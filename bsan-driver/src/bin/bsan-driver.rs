@@ -51,5 +51,5 @@ fn main() {
         }
     };
     rustc_driver::install_ice_hook(rustc_driver::DEFAULT_BUG_REPORT_URL, |_| ());
-    bsan_driver::run_compiler(args, target_crate, &mut bsan_driver::BSanCallBacks {})
+    bsan_driver::run_compiler(args, target_crate, &mut bsan_driver::BSanCtx {})
 }
