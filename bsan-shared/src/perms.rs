@@ -1,6 +1,9 @@
 use core::cmp::Ordering;
 use core::cmp::Ordering::*;
 
+use super::foreign_access_skipping::*;
+use super::helpers::{AccessKind, AccessRelatedness};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RetagInfo {
     pub size: usize,
@@ -134,6 +137,144 @@ impl PermissionPriv {
     fn compatible_with_protector(&self) -> bool {
         !matches!(self, ReservedIM)
     }
+
+    /// See `foreign_access_skipping.rs`. Computes the SIFA of a permission.
+    fn strongest_idempotent_foreign_access(&self, prot: bool) -> IdempotentForeignAccess {
+        match self {
+            // A protected non-conflicted Reserved will become conflicted under a foreign read,
+            // and is hence not idempotent under it.
+            // Otherwise, foreign reads do not affect Reserved
+            ReservedFrz => {
+                if prot {
+                    return IdempotentForeignAccess::None;
+                }
+
+                IdempotentForeignAccess::Read
+            }
+            // Famously, ReservedIM survives foreign writes. It is never protected.
+            ReservedIM if prot => unreachable!("Protected ReservedIM should not exist!"),
+            ReservedIM => IdempotentForeignAccess::Write,
+            // Active changes on any foreign access (becomes Frozen/Disabled).
+            Active => IdempotentForeignAccess::None,
+            // Frozen survives foreign reads, but not writes.
+            Frozen => IdempotentForeignAccess::Read,
+            // Disabled survives foreign reads and writes. It survives them
+            // even if protected, because a protected `Disabled` is not initialized
+            // and does therefore not trigger UB.
+            Disabled => IdempotentForeignAccess::Write,
+
+            _ => IdempotentForeignAccess::None,
+        }
+    }
+}
+/// This module controls how each permission individually reacts to an access.
+/// Although these functions take `protected` as an argument, this is NOT because
+/// we check protector violations here, but because some permissions behave differently
+/// when protected.
+mod transition {
+    use super::*;
+    /// A child node was read-accessed: UB on Disabled, noop on the rest.
+    fn child_read(state: PermissionPriv, _protected: bool) -> Option<PermissionPriv> {
+        Some(match state {
+            Disabled => return None,
+            // The inner data `ty_is_freeze` of `Reserved` is always irrelevant for Read
+            // accesses, since the data is not being mutated. Hence the `{ .. }`.
+            readable @ (ReservedFrz | ReservedFrzConf | ReservedIM | Active | Frozen) => readable,
+        })
+    }
+
+    /// A non-child node was read-accessed: keep `Reserved` but mark it as `conflicted` if it
+    /// is protected; invalidate `Active`.
+    fn foreign_read(state: PermissionPriv, protected: bool) -> Option<PermissionPriv> {
+        Some(match state {
+            // Non-writeable states just ignore foreign reads.
+            non_writeable @ (Frozen | Disabled) => non_writeable,
+            // Writeable states are more tricky, and depend on whether things are protected.
+            // The inner data `ty_is_freeze` of `Reserved` is always irrelevant for Read
+            // accesses, since the data is not being mutated. Hence the `{ .. }`
+
+            // Someone else read. To make sure we won't write before function exit,
+            // we set the "conflicted" flag, which will disallow writes while we are protected.
+            ReservedFrz if protected => ReservedFrzConf,
+            // Before activation and without protectors, foreign reads are fine.
+            // That's the entire point of 2-phase borrows.
+            res @ (ReservedFrz | ReservedIM) => {
+                // Even though we haven't checked `ReservedIM if protected` separately,
+                // it is a state that cannot occur because under a protector we only
+                // create `ReservedFrz` never `ReservedIM`.
+                assert!(!protected);
+                res
+            }
+            Active => {
+                if protected {
+                    // We wrote, someone else reads -- that's bad.
+                    // (Since Active is always initialized, this move-to-protected will mean insta-UB.)
+                    Disabled
+                } else {
+                    // We don't want to disable here to allow read-read reordering: it is crucial
+                    // that the foreign read does not invalidate future reads through this tag.
+                    Frozen
+                }
+            }
+            // TODO: Verify behavior
+            _ => return None,
+        })
+    }
+
+    /// A child node was write-accessed: `Reserved` must become `Active` to obtain
+    /// write permissions, `Frozen` and `Disabled` cannot obtain such permissions and produce UB.
+    fn child_write(state: PermissionPriv, protected: bool) -> Option<PermissionPriv> {
+        Some(match state {
+            // If the `conflicted` flag is set, then there was a foreign read during
+            // the function call that is still ongoing (still `protected`),
+            // this is UB (`noalias` violation).
+            ReservedFrzConf if protected => return None,
+            // A write always activates the 2-phase borrow, even with interior
+            // mutability
+            ReservedFrz | ReservedIM | Active => Active,
+            Frozen | Disabled => return None,
+            // TODO: Verify validity of this behavior
+            _ => return None,
+        })
+    }
+
+    /// A non-child node was write-accessed: this makes everything `Disabled` except for
+    /// non-protected interior mutable `Reserved` which stay the same.
+    fn foreign_write(state: PermissionPriv, protected: bool) -> Option<PermissionPriv> {
+        // There is no explicit dependency on `protected`, but recall that interior mutable
+        // types receive a `ReservedFrz` instead of `ReservedIM` when retagged under a protector,
+        // so the result of this function does indirectly depend on (past) protector status.
+        Some(match state {
+            res @ ReservedIM => {
+                // We can never create a `ReservedIM` under a protector, only `ReservedFrz`.
+                assert!(!protected);
+                res
+            }
+            _ => Disabled,
+        })
+    }
+
+    /// Dispatch handler depending on the kind of access and its position.
+    pub(super) fn perform_access(
+        kind: AccessKind,
+        rel_pos: AccessRelatedness,
+        child: PermissionPriv,
+        protected: bool,
+    ) -> Option<PermissionPriv> {
+        match (kind, rel_pos.is_foreign()) {
+            (AccessKind::Write, true) => foreign_write(child, protected),
+            (AccessKind::Read, true) => foreign_read(child, protected),
+            (AccessKind::Write, false) => child_write(child, protected),
+            (AccessKind::Read, false) => child_read(child, protected),
+        }
+    }
+}
+
+/// Transition from one permission to the next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PermTransition {
+    from: PermissionPriv,
+    to: PermissionPriv,
 }
 
 #[repr(transparent)]
