@@ -14,3 +14,4 @@ pub use foreign_access_skipping::*;
 pub use helpers::*;
 pub use perms::*;
 pub use range_map::*;
+pub use types::*;
