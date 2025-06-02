@@ -29,6 +29,7 @@ pub use local::*;
 
 mod block;
 mod borrow_tracker;
+mod dummy_span;
 mod shadow;
 
 macro_rules! println {
