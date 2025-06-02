@@ -19,3 +19,9 @@ impl DummySpan {
         DummySpanData::new()
     }
 }
+
+impl Into<DummySpan> for DummySpanData {
+    fn into(self) -> DummySpan {
+        DummySpan(self.0)
+    }
+}
