@@ -3,8 +3,7 @@
 // but nice to port in case there are any similar behaviors / as a starting point
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::fmt;
-use core::fmt::Write;
+use core::fmt::{self, Write};
 use core::ops::Range;
 
 use bsan_shared::diagnostics::*;
@@ -222,12 +221,8 @@ impl<'tcx> Tree {
     }
 
     /// Debug helper: assign name to tag.
-    pub fn give_pointer_debug_name(
-        &mut self,
-        tag: BorTag,
-        nth_parent: u8,
-        name: &str,
-    ) -> Result<(), _> {
+    // FIXME: Refacotor return type to Result-like object if ported
+    pub fn give_pointer_debug_name(&mut self, tag: BorTag, nth_parent: u8, name: &str) -> bool {
         let tag = self.nth_parent(tag, nth_parent).unwrap();
         let idx = self.tag_mapping.get(&tag).unwrap();
         if let Some(node) = self.nodes.get_mut(idx) {
@@ -235,7 +230,7 @@ impl<'tcx> Tree {
         } else {
             println!("Tag {tag:?} (to be named '{name}') not found!");
         }
-        Ok(())
+        true
     }
 
     /// Debug helper: determines if the tree contains a tag.
