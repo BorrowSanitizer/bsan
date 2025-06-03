@@ -7,6 +7,7 @@
 #![feature(format_args_nl)]
 #![allow(unused)]
 
+#[macro_use]
 extern crate alloc;
 use core::alloc::{AllocError, Allocator, GlobalAlloc, Layout};
 use core::cell::UnsafeCell;
@@ -28,7 +29,8 @@ use libc_print::std_name::*;
 pub use local::*;
 
 mod block;
-mod borrow_tracker;
+pub mod borrow_tracker;
+mod diagnostics;
 mod dummy_span;
 mod shadow;
 
