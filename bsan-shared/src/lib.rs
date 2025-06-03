@@ -1,7 +1,7 @@
 #![cfg_attr(not(test), no_std)]
 #![allow(dead_code)]
-#![feature(allocator_api)]
 
+#[macro_use]
 extern crate alloc;
 
 mod foreign_access_skipping;
