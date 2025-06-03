@@ -4,14 +4,50 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use bsan_shared::diagnostics::*;
-use bsan_shared::*;
+use bsan_shared::{Permission, Size, *};
+use hashbrown::HashSet;
 
 use super::unimap::*;
 use super::*;
-use crate::diagnostics::NodeDebugInfo;
-use bsan_shared::diagnostics::*;
-use crate::dummy_span::*
-use crate::{BorTag, BsanAllocHooks};
+use crate::diagnostics::{AccessCause, Event, NodeDebugInfo, TbError};
+use crate::dummy_span::*;
+use crate::{global_ctx, AllocId, BorTag, BsanAllocHooks, GlobalCtx, GLOBAL_CTX};
+
+// Ported from https://doc.rust-lang.org/stable/nightly-rustc/src/rustc_middle/mir/interpret/allocation.rs.html#336-384
+
+#[derive(Copy, Clone, Debug)]
+pub struct AllocRange {
+    pub start: Size,
+    pub size: Size,
+}
+
+#[inline(always)]
+
+pub fn alloc_range(start: Size, size: Size) -> AllocRange {
+    AllocRange { start, size }
+}
+
+impl AllocRange {
+    #[inline(always)]
+
+    pub fn end(self) -> Size {
+        self.start + self.size // This does overflow checking.
+    }
+
+    /// Returns the `subrange` within this range; panics if it is not a subrange.
+
+    #[inline]
+
+    pub fn subrange(self, subrange: AllocRange) -> AllocRange {
+        let sub_start = self.start + subrange.start;
+
+        let range = alloc_range(sub_start, subrange.size);
+
+        assert!(range.end() <= self.end(), "access outside the bounds for given AllocRange");
+
+        range
+    }
+}
 
 /// Whether to continue exploring the children recursively or not.
 enum ContinueTraversal {
@@ -252,9 +288,10 @@ pub struct Node {
     pub parent: Option<UniIndex>,
     /// If the pointer was reborrowed, it has children.
     // miri: FIXME: bench to compare this to FxHashSet and to other SmallVec sizes
+
     // Miri's implementation uses SmallVec as an optimization, can later be discussed for
     // bsan if needed as an optimization.
-    pub children: Vec<[UniIndex; 4]>,
+    pub children: Vec<UniIndex>,
     /// Either `Reserved`,  `Frozen`, or `Disabled`, it is the permission this tag will
     /// lazily be initialized to on the first access.
     /// It is only ever `Disabled` for a tree root, since the root is initialized to `Active` by
@@ -557,11 +594,11 @@ impl<'tree> TreeVisitor<'tree> {
 
 impl Tree {
     /// Create a new tree, with only a root pointer.
-    pub fn new(root_tag: BorTag, size: Size, span: Span) -> Self {
+    pub fn new(root_tag: BorTag, size: Size, span: DummySpan, allocator: BsanAllocHooks) -> Self {
         // The root has `Disabled` as the default permission,
         // so that any access out of bounds is invalid.
         let root_default_perm = Permission::new_disabled();
-        let mut tag_mapping = UniKeyMap::default();
+        let mut tag_mapping = UniKeyMap::new(allocator);
         let root_idx = tag_mapping.insert(root_tag);
         let nodes = {
             let mut nodes = UniValMap::<Node>::default();
@@ -573,7 +610,8 @@ impl Tree {
                 Node {
                     tag: root_tag,
                     parent: None,
-                    children: SmallVec::default(),
+                    // Miri uses SmallVec here
+                    children: Vec::default(),
                     default_initial_perm: root_default_perm,
                     // The root may never be skipped, all accesses will be local.
                     default_initial_idempotent_foreign_access: IdempotentForeignAccess::None,
@@ -602,6 +640,8 @@ impl Tree {
 }
 
 impl<'tcx> Tree {
+    // FIXME: Refactor to our own Result type
+
     /// Insert a new tag in the tree.
     ///
     /// `initial_perms` defines the initial permissions for the part of memory
@@ -620,8 +660,10 @@ impl<'tcx> Tree {
         initial_perms: RangeMap<LocationState>,
         default_perm: Permission,
         protected: bool,
-        span: Span,
-    ) -> InterpResult<'tcx> {
+        span: DummySpan,
+    ) -> bool {
+        use core::ops::Range;
+
         let idx = self.tag_mapping.insert(new_tag);
         let parent_idx = self.tag_mapping.get(&parent_tag).unwrap();
         assert!(default_perm.is_initial());
@@ -634,7 +676,8 @@ impl<'tcx> Tree {
             Node {
                 tag: new_tag,
                 parent: Some(parent_idx),
-                children: SmallVec::default(),
+                // Miri uses SmallVec here
+                children: Vec::default(),
                 default_initial_perm: default_perm,
                 default_initial_idempotent_foreign_access: default_strongest_idempotent,
                 debug_info: NodeDebugInfo::new(new_tag, default_perm, span),
@@ -666,7 +709,7 @@ impl<'tcx> Tree {
         // See the comment in `tb_reborrow` for why it is correct to use the SIFA of `default_uninit_perm`.
         self.update_last_accessed_after_retag(parent_idx, default_strongest_idempotent);
 
-        interp_ok(())
+        true
     }
 
     /// Restores the SIFA "children are stronger" invariant after a retag.
@@ -709,6 +752,8 @@ impl<'tcx> Tree {
         }
     }
 
+    // FIXME: Refactor to our own Result type
+
     /// Deallocation requires
     /// - a pointer that permits write accesses
     /// - the absence of Strong Protectors anywhere in the allocation
@@ -716,19 +761,21 @@ impl<'tcx> Tree {
         &mut self,
         tag: BorTag,
         access_range: AllocRange,
-        global: &GlobalState,
+        global: GlobalCtx,
         alloc_id: AllocId, // diagnostics
-        span: Span,        // diagnostics
-    ) -> InterpResult<'tcx> {
-        self.perform_access(
+        span: DummySpan,   // diagnostics
+    ) -> bool {
+        // FIXME: Refactor to error propagation once we have own Result type
+        let success = self.perform_access(
             tag,
-            Some((access_range, AccessKind::Write, diagnostics::AccessCause::Dealloc)),
+            Some((access_range, AccessKind::Write, AccessCause::Dealloc)),
             global,
             alloc_id,
             span,
-        )?;
+        );
         for (perms_range, perms) in self.rperms.iter_mut(access_range.start, access_range.size) {
             TreeVisitor { nodes: &mut self.nodes, tag_mapping: &self.tag_mapping, perms }
+                // FIXME: Refactor to use error propagation
                 .traverse_this_parents_children_other(
                     tag,
                     // visit all children, skipping none
@@ -737,33 +784,39 @@ impl<'tcx> Tree {
                         let NodeAppArgs { node, perm, .. } = args;
                         let perm =
                             perm.get().copied().unwrap_or_else(|| node.default_location_state());
-                        if global.borrow().protected_tags.get(&node.tag)
-                            == Some(&ProtectorKind::StrongProtector)
-                            // Don't check for protector if it is a Cell (see `unsafe_cell_deallocate` in `interior_mutability.rs`).
-                            // Related to https://github.com/rust-lang/rust/issues/55005.
-                            && !perm.permission().is_cell()
-                        {
-                            Err(TransitionError::ProtectedDealloc)
-                        } else {
-                            Ok(())
-                        }
+                        // FIXME: Refactor when global context has protected tags
+                        // if global.borrow().protected_tags.get(&node.tag)
+                        //     == Some(&ProtectorKind::StrongProtector)
+                        // {
+                        //     Err(TransitionError::ProtectedDealloc)
+                        // } else {
+                        //     Ok(())
+                        // }
+                        //
+                        Ok(())
                     },
-                    |args: ErrHandlerArgs<'_, TransitionError>| -> InterpErrorKind<'tcx> {
+                    // FIXME: Refactor to our own Result
+                    |args: ErrHandlerArgs<'_, TransitionError>| -> bool {
                         let ErrHandlerArgs { error_kind, conflicting_info, accessed_info } = args;
                         TbError {
                             conflicting_info,
-                            access_cause: diagnostics::AccessCause::Dealloc,
+                            access_cause: AccessCause::Dealloc,
                             alloc_id,
                             error_offset: perms_range.start,
                             error_kind,
                             accessed_info,
-                        }
-                        .build()
+                        };
+
+                        true
                     },
-                )?;
+                )
+                .unwrap();
         }
-        interp_ok(())
+
+        true
     }
+
+    // FIXME: Refactor with our own Result
 
     /// Map the per-node and per-location `LocationState::perform_access`
     /// to each location of the first component of `access_range_and_kind`,
@@ -786,12 +839,12 @@ impl<'tcx> Tree {
     pub fn perform_access(
         &mut self,
         tag: BorTag,
-        access_range_and_kind: Option<(AllocRange, AccessKind, diagnostics::AccessCause)>,
-        global: &GlobalState,
+        access_range_and_kind: Option<(AllocRange, AccessKind, AccessCause)>,
+        global: GlobalCtx,
         alloc_id: AllocId, // diagnostics
-        span: Span,        // diagnostics
-    ) -> InterpResult<'tcx> {
-        use std::ops::Range;
+        span: DummySpan,   // diagnostics
+    ) -> bool {
+        use core::ops::Range;
         // Performs the per-node work:
         // - insert the permission if it does not exist
         // - perform the access
@@ -810,7 +863,7 @@ impl<'tcx> Tree {
         };
         let node_app = |perms_range: Range<u64>,
                         access_kind: AccessKind,
-                        access_cause: diagnostics::AccessCause,
+                        access_cause: AccessCause,
                         args: NodeAppArgs<'_>|
          -> Result<(), TransitionError> {
             let NodeAppArgs { node, mut perm, rel_pos } = args;
@@ -822,28 +875,32 @@ impl<'tcx> Tree {
             // `traverse_this_parents_children_other`.
             old_state.record_new_access(access_kind, rel_pos);
 
-            let protected = global.borrow().protected_tags.contains_key(&node.tag);
-            let transition = old_state.perform_access(access_kind, rel_pos, protected)?;
+            // FIXME: Implement protected tag lookup through global context
+            //let protected = global.borrow().protected_tags.contains_key(&node.tag);
+            // FIXME: Pipe protection status into perform access
+            let transition = old_state.perform_access(access_kind, rel_pos, false)?;
             // Record the event as part of the history
             if !transition.is_noop() {
-                node.debug_info.history.push(diagnostics::Event {
+                node.debug_info.history.push(Event {
                     transition,
-                    is_foreign: rel_pos.is_foreign(),
                     access_cause,
-                    access_range: access_range_and_kind.map(|x| x.0),
+                    is_foreign: rel_pos.is_foreign(),
                     transition_range: perms_range,
                     span,
+                    access_range: access_range_and_kind.map(|x| x.0),
                 });
             }
             Ok(())
         };
 
+        // FIXME: Refactor with our own Result
+
         // Error handler in case `node_app` goes wrong.
         // Wraps the faulty transition in more context for diagnostics.
         let err_handler = |perms_range: Range<u64>,
-                           access_cause: diagnostics::AccessCause,
+                           access_cause: AccessCause,
                            args: ErrHandlerArgs<'_, TransitionError>|
-         -> InterpErrorKind<'tcx> {
+         -> bool {
             let ErrHandlerArgs { error_kind, conflicting_info, accessed_info } = args;
             TbError {
                 conflicting_info,
@@ -852,8 +909,10 @@ impl<'tcx> Tree {
                 error_offset: perms_range.start,
                 error_kind,
                 accessed_info,
-            }
-            .build()
+            };
+            // FIXME: Handle errors and results properly
+            // .build();
+            true
         };
 
         if let Some((access_range, access_kind, access_cause)) = access_range_and_kind {
@@ -861,15 +920,19 @@ impl<'tcx> Tree {
             // We iterate over affected locations and traverse the tree for each of them.
             for (perms_range, perms) in self.rperms.iter_mut(access_range.start, access_range.size)
             {
+                // FIXME: Refactor to use error propagation
                 TreeVisitor { nodes: &mut self.nodes, tag_mapping: &self.tag_mapping, perms }
                     .traverse_this_parents_children_other(
                         tag,
                         |args| node_skipper(access_kind, args),
                         |args| node_app(perms_range.clone(), access_kind, access_cause, args),
                         |args| err_handler(perms_range.clone(), access_cause, args),
-                    )?;
+                    )
+                    .unwrap();
             }
         } else {
+            // FIXME: Refactor to use error propagation
+
             // This is a special access through the entire allocation.
             // It actually only affects `accessed` locations, so we need
             // to filter on those before initiating the traversal.
@@ -886,24 +949,25 @@ impl<'tcx> Tree {
                     && let Some(access_kind) = p.permission.protector_end_access()
                     && p.accessed
                 {
-                    let access_cause = diagnostics::AccessCause::FnExit(access_kind);
+                    let access_cause = AccessCause::FnExit(access_kind);
                     TreeVisitor { nodes: &mut self.nodes, tag_mapping: &self.tag_mapping, perms }
                         .traverse_nonchildren(
-                        tag,
-                        |args| node_skipper(access_kind, args),
-                        |args| node_app(perms_range.clone(), access_kind, access_cause, args),
-                        |args| err_handler(perms_range.clone(), access_cause, args),
-                    )?;
+                            tag,
+                            |args| node_skipper(access_kind, args),
+                            |args| node_app(perms_range.clone(), access_kind, access_cause, args),
+                            |args| err_handler(perms_range.clone(), access_cause, args),
+                        )
+                        .unwrap();
                 }
             }
         }
-        interp_ok(())
+        true
     }
 }
 
 /// Integration with the BorTag garbage collector
 impl Tree {
-    pub fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
+    pub fn remove_unreachable_tags(&mut self, live_tags: &HashSet<BorTag>) {
         self.remove_useless_children(self.root, live_tags);
         // Right after the GC runs is a good moment to check if we can
         // merge some adjacent ranges that were made equal by the removal of some
@@ -914,7 +978,7 @@ impl Tree {
 
     /// Checks if a node is useless and should be GC'ed.
     /// A node is useless if it has no children and also the tag is no longer live.
-    fn is_useless(&self, idx: UniIndex, live: &FxHashSet<BorTag>) -> bool {
+    fn is_useless(&self, idx: UniIndex, live: &HashSet<BorTag>) -> bool {
         let node = self.nodes.get(idx).unwrap();
         node.children.is_empty() && !live.contains(&node.tag)
     }
@@ -925,7 +989,7 @@ impl Tree {
     fn can_be_replaced_by_single_child(
         &self,
         idx: UniIndex,
-        live: &FxHashSet<BorTag>,
+        live: &HashSet<BorTag>,
     ) -> Option<UniIndex> {
         let node = self.nodes.get(idx).unwrap();
 
@@ -987,7 +1051,7 @@ impl Tree {
     /// `child: Reserved`. This tree can exist. If we blindly delete `parent` and reassign
     /// `child` to be a direct child of `root` then Writes to `child` are now permitted
     /// whereas they were not when `parent` was still there.
-    fn remove_useless_children(&mut self, root: UniIndex, live: &FxHashSet<BorTag>) {
+    fn remove_useless_children(&mut self, root: UniIndex, live: &HashSet<BorTag>) {
         // To avoid stack overflows, we roll our own stack.
         // Each element in the stack consists of the current tag, and the number of the
         // next child to be processed.
@@ -1013,7 +1077,7 @@ impl Tree {
                 // we have to temporarily move the list out of the node, and then put the
                 // list of remaining children back in.
                 let mut children_of_node =
-                    mem::take(&mut self.nodes.get_mut(*tag).unwrap().children);
+                    core::mem::take(&mut self.nodes.get_mut(*tag).unwrap().children);
                 // Remove all useless children.
                 children_of_node.retain_mut(|idx| {
                     if self.is_useless(*idx, live) {
@@ -1055,6 +1119,12 @@ impl Node {
     }
 }
 
+pub type VisitWith<'a> = dyn FnMut(Option<AllocId>, Option<BorTag>) + 'a;
+
+pub trait VisitProvenance {
+    fn visit_provenance(&self, visit: &mut VisitWith<'_>);
+}
+
 impl VisitProvenance for Tree {
     fn visit_provenance(&self, visit: &mut VisitWith<'_>) {
         // To ensure that the root never gets removed, we visit it
@@ -1063,27 +1133,19 @@ impl VisitProvenance for Tree {
     }
 }
 
-/// Relative position of the access
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AccessRelatedness {
-    /// The accessed pointer is the current one
-    This,
-    /// The accessed pointer is a (transitive) child of the current one.
-    // Current pointer is excluded (unlike in some other places of this module
-    // where "child" is inclusive).
-    StrictChildAccess,
-    /// The accessed pointer is a (transitive) parent of the current one.
-    // Current pointer is excluded.
-    AncestorAccess,
-    /// The accessed pointer is neither of the above.
-    // It's a cousin/uncle/etc., something in a side branch.
-    CousinAccess,
-}
-
-impl AccessRelatedness {
-    /// Check that access is either Ancestor or Distant, i.e. not
-    /// a transitive child (initial pointer included).
-    pub fn is_foreign(self) -> bool {
-        matches!(self, AccessRelatedness::AncestorAccess | AccessRelatedness::CousinAccess)
-    }
-}
+// /// Relative position of the access
+// #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// pub enum AccessRelatedness {
+//     /// The accessed pointer is the current one
+//     This,
+//     /// The accessed pointer is a (transitive) child of the current one.
+//     // Current pointer is excluded (unlike in some other places of this module
+//     // where "child" is inclusive).
+//     StrictChildAccess,
+//     /// The accessed pointer is a (transitive) parent of the current one.
+//     // Current pointer is excluded.
+//     AncestorAccess,
+//     /// The accessed pointer is neither of the above.
+//     // It's a cousin/uncle/etc., something in a side branch.
+//     CousinAccess,
+// }
