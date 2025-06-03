@@ -1,5 +1,6 @@
 use core::cmp::Ordering;
 use core::cmp::Ordering::*;
+use core::fmt;
 
 use super::foreign_access_skipping::*;
 use super::helpers::{AccessKind, AccessRelatedness};
@@ -277,6 +278,30 @@ pub struct PermTransition {
     to: PermissionPriv,
 }
 
+impl PermTransition {
+    /// All transitions created through normal means (using `perform_access`)
+    /// should be possible, but the same is not guaranteed by construction of
+    /// transitions inferred by diagnostics. This checks that a transition
+    /// reconstructed by diagnostics is indeed one that could happen.
+    fn is_possible(self) -> bool {
+        self.from <= self.to
+    }
+
+    pub fn is_noop(self) -> bool {
+        self.from == self.to
+    }
+
+    /// Extract result of a transition (checks that the starting point matches).
+    pub fn applied(self, starting_point: Permission) -> Option<Permission> {
+        (starting_point.inner == self.from).then_some(Permission { inner: self.to })
+    }
+
+    /// Determines if this transition would disable the permission.
+    pub fn produces_disabled(self) -> bool {
+        self.to == Disabled
+    }
+}
+
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 
@@ -298,6 +323,10 @@ impl Permission {
     /// Check if `self` is the terminal state of a pointer (is `Disabled`).
     pub fn is_disabled(&self) -> bool {
         self.inner == Disabled
+    }
+    /// Check if `self` is the never-allow-writes-again state of a pointer (is `Frozen`).
+    pub fn is_frozen(&self) -> bool {
+        self.inner == Frozen
     }
     /// Check if `self` is the post-child-write state of a pointer (is `Active`).
     pub fn is_active(&self) -> bool {
@@ -347,6 +376,223 @@ impl Permission {
     /// Reject `ReservedIM` that cannot exist in the presence of a protector.
     pub fn compatible_with_protector(&self) -> bool {
         self.inner.compatible_with_protector()
+    }
+
+    /// Apply the transition to the inner PermissionPriv.
+    pub fn perform_access(
+        kind: AccessKind,
+        rel_pos: AccessRelatedness,
+        old_perm: Self,
+        protected: bool,
+    ) -> Option<PermTransition> {
+        let old_state = old_perm.inner;
+        transition::perform_access(kind, rel_pos, old_state, protected)
+            .map(|new_state| PermTransition { from: old_state, to: new_state })
+    }
+}
+
+pub mod diagnostics {
+    use super::*;
+    impl fmt::Display for PermissionPriv {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "{}",
+                match self {
+                    ReservedFrz => "Reserved",
+                    ReservedFrzConf => "Reserved (conflicted)",
+                    ReservedIM => "Reserved (interior mutable)",
+                    Active => "Active",
+                    Frozen => "Frozen",
+                    Disabled => "Disabled",
+                }
+            )
+        }
+    }
+
+    impl fmt::Display for PermTransition {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "from {} to {}", self.from, self.to)
+        }
+    }
+
+    impl fmt::Display for Permission {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{}", self.inner)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub enum TransitionError {
+        /// This access is not allowed because some parent tag has insufficient permissions.
+        /// For example, if a tag is `Frozen` and encounters a child write this will
+        /// produce a `ChildAccessForbidden(Frozen)`.
+        /// This kind of error can only occur on child accesses.
+        ChildAccessForbidden(Permission),
+        /// A protector was triggered due to an invalid transition that loses
+        /// too much permissions.
+        /// For example, if a protected tag goes from `Active` to `Disabled` due
+        /// to a foreign write this will produce a `ProtectedDisabled(Active)`.
+        /// This kind of error can only occur on foreign accesses.
+        ProtectedDisabled(Permission),
+        /// Cannot deallocate because some tag in the allocation is strongly protected.
+        /// This kind of error can only occur on deallocations.
+        ProtectedDealloc,
+    }
+
+    impl PermTransition {
+        /// Readable explanation of the consequences of an event.
+        /// Fits in the sentence "This transition corresponds to {trans.summary()}".
+        pub fn summary(&self) -> &'static str {
+            assert!(self.is_possible());
+            assert!(!self.is_noop());
+            match (self.from, self.to) {
+                (_, Active) => "the first write to a 2-phase borrowed mutable reference",
+                (_, Frozen) => "a loss of write permissions",
+                (ReservedFrz, ReservedFrzConf) => {
+                    "a temporary loss of write permissions until function exit"
+                }
+                (Frozen, Disabled) => "a loss of read permissions",
+                (_, Disabled) => "a loss of read and write permissions",
+                (old, new) => {
+                    unreachable!("Transition from {old:?} to {new:?} should never be possible")
+                }
+            }
+        }
+
+        /// Determines whether `self` is a relevant transition for the error `err`.
+        /// `self` will be a transition that happened to a tag some time before
+        /// that tag caused the error.
+        ///
+        /// Irrelevant events:
+        /// - modifications of write permissions when the error is related to read permissions
+        ///   (on failed reads and protected `Frozen -> Disabled`, ignore `Reserved -> Active`,
+        ///   `Reserved(conflicted=false) -> Reserved(conflicted=true)`, and `Active -> Frozen`)
+        /// - all transitions for attempts to deallocate strongly protected tags
+        ///
+        /// # Panics
+        ///
+        /// This function assumes that its arguments apply to the same location
+        /// and that they were obtained during a normal execution. It will panic otherwise.
+        /// - all transitions involved in `self` and `err` should be increasing
+        ///   (Reserved < Active < Frozen < Disabled);
+        /// - between `self` and `err` the permission should also be increasing,
+        ///   so all permissions inside `err` should be greater than `self.1`;
+        /// - `Active`, `Reserved(conflicted=false)`, and `Cell` cannot cause an error
+        ///   due to insufficient permissions, so `err` cannot be a `ChildAccessForbidden(_)`
+        ///   of either of them;
+        /// - `err` should not be `ProtectedDisabled(Disabled)`, because the protected
+        ///   tag should not have been `Disabled` in the first place (if this occurs it means
+        ///   we have unprotected tags that become protected)
+        pub(in super::super) fn is_relevant(&self, err: TransitionError) -> bool {
+            // NOTE: `super::super` is the visibility of `TransitionError`
+            assert!(self.is_possible());
+            if self.is_noop() {
+                return false;
+            }
+            match err {
+                TransitionError::ChildAccessForbidden(insufficient) => {
+                    // Show where the permission was gained then lost,
+                    // but ignore unrelated permissions.
+                    // This eliminates transitions like `Active -> Frozen`
+                    // when the error is a failed `Read`.
+                    match (self.to, insufficient.inner) {
+                        (Frozen, Frozen) => true,
+                        (Active, Frozen) => true,
+                        (Disabled, Disabled) => true,
+                        (ReservedFrzConf | ReservedFrz, ReservedFrzConf | ReservedFrz) => true,
+                        // A pointer being `Disabled` is a strictly stronger source of
+                        // errors than it being `Frozen`. If we try to access a `Disabled`,
+                        // then where it became `Frozen` (or `Active` or `Reserved`) is the least
+                        // of our concerns for now.
+                        (ReservedFrzConf | Active | Frozen, Disabled) => false,
+                        (ReservedFrzConf, Frozen) => false,
+
+                        // `Active`, `Reserved`, and `Cell` have all permissions, so a
+                        // `ChildAccessForbidden(Reserved | Active)` can never exist.
+                        (_, Active) | (_, ReservedFrz) => {
+                            unreachable!("this permission cannot cause an error")
+                        }
+                        // No transition has `Reserved { conflicted: false }` or `ReservedIM`
+                        // as its `.to` unless it's a noop. `Cell` cannot be in its `.to`
+                        // because all child accesses are a noop.
+                        (ReservedFrz | ReservedIM, _) => {
+                            unreachable!("self is a noop transition")
+                        }
+                        // All transitions produced in normal executions (using `apply_access`)
+                        // change permissions in the order `Reserved -> Active -> Frozen -> Disabled`.
+                        // We assume that the error was triggered on the same location that
+                        // the transition `self` applies to, so permissions found must be increasing
+                        // in the order `self.from < self.to <= insufficient.inner`
+                        (
+                            Active | Frozen | Disabled,
+                            ReservedFrzConf | ReservedFrz | ReservedIM,
+                        )
+                        | (Disabled, Frozen)
+                        | (ReservedFrzConf | ReservedFrz, ReservedIM) => {
+                            unreachable!("permissions between self and err must be increasing")
+                        }
+                    }
+                }
+                TransitionError::ProtectedDisabled(before_disabled) => {
+                    // Show how we got to the starting point of the forbidden transition,
+                    // but ignore what came before.
+                    // This eliminates transitions like `Reserved -> Active`
+                    // when the error is a `Frozen -> Disabled`.
+                    match (self.to, before_disabled.inner) {
+                        // We absolutely want to know where it was activated/frozen/marked
+                        // conflicted.
+                        (Active, Active) => true,
+                        (Frozen, Frozen) => true,
+                        (
+                            ReservedFrzConf | ReservedFrz,
+                            ReservedFrzConf | ReservedFrz,
+                        ) => true,
+                        // If the error is a transition `Frozen -> Disabled`, then we don't really
+                        // care whether before that was `Reserved -> Active -> Frozen` or
+                        // `Frozen` directly.
+                        // The error will only show either
+                        // - created as Reserved { conflicted: false },
+                        //   then Reserved { .. } -> Disabled is forbidden
+                        // - created as Reserved { conflicted: false },
+                        //   then Active -> Disabled is forbidden
+                        // A potential `Reserved { conflicted: false }
+                        //   -> Reserved { conflicted: true }` is inexistant or irrelevant,
+                        // and so is the `Reserved { conflicted: false } -> Active`
+                        (Active, Frozen) => false,
+                        (ReservedFrzConf, _) => false,
+
+                        (_, Disabled) =>
+                            unreachable!(
+                                "permission that results in Disabled should not itself be Disabled in the first place"
+                            ),
+                        // No transition has `Reserved { conflicted: false }` or `ReservedIM` as its `.to`
+                        // unless it's a noop. `Cell` cannot be in its `.to` because all child
+                        // accesses are a noop.
+                        (ReservedFrz | ReservedIM,  _) =>
+                            unreachable!("self is a noop transition"),
+
+                        // Permissions only evolve in the order `Reserved -> Active -> Frozen -> Disabled`,
+                        // so permissions found must be increasing in the order
+                        // `self.from < self.to <= forbidden.from < forbidden.to`.
+                        ((Disabled  | ReservedFrzConf | ReservedFrz | ReservedIM | Active | Frozen)
+                        | (Frozen| ReservedFrzConf | ReservedFrz | ReservedIM | Active)
+                        | (Active | ReservedFrzConf | ReservedFrz | ReservedIM), _) =>
+                            unreachable!("permissions between self and err must be increasing"),
+                    }
+                }
+                // We don't care because protectors evolve independently from
+                // permissions.
+                TransitionError::ProtectedDealloc => false,
+            }
+        }
+
+        /// Endpoint of a transition.
+        /// Meant only for diagnostics, use `applied` in non-diagnostics
+        /// code, which also checks that the starting point matches the current state.
+        pub fn endpoint(&self) -> Permission {
+            Permission { inner: self.to }
+        }
     }
 }
 
