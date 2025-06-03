@@ -146,7 +146,7 @@ impl ThreadId {
 
 /// Unique identifier for a node within the tree
 #[repr(transparent)]
-#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Copy, Clone, Hash, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BorTag(usize);
 
 impl BorTag {

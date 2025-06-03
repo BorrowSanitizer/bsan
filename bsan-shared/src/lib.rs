@@ -8,7 +8,7 @@ mod foreign_access_skipping;
 mod helpers;
 mod perms;
 mod range_map;
-mod types;
+pub mod types;
 
 pub use foreign_access_skipping::*;
 pub use helpers::*;

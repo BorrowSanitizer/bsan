@@ -7,9 +7,9 @@ use core::fmt::{self, Write};
 use core::ops::Range;
 
 use bsan_shared::diagnostics::*;
-use bsan_shared::*;
+use bsan_shared::{Size, *};
 
-use crate::borrow_tracker::tree::{LocationState, Tree};
+use crate::borrow_tracker::tree::{AllocRange, LocationState, Tree};
 use crate::borrow_tracker::unimap::UniIndex;
 use crate::span::*;
 use crate::{println, AllocId, BorTag};
@@ -60,14 +60,14 @@ pub struct Event {
     pub transition: PermTransition,
     /// Kind of the access that triggered this event.
     pub access_cause: AccessCause,
+
     /// Relative position of the tag to the one used for the access.
     pub is_foreign: bool,
     /// User-visible range of the access.
     /// `None` means that this is an implicit access to the entire allocation
     /// (used for the implicit read on protector release).
-
     // MIR specfic
-    // pub access_range: Option<AllocRange>,
+    pub access_range: Option<AllocRange>,
     /// The transition recorded by this event only occurred on a subrange of
     /// `access_range`: a single access on `access_range` triggers several events,
     /// each with their own mutually disjoint `transition_range`. No-op transitions
@@ -130,7 +130,7 @@ impl HistoryData {
             transition,
             is_foreign,
             access_cause,
-            //access_range,
+            access_range,
             span,
             transition_range: _,
         } in &events
