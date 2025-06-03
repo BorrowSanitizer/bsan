@@ -1,3 +1,3 @@
-artifact_url = 'https://ci-artifacts.rust-lang.org/rustc-builds'
-toolchain = "283db70ace62a0ae704a624e43b68c2ee44b87a6"
-components = [ "rust-src", "clippy", "rustfmt", "rustc-dev", "llvm-tools"]
+artifact_url = "https://github.com/BorrowSanitizer/rust/releases/download/"
+tag = "rolling"
+rustc_version = "1.89.0"

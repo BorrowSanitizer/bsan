@@ -9,6 +9,8 @@ mod download;
 mod env;
 mod utils;
 
+static TOOLCHAIN_NAME: &str = "bsan";
+
 #[derive(Clone, Debug, Parser)]
 pub enum Command {
     /// Ensures that all dependencies have been installed.

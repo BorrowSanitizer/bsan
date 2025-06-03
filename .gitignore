@@ -1,11 +1,9 @@
 target
-build
 Makefile
 CMakeCache.txt
 CMakeFiles
-.deps
+.toolchain
 *.tar.*
-rust_dev
 *.ll
 *.bc
 *.a

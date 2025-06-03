@@ -69,6 +69,7 @@ pub fn version_meta(sh: &Shell, toolchain: &str) -> Result<VersionMeta> {
     rustc_version::version_meta_for(&target_output).map_err(|e| anyhow!("{e}"))
 }
 
+#[allow(dead_code)]
 pub fn flagsplit(flags: &str) -> Vec<String> {
     // This code is taken from `RUSTFLAGS` handling in cargo.
     flags.split(' ').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect()

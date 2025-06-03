@@ -4,17 +4,17 @@
 
 use std::fs::{self, File};
 use std::io::{self, BufReader, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::Result;
 use path_macro::path;
 use rustc_version::VersionMeta;
-use which::which;
 use xshell::{cmd, Cmd, Shell};
 use xz2::bufread::XzDecoder;
 
 use crate::env::BsanConfig;
 use crate::utils::{self, active_toolchain, is_running_on_ci, show_error, version_meta};
+use crate::TOOLCHAIN_NAME;
 
 static CURL_FLAGS: &[&str] = &[
     // follow redirect
@@ -60,7 +60,13 @@ fn curl_version(sh: &Shell) -> semver::Version {
     extract_curl_version(&out)
 }
 
-fn download_file(sh: &Shell, url: String, destination: &Path, help_on_error: &str) {
+fn download_file(sh: &Shell, url: &Path, destination: &Path, help_on_error: &str) -> Result<()> {
+    println!("downloading {}", url.display());
+
+    if destination.exists() {
+        fs::remove_file(destination)?;
+    }
+
     let mut curl: Cmd<'_> = cmd!(sh, "curl");
     curl = curl.args([
         // output file
@@ -79,19 +85,21 @@ fn download_file(sh: &Shell, url: String, destination: &Path, help_on_error: &st
     if curl_version(sh) >= semver::Version::new(7, 71, 0) {
         curl = curl.arg("--retry-all-errors");
     }
+
     if curl.quiet().run().is_err() {
         if !help_on_error.is_empty() {
             show_error!("{help_on_error}");
-        } else {
-            std::process::exit(1);
         }
+        std::process::exit(1);
     }
+    Ok(())
 }
 
 fn unpack(tarball: &Path, dst: &Path, pattern: &str) -> Result<()> {
     if !dst.exists() {
         std::fs::create_dir_all(dst)?;
     }
+    println!("extracting {}", tarball.display());
     // `tarball` ends with `.tar.xz`; strip that suffix
     // example: `rust-dev-nightly-x86_64-unknown-linux-gnu`
     let uncompressed_filename =
@@ -141,80 +149,60 @@ fn move_file<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<()> {
     }
 }
 
-pub fn rust_dev(
+pub fn toolchain(
     sh: &Shell,
+    host: &VersionMeta,
     config: &BsanConfig,
-    meta: &VersionMeta,
-    root_dir: &Path,
-) -> Result<PathBuf> {
-    let dest_path = path!(root_dir / "rust-dev");
-    let commit_hash = meta.commit_hash.as_ref().unwrap();
-
-    // Check to see if we have already downloaded the rust-dev artifact.
-    // If the version of the artifact matches the current version of our
-    // toolchain, then we can reuse it. Otherwise, we should remove it and
-    // download a new one.
-    let cached_hash = path!(dest_path / "git-commit-hash");
-    if cached_hash.exists() {
-        let cached_hash = fs::read_to_string(cached_hash)?;
-        // we use contains here, because the version string stored in
-        // VersionMeta contains the prefix 'rustc'.
-        if commit_hash == (&cached_hash) {
-            return Ok(dest_path);
-        } else {
-            fs::remove_dir_all(&dest_path)?;
-        }
-    }
-    let artifact_url = &config.artifact_url;
-
-    let filename = format!("rust-dev-nightly-{}.tar.xz", &meta.host);
-    let tarball_dest = path!(filename);
-    let help_on_error = "ERROR: failed to download pre-built rust-dev artifacts.";
-    download_file(
-        sh,
-        format!("{artifact_url}/{commit_hash}/{filename}"),
-        &tarball_dest,
-        help_on_error,
-    );
-    unpack(&tarball_dest, &dest_path, "rust-dev")?;
-    fs::remove_file(tarball_dest)?;
-    Ok(dest_path)
-}
-
-pub fn toolchain(sh: &Shell, config: &BsanConfig) -> Result<VersionMeta> {
-    // Make sure rustup-toolchain-install-master is installed.
-    if which("rustup-toolchain-install-master").is_err() {
-        let cmd = cmd!(sh, "cargo install rustup-toolchain-install-master");
-        ask_to_run(cmd, true, "install a script for downloading a custom nightly toolchain.")?;
-    }
-
-    let new_commit = &config.toolchain;
-
-    if let Ok(meta) = version_meta(sh, "bsan")
-        && Some(new_commit) == meta.commit_hash.as_ref()
-    {
-        if active_toolchain()? != "bsan" {
-            cmd!(sh, "rustup override set bsan").run()?;
+    toolchain_dir: &Path,
+) -> Result<VersionMeta> {
+    if let Ok(meta) = version_meta(sh, TOOLCHAIN_NAME) {
+        if active_toolchain()? != TOOLCHAIN_NAME {
+            cmd!(sh, "rustup override set {TOOLCHAIN_NAME}").run()?;
         }
         return Ok(meta);
     }
 
-    let components = &config.components;
+    let version = &config.rustc_version;
+    let target = &host.host;
+    let archive_postfix: String = format!("{version}-dev-{target}.tar.xz");
+    let artifact_url = path!(&config.artifact_url / &config.tag);
+    let help_on_error = "Failed to download the custom Rust toolchain.";
 
-    // Install and setup new toolchain.
-    cmd!(sh, "rustup toolchain uninstall bsan").run()?;
-    cmd!(sh, "rustup-toolchain-install-master -n bsan -c {components...} -- {new_commit}").run()?;
-    cmd!(sh, "rustup override set bsan").run()?;
-    // Cleanup.
-    cmd!(sh, "cargo clean").run()?;
-    // Call `cargo metadata` on the sources in case that changes the lockfile
-    // (which fails under some setups when it is done from inside vscode).
-    let sysroot = cmd!(sh, "rustc --print sysroot").read()?;
-    let sysroot = sysroot.trim();
-    cmd!(sh, "cargo metadata --format-version 1 --manifest-path {sysroot}/lib/rustlib/rustc-src/rust/compiler/rustc/Cargo.toml").ignore_stdout().run()?;
-    version_meta(sh, "bsan")
+    let tmp_dir = path!(toolchain_dir / ".tmp");
+    if tmp_dir.exists() {
+        fs::remove_dir_all(&tmp_dir)?;
+    }
+    fs::create_dir_all(&tmp_dir)?;
+
+    let download_unpack_install = |prefix: &str| -> Result<()> {
+        // Download the .tar.xz file
+        let tar_file = format!("{prefix}-{archive_postfix}");
+        let tar_path = path!(toolchain_dir / tar_file);
+        download_file(sh, &path!(artifact_url / tar_file), &tar_path, help_on_error)?;
+
+        // Unpack it into a .tmp subdirectory
+        let out_dir = path!(toolchain_dir / ".tmp" / prefix);
+        unpack(&tar_path, &out_dir, "")?;
+        fs::remove_file(&tar_path)?;
+
+        // Install it into the toolchain directory
+        cmd!(sh, "{out_dir}/install.sh --prefix=\"\" --destdir={toolchain_dir}").quiet().run()?;
+        fs::remove_dir_all(&out_dir)?;
+        Ok(())
+    };
+
+    download_unpack_install("rust")?;
+    download_unpack_install("rustc-dev")?;
+    download_unpack_install("rust-dev")?;
+
+    cmd!(sh, "rustup toolchain uninstall {TOOLCHAIN_NAME}").quiet().run()?;
+    cmd!(sh, "rustup toolchain link {TOOLCHAIN_NAME} {toolchain_dir}").quiet().run()?;
+    cmd!(sh, "rustup override set {TOOLCHAIN_NAME}").quiet().run()?;
+
+    version_meta(sh, TOOLCHAIN_NAME)
 }
 
+#[allow(dead_code)]
 pub fn ask_to_run(cmd: Cmd<'_>, ask: bool, text: &str) -> Result<()> {
     // Disable interactive prompts in CI (GitHub Actions, Travis, AppVeyor, etc).
     // Azure doesn't set `CI` though (nothing to see here, just Microsoft being Microsoft),

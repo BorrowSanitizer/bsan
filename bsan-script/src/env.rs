@@ -9,29 +9,27 @@ use serde::Deserialize;
 use xshell::{cmd, Cmd, Shell};
 
 use crate::commands::Buildable;
-use crate::utils::show_error;
-use crate::{download, utils};
+use crate::utils::{active_toolchain, show_error};
+use crate::{download, utils, TOOLCHAIN_NAME};
 
 #[allow(dead_code)]
 pub struct BsanEnv {
-    /// The build directory
-    pub build_dir: PathBuf,
+    /// Dependency metadata
+    pub meta: VersionMeta,
     /// The target bin directory within the sysroot, which contains LLVM tool binaries.
     pub target_bindir: PathBuf,
     /// The sysroot of the nightly toolchain.
     pub sysroot: PathBuf,
+    /// The build directory
+    pub build_dir: PathBuf,
     /// The root of the repository checkout we are working in.
     pub root_dir: PathBuf,
-    /// The installation directory for rust dev artifacts
-    pub rust_dev: PathBuf,
     /// The shell we use.
     pub sh: Shell,
     /// Repository-wide configuration
     config: BsanConfig,
     /// Extra flags to pass to cargo.
     cargo_extra_flags: Vec<String>,
-    /// Additional version metadata from rustc
-    pub meta: VersionMeta,
     /// Controls whether binaries are built in debug or release mode
     mode: Mode,
 }
@@ -84,8 +82,8 @@ impl Mode {
 #[derive(Deserialize)]
 pub struct BsanConfig {
     pub artifact_url: String,
-    pub toolchain: String,
-    pub components: Vec<String>,
+    pub rustc_version: String,
+    pub tag: String,
 }
 
 impl BsanConfig {
@@ -100,13 +98,17 @@ impl BsanEnv {
     pub fn new() -> Result<Self> {
         let sh = Shell::new()?;
         let root_dir = utils::root_dir()?;
+        let host = utils::version_meta(&sh, &active_toolchain()?)?;
 
-        let deps_dir = path!(root_dir / ".deps");
+        let deps_dir = path!(root_dir / ".toolchain");
         fs::create_dir_all(&deps_dir)?;
         let config = BsanConfig::from_file(&path!(root_dir / "bsan.toml"))?;
 
-        let meta = download::toolchain(&sh, &config)?;
-        let rust_dev = download::rust_dev(&sh, &config, &meta, &deps_dir)?;
+        let meta = download::toolchain(&sh, &host, &config, &deps_dir)?;
+
+        let build_dir = path!(root_dir / "target");
+        // Hard-code the target dir, since we rely on all binaries ending up in the same spot.
+        sh.set_var("CARGO_TARGET_DIR", &build_dir);
 
         let sysroot = cmd!(sh, "rustc --print sysroot").output()?.stdout;
         let sysroot = PathBuf::from(String::from_utf8(sysroot)?.trim_end());
@@ -117,10 +119,6 @@ impl BsanEnv {
         let mut target_bindir = path!(target_libdir);
         assert!(target_bindir.pop());
         target_bindir.push("bin");
-
-        let build_dir = path!(root_dir / "target");
-        // Hard-code the target dir, since we rely on all binaries ending up in the same spot.
-        sh.set_var("CARGO_TARGET_DIR", &build_dir);
 
         // Compute rustflags.
         let rustflags = {
@@ -158,14 +156,13 @@ impl BsanEnv {
 
         Ok(Self {
             sh,
-            build_dir,
-            target_bindir,
+            meta,
             sysroot,
+            target_bindir,
+            build_dir,
             root_dir,
             config,
             cargo_extra_flags,
-            meta,
-            rust_dev,
             mode: Mode::Debug,
         })
     }
@@ -213,7 +210,7 @@ impl BsanEnv {
     }
 
     fn cargo_cmd_base(&self, cmd: &str) -> Cmd<'_> {
-        cmd!(self.sh, "cargo +bsan {cmd}").quiet()
+        cmd!(self.sh, "cargo +{TOOLCHAIN_NAME} {cmd}").quiet()
     }
 
     pub fn target_binary(&self, binary_name: &str) -> PathBuf {
@@ -325,8 +322,7 @@ impl BsanEnv {
     }
 
     pub fn llvm_config(&self) -> Cmd<'_> {
-        let rust_dev_dir = &self.rust_dev;
-        let bin_dir = path!(rust_dev_dir / "bin");
+        let bin_dir = path!(self.sysroot / "bin");
         let llvm_config = path!(bin_dir / "llvm-config");
         cmd!(self.sh, "{llvm_config}")
     }
@@ -338,7 +334,7 @@ impl BsanEnv {
     ) -> Result<()> {
         let BsanEnv { cargo_extra_flags, .. } = self;
         let path = path!(self.root_dir / crate_dir.as_ref());
-        cmd!(self.sh, "cargo +bsan install {cargo_extra_flags...} --path {path} --force {args...}")
+        cmd!(self.sh, "cargo +{TOOLCHAIN_NAME} install {cargo_extra_flags...} --path {path} --force {args...}")
             .run()?;
         Ok(())
     }
