@@ -122,7 +122,11 @@ impl AllocId {
 
 impl fmt::Debug for AllocId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if f.alternate() { write!(f, "a{}", self.0) } else { write!(f, "alloc{}", self.0) }
+        if f.alternate() {
+            write!(f, "a{}", self.0)
+        } else {
+            write!(f, "alloc{}", self.0)
+        }
     }
 }
 
