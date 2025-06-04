@@ -18,8 +18,8 @@ use alloc::vec::Vec;
 use core::alloc::Allocator;
 use core::hash::Hash;
 
-use hashbrown::hash_map::HashMap;
 use hashbrown::DefaultHashBuilder;
+use hashbrown::hash_map::HashMap;
 
 /// Intermediate key between a UniKeyMap and a UniValMap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

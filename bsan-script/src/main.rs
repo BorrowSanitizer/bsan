@@ -1,7 +1,7 @@
 // Our build script is a modified copy of Miri's build script.
 #![feature(io_error_more)]
 use anyhow::Result;
-use clap::{command, Parser};
+use clap::{Parser, command};
 use commands::Component;
 //mod commands;
 mod commands;

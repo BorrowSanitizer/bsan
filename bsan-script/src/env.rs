@@ -6,7 +6,7 @@ use anyhow::Result;
 use path_macro::path;
 use rustc_version::VersionMeta;
 use serde::Deserialize;
-use xshell::{cmd, Cmd, Shell};
+use xshell::{Cmd, Shell, cmd};
 
 use crate::utils::show_error;
 use crate::{download, utils};
@@ -44,11 +44,7 @@ pub enum Mode {
 
 impl Mode {
     pub fn release(release: bool) -> Self {
-        if release {
-            Mode::Release
-        } else {
-            Mode::Debug
-        }
+        if release { Mode::Release } else { Mode::Debug }
     }
 
     fn opt_level(&self) -> u32 {
