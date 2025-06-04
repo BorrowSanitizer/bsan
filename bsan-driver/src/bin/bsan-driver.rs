@@ -5,8 +5,8 @@ extern crate rustc_session;
 
 use std::env;
 
-use rustc_session::config::ErrorOutputType;
 use rustc_session::EarlyDiagCtxt;
+use rustc_session::config::ErrorOutputType;
 
 const BSAN_BUG_REPORT_URL: &str = "https://github.com/BorrowSanitizer/bsan/issues/new";
 

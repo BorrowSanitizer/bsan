@@ -76,11 +76,7 @@ impl IdempotentForeignAccess {
     /// This methods converts these into the corresponding `IdempotentForeignAccess`, to be used
     /// to e.g. invoke `can_skip_foreign_access`.
     pub fn from_acc_and_rel(acc: AccessKind, rel: AccessRelatedness) -> IdempotentForeignAccess {
-        if rel.is_foreign() {
-            Self::from_foreign(acc)
-        } else {
-            Self::None
-        }
+        if rel.is_foreign() { Self::from_foreign(acc) } else { Self::None }
     }
 
     /// During retags, the SIFA needs to be weakened to account for children with weaker SIFAs being inserted.
