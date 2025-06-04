@@ -359,7 +359,11 @@ impl Permission {
     /// is a protector is relevant because being protected takes priority over being
     /// interior mutable)
     pub fn new_reserved(ty_is_freeze: bool, protected: bool) -> Self {
-        if ty_is_freeze || protected { Self::new_reserved_frz() } else { Self::new_reserved_im() }
+        if ty_is_freeze || protected {
+            Self::new_reserved_frz()
+        } else {
+            Self::new_reserved_im()
+        }
     }
 
     /// Default initial permission of a reborrowed shared reference.

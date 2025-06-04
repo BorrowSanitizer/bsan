@@ -11,7 +11,7 @@ use ui_test::color_eyre::eyre::{Context, Result};
 use ui_test::custom_flags::edition::Edition;
 use ui_test::dependencies::DependencyBuilder;
 use ui_test::spanned::Spanned;
-use ui_test::{CommandBuilder, Config, Format, Match, OutputConflictHandling, status_emitter};
+use ui_test::{status_emitter, CommandBuilder, Config, Format, Match, OutputConflictHandling};
 
 #[allow(dead_code)]
 #[derive(Copy, Clone, Debug)]

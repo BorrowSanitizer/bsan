@@ -10,7 +10,7 @@ use anyhow::Result;
 use path_macro::path;
 use rustc_version::VersionMeta;
 use which::which;
-use xshell::{Cmd, Shell, cmd};
+use xshell::{cmd, Cmd, Shell};
 use xz2::bufread::XzDecoder;
 
 use crate::env::BsanConfig;
