@@ -10,7 +10,7 @@ use hashbrown::HashSet;
 use super::unimap::*;
 use super::*;
 use crate::diagnostics::{AccessCause, Event, NodeDebugInfo, TbError};
-use crate::dummy_span::*;
+use crate::span::*;
 use crate::{global_ctx, AllocId, BorTag, BsanAllocHooks, GlobalCtx, GLOBAL_CTX};
 
 // Ported from https://doc.rust-lang.org/stable/nightly-rustc/src/rustc_middle/mir/interpret/allocation.rs.html#336-384
@@ -594,7 +594,7 @@ impl<'tree> TreeVisitor<'tree> {
 
 impl Tree {
     /// Create a new tree, with only a root pointer.
-    pub fn new(root_tag: BorTag, size: Size, span: DummySpan, allocator: BsanAllocHooks) -> Self {
+    pub fn new(root_tag: BorTag, size: Size, span: Span, allocator: BsanAllocHooks) -> Self {
         // The root has `Disabled` as the default permission,
         // so that any access out of bounds is invalid.
         let root_default_perm = Permission::new_disabled();
@@ -660,7 +660,7 @@ impl<'tcx> Tree {
         initial_perms: RangeMap<LocationState>,
         default_perm: Permission,
         protected: bool,
-        span: DummySpan,
+        span: Span,
     ) -> bool {
         use core::ops::Range;
 
@@ -763,7 +763,7 @@ impl<'tcx> Tree {
         access_range: AllocRange,
         global: GlobalCtx,
         alloc_id: AllocId, // diagnostics
-        span: DummySpan,   // diagnostics
+        span: Span,        // diagnostics
     ) -> bool {
         // FIXME: Refactor to error propagation once we have own Result type
         let success = self.perform_access(
@@ -842,7 +842,7 @@ impl<'tcx> Tree {
         access_range_and_kind: Option<(AllocRange, AccessKind, AccessCause)>,
         global: GlobalCtx,
         alloc_id: AllocId, // diagnostics
-        span: DummySpan,   // diagnostics
+        span: Span,        // diagnostics
     ) -> bool {
         use core::ops::Range;
         // Performs the per-node work:
