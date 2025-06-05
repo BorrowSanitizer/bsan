@@ -18,7 +18,7 @@ impl Size {
         let bits = bits.try_into().ok().unwrap();
 
         // Avoid potential overflow from `bits + 7`.
-        Size(bits / 8 + ((bits % 8) + 7) / 8)
+        Size(bits / 8 + (bits % 8).div_ceil(8))
     }
     /// Get a Size defined by a number of bytesi
     pub fn from_bytes(bytes: impl TryInto<u64>) -> Size {
