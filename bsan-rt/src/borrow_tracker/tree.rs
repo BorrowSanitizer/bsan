@@ -1,7 +1,7 @@
 // Half implemented Tree for use in diagnostics
 
 use alloc::vec::Vec;
-use core::fmt;
+use core::fmt::{self, Display};
 
 use bsan_shared::diagnostics::*;
 use bsan_shared::{Permission, Size, *};
@@ -46,6 +46,37 @@ impl AllocRange {
         assert!(range.end() <= self.end(), "access outside the bounds for given AllocRange");
 
         range
+    }
+}
+
+// Basic errors and Result
+// TODO: Used as a placeholder more or less, should be redesigned properly in the future
+pub type BsanTreeResult<T> = Result<T, BsanTreeError>;
+
+// Is essentially a mirror of TbError, not 100% idiomatic to Miri but it does not need to be
+#[derive(Debug, Clone)]
+pub struct BsanTreeError {
+    /// What failure occurred.
+    pub error_kind: TransitionError,
+    /// The allocation in which the error is happening.
+    pub alloc_id: AllocId,
+    /// The offset (into the allocation) at which the conflict occurred.
+    pub error_offset: u64,
+    /// The tag on which the error was triggered.
+    /// On protector violations, this is the tag that was protected.
+    /// On accesses rejected due to insufficient permissions, this is the
+    /// tag that lacked those permissions.
+    pub conflicting_info: NodeDebugInfo,
+    // What kind of access caused this error (read, write, reborrow, deallocation)
+    pub access_cause: AccessCause,
+    /// Which tag the access that caused this error was made through, i.e.
+    /// which tag was used to read/write/deallocate.
+    pub accessed_info: NodeDebugInfo,
+}
+
+impl Display for BsanTreeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "BSAN-TREE-ERROR: {:?}", self.error_kind)
     }
 }
 
@@ -640,8 +671,6 @@ impl Tree {
 }
 
 impl<'tcx> Tree {
-    // FIXME: Refactor to our own Result type
-
     /// Insert a new tag in the tree.
     ///
     /// `initial_perms` defines the initial permissions for the part of memory
@@ -661,7 +690,7 @@ impl<'tcx> Tree {
         default_perm: Permission,
         protected: bool,
         span: Span,
-    ) -> bool {
+    ) -> BsanTreeResult<()> {
         use core::ops::Range;
 
         let idx = self.tag_mapping.insert(new_tag);
@@ -709,7 +738,7 @@ impl<'tcx> Tree {
         // See the comment in `tb_reborrow` for why it is correct to use the SIFA of `default_uninit_perm`.
         self.update_last_accessed_after_retag(parent_idx, default_strongest_idempotent);
 
-        true
+        Ok(())
     }
 
     /// Restores the SIFA "children are stronger" invariant after a retag.
@@ -752,8 +781,6 @@ impl<'tcx> Tree {
         }
     }
 
-    // FIXME: Refactor to our own Result type
-
     /// Deallocation requires
     /// - a pointer that permits write accesses
     /// - the absence of Strong Protectors anywhere in the allocation
@@ -764,18 +791,17 @@ impl<'tcx> Tree {
         global: GlobalCtx,
         alloc_id: AllocId, // diagnostics
         span: Span,        // diagnostics
-    ) -> bool {
-        // FIXME: Refactor to error propagation once we have own Result type
+    ) -> BsanTreeResult<()> {
         let success = self.perform_access(
             tag,
             Some((access_range, AccessKind::Write, AccessCause::Dealloc)),
             global,
             alloc_id,
             span,
-        );
+        )?;
+
         for (perms_range, perms) in self.rperms.iter_mut(access_range.start, access_range.size) {
             TreeVisitor { nodes: &mut self.nodes, tag_mapping: &self.tag_mapping, perms }
-                // FIXME: Refactor to use error propagation
                 .traverse_this_parents_children_other(
                     tag,
                     // visit all children, skipping none
@@ -784,7 +810,7 @@ impl<'tcx> Tree {
                         let NodeAppArgs { node, perm, .. } = args;
                         let perm =
                             perm.get().copied().unwrap_or_else(|| node.default_location_state());
-                        // FIXME: Refactor when global context has protected tags
+                        // TODO: Refactor when global context has protected tags
                         // if global.borrow().protected_tags.get(&node.tag)
                         //     == Some(&ProtectorKind::StrongProtector)
                         // {
@@ -795,28 +821,25 @@ impl<'tcx> Tree {
                         //
                         Ok(())
                     },
-                    // FIXME: Refactor to our own Result
-                    |args: ErrHandlerArgs<'_, TransitionError>| -> bool {
+                    |args: ErrHandlerArgs<'_, TransitionError>| -> BsanTreeError {
                         let ErrHandlerArgs { error_kind, conflicting_info, accessed_info } = args;
-                        TbError {
+                        let conflicting_info = conflicting_info.clone();
+                        let accessed_info = accessed_info.clone();
+                        // For now this is a mirror of a TbError provided by Miri
+                        BsanTreeError {
                             conflicting_info,
                             access_cause: AccessCause::Dealloc,
                             alloc_id,
                             error_offset: perms_range.start,
                             error_kind,
                             accessed_info,
-                        };
-
-                        true
+                        }
                     },
-                )
-                .unwrap();
+                )?
         }
 
-        true
+        Ok(())
     }
-
-    // FIXME: Refactor with our own Result
 
     /// Map the per-node and per-location `LocationState::perform_access`
     /// to each location of the first component of `access_range_and_kind`,
@@ -843,7 +866,7 @@ impl<'tcx> Tree {
         global: GlobalCtx,
         alloc_id: AllocId, // diagnostics
         span: Span,        // diagnostics
-    ) -> bool {
+    ) -> BsanTreeResult<()> {
         use core::ops::Range;
         // Performs the per-node work:
         // - insert the permission if it does not exist
@@ -875,9 +898,9 @@ impl<'tcx> Tree {
             // `traverse_this_parents_children_other`.
             old_state.record_new_access(access_kind, rel_pos);
 
-            // FIXME: Implement protected tag lookup through global context
+            // TODO: Implement protected tag lookup through global context
             //let protected = global.borrow().protected_tags.contains_key(&node.tag);
-            // FIXME: Pipe protection status into perform access
+            // TODO: Pipe protection status into perform access
             let transition = old_state.perform_access(access_kind, rel_pos, false)?;
             // Record the event as part of the history
             if !transition.is_noop() {
@@ -893,26 +916,27 @@ impl<'tcx> Tree {
             Ok(())
         };
 
-        // FIXME: Refactor with our own Result
-
+        // TODO: We need an a
         // Error handler in case `node_app` goes wrong.
         // Wraps the faulty transition in more context for diagnostics.
         let err_handler = |perms_range: Range<u64>,
                            access_cause: AccessCause,
                            args: ErrHandlerArgs<'_, TransitionError>|
-         -> bool {
+         -> BsanTreeError {
             let ErrHandlerArgs { error_kind, conflicting_info, accessed_info } = args;
-            TbError {
+
+            let conflicting_info = conflicting_info.clone();
+            let accessed_info = accessed_info.clone();
+
+            BsanTreeError {
                 conflicting_info,
                 access_cause,
                 alloc_id,
                 error_offset: perms_range.start,
                 error_kind,
                 accessed_info,
-            };
-            // FIXME: Handle errors and results properly
+            }
             // .build();
-            true
         };
 
         if let Some((access_range, access_kind, access_cause)) = access_range_and_kind {
@@ -920,19 +944,15 @@ impl<'tcx> Tree {
             // We iterate over affected locations and traverse the tree for each of them.
             for (perms_range, perms) in self.rperms.iter_mut(access_range.start, access_range.size)
             {
-                // FIXME: Refactor to use error propagation
                 TreeVisitor { nodes: &mut self.nodes, tag_mapping: &self.tag_mapping, perms }
                     .traverse_this_parents_children_other(
                         tag,
                         |args| node_skipper(access_kind, args),
                         |args| node_app(perms_range.clone(), access_kind, access_cause, args),
                         |args| err_handler(perms_range.clone(), access_cause, args),
-                    )
-                    .unwrap();
+                    )?
             }
         } else {
-            // FIXME: Refactor to use error propagation
-
             // This is a special access through the entire allocation.
             // It actually only affects `accessed` locations, so we need
             // to filter on those before initiating the traversal.
@@ -952,16 +972,15 @@ impl<'tcx> Tree {
                     let access_cause = AccessCause::FnExit(access_kind);
                     TreeVisitor { nodes: &mut self.nodes, tag_mapping: &self.tag_mapping, perms }
                         .traverse_nonchildren(
-                            tag,
-                            |args| node_skipper(access_kind, args),
-                            |args| node_app(perms_range.clone(), access_kind, access_cause, args),
-                            |args| err_handler(perms_range.clone(), access_cause, args),
-                        )
-                        .unwrap();
+                        tag,
+                        |args| node_skipper(access_kind, args),
+                        |args| node_app(perms_range.clone(), access_kind, access_cause, args),
+                        |args| err_handler(perms_range.clone(), access_cause, args),
+                    )?;
                 }
             }
         }
-        true
+        Ok(())
     }
 }
 

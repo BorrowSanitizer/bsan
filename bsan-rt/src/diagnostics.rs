@@ -9,7 +9,7 @@ use core::ops::Range;
 use bsan_shared::diagnostics::*;
 use bsan_shared::{Size, *};
 
-use crate::borrow_tracker::tree::{AllocRange, LocationState, Tree};
+use crate::borrow_tracker::tree::{AllocRange, BsanTreeResult, LocationState, Tree};
 use crate::borrow_tracker::unimap::UniIndex;
 use crate::span::*;
 use crate::{println, AllocId, BorTag};
@@ -221,8 +221,12 @@ impl<'tcx> Tree {
     }
 
     /// Debug helper: assign name to tag.
-    // FIXME: Refacotor return type to Result-like object if ported
-    pub fn give_pointer_debug_name(&mut self, tag: BorTag, nth_parent: u8, name: &str) -> bool {
+    pub fn give_pointer_debug_name(
+        &mut self,
+        tag: BorTag,
+        nth_parent: u8,
+        name: &str,
+    ) -> BsanTreeResult<()> {
         let tag = self.nth_parent(tag, nth_parent).unwrap();
         let idx = self.tag_mapping.get(&tag).unwrap();
         if let Some(node) = self.nodes.get_mut(idx) {
@@ -230,7 +234,7 @@ impl<'tcx> Tree {
         } else {
             println!("Tag {tag:?} (to be named '{name}') not found!");
         }
-        true
+        Ok(())
     }
 
     /// Debug helper: determines if the tree contains a tag.
