@@ -3,11 +3,12 @@
 use alloc::vec::Vec;
 use core::fmt;
 
+use bsan_shared::diagnostics::*;
 use bsan_shared::*;
 
 use super::unimap::*;
 use super::*;
-use crate::diagnostics::{NodeDebugInfo, TransitionError};
+use crate::diagnostics::NodeDebugInfo;
 use crate::{BorTag, BsanAllocHooks};
 
 /// Whether to continue exploring the children recursively or not.
