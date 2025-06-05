@@ -822,8 +822,6 @@ where
         }
     }
 
-    // FIXME: Refactor to our own Result type
-
     /// Deallocation requires
     /// - a pointer that permits write accesses
     /// - the absence of Strong Protectors anywhere in the allocation
@@ -847,7 +845,6 @@ where
 
         for (perms_range, perms) in self.rperms.iter_mut(access_range.start, access_range.size) {
             TreeVisitor { nodes: &mut self.nodes, tag_mapping: &self.tag_mapping, perms }
-                // FIXME: Refactor to use error propagation
                 .traverse_this_parents_children_other(
                     tag,
                     // visit all children, skipping none
@@ -887,8 +884,6 @@ where
 
         Ok(())
     }
-
-    // FIXME: Refactor with our own Result
 
     /// Map the per-node and per-location `LocationState::perform_access`
     /// to each location of the first component of `access_range_and_kind`,
@@ -994,7 +989,6 @@ where
             // We iterate over affected locations and traverse the tree for each of them.
             for (perms_range, perms) in self.rperms.iter_mut(access_range.start, access_range.size)
             {
-                // FIXME: Refactor to use error propagation
                 TreeVisitor { nodes: &mut self.nodes, tag_mapping: &self.tag_mapping, perms }
                     .traverse_this_parents_children_other(
                         tag,
@@ -1005,8 +999,6 @@ where
                     )?
             }
         } else {
-            // FIXME: Refactor to use error propagation
-
             // This is a special access through the entire allocation.
             // It actually only affects `accessed` locations, so we need
             // to filter on those before initiating the traversal.
