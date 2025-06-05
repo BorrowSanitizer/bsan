@@ -183,8 +183,8 @@ impl<T> RangeMap<T> {
                     offset + len
                 );
                 // see if we want to merge everything in `equal_since..end` (exclusive at the end!)
-                if successful_merge_count > 0 {
-                    if done || self.v[end_idx].data != self.v[equal_since_idx].data {
+                if successful_merge_count > 0
+                    && (done || self.v[end_idx].data != self.v[equal_since_idx].data) {
                         // Everything in `equal_since..end` was equal. Make them just one element covering
                         // the entire range.
                         let removed_elems = end_idx - equal_since_idx - 1; // number of elements that we would remove
@@ -205,7 +205,6 @@ impl<T> RangeMap<T> {
                         // Go on scanning for the next block starting here.
                         equal_since_idx = end_idx;
                     }
-                }
                 // Leave loop if this is the last element.
                 if done {
                     break;
@@ -231,13 +230,12 @@ impl<T> RangeMap<T> {
     {
         let clean = Vec::with_capacity(self.v.len());
         for elem in mem::replace(&mut self.v, clean) {
-            if let Some(prev) = self.v.last_mut() {
-                if prev.data == elem.data {
+            if let Some(prev) = self.v.last_mut()
+                && prev.data == elem.data {
                     assert_eq!(prev.range.end, elem.range.start);
                     prev.range.end = elem.range.end;
                     continue;
                 }
-            }
             self.v.push(elem);
         }
     }

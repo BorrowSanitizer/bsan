@@ -575,9 +575,9 @@ pub mod diagnostics {
                         // Permissions only evolve in the order `Reserved -> Active -> Frozen -> Disabled`,
                         // so permissions found must be increasing in the order
                         // `self.from < self.to <= forbidden.from < forbidden.to`.
-                        ((Disabled  | ReservedFrzConf | ReservedFrz | ReservedIM | Active | Frozen)
-                        | (Frozen| ReservedFrzConf | ReservedFrz | ReservedIM | Active)
-                        | (Active | ReservedFrzConf | ReservedFrz | ReservedIM), _) =>
+                        (Disabled  | ReservedFrzConf | ReservedFrz | ReservedIM | Active | Frozen
+                        | Frozen| ReservedFrzConf | ReservedFrz | ReservedIM | Active
+                        | Active | ReservedFrzConf | ReservedFrz | ReservedIM, _) =>
                             unreachable!("permissions between self and err must be increasing"),
                     }
                 }
@@ -596,8 +596,8 @@ pub mod diagnostics {
     }
 }
 
-impl Into<u8> for Permission {
-    fn into(self) -> u8 {
-        self.inner as u8
+impl From<Permission> for u8 {
+    fn from(val: Permission) -> Self {
+        val.inner as u8
     }
 }

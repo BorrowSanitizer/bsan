@@ -31,7 +31,6 @@ pub use local::*;
 mod block;
 pub mod borrow_tracker;
 mod diagnostics;
-mod dummy_span;
 mod shadow;
 mod span;
 
