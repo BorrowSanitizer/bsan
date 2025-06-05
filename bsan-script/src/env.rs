@@ -212,7 +212,9 @@ impl BsanEnv {
         let target_bindir = &self.target_bindir;
         let binary = path!(target_bindir / binary_name);
         if !binary.exists() {
-            show_error!("Unable to locate binary `{binary_name}` within the target bindir ({target_bindir:?}).");
+            show_error!(
+                "Unable to locate binary `{binary_name}` within the target bindir ({target_bindir:?})."
+            );
         } else {
             binary
         }
