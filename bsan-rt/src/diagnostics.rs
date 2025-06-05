@@ -11,7 +11,7 @@ use bsan_shared::*;
 
 use crate::borrow_tracker::tree::{LocationState, Tree};
 use crate::borrow_tracker::unimap::UniIndex;
-use crate::dummy_span::*;
+use crate::span::*;
 use crate::{println, AllocId, BorTag};
 
 /// Cause of an access: either a real access or one
@@ -82,7 +82,7 @@ pub struct Event {
     /// `event.transition_range.contains(error.error_offset)`.
     pub transition_range: Range<u64>,
     /// Line of code that triggered this event.
-    pub span: DummySpan,
+    pub span: Span,
 }
 
 /// List of all events that affected a tag.
@@ -92,7 +92,7 @@ pub struct Event {
 #[derive(Clone, Debug)]
 pub struct History {
     tag: BorTag,
-    created: (DummySpan, Permission),
+    created: (Span, Permission),
     events: Vec<Event>,
 }
 
@@ -102,7 +102,7 @@ pub struct History {
 /// the use of `SpanData` rather than `Span`.
 #[derive(Debug, Clone, Default)]
 pub struct HistoryData {
-    pub events: Vec<(Option<DummySpanData>, String)>, // includes creation
+    pub events: Vec<(Option<SpanData>, String)>, // includes creation
 }
 
 impl History {
@@ -179,7 +179,7 @@ pub struct NodeDebugInfo {
 impl NodeDebugInfo {
     /// Information for a new node. By default it has no
     /// name and an empty history.
-    pub fn new(tag: BorTag, initial: Permission, span: DummySpan) -> Self {
+    pub fn new(tag: BorTag, initial: Permission, span: Span) -> Self {
         let history = History { tag, created: (span, initial), events: Vec::new() };
         Self { tag, name: None, history }
     }
