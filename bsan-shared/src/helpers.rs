@@ -1,8 +1,17 @@
+use core::fmt::Display;
+
 /// Indicates which kind of access is being performed.
 #[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]
 pub enum AccessKind {
     Read,
     Write,
+}
+
+#[allow(clippy::recursive_format_impl)]
+impl Display for AccessKind {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "AccessKind<{self}>")
+    }
 }
 
 /// Relative position of the access
