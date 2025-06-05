@@ -7,6 +7,7 @@ pub enum AccessKind {
     Write,
 }
 
+#[allow(clippy::recursive_format_impl)]
 impl Display for AccessKind {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "AccessKind<{self}>")
