@@ -673,8 +673,6 @@ impl Tree {
 }
 
 impl<'tcx> Tree {
-    // FIXME: Refactor to our own Result type
-
     /// Insert a new tag in the tree.
     ///
     /// `initial_perms` defines the initial permissions for the part of memory
@@ -785,8 +783,6 @@ impl<'tcx> Tree {
         }
     }
 
-    // FIXME: Refactor to our own Result type
-
     /// Deallocation requires
     /// - a pointer that permits write accesses
     /// - the absence of Strong Protectors anywhere in the allocation
@@ -808,7 +804,6 @@ impl<'tcx> Tree {
 
         for (perms_range, perms) in self.rperms.iter_mut(access_range.start, access_range.size) {
             TreeVisitor { nodes: &mut self.nodes, tag_mapping: &self.tag_mapping, perms }
-                // FIXME: Refactor to use error propagation
                 .traverse_this_parents_children_other(
                     tag,
                     // visit all children, skipping none
@@ -847,8 +842,6 @@ impl<'tcx> Tree {
 
         Ok(())
     }
-
-    // FIXME: Refactor with our own Result
 
     /// Map the per-node and per-location `LocationState::perform_access`
     /// to each location of the first component of `access_range_and_kind`,
@@ -953,7 +946,6 @@ impl<'tcx> Tree {
             // We iterate over affected locations and traverse the tree for each of them.
             for (perms_range, perms) in self.rperms.iter_mut(access_range.start, access_range.size)
             {
-                // FIXME: Refactor to use error propagation
                 TreeVisitor { nodes: &mut self.nodes, tag_mapping: &self.tag_mapping, perms }
                     .traverse_this_parents_children_other(
                         tag,
@@ -963,8 +955,6 @@ impl<'tcx> Tree {
                     )?
             }
         } else {
-            // FIXME: Refactor to use error propagation
-
             // This is a special access through the entire allocation.
             // It actually only affects `accessed` locations, so we need
             // to filter on those before initiating the traversal.
@@ -984,12 +974,11 @@ impl<'tcx> Tree {
                     let access_cause = AccessCause::FnExit(access_kind);
                     TreeVisitor { nodes: &mut self.nodes, tag_mapping: &self.tag_mapping, perms }
                         .traverse_nonchildren(
-                            tag,
-                            |args| node_skipper(access_kind, args),
-                            |args| node_app(perms_range.clone(), access_kind, access_cause, args),
-                            |args| err_handler(perms_range.clone(), access_cause, args),
-                        )
-                        .unwrap();
+                        tag,
+                        |args| node_skipper(access_kind, args),
+                        |args| node_app(perms_range.clone(), access_kind, access_cause, args),
+                        |args| err_handler(perms_range.clone(), access_cause, args),
+                    )?;
                 }
             }
         }
