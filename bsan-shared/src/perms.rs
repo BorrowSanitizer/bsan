@@ -18,6 +18,8 @@ impl RetagInfo {
         Self { size, perm_kind, protector_kind }
     }
 
+    /// # Safety
+    /// Both perm_kind and protector_kind must be valid enum variants.
     pub unsafe fn from_raw(size: usize, perm_kind: u8, protector_kind: u8) -> Self {
         let perm_kind = unsafe { Permission::from_raw(perm_kind) };
         let protector_kind = unsafe { ProtectorKind::from_raw(protector_kind) };
@@ -310,6 +312,8 @@ pub struct Permission {
 }
 impl Permission {
     #[inline]
+    /// # Safety
+    /// Must be a valid enum variant.
     pub unsafe fn from_raw(perm_priv: u8) -> Self {
         let inner: PermissionPriv =
             unsafe { core::mem::transmute::<u8, PermissionPriv>(perm_priv) };
