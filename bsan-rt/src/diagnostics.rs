@@ -18,7 +18,7 @@ use crate::{println, AllocId, BorTag, GlobalCtx};
 
 /// Cause of an access: either a real access or one
 /// inserted by Tree Borrows due to a reborrow or a deallocation.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AccessCause {
     Explicit(AccessKind),
     Reborrow,
@@ -56,7 +56,7 @@ impl AccessCause {
 }
 
 /// Complete data for an event:
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Event {
     /// Transformation of permissions that occurred because of this event.
     pub transition: PermTransition,
@@ -91,7 +91,7 @@ pub struct Event {
 /// NOTE: not all of these events are relevant for a particular location,
 /// the events should be filtered before the generation of diagnostics.
 /// Available filtering methods include `History::forget` and `History::extract_relevant`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct History<A: Allocator = Global> {
     tag: BorTag,
     created: (Span, Permission),
@@ -170,7 +170,7 @@ where
 
 /// Some information that is irrelevant for the algorithm but very
 /// convenient to know about a tag for debugging and testing.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct NodeDebugInfo<A: Allocator = Global> {
     /// The tag in question.
     pub tag: BorTag,
@@ -189,13 +189,20 @@ pub struct NodeDebugInfo<A: Allocator = Global> {
     pub history: History<A>,
 }
 
+impl NodeDebugInfo<Global> {
+    pub fn new(tag: BorTag, initial: Permission, span: Span) -> Self {
+        let history = History { tag, created: (span, initial), events: Vec::new_in(Global) };
+        Self { tag, name: None, history }
+    }
+}
+
 impl<A> NodeDebugInfo<A>
 where
     A: Allocator,
 {
     /// Information for a new node. By default it has no
-    /// name and an empty history.
-    pub fn new(tag: BorTag, initial: Permission, span: Span, alloc: A) -> Self {
+    /// name and an empty history. Uses custom allocator.
+    pub fn new_in(tag: BorTag, initial: Permission, span: Span, alloc: A) -> Self {
         let history = History { tag, created: (span, initial), events: Vec::new_in(alloc) };
         Self { tag, name: None, history }
     }

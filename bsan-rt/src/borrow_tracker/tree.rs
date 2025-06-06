@@ -17,7 +17,7 @@ use crate::{global_ctx, AllocId, BorTag, BsanAllocHooks, GlobalCtx, GLOBAL_CTX};
 
 // Ported from https://doc.rust-lang.org/stable/nightly-rustc/src/rustc_middle/mir/interpret/allocation.rs.html#336-384
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct AllocRange {
     pub start: Size,
     pub size: Size,
@@ -296,7 +296,7 @@ pub struct Tree<A: Allocator = Global> {
     // TODO: Validate whether this is the correct use of
     pub tag_mapping: UniKeyMap<BorTag, A>,
     /// All nodes of this tree.
-    pub nodes: UniValMap<Node>,
+    pub nodes: UniValMap<Node, A>,
     /// Maps a tag and a location to a perm, with possible lazy
     /// initialization.
     ///
@@ -306,14 +306,14 @@ pub struct Tree<A: Allocator = Global> {
     /// `unwrap` any `perm.get(key)`.
     ///
     /// We do uphold the fact that `keys(perms)` is a subset of `keys(nodes)`
-    pub rperms: RangeMap<UniValMap<LocationState>, A>,
+    pub rperms: RangeMap<UniValMap<LocationState, A>, A>,
     /// The index of the root node.
     pub root: UniIndex,
 }
 
 /// A node in the borrow tree. Each node is uniquely identified by a tag via
 /// the `nodes` map of `Tree`.
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct Node<A: Allocator = Global> {
     /// The tag of this node.
     pub tag: BorTag,
@@ -324,7 +324,7 @@ pub struct Node<A: Allocator = Global> {
 
     // Miri's implementation uses SmallVec as an optimization, can later be discussed for
     // bsan if needed as an optimization.
-    pub children: Vec<[UniIndex; 4], A>,
+    pub children: Vec<UniIndex, A>,
     /// Either `Reserved`,  `Frozen`, or `Disabled`, it is the permission this tag will
     /// lazily be initialized to on the first access.
     /// It is only ever `Disabled` for a tree root, since the root is initialized to `Active` by
@@ -363,10 +363,10 @@ struct ErrHandlerArgs<'node, InErr> {
 /// Internal contents of `Tree` with the minimum of mutable access for
 /// the purposes of the tree traversal functions: the permissions (`perms`) can be
 /// updated but not the tree structure (`tag_mapping` and `nodes`)
-struct TreeVisitor<'tree> {
-    tag_mapping: &'tree UniKeyMap<BorTag, BsanAllocHooks>,
-    nodes: &'tree mut UniValMap<Node>,
-    perms: &'tree mut UniValMap<LocationState>,
+struct TreeVisitor<'tree, A: Allocator = Global> {
+    tag_mapping: &'tree UniKeyMap<BorTag, A>,
+    nodes: &'tree mut UniValMap<Node, A>,
+    perms: &'tree mut UniValMap<LocationState, A>,
 }
 
 #[derive(Clone, Copy)]
@@ -383,7 +383,7 @@ enum RecursionState {
 /// Stack of nodes left to explore in a tree traversal.
 /// See the docs of `traverse_this_parents_children_other` for details on the
 /// traversal order.
-struct TreeVisitorStack<NodeContinue, NodeApp, ErrHandler> {
+struct TreeVisitorStack<NodeContinue, NodeApp, ErrHandler, A: Allocator = Global> {
     /// Identifier of the original access.
     initial: UniIndex,
     /// Function describing whether to continue at a tag.
@@ -401,7 +401,7 @@ struct TreeVisitorStack<NodeContinue, NodeApp, ErrHandler> {
     /// The last element indicates this.
     /// This is just an artifact of how you hand-roll recursion,
     /// it does not have a deeper meaning otherwise.
-    stack: Vec<(UniIndex, AccessRelatedness, RecursionState)>,
+    stack: Vec<(UniIndex, AccessRelatedness, RecursionState), A>,
 }
 
 impl<NodeContinue, NodeApp, InnErr, OutErr, ErrHandler>
@@ -528,17 +528,30 @@ where
         }
         Ok(())
     }
-
     fn new(
         initial: UniIndex,
         f_continue: NodeContinue,
         f_propagate: NodeApp,
         err_builder: ErrHandler,
     ) -> Self {
-        Self { initial, f_continue, f_propagate, err_builder, stack: Vec::new() }
+        Self { initial, f_continue, f_propagate, err_builder, stack: Vec::new_in(Global) }
     }
 }
 
+impl<NodeContinue, NodeApp, ErrHandler, A> TreeVisitorStack<NodeContinue, NodeApp, ErrHandler, A>
+where
+    A: Allocator,
+{
+    fn new_in(
+        initial: UniIndex,
+        f_continue: NodeContinue,
+        f_propagate: NodeApp,
+        err_builder: ErrHandler,
+        allocator: A,
+    ) -> Self {
+        Self { initial, f_continue, f_propagate, err_builder, stack: Vec::new_in(allocator) }
+    }
+}
 impl<'tree> TreeVisitor<'tree> {
     /// Applies `f_propagate` to every vertex of the tree in a piecewise bottom-up way: First, visit
     /// all ancestors of `start` (starting with `start` itself), then children of `start`, then the rest,
@@ -625,16 +638,20 @@ impl<'tree> TreeVisitor<'tree> {
     }
 }
 
-impl Tree {
+impl<A> Tree<A>
+where
+    A: Allocator + Clone,
+{
     /// Create a new tree, with only a root pointer.
-    pub fn new(root_tag: BorTag, size: Size, span: Span, allocator: BsanAllocHooks) -> Self {
+    pub fn new_in(root_tag: BorTag, size: Size, span: Span, allocator: A) -> Self {
         // The root has `Disabled` as the default permission,
         // so that any access out of bounds is invalid.
         let root_default_perm = Permission::new_disabled();
-        let mut tag_mapping = UniKeyMap::new(allocator);
+        let mut tag_mapping = UniKeyMap::new(allocator.clone());
         let root_idx = tag_mapping.insert(root_tag);
         let nodes = {
-            let mut nodes = UniValMap::<Node>::default();
+            // ATTENTION: Using the `Global` allocator for the nodes even though this is a custom allocated method
+            let mut nodes = UniValMap::<Node, A>::new_in(allocator.clone());
             let mut debug_info = NodeDebugInfo::new(root_tag, root_default_perm, span);
             // name the root so that all allocations contain one named pointer
             debug_info.add_name("root of the allocation");
@@ -644,7 +661,8 @@ impl Tree {
                     tag: root_tag,
                     parent: None,
                     // Miri uses SmallVec here
-                    children: Vec::default(),
+                    // ATTENTION: Using `Global` allocator
+                    children: Vec::new_in(Global),
                     default_initial_perm: root_default_perm,
                     // The root may never be skipped, all accesses will be local.
                     default_initial_idempotent_foreign_access: IdempotentForeignAccess::None,
@@ -654,7 +672,7 @@ impl Tree {
             nodes
         };
         let rperms = {
-            let mut perms = UniValMap::default();
+            let mut perms = UniValMap::new_in(allocator.clone());
             // We manually set it to `Active` on all in-bounds positions.
             // We also ensure that it is accessed, so that no `Active` but
             // not yet accessed nodes exist. Essentially, we pretend there
@@ -666,7 +684,7 @@ impl Tree {
                     IdempotentForeignAccess::None,
                 ),
             );
-            RangeMap::new(size, perms)
+            RangeMap::new_in(size, perms, allocator)
         };
         Self { root: root_idx, nodes, rperms, tag_mapping }
     }
@@ -987,14 +1005,17 @@ impl<'tcx> Tree {
 }
 
 /// Integration with the BorTag garbage collector
-impl Tree {
-    pub fn remove_unreachable_tags(&mut self, live_tags: &HashSet<BorTag>) {
+impl<A> Tree<A>
+where
+    A: Allocator,
+{
+    pub fn remove_unreachable_tags(&mut self, live_tags: &HashSet<BorTag>, allocator: A) {
         self.remove_useless_children(self.root, live_tags);
         // Right after the GC runs is a good moment to check if we can
         // merge some adjacent ranges that were made equal by the removal of some
         // tags (this does not necessarily mean that they have identical internal representations,
         // see the `PartialEq` impl for `UniValMap`)
-        self.rperms.merge_adjacent_thorough();
+        self.rperms.merge_adjacent_thorough(allocator);
     }
 
     /// Checks if a node is useless and should be GC'ed.
