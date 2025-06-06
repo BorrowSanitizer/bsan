@@ -120,6 +120,11 @@ where
         self.mapping.len()
     }
 
+    /// Checks if the map is empty
+    pub fn is_empty(&self) -> bool {
+        self.mapping.is_empty()
+    }
+
     /// Whether this key has an associated index or not.
     pub fn contains_key(&self, key: &K) -> bool {
         self.mapping.contains_key(key)

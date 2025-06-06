@@ -1,8 +1,9 @@
+#![allow(unused_lifetimes)]
 // Ported from Miri's `diagnostics.rs`
 // Won't be used exactly as it is used in Miri or at all
 // but nice to port in case there are any similar behaviors / as a starting point
 use alloc::alloc::Global;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::alloc::Allocator;
 use core::fmt::{self, Write};
@@ -452,10 +453,11 @@ impl DisplayFmt {
     /// and `?Res`/`?Re*`/`?Act`/`?Frz`/`?Dis` for unaccessed locations.
     fn print_perm(&self, perm: Option<LocationState>) -> String {
         if let Some(perm) = perm {
-            format!(
-                "{ac}",
-                ac = if perm.is_accessed() { self.accessed.yes } else { self.accessed.no },
-            )
+            if perm.is_accessed() {
+                self.accessed.yes.to_string()
+            } else {
+                self.accessed.no.to_string()
+            }
         } else {
             format!("{}{}", self.accessed.meh, self.perm.uninit)
         }
