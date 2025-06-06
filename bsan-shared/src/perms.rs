@@ -1,3 +1,5 @@
+#![allow(unreachable_patterns)]
+
 use core::cmp::Ordering;
 use core::cmp::Ordering::*;
 use core::fmt;
