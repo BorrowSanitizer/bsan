@@ -8,7 +8,7 @@ use path_macro::path;
 use xshell::cmd;
 
 use crate::env::{BsanEnv, Mode};
-use crate::utils::{self, show_error};
+use crate::utils::{self, install_git_hooks, show_error};
 use crate::Command;
 
 impl Command {
@@ -16,7 +16,7 @@ impl Command {
         let mut env = BsanEnv::new()?;
         let env = &mut env;
         match self {
-            Command::Setup => Ok(()),
+            Command::Setup => Self::setup(env),
             Command::Clean => Self::clean(env),
             Command::Ci { args } => Self::ci(env, &args),
             Command::Doc { components, args } => components.iter().try_for_each(|c| {
@@ -45,6 +45,12 @@ impl Command {
             }
             Command::UI { bless } => Self::ui(env, bless),
         }
+    }
+
+    fn setup(env: &mut BsanEnv) -> Result<()> {
+        install_git_hooks(&env.root_dir)?;
+
+        Ok(())
     }
 
     fn fmt(env: &mut BsanEnv, args: &[String]) -> Result<()> {

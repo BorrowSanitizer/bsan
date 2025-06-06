@@ -12,6 +12,8 @@ path_macro = "1.0.0"
 rustc_version = "0.4.1"
 semver = "1.0.26"
 serde = { version = "1.0.219", features = ["derive"] }
+strum = "0.27.1"
+strum_macros = "0.27.1"
 tar = "0.4.44"
 toml = "0.8.22"
 which = "7.0.3"
