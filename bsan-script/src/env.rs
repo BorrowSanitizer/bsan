@@ -10,7 +10,7 @@ use xshell::{cmd, Cmd, Shell};
 
 use crate::commands::Buildable;
 use crate::utils::{active_toolchain, show_error};
-use crate::{download, utils, TOOLCHAIN_NAME};
+use crate::{utils, TOOLCHAIN_NAME};
 
 #[allow(dead_code)]
 pub struct BsanEnv {
@@ -82,7 +82,10 @@ impl Mode {
 #[derive(Deserialize)]
 pub struct BsanConfig {
     pub artifact_url: String,
-    pub tag: String
+    pub tag: String,
+    pub sha: String,
+    pub dependencies: Vec<String>,
+    pub targets: Vec<String>
 }
 
 impl BsanConfig {
@@ -101,9 +104,9 @@ impl BsanEnv {
 
         let deps_dir = path!(root_dir / ".toolchain");
         fs::create_dir_all(&deps_dir)?;
-        let config = BsanConfig::from_file(&path!(root_dir / "bsan.toml"))?;
+        let config = BsanConfig::from_file(&path!(root_dir / "config.toml"))?;
 
-        let meta = download::toolchain(&sh, &host, &config, &deps_dir)?;
+        let meta = setup::setup(&sh, &host, &config, &deps_dir)?;
 
         let build_dir = path!(root_dir / "target");
         // Hard-code the target dir, since we rely on all binaries ending up in the same spot.
@@ -338,3 +341,4 @@ impl BsanEnv {
         Ok(())
     }
 }
+

@@ -4,7 +4,7 @@ extern crate rustc_driver;
 
 use std::env;
 pub const BSAN_BUG_REPORT_URL: &str = "https://github.com/BorrowSanitizer/rust/issues/new";
-pub const BSAN_DEFAULT_ARGS: &[&str] = &["--cfg=bsan", "-Zmir-opt-level=0", "-Cpasses=bsan"];
+pub const BSAN_DEFAULT_ARGS: &[&str] = &["--cfg=bsan", "-Zmir-opt-level=0", "-Cpasses=bsan", "-Zllvm-emit-retag"];
 
 pub struct BSanCallBacks {}
 impl rustc_driver::Callbacks for BSanCallBacks {}
