@@ -1,6 +1,8 @@
-// Half implemented Tree for use in diagnostics
+#![allow(unused_lifetimes)]
+#![allow(clippy::extra_unused_lifetimes)]
 
 use alloc::alloc::Global;
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::alloc::Allocator;
 use core::fmt::{self, Display};
@@ -24,22 +26,18 @@ pub struct AllocRange {
 }
 
 #[inline(always)]
-
 pub fn alloc_range(start: Size, size: Size) -> AllocRange {
     AllocRange { start, size }
 }
 
 impl AllocRange {
     #[inline(always)]
-
     pub fn end(self) -> Size {
         self.start + self.size // This does overflow checking.
     }
 
     /// Returns the `subrange` within this range; panics if it is not a subrange.
-
     #[inline]
-
     pub fn subrange(self, subrange: AllocRange) -> AllocRange {
         let sub_start = self.start + subrange.start;
 
@@ -53,7 +51,7 @@ impl AllocRange {
 
 // Basic errors and Result
 // TODO: Used as a placeholder more or less, should be redesigned properly in the future
-pub type BsanTreeResult<T> = Result<T, BsanTreeError>;
+pub type BsanTreeResult<T> = Result<T, Box<BsanTreeError>>;
 
 // Is essentially a mirror of TbError, not 100% idiomatic to Miri but it does not need to be
 #[derive(Debug, Clone)]
@@ -690,6 +688,16 @@ where
     }
 }
 
+pub(super) struct ChildParams {
+    base_offset: Size,
+    parent_tag: BorTag,
+    new_tag: BorTag,
+    initial_perms: RangeMap<LocationState>,
+    default_perm: Permission,
+    protected: bool,
+    span: Span,
+}
+
 impl<'tcx> Tree {
     /// Insert a new tag in the tree.
     ///
@@ -701,17 +709,18 @@ impl<'tcx> Tree {
     /// For all non-accessed locations in the RangeMap (those that haven't had an
     /// implicit read), their SIFA must be weaker than or as weak as the SIFA of
     /// `default_perm`.
-    pub(super) fn new_child(
-        &mut self,
-        base_offset: Size,
-        parent_tag: BorTag,
-        new_tag: BorTag,
-        initial_perms: RangeMap<LocationState>,
-        default_perm: Permission,
-        protected: bool,
-        span: Span,
-    ) -> BsanTreeResult<()> {
+    pub(super) fn new_child(&mut self, params: ChildParams) -> BsanTreeResult<()> {
         use core::ops::Range;
+
+        let ChildParams {
+            new_tag,
+            base_offset,
+            parent_tag,
+            initial_perms,
+            default_perm,
+            protected,
+            span,
+        } = params;
 
         let idx = self.tag_mapping.insert(new_tag);
         let parent_idx = self.tag_mapping.get(&parent_tag).unwrap();
@@ -812,7 +821,7 @@ impl<'tcx> Tree {
         alloc_id: AllocId, // diagnostics
         span: Span,        // diagnostics
     ) -> BsanTreeResult<()> {
-        let success = self.perform_access(
+        self.perform_access(
             tag,
             Some((access_range, AccessKind::Write, AccessCause::Dealloc)),
             global,
