@@ -5,12 +5,15 @@
 //! Users must not depend on whether a range is coalesced or not, even though this is observable
 //! via the iteration APIs.
 
+#![allow(dead_code)]
 use alloc::vec::Vec;
+use core::alloc::Allocator;
 use core::cmp::Ordering;
 use core::ops::Range;
 use core::{iter, mem};
 
 use crate::types::Size;
+use crate::vec_in;
 
 #[derive(Clone, Debug)]
 struct Elem<T> {
@@ -20,17 +23,24 @@ struct Elem<T> {
     data: T,
 }
 #[derive(Clone, Debug)]
-pub struct RangeMap<T> {
-    v: Vec<Elem<T>>,
+pub struct RangeMap<T, A: Allocator> {
+    v: Vec<Elem<T>, A>,
 }
 
-impl<T> RangeMap<T> {
+impl<T, A> RangeMap<T, A>
+where
+    A: Allocator,
+{
     /// Creates a new `RangeMap` for the given size, and with the given initial value used for
     /// the entire range.
     #[inline(always)]
-    pub fn new(size: Size, init: T) -> RangeMap<T> {
+    pub fn new(size: Size, init: T, alloc: A) -> RangeMap<T, A> {
         let size = size.bytes();
-        let v = if size > 0 { vec![Elem { range: 0..size, data: init }] } else { Vec::new() };
+        let v = if size > 0 {
+            vec_in![alloc, Elem { range: 0..size, data: init }]
+        } else {
+            Vec::new_in(alloc)
+        };
         RangeMap { v }
     }
 
@@ -188,28 +198,28 @@ impl<T> RangeMap<T> {
                     offset + len
                 );
                 // see if we want to merge everything in `equal_since..end` (exclusive at the end!)
-                if successful_merge_count > 0
-                    && (done || self.v[end_idx].data != self.v[equal_since_idx].data)
-                {
-                    // Everything in `equal_since..end` was equal. Make them just one element covering
-                    // the entire range.
-                    let removed_elems = end_idx - equal_since_idx - 1; // number of elements that we would remove
-                    if removed_elems > 0 {
-                        // Adjust the range of the first element to cover all of them.
-                        let equal_until = self.v[end_idx - 1].range.end; // end of range of last of the equal elements
-                        self.v[equal_since_idx].range.end = equal_until;
-                        // Delete the rest of them.
-                        self.v.splice(equal_since_idx + 1..end_idx, iter::empty());
-                        // Adjust `end_idx` because we made the list shorter.
-                        end_idx -= removed_elems;
-                        // Adjust the count for the cutoff.
-                        successful_merge_count += removed_elems;
-                    } else {
-                        // Adjust the count for the cutoff.
-                        successful_merge_count -= 1;
+                if successful_merge_count > 0 {
+                    if done || self.v[end_idx].data != self.v[equal_since_idx].data {
+                        // Everything in `equal_since..end` was equal. Make them just one element covering
+                        // the entire range.
+                        let removed_elems = end_idx - equal_since_idx - 1; // number of elements that we would remove
+                        if removed_elems > 0 {
+                            // Adjust the range of the first element to cover all of them.
+                            let equal_until = self.v[end_idx - 1].range.end; // end of range of last of the equal elements
+                            self.v[equal_since_idx].range.end = equal_until;
+                            // Delete the rest of them.
+                            self.v.splice(equal_since_idx + 1..end_idx, iter::empty());
+                            // Adjust `end_idx` because we made the list shorter.
+                            end_idx -= removed_elems;
+                            // Adjust the count for the cutoff.
+                            successful_merge_count += removed_elems;
+                        } else {
+                            // Adjust the count for the cutoff.
+                            successful_merge_count -= 1;
+                        }
+                        // Go on scanning for the next block starting here.
+                        equal_since_idx = end_idx;
                     }
-                    // Go on scanning for the next block starting here.
-                    equal_since_idx = end_idx;
                 }
                 // Leave loop if this is the last element.
                 if done {
@@ -230,18 +240,18 @@ impl<T> RangeMap<T> {
 
     /// Remove all adjacent duplicates
     #[allow(dead_code)]
-    pub fn merge_adjacent_thorough(&mut self)
+    pub fn merge_adjacent_thorough(&mut self, alloc: A)
     where
         T: PartialEq,
     {
-        let clean = Vec::with_capacity(self.v.len());
+        let clean = Vec::with_capacity_in(self.v.len(), alloc);
         for elem in mem::replace(&mut self.v, clean) {
-            if let Some(prev) = self.v.last_mut()
-                && prev.data == elem.data
-            {
-                assert_eq!(prev.range.end, elem.range.start);
-                prev.range.end = elem.range.end;
-                continue;
+            if let Some(prev) = self.v.last_mut() {
+                if prev.data == elem.data {
+                    assert_eq!(prev.range.end, elem.range.start);
+                    prev.range.end = elem.range.end;
+                    continue;
+                }
             }
             self.v.push(elem);
         }
@@ -253,7 +263,8 @@ mod test {
     use super::*;
 
     /// Query the map at every offset in the range and collect the results.
-    fn to_vec<T: Copy>(map: &RangeMap<T>, offset: usize, len: usize) -> Vec<T> {
+    // Don't need to use custom allocator vecs in tests
+    fn to_vec<T: Copy, A: Allocator>(map: &RangeMap<T, A>, offset: usize, len: usize) -> Vec<T> {
         (offset..offset + len)
             .map(|i| {
                 map.iter(Size::from_bytes(i), Size::from_bytes(1)).next().map(|(_, &t)| t).unwrap()

@@ -1,6 +1,8 @@
 // Half implemented Tree for use in diagnostics
 
+use alloc::alloc::Global;
 use alloc::vec::Vec;
+use core::alloc::Allocator;
 use core::fmt::{self, Display};
 
 use bsan_shared::diagnostics::*;
@@ -284,7 +286,7 @@ impl fmt::Display for LocationState {
 /// Tree structure with both parents and children since we want to be
 /// able to traverse the tree efficiently in both directions.
 #[derive(Clone, Debug)]
-pub struct Tree {
+pub struct Tree<A: Allocator = Global> {
     /// Mapping from tags to keys. The key obtained can then be used in
     /// any of the `UniValMap` relative to this allocation, i.e. both the
     /// `nodes` and `rperms` of the same `Tree`.
@@ -292,7 +294,7 @@ pub struct Tree {
     /// keys, so traversing the entire tree needs exactly one access to
     /// `tag_mapping`.
     // TODO: Validate whether this is the correct use of
-    pub tag_mapping: UniKeyMap<BorTag, BsanAllocHooks>,
+    pub tag_mapping: UniKeyMap<BorTag, A>,
     /// All nodes of this tree.
     pub nodes: UniValMap<Node>,
     /// Maps a tag and a location to a perm, with possible lazy
@@ -304,7 +306,7 @@ pub struct Tree {
     /// `unwrap` any `perm.get(key)`.
     ///
     /// We do uphold the fact that `keys(perms)` is a subset of `keys(nodes)`
-    pub rperms: RangeMap<UniValMap<LocationState>>,
+    pub rperms: RangeMap<UniValMap<LocationState>, A>,
     /// The index of the root node.
     pub root: UniIndex,
 }
@@ -312,7 +314,7 @@ pub struct Tree {
 /// A node in the borrow tree. Each node is uniquely identified by a tag via
 /// the `nodes` map of `Tree`.
 #[derive(Clone, Debug)]
-pub struct Node {
+pub struct Node<A: Allocator = Global> {
     /// The tag of this node.
     pub tag: BorTag,
     /// All tags except the root have a parent tag.
@@ -322,7 +324,7 @@ pub struct Node {
 
     // Miri's implementation uses SmallVec as an optimization, can later be discussed for
     // bsan if needed as an optimization.
-    pub children: Vec<UniIndex>,
+    pub children: Vec<[UniIndex; 4], A>,
     /// Either `Reserved`,  `Frozen`, or `Disabled`, it is the permission this tag will
     /// lazily be initialized to on the first access.
     /// It is only ever `Disabled` for a tree root, since the root is initialized to `Active` by
@@ -334,7 +336,7 @@ pub struct Node {
     /// and `LocationState::idempotent_foreign_access` for more information
     default_initial_idempotent_foreign_access: IdempotentForeignAccess,
     /// Some extra information useful only for debugging purposes
-    pub debug_info: NodeDebugInfo,
+    pub debug_info: NodeDebugInfo<A>,
 }
 
 /// Data given to the transition function

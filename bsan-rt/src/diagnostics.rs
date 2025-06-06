@@ -1,8 +1,10 @@
 // Ported from Miri's `diagnostics.rs`
 // Won't be used exactly as it is used in Miri or at all
 // but nice to port in case there are any similar behaviors / as a starting point
+use alloc::alloc::Global;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::alloc::Allocator;
 use core::fmt::{self, Write};
 use core::ops::Range;
 
@@ -12,7 +14,7 @@ use bsan_shared::{Size, *};
 use crate::borrow_tracker::tree::{AllocRange, BsanTreeResult, LocationState, Tree};
 use crate::borrow_tracker::unimap::UniIndex;
 use crate::span::*;
-use crate::{println, AllocId, BorTag};
+use crate::{println, AllocId, BorTag, GlobalCtx};
 
 /// Cause of an access: either a real access or one
 /// inserted by Tree Borrows due to a reborrow or a deallocation.
@@ -90,33 +92,44 @@ pub struct Event {
 /// the events should be filtered before the generation of diagnostics.
 /// Available filtering methods include `History::forget` and `History::extract_relevant`.
 #[derive(Clone, Debug)]
-pub struct History {
+pub struct History<A: Allocator = Global> {
     tag: BorTag,
     created: (Span, Permission),
-    events: Vec<Event>,
+    events: Vec<Event, A>,
 }
 
 /// History formatted for use by `src/diagnostics.rs`.
 ///
 /// NOTE: needs to be `Send` because of a bound on `MachineStopType`, hence
 /// the use of `SpanData` rather than `Span`.
-#[derive(Debug, Clone, Default)]
-pub struct HistoryData {
-    pub events: Vec<(Option<SpanData>, String)>, // includes creation
+#[derive(Debug, Clone)]
+pub struct HistoryData<A: Allocator = Global> {
+    pub events: Vec<(Option<SpanData>, String), A>, // includes creation
 }
 
-impl History {
+impl<A> History<A>
+where
+    A: Allocator,
+{
     /// Record an additional event to the history.
     pub fn push(&mut self, event: Event) {
         self.events.push(event);
     }
 }
 
-impl HistoryData {
+impl<A> HistoryData<A>
+where
+    A: Allocator,
+{
     // Format events from `new_history` into those recorded by `self`.
     //
     // NOTE: also converts `Span` to `SpanData`.
-    fn extend(&mut self, new_history: History, tag_name: &'static str, show_initial_state: bool) {
+    fn extend(
+        &mut self,
+        new_history: History<A>,
+        tag_name: &'static str,
+        show_initial_state: bool,
+    ) {
         let History { tag, created, events } = new_history;
         let this = format!("the {tag_name} tag {tag:?}");
         let msg_initial_state = format!(", in the initial state {}", created.1);
@@ -158,7 +171,7 @@ impl HistoryData {
 /// Some information that is irrelevant for the algorithm but very
 /// convenient to know about a tag for debugging and testing.
 #[derive(Clone, Debug)]
-pub struct NodeDebugInfo {
+pub struct NodeDebugInfo<A: Allocator = Global> {
     /// The tag in question.
     pub tag: BorTag,
     /// Name(s) that were associated with this tag (comma-separated).
@@ -173,14 +186,17 @@ pub struct NodeDebugInfo {
     /// the history is automatically cleaned up by the GC.
     /// NOTE: this is `!Send`, it needs to be converted before displaying
     /// the actual diagnostics because `src/diagnostics.rs` requires `Send`.
-    pub history: History,
+    pub history: History<A>,
 }
 
-impl NodeDebugInfo {
+impl<A> NodeDebugInfo<A>
+where
+    A: Allocator,
+{
     /// Information for a new node. By default it has no
     /// name and an empty history.
-    pub fn new(tag: BorTag, initial: Permission, span: Span) -> Self {
-        let history = History { tag, created: (span, initial), events: Vec::new() };
+    pub fn new(tag: BorTag, initial: Permission, span: Span, alloc: A) -> Self {
+        let history = History { tag, created: (span, initial), events: Vec::new_in(alloc) };
         Self { tag, name: None, history }
     }
 
@@ -196,7 +212,10 @@ impl NodeDebugInfo {
     }
 }
 
-impl fmt::Display for NodeDebugInfo {
+impl<A> fmt::Display for NodeDebugInfo<A>
+where
+    A: Allocator,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(ref name) = self.name {
             write!(f, "{tag:?} ({name})", tag = self.tag)
@@ -242,32 +261,33 @@ impl<'tcx> Tree {
         self.tag_mapping.contains_key(&tag)
     }
 }
-impl History {
+
+impl<A> History<A>
+where
+    A: Allocator,
+{
     /// Keep only the tag and creation
-    fn forget(&self) -> Self {
-        History { events: Vec::new(), created: self.created, tag: self.tag }
+    fn forget(&self, alloc: A) -> Self {
+        History { events: Vec::new_in(alloc), created: self.created, tag: self.tag }
     }
 
     /// Reconstruct the history relevant to `error_offset` by filtering
     /// only events whose range contains the offset we are interested in.
-    fn extract_relevant(&self, error_offset: u64, error_kind: TransitionError) -> Self {
-        History {
-            events: self
-                .events
-                .iter()
-                .filter(|e| e.transition_range.contains(&error_offset))
-                // removed some of Miri's additional information as it is not neccessary to bsan
-                // .filter(|e| e.transition.is_relevant(error_kind))
-                .cloned()
-                .collect::<Vec<_>>(),
-            created: self.created,
-            tag: self.tag,
-        }
+    fn extract_relevant(&self, error_offset: u64, error_kind: TransitionError, alloc: A) -> Self {
+        let filtered_events =
+            self.events.iter().filter(|e| e.transition_range.contains(&error_offset)).cloned();
+        // removed some of Miri's additional information as it is not neccessary to bsan
+        // .filter(|e| e.transition.is_relevant(error_kind))
+
+        let mut events_vec = Vec::new_in(alloc);
+        events_vec.extend(filtered_events);
+
+        History { events: events_vec, created: self.created, tag: self.tag }
     }
 }
 
 /// Failures that can occur during the execution of Tree Borrows procedures.
-pub(super) struct TbError<'node> {
+pub(super) struct TbError<'node, A: Allocator = Global> {
     /// What failure occurred.
     pub error_kind: TransitionError,
     /// The allocation in which the error is happening.
@@ -278,12 +298,12 @@ pub(super) struct TbError<'node> {
     /// On protector violations, this is the tag that was protected.
     /// On accesses rejected due to insufficient permissions, this is the
     /// tag that lacked those permissions.
-    pub conflicting_info: &'node NodeDebugInfo,
+    pub conflicting_info: &'node NodeDebugInfo<A>,
     // What kind of access caused this error (read, write, reborrow, deallocation)
     pub access_cause: AccessCause,
     /// Which tag the access that caused this error was made through, i.e.
     /// which tag was used to read/write/deallocate.
-    pub accessed_info: &'node NodeDebugInfo,
+    pub accessed_info: &'node NodeDebugInfo<A>,
 }
 
 type S = &'static str;

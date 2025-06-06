@@ -38,3 +38,44 @@ impl AccessRelatedness {
         matches!(self, AccessRelatedness::AncestorAccess | AccessRelatedness::CousinAccess)
     }
 }
+
+#[macro_export]
+macro_rules! vec_in {
+    ($alloc:expr) => {
+        Vec::new_in(alloc)
+    };
+
+    // Handle the custom "Elem" syntax for range initialization
+    // This is more specific, so it must come before the next arm.
+    ($alloc:expr, Elem { range: $range:expr, init: $init:expr }) => (
+        {
+            let init_fn = $init;
+            let range = $range;
+
+            // Be efficient: pre-allocate if the iterator gives a size hint
+            let (lower, upper) = range.size_hint();
+            let capacity = upper.unwrap_or(lower);
+            let mut vec = Vec::with_capacity_in(capacity, $alloc);
+
+            // Create the items by iterating and calling the initializer
+            for i in range {
+                vec.push(init_fn(i));
+            }
+            vec
+        }
+    );
+
+    // Handle a comma-separated list of expressions (your original arm)
+    // This is a general "catch-all", so it must come last.
+    ($alloc:expr, $($x:expr),+ $(,)?) => (
+        {
+            // This is a simple way, but not the most efficient for many elements.
+            // A more advanced macro could count the elements to pre-allocate.
+            let mut vec = Vec::new_in($alloc);
+            $(
+                vec.push($x);
+            )+
+            vec
+        }
+    );
+}
