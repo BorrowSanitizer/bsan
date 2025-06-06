@@ -1,3 +1,2 @@
 artifact_url = "https://github.com/BorrowSanitizer/rust/releases/download/"
-tag = "rolling"
-rustc_version = "1.89.0"
+tag = "rolling-2025-06-06"

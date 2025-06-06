@@ -162,9 +162,8 @@ pub fn toolchain(
         return Ok(meta);
     }
 
-    let version = &config.rustc_version;
     let target = &host.host;
-    let archive_postfix: String = format!("{version}-dev-{target}.tar.xz");
+    let archive_postfix: String = format!("{target}.tar.xz");
     let artifact_url = path!(&config.artifact_url / &config.tag);
     let help_on_error = "Failed to download the custom Rust toolchain.";
 

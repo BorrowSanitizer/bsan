@@ -82,8 +82,7 @@ impl Mode {
 #[derive(Deserialize)]
 pub struct BsanConfig {
     pub artifact_url: String,
-    pub rustc_version: String,
-    pub tag: String,
+    pub tag: String
 }
 
 impl BsanConfig {
