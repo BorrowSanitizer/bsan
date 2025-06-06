@@ -20,14 +20,14 @@ impl Span {
     }
 }
 
-impl Into<Span> for SpanData {
-    fn into(self) -> Span {
-        Span(self.0)
+impl From<SpanData> for Span {
+    fn from(val: SpanData) -> Self {
+        Span(val.0)
     }
 }
 
-impl Into<SpanData> for Span {
-    fn into(self) -> SpanData {
-        SpanData(self.0)
+impl From<Span> for SpanData {
+    fn from(val: Span) -> Self {
+        SpanData(val.0)
     }
 }

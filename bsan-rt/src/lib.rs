@@ -19,7 +19,7 @@ use core::ptr::NonNull;
 use core::{fmt, mem, ptr};
 
 mod global;
-use bsan_shared::RetagInfo;
+use bsan_shared::perms::RetagInfo;
 pub use global::*;
 
 mod local;
