@@ -59,14 +59,15 @@ impl Command {
 
     fn ui(env: &mut BsanEnv, _bless: bool) -> Result<()> {
         env.in_mode(Mode::Release, |env| {
-            let driver = BsanDriver.build(env, &[])?;
-            let cargo_bsan = CargoBsan.build(env, &[])?;
-            let bsan_rt = BsanRuntime.build(env, &[])?;
-            let plugin = BsanLLVMPlugin.build(env, &[])?;
+            let args = &[];
+            let driver = env.build_artifact(BsanDriver, args)?;
+            let cargo_bsan = env.build_artifact(CargoBsan, args)?;
+            let runtime = env.build_artifact(BsanRuntime, args)?;
+            let plugin = env.build_artifact(BsanLLVMPlugin, args)?;
 
             env.sh.set_var("BSAN_PLUGIN", plugin);
             env.sh.set_var("BSAN_DRIVER", driver);
-            env.sh.set_var("BSAN_RT_SYSROOT", bsan_rt.parent().unwrap());
+            env.sh.set_var("BSAN_RT_SYSROOT", runtime.parent().unwrap());
             env.sh.set_var("BSAN_SYSROOT", path!(&env.build_dir / "sysroot"));
 
             cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
@@ -97,7 +98,7 @@ impl Command {
     }
 
     fn opt(env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        let pass = BsanLLVMPlugin.build(env, &[])?;
+        let pass = env.build_artifact(BsanLLVMPlugin, args)?;
         let pass = pass.to_str().unwrap();
         let opt = env.target_binary("opt");
         let _ =
@@ -148,7 +149,7 @@ pub trait Buildable {
 
     fn doc(&self, env: &mut BsanEnv, args: &[String]) -> Result<()>;
 
-    fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<PathBuf>;
+    fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<()>;
 
     fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()>;
 
@@ -160,7 +161,7 @@ pub trait Buildable {
 }
 
 macro_rules! impl_component {
-    ($struct_name:ident, $artifact_name:expr) => {
+    ($struct_name:ident, $artifact_name:expr, $should_install:expr) => {
         struct $struct_name;
 
         impl Buildable for $struct_name {
@@ -173,10 +174,9 @@ macro_rules! impl_component {
                 env.doc(self.artifact(), args)
             }
 
-            fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<PathBuf> {
+            fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
                 let artifact = self.artifact();
-                env.build(artifact, args, true)?;
-                Ok(env.assert_artifact(artifact))
+                env.build(artifact, args, true)
             }
 
             fn clippy(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
@@ -184,7 +184,11 @@ macro_rules! impl_component {
             }
 
             fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-                env.install(self.artifact(), args)
+                if $should_install {
+                    env.install(self.artifact(), args)
+                } else {
+                    Ok(()) // Or `Err(anyhow!("Installation not supported"))` if you want it to fail
+                }
             }
 
             fn check(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
@@ -198,9 +202,9 @@ macro_rules! impl_component {
     };
 }
 
-impl_component!(BsanDriver, "bsan-driver");
-impl_component!(CargoBsan, "cargo-bsan");
-impl_component!(BsanShared, "bsan-shared");
+impl_component!(BsanDriver, "bsan-driver", true);
+impl_component!(CargoBsan, "cargo-bsan", true);
+impl_component!(BsanShared, "bsan-shared", false);
 
 static RT_FLAGS: &[&str] =
     &["-Cpanic=abort", "-Zpanic_abort_tests", "-Cembed-bitcode=yes", "-Clto"];
@@ -216,12 +220,12 @@ impl Buildable for BsanRuntime {
         env.doc("bsan-rt", args)
     }
 
-    fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<PathBuf> {
+    fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
         env.with_rust_flags(RT_FLAGS, |env| env.build("bsan-rt", args, true))?;
         let artifact = env.assert_artifact(self.artifact());
         let llvm_objcopy = env.target_binary("llvm-objcopy");
         cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_*").arg(&artifact).quiet().run()?;
-        Ok(artifact)
+        Ok(())
     }
 
     fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
@@ -234,7 +238,8 @@ impl Buildable for BsanRuntime {
 
     fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
         env.in_mode(Mode::Release, |env| {
-            let runtime = self.build(env, args)?;
+            self.build(env, args)?;
+            let runtime = env.assert_artifact(self.artifact());
             env.copy_to_sysroot_libdir(&runtime)
         })
     }
@@ -259,7 +264,7 @@ impl Buildable for BsanLLVMPlugin {
         Ok(())
     }
 
-    fn build(&self, env: &mut BsanEnv, _args: &[String]) -> Result<PathBuf> {
+    fn build(&self, env: &mut BsanEnv, _args: &[String]) -> Result<()> {
         let cxxflags = env.llvm_config().arg("--cxxflags").output()?.stdout;
 
         let mut cfg = env.cc();
@@ -303,7 +308,7 @@ impl Buildable for BsanLLVMPlugin {
         )
         .quiet();
         cmd.run()?;
-        Ok(library_path)
+        Ok(())
     }
 
     fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
@@ -316,7 +321,8 @@ impl Buildable for BsanLLVMPlugin {
 
     fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
         env.in_mode(Mode::Release, |env| {
-            let pass = self.build(env, args)?;
+            self.build(env, args)?;
+            let pass = env.assert_artifact(self.artifact());
             env.copy_to_sysroot_libdir(&pass)
         })
     }

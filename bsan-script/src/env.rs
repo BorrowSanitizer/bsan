@@ -8,6 +8,7 @@ use rustc_version::VersionMeta;
 use serde::Deserialize;
 use xshell::{cmd, Cmd, Shell};
 
+use crate::commands::Buildable;
 use crate::utils::show_error;
 use crate::{download, utils};
 
@@ -283,6 +284,11 @@ impl BsanEnv {
         }
         cmd.run()?;
         Ok(())
+    }
+
+    pub fn build_artifact(&mut self, b: impl Buildable, args: &[String]) -> Result<PathBuf> {
+        b.build(self, args)?;
+        Ok(self.assert_artifact(b.artifact()))
     }
 
     pub fn cc_cmd(&self) -> Cmd<'_> {
