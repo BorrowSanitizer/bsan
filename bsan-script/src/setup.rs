@@ -28,7 +28,7 @@ pub fn setup(sh: &Shell,
     // First, check if the current platform is supported.
     let current_target = &host.host;
     if !config.targets.contains(&host.host) {
-        show_error!("The current target  `{current_target}`, is it installed?");
+        show_error!("The current target `{current_target}` is not supported.");
     }
 
     // Then, let's make sure that we have all of the right dependencies
