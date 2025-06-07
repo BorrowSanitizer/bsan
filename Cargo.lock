@@ -157,6 +157,7 @@ dependencies = [
  "rustc_version",
  "semver",
  "serde",
+ "serde_json",
  "tar",
  "toml",
  "which",

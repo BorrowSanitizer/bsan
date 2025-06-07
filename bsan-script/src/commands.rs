@@ -282,7 +282,7 @@ impl Buildable for BsanLLVMPlugin {
         let suffix = utils::dylib_suffix(&env.meta);
         let lib_llvm = format!("libLLVM-{llvm_ver}-rust-{rust_ver}.{suffix}");
 
-        let lib_dir: PathBuf = path!(&env.rust_dev / "lib");
+        let lib_dir: PathBuf = path!(&env.sysroot / "lib");
         let lib_llvm: PathBuf = path!(lib_dir / lib_llvm);
 
         if !lib_llvm.exists() {
