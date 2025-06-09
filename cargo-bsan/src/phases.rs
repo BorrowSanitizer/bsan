@@ -57,7 +57,7 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
 
     if env::var_os("BSAN_RT_SYSROOT").is_none() {
         unsafe {
-            env::set_var("BSAN_RT_SYSROOT", &host_sysroot);
+            env::set_var("BSAN_RT_SYSROOT", &host_sysroot.join("lib"));
         }
     }
 
