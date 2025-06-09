@@ -10,7 +10,7 @@ use xshell::{cmd, Cmd, Shell};
 
 use crate::commands::Buildable;
 use crate::utils::{active_toolchain, show_error};
-use crate::{utils, TOOLCHAIN_NAME};
+use crate::{setup, utils, TOOLCHAIN_NAME};
 
 #[allow(dead_code)]
 pub struct BsanEnv {
@@ -177,7 +177,7 @@ impl BsanEnv {
             config,
             cargo_extra_flags,
             mode: Mode::Debug,
-            quiet
+            quiet,
         })
     }
 
@@ -227,10 +227,9 @@ impl BsanEnv {
         let cmd = cmd!(self.sh, "cargo +{TOOLCHAIN_NAME} {cmd}").quiet();
         if self.quiet {
             cmd.arg("--quiet")
-        }else{
+        } else {
             cmd
         }
-
     }
 
     pub fn target_binary(&self, binary_name: &str) -> PathBuf {
@@ -300,8 +299,7 @@ impl BsanEnv {
         // We build all targets, since building *just* the bin target does not include
         // `dev-dependencies` and that changes feature resolution. This also gets us more
         // parallelism in `./b test` as we build BorrowSanitizer and its tests together.
-        let mut cmd =
-            self.cargo_cmd(crate_dir, "build").args(&["--all-targets"]).args(args);
+        let mut cmd = self.cargo_cmd(crate_dir, "build").args(&["--all-targets"]).args(args);
         if matches!(self.mode, Mode::Release) {
             cmd = cmd.arg("--release");
         }
