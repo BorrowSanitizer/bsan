@@ -12,8 +12,8 @@ use crate::utils::install_git_hooks;
 use crate::Command;
 
 impl Command {
-    pub fn exec(self) -> Result<()> {
-        let mut env = BsanEnv::new()?;
+    pub fn exec(self, quiet: bool) -> Result<()> {
+        let mut env = BsanEnv::new(quiet)?;
         let env = &mut env;
         match self {
             Command::Setup => Self::setup(env),
@@ -176,7 +176,7 @@ macro_rules! impl_component {
 
             fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
                 let artifact = self.artifact();
-                env.build(artifact, args, true)?;
+                env.build(artifact, args)?;
                 if $should_install {
                     Ok(Some(path!(env.artifact_dir() / artifact)))
                 } else {
@@ -226,7 +226,7 @@ impl Buildable for BsanRuntime {
     }
 
     fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
-        env.with_rust_flags(RT_FLAGS, |env| env.build("bsan-rt", args, true))?;
+        env.with_rust_flags(RT_FLAGS, |env| env.build("bsan-rt", args))?;
         let artifact = env.assert_artifact(self.artifact());
         let llvm_objcopy = env.target_binary("llvm-objcopy");
         cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_*").arg(&artifact).quiet().run()?;

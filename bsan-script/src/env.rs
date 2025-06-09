@@ -32,6 +32,8 @@ pub struct BsanEnv {
     cargo_extra_flags: Vec<String>,
     /// Controls whether binaries are built in debug or release mode
     mode: Mode,
+    /// Whether build output should be silenced.
+    quiet: bool,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Default)]
@@ -104,7 +106,7 @@ impl BsanConfig {
 }
 
 impl BsanEnv {
-    pub fn new() -> Result<Self> {
+    pub fn new(quiet: bool) -> Result<Self> {
         let sh = Shell::new()?;
         let root_dir = utils::root_dir()?;
         let host = utils::version_meta(&sh, &active_toolchain()?)?;
@@ -175,6 +177,7 @@ impl BsanEnv {
             config,
             cargo_extra_flags,
             mode: Mode::Debug,
+            quiet
         })
     }
 
@@ -221,7 +224,13 @@ impl BsanEnv {
     }
 
     fn cargo_cmd_base(&self, cmd: &str) -> Cmd<'_> {
-        cmd!(self.sh, "cargo +{TOOLCHAIN_NAME} {cmd}").quiet()
+        let cmd = cmd!(self.sh, "cargo +{TOOLCHAIN_NAME} {cmd}").quiet();
+        if self.quiet {
+            cmd.arg("--quiet")
+        }else{
+            cmd
+        }
+
     }
 
     pub fn target_binary(&self, binary_name: &str) -> PathBuf {
@@ -287,13 +296,12 @@ impl BsanEnv {
         Ok(())
     }
 
-    pub fn build(&self, crate_dir: impl AsRef<OsStr>, args: &[String], quiet: bool) -> Result<()> {
-        let quiet_flag = if quiet { Some("--quiet") } else { None };
+    pub fn build(&self, crate_dir: impl AsRef<OsStr>, args: &[String]) -> Result<()> {
         // We build all targets, since building *just* the bin target does not include
         // `dev-dependencies` and that changes feature resolution. This also gets us more
         // parallelism in `./b test` as we build BorrowSanitizer and its tests together.
         let mut cmd =
-            self.cargo_cmd(crate_dir, "build").args(&["--all-targets"]).args(quiet_flag).args(args);
+            self.cargo_cmd(crate_dir, "build").args(&["--all-targets"]).args(args);
         if matches!(self.mode, Mode::Release) {
             cmd = cmd.arg("--release");
         }

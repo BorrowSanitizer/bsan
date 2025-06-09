@@ -109,6 +109,9 @@ pub enum Command {
 #[command(after_help = "Environment variables:
   CARGO_EXTRA_FLAGS: Pass extra flags to all cargo invocations")]
 pub struct Cli {
+    /// Silence build
+    #[arg(short, long)]
+    quiet: bool,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -116,6 +119,6 @@ pub struct Cli {
 fn main() -> Result<()> {
     let args = std::env::args();
     let args = Cli::parse_from(args);
-    args.command.exec()?;
+    args.command.exec(args.quiet)?;
     Ok(())
 }
