@@ -30,13 +30,14 @@ pub fn is_running_on_ci() -> bool {
 pub enum PromptResult {
     Yes, // y/Y/yes
     No,  // n/N/no
-         //Print, // p/P/print
 }
 
 /// Prompt a user for a answer, looping until they enter an accepted input or nothing
-pub fn prompt_user(prompt: &str) -> io::Result<Option<PromptResult>> {
-    let mut input = String::new();
-    loop {
+pub fn prompt_user(prompt: &str) -> Result<Option<PromptResult>> {
+    if is_running_on_ci() {
+        return Ok(Some(PromptResult::Yes));
+    } else {
+        let mut input = String::new();
         print!("{prompt} ");
         io::stdout().flush()?;
         input.clear();
@@ -46,9 +47,10 @@ pub fn prompt_user(prompt: &str) -> io::Result<Option<PromptResult>> {
             "n" | "no" => return Ok(Some(PromptResult::No)),
             "" => return Ok(Some(PromptResult::Yes)),
             _ => {
-                show_error!("Unrecognized option '{}'\nNOTE: press Ctrl+C to exit", input.trim());
+                eprintln!("Unrecognized option '{}'.", input.trim());
+                Ok(None)
             }
-        };
+        }
     }
 }
 
@@ -98,26 +100,23 @@ pub fn install_git_hooks(root_dir: &PathBuf) -> Result<()> {
     let install_hook = |hook: GitHook| {
         let hooks_dir = path!(root_dir / "bsan-script" / "etc");
         let hook_name = hook.value();
+
         println!("Installing {:?} hook...", &hook_name);
 
-        let hook_path = hooks_dir.join(hook_name.to_string() + ".sh");
+        let hook_path = path!(hooks_dir / format!("{hook_name}.sh"));
 
         if !hook_path.exists() {
             show_error!("{} script {:?} not found", &hook_name, &hook_path);
         }
 
-        match std::fs::symlink_metadata(path!(&git_hooks_dir / &hook_name)) {
-            Ok(metadata) => {
-                if metadata.is_symlink() {
-                    println!("{:?} hook is already symlinked (added). If you wish to reinstall, remove symlink from {:?}", &hook_name, &git_hooks_dir);
-                    return;
-                }
-            }
-            // TODO: Handle NotFound error and propagate other errors
-            Err(_) => {}
-        };
+        if let Ok(metadata) = std::fs::symlink_metadata(path!(&git_hooks_dir / &hook_name))
+            && metadata.is_symlink()
+        {
+            println!("{:?} hook is already symlinked (added). If you wish to reinstall, remove symlink from {:?}", &hook_name, &git_hooks_dir);
+            return;
+        }
 
-        let hook_script = hook_name.to_string() + ".sh";
+        let hook_script = format!("{hook_name}.sh");
         // We don't support development on Windows yet
         match std::os::unix::fs::symlink(
             path!(hooks_dir / hook_script),
@@ -126,7 +125,6 @@ pub fn install_git_hooks(root_dir: &PathBuf) -> Result<()> {
             Err(e) => show_error!("Failed to symlink {} script\nFS ERROR: {e}", &hook_name),
             _ => {
                 // Check for successful symlink
-
                 match std::fs::symlink_metadata(path!(&git_hooks_dir / &hook_name)) {
                     Ok(metadata) => {
                         if !metadata.is_symlink() {
@@ -292,28 +290,4 @@ fn move_file<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<()> {
         }
         r => r,
     }
-}
-
-#[allow(dead_code)]
-pub fn ask_to_run(cmd: Cmd<'_>, ask: bool, text: &str) -> Result<()> {
-    // Disable interactive prompts in CI (GitHub Actions, Travis, AppVeyor, etc).
-    // Azure doesn't set `CI` though (nothing to see here, just Microsoft being Microsoft),
-    // so we also check their `TF_BUILD`.
-    let is_ci = is_running_on_ci();
-    if ask && !is_ci {
-        let mut buf = String::new();
-        print!("I will run `{cmd}` to {text}. Proceed? [Y/n] ");
-        io::stdout().flush().unwrap();
-        io::stdin().read_line(&mut buf).unwrap();
-        match buf.trim().to_lowercase().as_ref() {
-            // Proceed.
-            "" | "y" | "yes" => {}
-            "n" | "no" => show_error!("aborting as per your request"),
-            a => show_error!("invalid answer `{}`", a),
-        };
-    } else {
-        eprintln!("Running `{cmd:?}` to {text}.");
-    }
-    cmd.run()?;
-    Ok(())
 }

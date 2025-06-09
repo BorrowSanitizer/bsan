@@ -1,5 +1,5 @@
 // Our build script combines many preexisting components from Miri's build script
-// and the Rust compiler's bootstrap script. 
+// and the Rust compiler's bootstrap script.
 #![feature(io_error_more)]
 use anyhow::Result;
 use clap::{command, Parser};
@@ -7,8 +7,8 @@ use commands::Component;
 //mod commands;
 mod commands;
 mod env;
-mod utils;
 mod setup;
+mod utils;
 
 static TOOLCHAIN_NAME: &str = "bsan";
 

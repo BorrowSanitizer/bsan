@@ -1,12 +1,13 @@
+use std::fs::{self};
+use std::path::Path;
+
 use anyhow::Result;
 use path_macro::path;
 use rustc_version::VersionMeta;
-use std::fs::{self};
-use std::path::Path;
 use xshell::{cmd, Shell};
 
 use crate::env::BsanConfig;
-use crate::utils::{self, active_toolchain, show_error, version_meta};
+use crate::utils::{self, active_toolchain, prompt_user, show_error, version_meta, PromptResult};
 use crate::TOOLCHAIN_NAME;
 
 pub fn setup(
@@ -43,9 +44,13 @@ pub fn setup(
 
     // If we've passed these checks, then let's do the expensive step of
     // downloading and installing our custom toolchain.
-    let meta = toolchain(sh, host, config, toolchain_dir)?;
-
-    Ok(meta)
+    if let Some(PromptResult::Yes) = prompt_user(
+        "You need to install a custom Rust toolchain (`bsan`) to build BorrowSanitizer. Continue?",
+    )? {
+        toolchain(sh, host, config, toolchain_dir)
+    } else {
+        std::process::exit(0);
+    }
 }
 
 fn toolchain(
@@ -56,7 +61,7 @@ fn toolchain(
 ) -> Result<VersionMeta> {
     let target = &host.host;
     let version = &config.version;
-    let archive_postfix: String = format!("{version}-dev-{target}.tar.xz");
+    let archive_postfix: String = format!("{version}");
     let artifact_url = path!(&config.artifact_url / &config.tag);
     let help_on_error = "Failed to download the custom Rust toolchain.";
 
@@ -66,9 +71,15 @@ fn toolchain(
     }
     fs::create_dir_all(&tmp_dir)?;
 
-    let download_unpack_install = |prefix: &str| -> Result<()> {
+    let download_unpack_install = |prefix: &str, needs_target: bool| -> Result<()> {
         // Download the .tar.xz file
-        let tar_file = format!("{prefix}-{archive_postfix}");
+
+        let mut tar_file_name = format!("{prefix}-{archive_postfix}");
+        if needs_target {
+            tar_file_name = format!("{tar_file_name}-{target}");
+        }
+        let tar_file = format!("{tar_file_name}.tar.xz");
+
         let tar_path = path!(toolchain_dir / tar_file);
         utils::download_file(sh, &path!(artifact_url / tar_file), &tar_path, help_on_error)?;
 
@@ -83,10 +94,10 @@ fn toolchain(
         Ok(())
     };
 
-    download_unpack_install("rust")?;
-    download_unpack_install("rustc-dev")?;
-    download_unpack_install("rust-dev")?;
-    download_unpack_install("rust-src")?;
+    download_unpack_install("rust", true)?;
+    download_unpack_install("rustc-dev", true)?;
+    download_unpack_install("rust-dev", true)?;
+    download_unpack_install("rust-src", false)?;
 
     cmd!(sh, "rustup toolchain uninstall {TOOLCHAIN_NAME}").quiet().run()?;
     cmd!(sh, "rustup toolchain link {TOOLCHAIN_NAME} {toolchain_dir}").quiet().run()?;

@@ -87,7 +87,6 @@ regexes! {
 
 fn bsan_path() -> PathBuf {
     let driver = env::var("BSAN_DRIVER").expect("BSAN_DRIVER must be set to run the ui test suite");
-    println!("{:?}", driver);
     PathBuf::from(driver)
 }
 
