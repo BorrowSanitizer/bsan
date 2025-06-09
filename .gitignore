@@ -10,4 +10,5 @@ rust_dev
 *.bc
 *.a
 *.o
-*.txt
+.toolchain
+.vscode
