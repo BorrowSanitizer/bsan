@@ -1,4 +1,4 @@
-FROM ubuntu:latest
+FROM ghcr.io/borrowsanitizer/rust:rolling
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     build-essential \
