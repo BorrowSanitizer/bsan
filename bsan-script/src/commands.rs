@@ -8,7 +8,7 @@ use path_macro::path;
 use xshell::cmd;
 
 use crate::env::{BsanEnv, Mode};
-use crate::utils::{self, install_git_hooks, show_error};
+use crate::utils::install_git_hooks;
 use crate::Command;
 
 impl Command {
@@ -149,7 +149,7 @@ pub trait Buildable {
 
     fn doc(&self, env: &mut BsanEnv, args: &[String]) -> Result<()>;
 
-    fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<()>;
+    fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>>;
 
     fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()>;
 
@@ -174,9 +174,14 @@ macro_rules! impl_component {
                 env.doc(self.artifact(), args)
             }
 
-            fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+            fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
                 let artifact = self.artifact();
-                env.build(artifact, args, true)
+                env.build(artifact, args, true)?;
+                if $should_install {
+                    Ok(Some(path!(env.artifact_dir() / artifact)))
+                } else {
+                    Ok(None)
+                }
             }
 
             fn clippy(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
@@ -220,12 +225,12 @@ impl Buildable for BsanRuntime {
         env.doc("bsan-rt", args)
     }
 
-    fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+    fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
         env.with_rust_flags(RT_FLAGS, |env| env.build("bsan-rt", args, true))?;
         let artifact = env.assert_artifact(self.artifact());
         let llvm_objcopy = env.target_binary("llvm-objcopy");
         cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_*").arg(&artifact).quiet().run()?;
-        Ok(())
+        Ok(Some(path!(env.artifact_dir() / artifact)))
     }
 
     fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
@@ -264,51 +269,18 @@ impl Buildable for BsanLLVMPlugin {
         Ok(())
     }
 
-    fn build(&self, env: &mut BsanEnv, _args: &[String]) -> Result<()> {
+    fn build(&self, env: &mut BsanEnv, _args: &[String]) -> Result<Option<PathBuf>> {
+        let source_dir = path!(env.root_dir / "bsan-pass");
+        let mut cfg = env.cmake(source_dir);
+
         let cxxflags = env.llvm_config().arg("--cxxflags").output()?.stdout;
+        let cxxflags: String = String::from_utf8(cxxflags)?;
 
-        let mut cfg = env.cc();
-        cfg.warnings(false);
-
-        for flag in String::from_utf8(cxxflags)?.split_whitespace() {
-            cfg.flag(flag);
-        }
-
-        let out_dir = env.artifact_dir();
-        fs::create_dir_all(&out_dir)?;
-
-        let src_dir = path!(&env.root_dir / "bsan-pass");
-
-        let objects = cfg
-            .file(path!(src_dir / "BorrowSanitizer.cpp"))
-            .include(src_dir)
-            .cpp(true)
-            .cpp_link_stdlib(None)
-            .out_dir(&out_dir)
-            .pic(true)
-            .compile_intermediates();
-
-        let rust_ver = env.meta.semver.to_string();
-        let llvm_ver = env.meta.llvm_version.as_ref().unwrap().major;
-        let suffix = utils::dylib_suffix(&env.meta);
-        let lib_llvm = format!("libLLVM-{llvm_ver}-rust-{rust_ver}.{suffix}");
-
-        let lib_dir: PathBuf = path!(&env.rust_dev / "lib");
-        let lib_llvm: PathBuf = path!(lib_dir / lib_llvm);
-
-        if !lib_llvm.exists() {
-            show_error!("Unable to locate LLVM within rust_dev artifacts ({lib_llvm:?}).")
-        }
-
-        let library_path = path!(out_dir / self.artifact());
-
-        let cmd = cmd!(
-            env.sh,
-            "cc --shared {objects...} {lib_llvm} -o {library_path} -Wl,-rpath={lib_dir}"
-        )
-        .quiet();
-        cmd.run()?;
-        Ok(())
+        cfg.define("CMAKE_CXX_FLAGS", cxxflags.trim());
+        cfg.build_target("bsan_plugin");
+        cfg.pic(true);
+        let path = cfg.build();
+        Ok(Some(path!(path / "build" / self.artifact())))
     }
 
     fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {

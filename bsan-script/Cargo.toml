@@ -7,6 +7,7 @@ edition = "2024"
 anyhow = "1.0.98"
 cc = "1.2.24"
 clap = { version = "4.5.21", features = ["derive"] }
+cmake = "0.1.54"
 dunce = "1.0.5"
 path_macro = "1.0.0"
 rustc_version = "0.4.1"

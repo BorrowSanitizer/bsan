@@ -72,6 +72,13 @@ impl Mode {
             Mode::Release => "release",
         }
     }
+
+    fn profile(&self) -> &str {
+        match self {
+            Mode::Debug => "Debug",
+            Mode::Release => "Release",
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -305,6 +312,16 @@ impl BsanEnv {
             .debug(self.mode.debug_info())
             .warnings_into_errors(true)
             .opt_level(self.mode.opt_level());
+        cfg
+    }
+
+    pub fn cmake(&self, path: PathBuf) -> cmake::Config {
+        let mut cfg = cmake::Config::new(path);
+        cfg.profile(self.mode.profile());
+        cfg.target(&self.meta.host);
+        cfg.host(&self.meta.host);
+        cfg.out_dir(self.artifact_dir());
+        cfg.generator("Ninja");
         cfg
     }
 

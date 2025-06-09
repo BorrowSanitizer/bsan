@@ -74,16 +74,6 @@ pub fn flagsplit(flags: &str) -> Vec<String> {
     flags.split(' ').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect()
 }
 
-pub fn dylib_suffix(meta: &VersionMeta) -> &str {
-    if meta.host.contains("apple-darwin") {
-        "dylib"
-    } else if meta.host.contains("windows") {
-        show_error!("Target {} is not supported.", &meta.host);
-    } else {
-        "so"
-    }
-}
-
 // Installs git hooks
 pub fn install_git_hooks(root_dir: &PathBuf) -> Result<()> {
     #[derive(Debug, PartialEq, EnumIter)]
