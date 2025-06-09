@@ -84,6 +84,7 @@ pub struct BsanConfig {
     pub artifact_url: String,
     pub tag: String,
     pub sha: String,
+    pub version: String,
     pub dependencies: Vec<String>,
     pub targets: Vec<String>
 }
