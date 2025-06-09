@@ -233,7 +233,10 @@ where
     }
 }
 
-impl<'tcx> Tree {
+impl<'tcxi, A> Tree<A>
+where
+    A: Allocator,
+{
     /// Climb the tree to get the tag of a distant ancestor.
     /// Allows operations on tags that are unreachable by the program
     /// but still exist in the tree. Not guaranteed to perform consistently

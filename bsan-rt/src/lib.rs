@@ -20,7 +20,11 @@ use core::ptr::NonNull;
 use core::{fmt, mem, ptr};
 
 mod global;
-use bsan_shared::RetagInfo;
+use alloc::alloc::Global;
+
+use borrow_tracker::tree::Tree;
+use borrow_tracker::*;
+use bsan_shared::{RetagInfo, Size};
 pub use global::*;
 
 mod local;
@@ -40,6 +44,7 @@ macro_rules! println {
     };
 }
 pub(crate) use println;
+use span::Span;
 
 pub type MMap = unsafe extern "C" fn(*mut c_void, usize, i32, i32, i32, off_t) -> *mut c_void;
 pub type MUnmap = unsafe extern "C" fn(*mut c_void, usize) -> i32;
@@ -257,16 +262,43 @@ extern "C" fn __bsan_deinit() {
 /// Creates a new borrow tag for the given provenance object.
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_retag(prov: *mut Provenance, size: usize, perm_kind: u8, protector_kind: u8) {
-    let _ = unsafe { RetagInfo::from_raw(size, perm_kind, protector_kind) };
+    let retag_info = unsafe { RetagInfo::from_raw(size, perm_kind, protector_kind) };
+
+    // Get the global context (used for the allocator for now)
+    let global_ctx = unsafe { global_ctx() };
+
+    // Run the validation `middleware`
+    // TODO: Handle these results with proper errors
+    let (mut tree, prov) =
+        unsafe { bt_validate_tree(prov, &global_ctx, Some(&retag_info)).unwrap() };
+
+    let _ = bt_tree_retag(tree, prov, &global_ctx, &retag_info).unwrap();
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_read(prov: *const Provenance, addr: usize, access_size: u64) {}
+extern "C" fn __bsan_read(prov: *const Provenance, addr: usize, access_size: u64) {
+    // Assuming root tag has been initialized in the tree
+
+    let global_ctx = unsafe { global_ctx() };
+
+    let (mut tree, prov) = unsafe { bt_validate_tree(prov, &global_ctx, None).unwrap() };
+
+    let _ = bt_read(tree, prov, &global_ctx, Size::from_bytes(addr), Size::from_bytes(access_size));
+}
 
 /// Records a write access of size `access_size` at the given address `addr` using the provenance `prov`.
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_write(prov: *const Provenance, addr: usize, access_size: u64) {}
+extern "C" fn __bsan_write(prov: *const Provenance, addr: usize, access_size: u64) {
+    // Assuming root tag has been initialized in the tree
+
+    let global_ctx = unsafe { global_ctx() };
+
+    let (mut tree, prov) = unsafe { bt_validate_tree(prov, &global_ctx, None).unwrap() };
+
+    let _ =
+        bt_write(tree, prov, &global_ctx, Size::from_bytes(addr), Size::from_bytes(access_size));
+}
 
 /// Copies the provenance stored in the range `[src_addr, src_addr + access_size)` within the shadow heap
 /// to the address `dst_addr`. This function will silently fail, so it should only be called in conjunction with

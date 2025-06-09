@@ -402,16 +402,17 @@ struct TreeVisitorStack<NodeContinue, NodeApp, ErrHandler, A: Allocator = Global
     stack: Vec<(UniIndex, AccessRelatedness, RecursionState), A>,
 }
 
-impl<NodeContinue, NodeApp, InnErr, OutErr, ErrHandler>
-    TreeVisitorStack<NodeContinue, NodeApp, ErrHandler>
+impl<NodeContinue, NodeApp, InnErr, OutErr, ErrHandler, A>
+    TreeVisitorStack<NodeContinue, NodeApp, ErrHandler, A>
 where
     NodeContinue: Fn(&NodeAppArgs<'_>) -> ContinueTraversal,
     NodeApp: Fn(NodeAppArgs<'_>) -> Result<(), InnErr>,
     ErrHandler: Fn(ErrHandlerArgs<'_, InnErr>) -> OutErr,
+    A: Allocator,
 {
     fn should_continue_at(
         &self,
-        this: &mut TreeVisitor<'_>,
+        this: &mut TreeVisitor<'_, A>,
         idx: UniIndex,
         rel_pos: AccessRelatedness,
     ) -> ContinueTraversal {
@@ -422,7 +423,7 @@ where
 
     fn propagate_at(
         &mut self,
-        this: &mut TreeVisitor<'_>,
+        this: &mut TreeVisitor<'_, A>,
         idx: UniIndex,
         rel_pos: AccessRelatedness,
     ) -> Result<(), OutErr> {
@@ -440,7 +441,7 @@ where
 
     fn go_upwards_from_accessed(
         &mut self,
-        this: &mut TreeVisitor<'_>,
+        this: &mut TreeVisitor<'_, A>,
         accessed_node: UniIndex,
         visit_children: ChildrenVisitMode,
     ) -> Result<(), OutErr> {
@@ -491,7 +492,7 @@ where
         Ok(())
     }
 
-    fn finish_foreign_accesses(&mut self, this: &mut TreeVisitor<'_>) -> Result<(), OutErr> {
+    fn finish_foreign_accesses(&mut self, this: &mut TreeVisitor<'_, A>) -> Result<(), OutErr> {
         while let Some((idx, rel_pos, step)) = self.stack.last_mut() {
             let idx = *idx;
             let rel_pos = *rel_pos;
@@ -531,8 +532,9 @@ where
         f_continue: NodeContinue,
         f_propagate: NodeApp,
         err_builder: ErrHandler,
+        allocator: A,
     ) -> Self {
-        Self { initial, f_continue, f_propagate, err_builder, stack: Vec::new_in(Global) }
+        Self { initial, f_continue, f_propagate, err_builder, stack: Vec::new_in(allocator) }
     }
 }
 
@@ -550,7 +552,10 @@ where
         Self { initial, f_continue, f_propagate, err_builder, stack: Vec::new_in(allocator) }
     }
 }
-impl<'tree> TreeVisitor<'tree> {
+impl<'tree, A> TreeVisitor<'tree, A>
+where
+    A: Allocator,
+{
     /// Applies `f_propagate` to every vertex of the tree in a piecewise bottom-up way: First, visit
     /// all ancestors of `start` (starting with `start` itself), then children of `start`, then the rest,
     /// going bottom-up in each of these two "pieces" / sections.
@@ -593,9 +598,11 @@ impl<'tree> TreeVisitor<'tree> {
         f_continue: impl Fn(&NodeAppArgs<'_>) -> ContinueTraversal,
         f_propagate: impl Fn(NodeAppArgs<'_>) -> Result<(), InnErr>,
         err_builder: impl Fn(ErrHandlerArgs<'_, InnErr>) -> OutErr,
+        allocator: A,
     ) -> Result<(), OutErr> {
         let start_idx = self.tag_mapping.get(&start).unwrap();
-        let mut stack = TreeVisitorStack::new(start_idx, f_continue, f_propagate, err_builder);
+        let mut stack =
+            TreeVisitorStack::new(start_idx, f_continue, f_propagate, err_builder, allocator);
         // Visits the accessed node itself, and all its parents, i.e. all nodes
         // undergoing a child access. Also pushes the children and the other
         // cousin nodes (i.e. all nodes undergoing a foreign access) to the stack
@@ -618,9 +625,11 @@ impl<'tree> TreeVisitor<'tree> {
         f_continue: impl Fn(&NodeAppArgs<'_>) -> ContinueTraversal,
         f_propagate: impl Fn(NodeAppArgs<'_>) -> Result<(), InnErr>,
         err_builder: impl Fn(ErrHandlerArgs<'_, InnErr>) -> OutErr,
+        allocator: A,
     ) -> Result<(), OutErr> {
         let start_idx = self.tag_mapping.get(&start).unwrap();
-        let mut stack = TreeVisitorStack::new(start_idx, f_continue, f_propagate, err_builder);
+        let mut stack =
+            TreeVisitorStack::new(start_idx, f_continue, f_propagate, err_builder, allocator);
         // Visits the accessed node itself, and all its parents, i.e. all nodes
         // undergoing a child access. Also pushes the other cousin nodes to the
         // stack, but not the children of the accessed node.
@@ -698,7 +707,10 @@ pub(super) struct ChildParams {
     span: Span,
 }
 
-impl<'tcx> Tree {
+impl<'tcx, A> Tree<A>
+where
+    A: Allocator + Clone + Copy,
+{
     /// Insert a new tag in the tree.
     ///
     /// `initial_perms` defines the initial permissions for the part of memory
@@ -817,9 +829,10 @@ impl<'tcx> Tree {
         &mut self,
         tag: BorTag,
         access_range: AllocRange,
-        global: GlobalCtx,
+        global: &GlobalCtx,
         alloc_id: AllocId, // diagnostics
         span: Span,        // diagnostics
+        allocator: A,
     ) -> BsanTreeResult<()> {
         self.perform_access(
             tag,
@@ -827,6 +840,7 @@ impl<'tcx> Tree {
             global,
             alloc_id,
             span,
+            allocator,
         )?;
 
         for (perms_range, perms) in self.rperms.iter_mut(access_range.start, access_range.size) {
@@ -864,6 +878,7 @@ impl<'tcx> Tree {
                             accessed_info,
                         }
                     },
+                    allocator,
                 )?
         }
 
@@ -892,9 +907,10 @@ impl<'tcx> Tree {
         &mut self,
         tag: BorTag,
         access_range_and_kind: Option<(AllocRange, AccessKind, AccessCause)>,
-        global: GlobalCtx,
+        global: &GlobalCtx,
         alloc_id: AllocId, // diagnostics
         span: Span,        // diagnostics
+        allocator: A,
     ) -> BsanTreeResult<()> {
         use core::ops::Range;
         // Performs the per-node work:
@@ -979,6 +995,7 @@ impl<'tcx> Tree {
                         |args| node_skipper(access_kind, args),
                         |args| node_app(perms_range.clone(), access_kind, access_cause, args),
                         |args| err_handler(perms_range.clone(), access_cause, args),
+                        allocator,
                     )?
             }
         } else {
@@ -1005,6 +1022,7 @@ impl<'tcx> Tree {
                         |args| node_skipper(access_kind, args),
                         |args| node_app(perms_range.clone(), access_kind, access_cause, args),
                         |args| err_handler(perms_range.clone(), access_cause, args),
+                        allocator,
                     )?;
                 }
             }
