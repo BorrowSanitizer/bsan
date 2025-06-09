@@ -581,12 +581,9 @@ pub mod diagnostics {
                         // We assume that the error was triggered on the same location that
                         // the transition `self` applies to, so permissions found must be increasing
                         // in the order `self.from < self.to <= insufficient.inner`
-                        (
-                            Active | Frozen | Disabled,
-                            ReservedFrzConf | ReservedFrz | ReservedIM,
-                        )
+                        (Active | Frozen | Disabled, ReservedFrzConf | ReservedIM)
                         | (Disabled, Frozen)
-                        | (ReservedFrzConf | ReservedFrz, ReservedIM) => {
+                        | (ReservedFrzConf, ReservedIM) => {
                             unreachable!("permissions between self and err must be increasing")
                         }
                     }
@@ -632,9 +629,7 @@ pub mod diagnostics {
                         // Permissions only evolve in the order `Reserved -> Active -> Frozen -> Disabled`,
                         // so permissions found must be increasing in the order
                         // `self.from < self.to <= forbidden.from < forbidden.to`.
-                        (Disabled  | ReservedFrzConf | ReservedFrz | ReservedIM | Active | Frozen
-                        | Frozen| ReservedFrzConf | ReservedFrz | ReservedIM | Active
-                        | Active | ReservedFrzConf | ReservedFrz | ReservedIM, _) =>
+                        (Disabled | Active | Frozen, _) =>
                             unreachable!("permissions between self and err must be increasing"),
                     }
                 }
