@@ -294,8 +294,7 @@ impl BsanEnv {
     }
 
     pub fn build_artifact(&mut self, b: impl Buildable, args: &[String]) -> Result<PathBuf> {
-        b.build(self, args)?;
-        Ok(self.assert_artifact(b.artifact()))
+        b.build(self, args).map(|a| a.unwrap())
     }
 
     pub fn cc_cmd(&self) -> Cmd<'_> {

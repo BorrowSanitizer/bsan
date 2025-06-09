@@ -4,7 +4,7 @@
 		"dockerfile": "Dockerfile"
 	},
 	"remoteEnv": {
-		"PATH": "${containerEnv:PATH}:/usr/local/rustup/toolchains/bsan/bin"
+		"PATH": "${containerEnv:PATH}:${containerWorkspaceFolder}"
 	},
 	"features": {
 		"ghcr.io/devcontainers/features/github-cli:1": {
@@ -18,6 +18,5 @@
 				"rust-lang.rust-analyzer"
 			]
 		}
-	},
-	"postStartCommand": "xb setup"
-}
+	}
+} 
