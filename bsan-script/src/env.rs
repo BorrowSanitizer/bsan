@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use path_macro::path;
 use rustc_version::VersionMeta;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use xshell::{cmd, Cmd, Shell};
 
 use crate::commands::Buildable;
@@ -79,14 +79,14 @@ impl Mode {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct BsanConfig {
     pub artifact_url: String,
     pub tag: String,
     pub sha: String,
     pub version: String,
     pub dependencies: Vec<String>,
-    pub targets: Vec<String>
+    pub targets: Vec<String>,
 }
 
 impl BsanConfig {
@@ -94,6 +94,12 @@ impl BsanConfig {
         let contents: String = std::fs::read_to_string(path)?;
         let contents: BsanConfig = toml::from_str(&contents)?;
         Ok(contents)
+    }
+
+    fn save(&self, path: &Path) -> Result<()> {
+        let contents: String = toml::to_string(self)?;
+        std::fs::write(path, contents)?;
+        Ok(())
     }
 }
 
@@ -105,9 +111,11 @@ impl BsanEnv {
 
         let deps_dir = path!(root_dir / ".toolchain");
         fs::create_dir_all(&deps_dir)?;
-        let config = BsanConfig::from_file(&path!(root_dir / "config.toml"))?;
 
-        let meta = setup::setup(&sh, &host, &config, &deps_dir)?;
+        let config_path = path!(root_dir / "config.toml");
+        let mut config = BsanConfig::from_file(&config_path)?;
+        let meta = setup::setup(&sh, &host, &mut config, &deps_dir)?;
+        config.save(&config_path)?;
 
         let build_dir = path!(root_dir / "target");
         // Hard-code the target dir, since we rely on all binaries ending up in the same spot.
@@ -342,4 +350,3 @@ impl BsanEnv {
         Ok(())
     }
 }
-
