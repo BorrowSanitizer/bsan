@@ -33,6 +33,7 @@ pub struct GlobalCtx {
     hooks: BsanHooks,
     next_alloc_id: AtomicUsize,
     next_thread_id: AtomicUsize,
+    next_bor_tag: AtomicUsize,
     shadow_heap: ShadowHeap<Provenance>,
 }
 
@@ -47,6 +48,7 @@ impl GlobalCtx {
             hooks,
             next_alloc_id: AtomicUsize::new(AllocId::min().get()),
             next_thread_id: AtomicUsize::new(0),
+            next_bor_tag: AtomicUsize::new(1),
             shadow_heap: ShadowHeap::new(&hooks),
         }
     }
@@ -98,6 +100,11 @@ impl GlobalCtx {
     pub fn new_alloc_id(&self) -> AllocId {
         let id = self.next_alloc_id.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         AllocId::new(id)
+    }
+
+    pub fn new_bor_tag(&self) -> BorTag {
+        let id = self.next_bor_tag.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        BorTag(id)
     }
 }
 
