@@ -1,25 +1,25 @@
+#![allow(unused_lifetimes)]
 // Ported from Miri's `diagnostics.rs`
 // Won't be used exactly as it is used in Miri or at all
 // but nice to port in case there are any similar behaviors / as a starting point
 use alloc::alloc::Global;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::alloc::Allocator;
 use core::fmt::{self, Write};
 use core::ops::Range;
 
 use bsan_shared::diagnostics::*;
-use bsan_shared::*;
+use bsan_shared::{Size, *};
 
-use crate::alloc::string::ToString;
-use crate::borrow_tracker::tree::{LocationState, Tree};
+use crate::borrow_tracker::tree::{AllocRange, BsanTreeResult, LocationState, Tree};
 use crate::borrow_tracker::unimap::UniIndex;
 use crate::span::*;
 use crate::{println, AllocId, BorTag, GlobalCtx};
 
 /// Cause of an access: either a real access or one
 /// inserted by Tree Borrows due to a reborrow or a deallocation.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AccessCause {
     Explicit(AccessKind),
     Reborrow,
@@ -57,20 +57,20 @@ impl AccessCause {
 }
 
 /// Complete data for an event:
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Event {
     /// Transformation of permissions that occurred because of this event.
     pub transition: PermTransition,
     /// Kind of the access that triggered this event.
     pub access_cause: AccessCause,
+
     /// Relative position of the tag to the one used for the access.
     pub is_foreign: bool,
     /// User-visible range of the access.
     /// `None` means that this is an implicit access to the entire allocation
     /// (used for the implicit read on protector release).
-
     // MIR specfic
-    // pub access_range: Option<AllocRange>,
+    pub access_range: Option<AllocRange>,
     /// The transition recorded by this event only occurred on a subrange of
     /// `access_range`: a single access on `access_range` triggers several events,
     /// each with their own mutually disjoint `transition_range`. No-op transitions
@@ -92,7 +92,7 @@ pub struct Event {
 /// NOTE: not all of these events are relevant for a particular location,
 /// the events should be filtered before the generation of diagnostics.
 /// Available filtering methods include `History::forget` and `History::extract_relevant`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct History<A: Allocator = Global> {
     tag: BorTag,
     created: (Span, Permission),
@@ -144,7 +144,7 @@ where
             transition,
             is_foreign,
             access_cause,
-            //access_range,
+            access_range,
             span,
             transition_range: _,
         } in &events
@@ -171,7 +171,7 @@ where
 
 /// Some information that is irrelevant for the algorithm but very
 /// convenient to know about a tag for debugging and testing.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct NodeDebugInfo<A: Allocator = Global> {
     /// The tag in question.
     pub tag: BorTag,
@@ -190,13 +190,20 @@ pub struct NodeDebugInfo<A: Allocator = Global> {
     pub history: History<A>,
 }
 
+impl NodeDebugInfo<Global> {
+    pub fn new(tag: BorTag, initial: Permission, span: Span) -> Self {
+        let history = History { tag, created: (span, initial), events: Vec::new_in(Global) };
+        Self { tag, name: None, history }
+    }
+}
+
 impl<A> NodeDebugInfo<A>
 where
     A: Allocator,
 {
     /// Information for a new node. By default it has no
-    /// name and an empty history.
-    pub fn new(tag: BorTag, initial: Permission, span: Span, alloc: A) -> Self {
+    /// name and an empty history. Uses custom allocator.
+    pub fn new_in(tag: BorTag, initial: Permission, span: Span, alloc: A) -> Self {
         let history = History { tag, created: (span, initial), events: Vec::new_in(alloc) };
         Self { tag, name: None, history }
     }
@@ -226,7 +233,10 @@ where
     }
 }
 
-impl Tree {
+impl<A> Tree<A>
+where
+    A: Allocator,
+{
     /// Climb the tree to get the tag of a distant ancestor.
     /// Allows operations on tags that are unreachable by the program
     /// but still exist in the tree. Not guaranteed to perform consistently
@@ -241,8 +251,12 @@ impl Tree {
     }
 
     /// Debug helper: assign name to tag.
-    // FIXME: Refacotor return type to Result-like object if ported
-    pub fn give_pointer_debug_name(&mut self, tag: BorTag, nth_parent: u8, name: &str) -> bool {
+    pub fn give_pointer_debug_name(
+        &mut self,
+        tag: BorTag,
+        nth_parent: u8,
+        name: &str,
+    ) -> BsanTreeResult<()> {
         let tag = self.nth_parent(tag, nth_parent).unwrap();
         let idx = self.tag_mapping.get(&tag).unwrap();
         if let Some(node) = self.nodes.get_mut(idx) {
@@ -250,7 +264,7 @@ impl Tree {
         } else {
             println!("Tag {tag:?} (to be named '{name}') not found!");
         }
-        true
+        Ok(())
     }
 
     /// Debug helper: determines if the tree contains a tag.
@@ -442,7 +456,11 @@ impl DisplayFmt {
     /// and `?Res`/`?Re*`/`?Act`/`?Frz`/`?Dis` for unaccessed locations.
     fn print_perm(&self, perm: Option<LocationState>) -> String {
         if let Some(perm) = perm {
-            (if perm.is_accessed() { self.accessed.yes } else { self.accessed.no }).to_string()
+            if perm.is_accessed() {
+                self.accessed.yes.to_string()
+            } else {
+                self.accessed.no.to_string()
+            }
         } else {
             format!("{}{}", self.accessed.meh, self.perm.uninit)
         }
