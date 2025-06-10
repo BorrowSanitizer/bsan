@@ -31,15 +31,3 @@ impl From<Span> for SpanData {
         SpanData(val.0)
     }
 }
-
-impl Default for Span {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Default for SpanData {
-    fn default() -> Self {
-        Self::new()
-    }
-}
