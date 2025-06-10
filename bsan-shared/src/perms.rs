@@ -1,3 +1,5 @@
+#![allow(unreachable_patterns)]
+
 use core::cmp::Ordering;
 use core::cmp::Ordering::*;
 use core::fmt;
@@ -142,7 +144,7 @@ impl PermissionPriv {
     }
 
     /// See `foreign_access_skipping.rs`. Computes the SIFA of a permission.
-    fn strongest_idempotent_foreign_access(&self, prot: bool) -> IdempotentForeignAccess {
+    pub fn strongest_idempotent_foreign_access(&self, prot: bool) -> IdempotentForeignAccess {
         match self {
             // A protected non-conflicted Reserved will become conflicted under a foreign read,
             // and is hence not idempotent under it.
@@ -382,6 +384,15 @@ impl Permission {
         self.inner.compatible_with_protector()
     }
 
+    /// What kind of access to perform before releasing the protector.
+    pub fn protector_end_access(&self) -> Option<AccessKind> {
+        match self.inner {
+            // Do not do perform access if it is a `Cell`, as this
+            // can cause data races when using thread-safe data types.
+            Active => Some(AccessKind::Write),
+            _ => Some(AccessKind::Read),
+        }
+    }
     /// Apply the transition to the inner PermissionPriv.
     pub fn perform_access(
         kind: AccessKind,
@@ -392,6 +403,48 @@ impl Permission {
         let old_state = old_perm.inner;
         transition::perform_access(kind, rel_pos, old_state, protected)
             .map(|new_state| PermTransition { from: old_state, to: new_state })
+    }
+
+    /// During a provenance GC, we want to compact the tree.
+    /// For this, we want to merge nodes upwards if they have a singleton parent.
+    /// But we need to be careful: If the parent is Frozen, and the child is Reserved,
+    /// we can not do such a merge. In general, such a merge is possible if the parent
+    /// allows similar accesses, and in particular if the parent never causes UB on its
+    /// own. This is enforced by a test, namely `tree_compacting_is_sound`. See that
+    /// test for more information.
+    /// This method is only sound if the parent is not protected. We never attempt to
+    /// remove protected parents.
+    pub fn can_be_replaced_by_child(self, child: Self) -> bool {
+        match (self.inner, child.inner) {
+            // ReservedIM can be replaced by anything besides Cell.
+            // ReservedIM allows all transitions, but unlike Cell, a local write
+            // to ReservedIM transitions to Active, while it is a no-op for Cell.
+            (ReservedIM, _) => true,
+            (_, ReservedIM) => false,
+            // Reserved (as parent, where conflictedness does not matter)
+            // can be replaced by all but ReservedIM and Cell,
+            // since ReservedIM and Cell alone would survive foreign writes
+            (ReservedFrz | ReservedFrzConf, _) => true,
+            (_, ReservedFrz | ReservedFrzConf) => false,
+            // Active can not be replaced by something surviving
+            // foreign reads and then remaining writable (i.e., Reserved*).
+            // Replacing a state by itself is always okay, even if the child state is protected.
+            // Active can be replaced by Frozen, since it is not protected.
+            (Active, Active | Frozen | Disabled) => true,
+            (_, Active) => false,
+            // Frozen can only be replaced by Disabled (and itself).
+            (Frozen, Frozen | Disabled) => true,
+            (_, Frozen) => false,
+            // Disabled can not be replaced by anything else.
+            (Disabled, Disabled) => true,
+        }
+    }
+
+    /// Returns the strongest foreign action this node survives (without change),
+    /// where `prot` indicates if it is protected.
+    /// See `foreign_access_skipping`
+    pub fn strongest_idempotent_foreign_access(&self, prot: bool) -> IdempotentForeignAccess {
+        self.inner.strongest_idempotent_foreign_access(prot)
     }
 }
 

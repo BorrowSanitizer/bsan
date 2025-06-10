@@ -192,12 +192,7 @@ namespace
             return getProvenance(I->getOperand(i));
         }
 
-        CallInst *createAllocationMetadata(Value *AllocAddr, APInt &AllocSize)
-        {
-            /* Value *AllocSizeValue =
-                ConstantInt::get(BS.IntptrTy, AllocSize.getZExtValue());
-            return CallInst::Create(BS.BsanFuncAlloc, {AllocAddr, AllocSizeValue}); */
-        }
+        void createAllocationMetadata(Value *AllocAddr, APInt &AllocSize) {}
 
         void instrumentLoad(LoadInst &I) {}
 
@@ -211,14 +206,9 @@ namespace
 
         void instrumentAggregateStore(StoreInst &I) {}
 
-        void instrumentRetag(IntrinsicInst &I) {
-            CallInst *CIRetag = CallInst::Create(
-                BS.BsanFuncRetag, {I.getOperand(0), I.getOperand(1), I.getOperand(2), I.getOperand(3)});
-            ReplaceInstWithInst(&I, CIRetag);
-        }
+        void instrumentRetag(IntrinsicInst &I) {}
 
-        bool runOnFunction()
-        {
+        bool runOnFunction() {
             for (BasicBlock *BB :
                  ReversePostOrderTraversal<BasicBlock *>(&F.getEntryBlock()))
             {
@@ -240,15 +230,13 @@ namespace
             return true;
         }
 
-        void initStack()
-        {
+        void initStack() {
             BasicBlock *EntryBlock = &F.getEntryBlock();
             InstrumentationIRBuilder IRB(EntryBlock, EntryBlock->getFirstNonPHIIt());
             IRB.CreateCall(BS.BsanFuncPushFrame, {ConstantInt::get(BS.IntptrTy, 0)});
         }
 
-        void deinitStack()
-        {
+        void deinitStack() {
             EscapeEnumerator EE(F, "bsan_cleanup", ClHandleCxxExceptions);
             while (IRBuilder<> *AtExit = EE.Next())
             {
@@ -257,8 +245,7 @@ namespace
             }
         }
 
-        bool shouldInstrumentAlloca(AllocaInst &AI)
-        {
+        bool shouldInstrumentAlloca(AllocaInst &AI) {
             bool ShouldInstrument =
                 // alloca() may be called with 0 size, ignore it.
                 (AI.getAllocatedType()->isSized() &&
@@ -269,23 +256,18 @@ namespace
         using InstVisitor<BorrowSanitizerVisitor>::visit;
 
         // We use this function to visit all instructions in depth-first order.
-        void visit(Instruction &I)
-        {
+        void visit(Instruction &I) {
             if (I.getMetadata(LLVMContext::MD_nosanitize))
                 return;
-            if (I.getOpcode() == Instruction::Alloca)
-            {
+            if (I.getOpcode() == Instruction::Alloca) {
                 AllocaInst &AI = static_cast<AllocaInst &>(I);
-                if (shouldInstrumentAlloca(AI))
-                {
+                if (shouldInstrumentAlloca(AI)) {
                     if (AI.isStaticAlloca())
                         StaticAllocaVec.push_back(&AI);
                     else
                         DynamicAllocaVec.push_back(&AI);
                 }
-            }
-            else
-            {
+            } else {
                 Instructions.push_back(&I);
             }
         }

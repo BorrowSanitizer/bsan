@@ -61,6 +61,11 @@ where
         RangeMap { v }
     }
 
+    pub fn size(&self) -> Size {
+        let size = self.v.last().map(|x| x.range.end).unwrap_or(0);
+        Size::from_bytes(size)
+    }
+
     /// Finds the index containing the given offset.
     fn find_offset(&self, offset: u64) -> usize {
         self.v
