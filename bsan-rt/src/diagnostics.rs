@@ -233,7 +233,7 @@ where
     }
 }
 
-impl<'tcxi, A> Tree<A>
+impl<A> Tree<A>
 where
     A: Allocator,
 {

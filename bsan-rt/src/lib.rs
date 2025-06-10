@@ -269,10 +269,14 @@ extern "C" fn __bsan_retag(prov: *mut Provenance, size: usize, perm_kind: u8, pr
 
     // Run the validation `middleware`
     // TODO: Handle these results with proper errors
-    let (mut tree, prov) =
-        unsafe { bt_validate_tree(prov, &global_ctx, Some(&retag_info)).unwrap() };
+    let mut tree_ptr = unsafe { bt_validate_tree(prov, global_ctx, Some(&retag_info)).unwrap() };
 
-    let _ = bt_tree_retag(tree, prov, &global_ctx, &retag_info).unwrap();
+    // Cast the raw pointers into references for safety
+    let mut tree = unsafe { &mut *tree_ptr };
+
+    let mut prov = unsafe { &mut *prov };
+
+    bt_retag(tree, prov, global_ctx, &retag_info).unwrap();
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -282,9 +286,21 @@ extern "C" fn __bsan_read(prov: *const Provenance, addr: usize, access_size: u64
 
     let global_ctx = unsafe { global_ctx() };
 
-    let (mut tree, prov) = unsafe { bt_validate_tree(prov, &global_ctx, None).unwrap() };
+    let mut tree_ptr = unsafe { bt_validate_tree(prov, global_ctx, None).unwrap() };
 
-    let _ = bt_read(tree, prov, &global_ctx, Size::from_bytes(addr), Size::from_bytes(access_size));
+    // Safety land
+    let tree = unsafe { &mut *tree_ptr };
+    let prov = unsafe { &*prov };
+
+    bt_access(
+        tree,
+        prov,
+        global_ctx,
+        bsan_shared::AccessKind::Read,
+        Size::from_bytes(addr),
+        Size::from_bytes(access_size),
+    )
+    .unwrap();
 }
 
 /// Records a write access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -294,10 +310,20 @@ extern "C" fn __bsan_write(prov: *const Provenance, addr: usize, access_size: u6
 
     let global_ctx = unsafe { global_ctx() };
 
-    let (mut tree, prov) = unsafe { bt_validate_tree(prov, &global_ctx, None).unwrap() };
+    let mut tree_ptr = unsafe { bt_validate_tree(prov, global_ctx, None).unwrap() };
 
-    let _ =
-        bt_write(tree, prov, &global_ctx, Size::from_bytes(addr), Size::from_bytes(access_size));
+    let tree = unsafe { &mut *tree_ptr };
+    let prov = unsafe { &*prov };
+
+    bt_access(
+        tree,
+        prov,
+        global_ctx,
+        bsan_shared::AccessKind::Write,
+        Size::from_bytes(addr),
+        Size::from_bytes(access_size),
+    )
+    .unwrap();
 }
 
 /// Copies the provenance stored in the range `[src_addr, src_addr + access_size)` within the shadow heap
