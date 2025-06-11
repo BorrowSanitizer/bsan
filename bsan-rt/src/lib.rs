@@ -50,6 +50,8 @@ macro_rules! println {
 pub(crate) use println;
 use span::Span;
 
+use crate::borrow_tracker::tree::AllocRange;
+
 /// Unique identifier for an allocation
 #[repr(transparent)]
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -171,7 +173,7 @@ impl Provenance {
 /// do not match, then the access is invalid. If they do match, then we proceed to validate the access against
 /// the tree for the allocation.
 #[repr(C)]
-struct AllocInfo {
+pub struct AllocInfo {
     pub alloc_id: AllocId,
     pub base_addr: usize,
     pub size: usize,
@@ -226,7 +228,8 @@ extern "C" fn __bsan_retag(prov: *mut Provenance, size: usize, perm_kind: u8, pr
 
     // Run the validation `middleware`
     // TODO: Handle these results with proper errors
-    let mut tree_ptr = unsafe { bt_validate_tree(prov, global_ctx, Some(&retag_info)).unwrap() };
+    let (mut tree_ptr, _) =
+        unsafe { bt_validate_tree(prov, global_ctx, Some(&retag_info)).unwrap() };
 
     // Cast the raw pointers into references for safety
     let mut tree = unsafe { &mut *tree_ptr };
@@ -243,12 +246,13 @@ extern "C" fn __bsan_read(prov: *const Provenance, addr: usize, access_size: u64
 
     let global_ctx = unsafe { global_ctx() };
 
-    let mut tree_ptr = unsafe { bt_validate_tree(prov, global_ctx, None).unwrap() };
+    let (mut tree_ptr, _) = unsafe { bt_validate_tree(prov, global_ctx, None).unwrap() };
 
     // Safety land
     let tree = unsafe { &mut *tree_ptr };
     let prov = unsafe { &*prov };
 
+    // TODO: Lock the tree
     bt_access(
         tree,
         prov,
@@ -267,7 +271,7 @@ extern "C" fn __bsan_write(prov: *const Provenance, addr: usize, access_size: u6
 
     let global_ctx = unsafe { global_ctx() };
 
-    let mut tree_ptr = unsafe { bt_validate_tree(prov, global_ctx, None).unwrap() };
+    let (mut tree_ptr, _) = unsafe { bt_validate_tree(prov, global_ctx, None).unwrap() };
 
     let tree = unsafe { &mut *tree_ptr };
     let prov = unsafe { &*prov };
@@ -357,7 +361,35 @@ extern "C" fn __bsan_extend_frame(num_elems: usize) {
 
 /// Deregisters a heap allocation
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_dealloc(prov: *mut Provenance) {}
+extern "C" fn __bsan_dealloc(prov: *mut Provenance) {
+    // Assuming root tag has been initialized in the tree
+
+    let global_ctx = unsafe { global_ctx() };
+
+    let (mut tree_ptr, alloc_info_ptr) =
+        unsafe { bt_validate_tree(prov, global_ctx, None).unwrap() };
+
+    let mut tree = unsafe { &mut *tree_ptr };
+
+    let prov = unsafe { &*prov };
+
+    let alloc_info = unsafe { &*alloc_info_ptr };
+
+    // TODO: Handle the result properly
+    // and lock the tree
+    tree.dealloc(
+        prov.bor_tag,
+        AllocRange {
+            start: Size::from_bytes(alloc_info.base_addr),
+            size: Size::from_bytes(alloc_info.size),
+        },
+        global_ctx,
+        prov.alloc_id,
+        Span::new(),
+        global_ctx.hooks().alloc,
+    )
+    .unwrap()
+}
 
 /// Marks the borrow tag for `prov` as "exposed," allowing it to be resolved to
 /// validate accesses through "wildcard" pointers.
