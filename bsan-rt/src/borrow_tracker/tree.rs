@@ -824,7 +824,7 @@ where
 
     /// Deallocation requires
     /// - a pointer that permits write accesses
-    /// - the absence of Strong Protectors anywhere in the allocation
+    /// - the absence of Strong Protectors anywhere in the allocation (unimplemented)
     pub fn dealloc(
         &mut self,
         tag: BorTag,
