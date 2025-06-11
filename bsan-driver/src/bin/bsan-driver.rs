@@ -5,6 +5,7 @@ extern crate rustc_session;
 
 use std::env;
 
+use bsan_driver::RetagFields;
 use rustc_session::config::ErrorOutputType;
 use rustc_session::EarlyDiagCtxt;
 
@@ -51,5 +52,13 @@ fn main() {
         }
     };
     rustc_driver::install_ice_hook(rustc_driver::DEFAULT_BUG_REPORT_URL, |_| ());
+<<<<<<< Updated upstream
     bsan_driver::run_compiler(args, target_crate, &mut bsan_driver::BSanCtx {})
+=======
+    bsan_driver::run_compiler(
+        args,
+        target_crate,
+        &mut bsan_driver::BSanCallBacks { retag_fields: RetagFields::All },
+    )
+>>>>>>> Stashed changes
 }

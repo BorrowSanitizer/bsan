@@ -8,5 +8,5 @@ CMakeFiles
 *.bc
 *.a
 *.o
-.toolchain
+*.txt
 .vscode

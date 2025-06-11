@@ -1,12 +1,27 @@
 #![feature(rustc_private)]
+<<<<<<< Updated upstream
 #![feature(box_patterns)]
 extern crate rustc_driver;
 extern crate rustc_hir;
 extern crate rustc_interface;
 extern crate rustc_middle;
 mod retag;
+=======
 
+extern crate rustc_abi;
+extern crate rustc_driver;
+extern crate rustc_hir;
+extern crate rustc_index;
+extern crate rustc_interface;
+extern crate rustc_middle;
+extern crate rustc_session;
+>>>>>>> Stashed changes
+
+pub mod callbacks;
+pub mod cx;
+pub mod expand_retag;
 use std::env;
+<<<<<<< Updated upstream
 
 use retag::AddRetagPass;
 use rustc_driver::Compilation;
@@ -24,6 +39,17 @@ impl rustc_driver::Callbacks for BSanCtx {
     }
 }
 
+=======
+
+pub use expand_retag::RetagFields;
+
+pub use crate::callbacks::BSanCallBacks;
+
+pub const BSAN_BUG_REPORT_URL: &str = "https://github.com/BorrowSanitizer/rust/issues/new";
+pub const BSAN_DEFAULT_ARGS: &[&str] =
+    &["--cfg=bsan", "-Zmir-opt-level=0", "-Cpasses=bsan", "-Zmir-emit-retag", "-Zllvm-emit-retag"];
+
+>>>>>>> Stashed changes
 /// Execute a compiler with the given CLI arguments and callbacks.
 pub fn run_compiler(mut args: Vec<String>, target_crate: bool, ctx: &mut BSanCtx) -> ! {
     if target_crate {
