@@ -12,23 +12,6 @@ use crate::{AllocInfo, BorTag, GlobalCtx, Provenance};
 pub mod tree;
 pub mod unimap;
 
-// #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-// pub enum BtAccessType {
-//     READ,
-//     WRITE,
-//     DEALLOC,
-// }
-
-// impl BtAccessType {
-//     fn access_kind(&self) -> AccessKind {
-//         match self {
-//             BtAccessType::READ => AccessKind::Read,
-//             BtAccessType::WRITE => AccessKind::Write,
-//             BtAccessType::DEALLOC => AccessKind::Write,
-//         }
-//     }
-// }
-
 // TODO: Create trait for this wrapper functionality
 
 // Potential validation middleware should be part of wrapper API?
@@ -39,6 +22,7 @@ pub mod unimap;
 /// This function should be called as middleware to verify the provenance and optionally
 /// initialize the tree on retags
 #[allow(clippy::result_unit_err)]
+#[allow(private_interfaces)]
 pub unsafe fn bt_validate_tree(
     prov: *const Provenance,
     global_ctx: &GlobalCtx,
