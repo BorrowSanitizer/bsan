@@ -228,8 +228,7 @@ extern "C" fn __bsan_retag(prov: *mut Provenance, size: usize, perm_kind: u8, pr
 
     // Run the validation `middleware`
     // TODO: Handle these results with proper errors
-    let (mut tree_ptr, _) =
-        unsafe { bt_validate_tree(prov, global_ctx, Some(&retag_info)).unwrap() };
+    let (mut tree_ptr, _) = unsafe { bt_validate_tree(prov, global_ctx).unwrap() };
 
     // Cast the raw pointers into references for safety
     let mut tree = unsafe { &mut *tree_ptr };
@@ -246,7 +245,7 @@ extern "C" fn __bsan_read(prov: *const Provenance, addr: usize, access_size: u64
 
     let global_ctx = unsafe { global_ctx() };
 
-    let (mut tree_ptr, _) = unsafe { bt_validate_tree(prov, global_ctx, None).unwrap() };
+    let (mut tree_ptr, _) = unsafe { bt_validate_tree(prov, global_ctx).unwrap() };
 
     // Safety land
     let tree = unsafe { &mut *tree_ptr };
@@ -271,7 +270,7 @@ extern "C" fn __bsan_write(prov: *const Provenance, addr: usize, access_size: u6
 
     let global_ctx = unsafe { global_ctx() };
 
-    let (mut tree_ptr, _) = unsafe { bt_validate_tree(prov, global_ctx, None).unwrap() };
+    let (mut tree_ptr, _) = unsafe { bt_validate_tree(prov, global_ctx).unwrap() };
 
     let tree = unsafe { &mut *tree_ptr };
     let prov = unsafe { &*prov };
@@ -348,6 +347,18 @@ unsafe extern "C" fn __bsan_alloc(prov: *mut MaybeUninit<Provenance>, addr: usiz
     unsafe {
         (*prov).write(Provenance::null());
     }
+
+    let ctx = unsafe { global_ctx() };
+
+    let bor_tag = ctx.new_bor_tag();
+    let allocator = ctx.hooks().alloc;
+
+    let prov = unsafe { (*prov).as_ptr() };
+    // Assuming root tag is null here, we want to initialize the tree
+
+    let (mut tree_ptr, _) = unsafe { bt_validate_tree(prov, ctx).unwrap() };
+    // tree_ptr is an output
+    unsafe { bt_init_tree(tree_ptr, bor_tag, Size::from_bytes(size), allocator).unwrap() };
 }
 
 /// Extends the current stack frame to store `num_elems` additional provenance values.
@@ -366,8 +377,7 @@ extern "C" fn __bsan_dealloc(prov: *mut Provenance) {
 
     let global_ctx = unsafe { global_ctx() };
 
-    let (mut tree_ptr, alloc_info_ptr) =
-        unsafe { bt_validate_tree(prov, global_ctx, None).unwrap() };
+    let (mut tree_ptr, alloc_info_ptr) = unsafe { bt_validate_tree(prov, global_ctx).unwrap() };
 
     let mut tree = unsafe { &mut *tree_ptr };
 
@@ -389,6 +399,9 @@ extern "C" fn __bsan_dealloc(prov: *mut Provenance) {
         global_ctx.hooks().alloc,
     )
     .unwrap()
+
+    // TODO: Deallocate the AllocInfo
+    // Potentially using a port of `AllocMetadata::dealloc`
 }
 
 /// Marks the borrow tag for `prov` as "exposed," allowing it to be resolved to
