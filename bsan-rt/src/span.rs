@@ -7,7 +7,14 @@ impl SpanData {
     }
 }
 
+impl From<usize> for SpanData {
+    fn from(val: usize) -> Self {
+        SpanData(val)
+    }
+}
+
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[repr(C)]
 pub struct Span(usize);
 
 impl Span {

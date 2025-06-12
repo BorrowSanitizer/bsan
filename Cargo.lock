@@ -141,6 +141,7 @@ dependencies = [
  "hashbrown",
  "libc",
  "libc-print",
+ "log",
  "rustc-hash",
  "smallvec",
 ]
