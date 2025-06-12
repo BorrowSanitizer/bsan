@@ -193,6 +193,13 @@ namespace
             return getProvenance(I->getOperand(i));
         }
 
+        CallInst *createAllocationMetadata(Value *AllocAddr, APInt &AllocSize)
+        {
+            /* Value *AllocSizeValue =
+                ConstantInt::get(BS.IntptrTy, AllocSize.getZExtValue());
+            return CallInst::Create(BS.BsanFuncAlloc, {AllocAddr, AllocSizeValue}); */
+        }
+
         void instrumentLoad(LoadInst &I) {}
 
         void instrumentVectorLoad(LoadInst &I) {}
@@ -285,6 +292,12 @@ namespace
             // TODO: Handle CallBr and Invoke
             if (isAllocLikeFn(&I, TLI))
             {
+                /*
+                APInt AllocSize = getAllocSize(&I, TLI).value_or(
+                    APInt::getZero(BS.IntptrTy->getIntegerBitWidth()));
+                CallInst *AllocCall = createAllocationMetadata(&I, AllocSize);
+                setProvenance(&I, AllocCall);
+                AllocCall->insertAfter(&I); */
             }
             else if (Callee && TLI->getLibFunc(*Callee, TLIFn) && TLI->has(TLIFn) &&
                      isLibFreeFunction(Callee, TLIFn))
