@@ -293,8 +293,7 @@ impl Buildable for BsanLLVMPlugin {
 
     fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
         env.in_mode(Mode::Release, |env| {
-            self.build(env, args)?;
-            let pass = env.assert_artifact(self.artifact());
+            let pass = self.build(env, args)?.expect("LLVM pass was not built.");
             env.copy_to_sysroot_libdir(&pass)
         })
     }
