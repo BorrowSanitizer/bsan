@@ -347,10 +347,10 @@ extern "C" fn __bsan_pop_frame() {}
 ///  been called to initialize the global context, esp. the allocator and mmap hooks.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_alloc(
-    span: Span,
-    prov: *mut MaybeUninit<Provenance>,
     object_address: *const c_void,
     alloc_size: usize,
+    prov: *mut MaybeUninit<Provenance>,
+    span: Span,
 ) {
     debug_assert!(!prov.is_null());
     let ctx = unsafe { global_ctx() };
@@ -442,7 +442,7 @@ mod test {
         let mut prov = MaybeUninit::<Provenance>::uninit();
         let prov_ptr = (&mut prov) as *mut _;
         unsafe {
-            __bsan_alloc(Span::new(), prov_ptr, 0xaaaaaaaa as *const c_void, 10);
+            __bsan_alloc(0xaaaaaaaa as *const c_void, 10, prov_ptr, Span::new());
             prov.assume_init()
         }
     }
