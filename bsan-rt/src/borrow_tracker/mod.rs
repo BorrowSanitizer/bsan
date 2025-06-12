@@ -15,6 +15,29 @@ pub mod unimap;
 
 // Potential validation middleware should be part of wrapper API?
 
+pub unsafe fn bt_init_tree(
+    // This is an output pointer
+    tree_ptr: *mut Tree<BsanAllocHooks>,
+    bor_tag: BorTag,
+    size: Size,
+    allocator: BsanAllocHooks,
+) -> Result<(), ()> {
+    // Check if the `Tree` (root node) exists, otherwise create it
+    if (tree_ptr.is_null()) {
+        // Create the tree
+
+        // ATTENTION: Using the allocator provided by `global_ctx`, with a dummy Span for now
+        unsafe {
+            let tree: Tree<BsanAllocHooks> = Tree::new_in(bor_tag, size, Span::new(), allocator);
+
+            *tree_ptr = tree;
+        };
+        // Now `Tree` reference should be valid
+    }
+
+    Ok(())
+}
+
 // TODO: Replace with custom `Result` type
 /// # Safety
 ///
@@ -25,8 +48,6 @@ pub mod unimap;
 pub unsafe fn bt_validate_tree(
     prov: *const Provenance,
     global_ctx: &GlobalCtx,
-    // `Some` intializes the tree
-    retag_info: Option<&RetagInfo>,
 ) -> Result<(*mut Tree<BsanAllocHooks>, *const AllocInfo), ()> {
     // Get global allocator
     let allocator = global_ctx.hooks().alloc;
@@ -50,25 +71,6 @@ pub unsafe fn bt_validate_tree(
     // Cast the Tree void ptr into `Tree`
     let tree_ptr = unsafe { &raw mut *alloc_info.tree as *mut Tree<BsanAllocHooks> };
 
-    if let Some(retag_info) = retag_info {
-        // Check if the `Tree` (root node) exists, otherwise create it
-        if (tree_ptr.is_null()) {
-            // Create the tree
-
-            // ATTENTION: Using the allocator provided by `global_ctx`, with a dummy Span for now
-            unsafe {
-                let tree: Tree<BsanAllocHooks> = Tree::new_in(
-                    (*prov).bor_tag,
-                    Size::from_bytes(retag_info.size),
-                    Span::new(),
-                    allocator,
-                );
-
-                *tree_ptr = tree;
-            };
-            // Now `Tree` reference should be valid
-        }
-    }
     // This should be valid
     // Returning pointers as we do not want any lifetime restrictions with this method
     Ok((tree_ptr, alloc_info_ptr))
