@@ -14,25 +14,54 @@ use crate::*;
 ///
 /// The pointer that is returned by `next` must not be mutated concurrently.
 pub unsafe trait Linkable<T: Sized> {
-    fn next(&self) -> *mut *mut T;
+    fn next(&mut self) -> *mut *mut T;
 }
 
 /// An mmap-ed chunk of memory that will munmap the chunk on drop.
-#[derive(Debug)]
 pub struct Block<T: Sized> {
-    pub size: NonZeroUsize,
+    pub num_elements: NonZeroUsize,
     pub base: NonNull<T>,
     pub munmap: MUnmap,
 }
 
 impl<T: Sized> Block<T> {
+    /// The number of instances of T that can fit within the block.
+    #[inline]
+    fn len(&self) -> NonZeroUsize {
+        self.num_elements
+    }
+
+    /// The byte width of the block.
+    #[inline]
+    fn byte_width(&self) -> NonZeroUsize {
+        #[cfg(test)]
+        let result = self.len().get().checked_mul(core::mem::size_of::<T>()).unwrap();
+        #[cfg(not(test))]
+        let result = unsafe { self.len().get().unchecked_mul(core::mem::size_of::<T>()) };
+
+        unsafe { NonZeroUsize::new_unchecked(result) }
+    }
+
     /// The last valid, addressable location within the block (at its high-end)
+    #[inline]
     fn last(&self) -> *mut T {
-        unsafe { self.base.as_ptr().add(self.size.get() - 1) }
+        unsafe { self.base.as_ptr().add(self.len().get() - 1) }
     }
     /// The first valid, addressable location within the block (at its low-end)
+    #[inline]
     fn first(&self) -> *mut T {
         self.base.as_ptr()
+    }
+}
+
+impl<T> core::fmt::Debug for Block<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Block")
+            .field("base", &self.base)
+            .field("first", &self.first())
+            .field("last", &self.last())
+            .field("reserved for num_elements", &self.num_elements)
+            .finish()
     }
 }
 
@@ -43,7 +72,7 @@ impl<T> Drop for Block<T> {
         // it was allocated by mmap
         let success = unsafe {
             let ptr = mem::transmute::<*mut T, *mut libc::c_void>(self.base.as_ptr());
-            (self.munmap)(ptr, self.size.get())
+            (self.munmap)(ptr, self.num_elements.get())
         };
         if success != 0 {
             panic!("Failed to unmap block!");
@@ -73,7 +102,7 @@ unsafe impl<T: Linkable<T>> Sync for BlockAllocator<T> {}
 
 impl<T: Linkable<T>> BlockAllocator<T> {
     /// Initializes a BlockAllocator for the given block.
-    fn new(block: Block<T>) -> Self {
+    pub fn new(block: Block<T>) -> Self {
         BlockAllocator {
             // we begin at the high-end of the block and decrement downward
             cursor: AtomicPtr::new(block.last() as *mut MaybeUninit<T>),
@@ -86,7 +115,7 @@ impl<T: Linkable<T>> BlockAllocator<T> {
     /// Allocates a new instance from the block.
     /// If a prior allocation has been freed, it will be reused instead of
     /// incrementing the internal cursor.
-    fn alloc(&self) -> Option<NonNull<MaybeUninit<T>>> {
+    pub fn alloc(&self) -> Option<NonNull<MaybeUninit<T>>> {
         if !self.free_lock.swap(true, Ordering::Acquire) {
             let curr = unsafe { *self.free_list.get() };
             let curr = if !curr.is_null() {
@@ -153,8 +182,8 @@ mod test {
     }
 
     unsafe impl Linkable<Link> for Link {
-        fn next(&self) -> *mut *mut Link {
-            unsafe { mem::transmute(self.link.get()) }
+        fn next(&mut self) -> *mut *mut Link {
+            unsafe { core::mem::transmute(self.link.get()) }
         }
     }
 
