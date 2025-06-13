@@ -11,6 +11,9 @@ use strum_macros::EnumIter;
 use xshell::{cmd, Cmd, Shell};
 use xz2::bufread::XzDecoder;
 
+// TODO(!urgent): Testing todos, add vanity to errors
+//  labels: enhancement
+//  assignees: Gitter499
 pub fn show_error_(msg: &impl std::fmt::Display) -> ! {
     eprintln!("fatal error: {msg}");
     std::process::exit(1)
