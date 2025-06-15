@@ -10,11 +10,8 @@
 		"ghcr.io/devcontainers/features/github-cli:1": {
 			"version": "latest"
 		},
-		"ghcr.io/devcontainers/features/common-utils:2": {},
-		"ghcr.io/devcontainers/features/git:1": {
-			"version": "latest",
-			"ppa": "false"
-		}
+		"ghcr.io/devcontainers/features/common-utils:2": {
+			"username": "bsan"
 	},
 	"customizations": {
 		"vscode": {
