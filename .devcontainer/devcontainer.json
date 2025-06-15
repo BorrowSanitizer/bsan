@@ -10,13 +10,7 @@
 		"ghcr.io/devcontainers/features/github-cli:1": {
 			"version": "latest"
 		},
-		"ghcr.io/devcontainers/features/common-utils:2": {
-			"installZsh": "true",
-			"username": "vscode",
-			"userUid": "1000",
-			"userGid": "1000",
-			"upgradePackages": "true"
-		},
+		"ghcr.io/devcontainers/features/common-utils:2": {},
 		"ghcr.io/devcontainers/features/git:1": {
 			"version": "latest",
 			"ppa": "false"
@@ -24,7 +18,11 @@
 	},
 	"customizations": {
 		"vscode": {
-			"settings": {},
+			"settings": {
+				"rust-analyzer.cargo.sysroot": "discover",
+				"rust-analyzer.rustc.source": "discover",
+				"rust-analyzer.workspace.symbol.search.scope": "workspace_and_dependencies"
+			},
 			"extensions": [
 				"rust-lang.rust-analyzer"
 			]

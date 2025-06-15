@@ -1,20 +1,20 @@
-name: CI
+name: CI (base)
 on:
-  push:
-    branches: [ "main" ]
-    paths:
-      - '**/*.rs'
-      - '**/*.toml'
-      - '**/*.yml'
-  pull_request:
-    branches: [ "main" ]
-  schedule:
-    - cron: '0 0 * * *'
-  workflow_dispatch: 
+  workflow_call:
+    inputs:
+      cache_container:
+        type: boolean
+        description: Require rebuilding the dev container.
+        required: true
+
+      push_container:
+        type: boolean
+        description: Push the dev container.
+        required: true
 env:
   CARGO_TERM_COLOR: always
 jobs:
-  build:
+  ci:
     strategy:
       fail-fast: false
       matrix:
@@ -23,12 +23,32 @@ jobs:
             os: ubuntu-24.04-arm
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+
     runs-on: '${{ matrix.config.os }}'
     name: '${{ matrix.config.target }}'
+
     steps:
     - uses: actions/checkout@v4
-    - name: Install Dependencies
-      run: |
-        rustup default nightly
-    - name: CI
-      run: ./xb ci
+
+    - name: Login to GitHub Container Registry
+      if: ${{ inputs.push_container }}
+      uses: docker/login-action@v2 
+      with:
+        registry: ghcr.io
+        username: ${{ github.repository_owner }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: CI (rebuild dev container)
+      if: ${{ ! inputs.cache_container }}
+      uses: devcontainers/ci@v0.3
+      with:
+        imageName: ghcr.io/BorrowSanitizer/dev-${{ matrix.config.os }}
+        runCmd: xb ci
+
+    - name: CI (cached container)
+      if: ${{ inputs.cache_container }}
+      uses: devcontainers/ci@v0.3
+      with:
+        imageName: ghcr.io/BorrowSanitizer/dev-${{ matrix.config.os }}
+        cacheFrom: ghcr.io/BorrowSanitizer/dev-${{ matrix.config.os }}
+        runCmd: xb ci

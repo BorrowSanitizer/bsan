@@ -1,0 +1,12 @@
+name: CI (scheduled)
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+jobs:
+  call-ci:
+    uses: BorrowSanitizer/bsan/.github/workflows/ci.yml@main
+    with:
+      cache_container: true
+      push_container: true
+    secrets: inherit

@@ -1,0 +1,24 @@
+name: CI (pull request)
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+jobs:
+  check_rebuild:
+    outputs:
+      devcontainer: ${{ steps.filter.outputs.devcontainer }}
+    steps:
+    - uses: dorny/paths-filter@v2.2.1
+      id: filter
+      with:
+        filters: |
+          devcontainer:
+            - '.devcontainer/**/*'
+  call_ci:
+    needs: [check_rebuild]
+    uses: BorrowSanitizer/bsan/.github/workflows/ci.yml@main
+    with:
+      cache_container: ${{ ! needs.outputs.devcontainer }}
+      push_container: false
+    secrets: inherit
