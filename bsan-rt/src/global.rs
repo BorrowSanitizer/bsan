@@ -6,7 +6,7 @@ use core::cell::{SyncUnsafeCell, UnsafeCell};
 use core::ffi::CStr;
 use core::fmt::{self, write, Write};
 use core::mem::{self, zeroed, MaybeUninit};
-use core::num::NonZeroUsize;
+use core::num::{self, NonZeroUsize};
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
@@ -37,6 +37,7 @@ pub struct GlobalCtx {
     next_alloc_id: AtomicUsize,
     next_thread_id: AtomicUsize,
     next_bor_tag: AtomicUsize,
+    alloc_metadata_map: BlockAllocator<AllocInfo>,
     shadow_heap: ShadowHeap<Provenance>,
     pub sizes: Sizes,
 }
@@ -45,11 +46,21 @@ impl GlobalCtx {
     /// Creates a new instance of `GlobalCtx` using the given `BsanHooks`.
     /// This function will also initialize our shadow heap
     fn new(hooks: BsanHooks) -> Self {
+        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+        let alloc_metadata_size = mem::size_of::<AllocInfo>();
+        debug_assert!(0 < alloc_metadata_size && alloc_metadata_size <= page_size);
+
+        //  TODO: allocate a page of `AllocInfo` objects.
+        //  let num_elements = NonZeroUsize::new(page_size / mem::size_of::<AllocInfo>()).unwrap();
+
+        let num_elements = NonZeroUsize::new(1024).unwrap();
+        let block = Block::new(&hooks, num_elements);
         Self {
             hooks,
             next_alloc_id: AtomicUsize::new(AllocId::min().get()),
             next_thread_id: AtomicUsize::new(0),
-            next_bor_tag: AtomicUsize::new(1),
+            next_bor_tag: AtomicUsize::new(0),
+            alloc_metadata_map: BlockAllocator::new(block),
             shadow_heap: ShadowHeap::new(&hooks),
             sizes: Sizes::default(),
         }
@@ -59,11 +70,34 @@ impl GlobalCtx {
         &self.shadow_heap
     }
 
+    // TODO: Discuss BorTag implementation
+    // Gitter499: I think it makes sense to keep track of the borrow tags at a global level
+    // Though I could see moving this responsibility completely to the tree
+    pub fn new_bor_tag(&self) -> BorTag {
+        let id = self.next_bor_tag.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        BorTag(id)
+    }
+
     pub fn hooks(&self) -> &BsanHooks {
         &self.hooks
     }
 
-    fn allocator(&self) -> BsanAllocHooks {
+    pub(crate) unsafe fn allocate_lock_location(&self) -> NonNull<MaybeUninit<AllocInfo>> {
+        match self.alloc_metadata_map.alloc() {
+            Some(a) => a,
+            None => {
+                // TODO: Discuss logging
+                //log::error!("Failed to allocate lock location");
+                panic!("Failed to allocate lock location");
+            }
+        }
+    }
+
+    pub fn new_block<T>(&self, num_elements: NonZeroUsize) -> Block<T> {
+        Block::new(self.hooks(), num_elements)
+    }
+
+    pub fn allocator(&self) -> BsanAllocHooks {
         self.hooks.alloc
     }
 
@@ -79,17 +113,7 @@ impl GlobalCtx {
     pub fn new_alloc_id(&self) -> AllocId {
         let id = self.next_alloc_id.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         AllocId::new(id)
-    }    
-    
-    pub fn new_bor_tag(&self) -> BorTag {
-        let id = self.next_bor_tag.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        BorTag(id)
     }
-
-    pub fn new_stack<T>(&self) -> Stack<T> {
-        Stack::new(self)
-    }
-    
 }
 
 impl Drop for GlobalCtx {

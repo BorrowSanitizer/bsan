@@ -15,11 +15,10 @@ use crate::*;
 ///
 /// The pointer that is returned by `next` must not be mutated concurrently.
 pub unsafe trait Linkable<T: Sized> {
-    fn next(&self) -> *mut *mut T;
+    fn next(&mut self) -> *mut *mut T;
 }
 
 /// An mmap-ed chunk of memory that will munmap the chunk on drop.
-#[derive(Debug)]
 pub struct Block<T: Sized> {
     num_elements: NonZero<usize>,
     base: NonNull<T>,
@@ -58,8 +57,20 @@ impl<T: Sized> Block<T> {
 
     /// The first valid, addressable location within the block (at its low-end)
     #[inline]
-    pub fn start(&self) -> NonNull<T> {
+    pub fn first(&self) -> NonNull<T> {
         self.base
+    }
+}
+
+impl<T> core::fmt::Debug for Block<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Block")
+            .field("base", &self.base)
+            .field("first", &self.first())
+            .field("last", &self.last())
+            .field("end", &self.end())
+            .field("reserved for num_elements", &self.num_elements)
+            .finish()
     }
 }
 
@@ -100,7 +111,7 @@ unsafe impl<T: Linkable<T>> Sync for BlockAllocator<T> {}
 
 impl<T: Linkable<T>> BlockAllocator<T> {
     /// Initializes a BlockAllocator for the given block.
-    fn new(block: Block<T>) -> Self {
+    pub fn new(block: Block<T>) -> Self {
         BlockAllocator {
             // we begin at the high-end of the block and decrement downward
             cursor: AtomicPtr::new(block.last().as_ptr() as *mut MaybeUninit<T>),
@@ -113,7 +124,7 @@ impl<T: Linkable<T>> BlockAllocator<T> {
     /// Allocates a new instance from the block.
     /// If a prior allocation has been freed, it will be reused instead of
     /// incrementing the internal cursor.
-    fn alloc(&self) -> Option<NonNull<MaybeUninit<T>>> {
+    pub fn alloc(&self) -> Option<NonNull<MaybeUninit<T>>> {
         if !self.free_lock.swap(true, Ordering::Acquire) {
             let curr = unsafe { *self.free_list.get() };
             let curr = if !curr.is_null() {
@@ -135,7 +146,7 @@ impl<T: Linkable<T>> BlockAllocator<T> {
                 if val.is_null() {
                     // We have reached the end of the block
                     None
-                } else if val.addr() == self.block.start().addr().get() {
+                } else if val.addr() == self.block.first().addr().get() {
                     // We are handing out the last element of the block
                     Some(core::ptr::null_mut())
                 } else {
@@ -181,8 +192,8 @@ mod test {
     }
 
     unsafe impl Linkable<Link> for Link {
-        fn next(&self) -> *mut *mut Link {
-            unsafe { mem::transmute(self.link.get()) }
+        fn next(&mut self) -> *mut *mut Link {
+            unsafe { core::mem::transmute(self.link.get()) }
         }
     }
 

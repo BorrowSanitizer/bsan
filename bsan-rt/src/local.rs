@@ -14,8 +14,8 @@ pub struct LocalCtx {
 impl LocalCtx {
     pub fn new(ctx: &GlobalCtx) -> Self {
         let thread_id = ctx.new_thread_id();
-        let provenance = ctx.new_stack::<Provenance>();
-        let protected_tags = ctx.new_stack::<BorTag>();
+        let provenance = Stack::<Provenance>::new(ctx);
+        let protected_tags = Stack::<BorTag>::new(ctx);
         Self { thread_id, provenance, protected_tags }
     }
 

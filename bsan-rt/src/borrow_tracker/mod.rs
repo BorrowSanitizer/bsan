@@ -46,15 +46,14 @@ pub unsafe fn bt_init_tree(
 /// initialize the tree on retags
 #[allow(clippy::result_unit_err)]
 #[allow(private_interfaces)]
-pub unsafe fn bt_validate_tree(
+pub unsafe fn bt_validate_prov(
     prov: *const Provenance,
-    global_ctx: &GlobalCtx,
-) -> Result<(*mut Tree<BsanAllocHooks>, *const AllocInfo), ()> {
+    ctx: &GlobalCtx,
+) -> Result<*const AllocInfo, ()> {
     // Get global allocator
-    let allocator = global_ctx.hooks().alloc;
+    let allocator = ctx.allocator();
 
     // TODO: Validate provenance and return a "safe" reference
-
     debug_assert!(unsafe { prov.as_ref().is_some() });
 
     // Initialize `Tree` if first retag
@@ -65,16 +64,9 @@ pub unsafe fn bt_validate_tree(
     // Casts the raw void ptr into an AllocInfo raw ptr and reborrows as a `AllocInfo` reference
     let alloc_info_ptr = unsafe { (((*prov).alloc_info) as *const AllocInfo) };
 
-    let alloc_info = unsafe { &*alloc_info_ptr };
-    // Asserting that the tree pointer exists
-    debug_assert!(unsafe { alloc_info.tree.as_ref().is_some() });
-
-    // Cast the Tree void ptr into `Tree`
-    let tree_ptr = unsafe { &raw mut *alloc_info.tree as *mut Tree<BsanAllocHooks> };
-
     // This should be valid
     // Returning pointers as we do not want any lifetime restrictions with this method
-    Ok((tree_ptr, alloc_info_ptr))
+    Ok(alloc_info_ptr)
 }
 
 #[allow(clippy::result_unit_err)]
@@ -84,9 +76,6 @@ pub fn bt_retag(
     global_ctx: &GlobalCtx,
     retag_info: &RetagInfo,
 ) -> Result<(), ()> {
-    // Update the provenance borrow tag
-    prov.bor_tag = global_ctx.new_bor_tag();
-
     // TODO: Potentially also update prov.alloc_info?
 
     if tree.is_allocation_of(prov.bor_tag) {

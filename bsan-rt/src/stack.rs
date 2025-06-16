@@ -46,7 +46,7 @@ impl<T> Stack<T> {
         self.frame_top = unsafe { self.frame_top.sub(elems) };
         self.curr_frame_len += elems as u32;
 
-        debug_assert!(self.frame_top.addr() > self.elems.start().addr());
+        debug_assert!(self.frame_top.addr() > self.elems.first().addr());
 
         frame_top
     }

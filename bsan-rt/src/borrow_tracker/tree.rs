@@ -13,8 +13,8 @@ use hashbrown::HashSet;
 
 use super::unimap::*;
 use super::*;
-use crate::hooks::BsanAllocHooks;
 use crate::diagnostics::{AccessCause, Event, NodeDebugInfo, TbError};
+use crate::hooks::BsanAllocHooks;
 use crate::span::*;
 use crate::{global_ctx, AllocId, BorTag, GlobalCtx, GLOBAL_CTX};
 
