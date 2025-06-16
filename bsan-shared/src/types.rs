@@ -20,7 +20,7 @@ impl Size {
         // Avoid potential overflow from `bits + 7`.
         Size(bits / 8 + (bits % 8).div_ceil(8))
     }
-    /// Get a Size defined by a number of bytesi
+    /// Get a Size defined by a number of bytes
     pub fn from_bytes(bytes: impl TryInto<u64>) -> Size {
         Size(bytes.try_into().ok().unwrap())
     }
