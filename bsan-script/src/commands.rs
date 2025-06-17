@@ -44,6 +44,10 @@ impl Command {
                 components.iter().try_for_each(|c| c.install(env, &args))
             }
             Command::UI { bless } => Self::ui(env, bless),
+            Command::Miri { components, args } => components.iter().try_for_each(|c| {
+                c.miri(env, &args)?;
+                Ok(())
+            }),
         }
     }
 
@@ -62,8 +66,8 @@ impl Command {
             let args = &[];
             let driver = env.build_artifact(BsanDriver, args)?;
             let cargo_bsan = env.build_artifact(CargoBsan, args)?;
-            let runtime = env.build_artifact(BsanRuntime, args)?;
-            let plugin = env.build_artifact(BsanLLVMPlugin, args)?;
+            let runtime = env.build_artifact(BsanRt, args)?;
+            let plugin = env.build_artifact(BsanPass, args)?;
 
             env.sh.set_var("BSAN_PLUGIN", plugin);
             env.sh.set_var("BSAN_DRIVER", driver);
@@ -83,6 +87,7 @@ impl Command {
         Self::fmt(env, &["--check".to_string()])?;
         components.iter().try_for_each(|c| c.clippy(env, args))?;
         components.iter().try_for_each(|c| c.test(env, args))?;
+        components.iter().try_for_each(|c| c.miri(env, args))?;
         Self::ui(env, false)
     }
 
@@ -98,7 +103,7 @@ impl Command {
     }
 
     fn opt(env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        let pass = env.build_artifact(BsanLLVMPlugin, args)?;
+        let pass = env.build_artifact(BsanPass, args)?;
         let pass = pass.to_str().unwrap();
         let opt = env.target_binary("opt");
         let _ =
@@ -112,8 +117,8 @@ impl Command {
 pub enum Component {
     BsanDriver,
     CargoBsan,
-    BsanRuntime,
-    BsanLLVMPass,
+    BsanRt,
+    BsanPass,
     BsanShared,
 }
 
@@ -123,8 +128,8 @@ macro_rules! all_components {
         [
             Component::BsanDriver,
             Component::CargoBsan,
-            Component::BsanRuntime,
-            Component::BsanLLVMPass,
+            Component::BsanRt,
+            Component::BsanPass,
             Component::BsanShared,
         ]
     };
@@ -137,8 +142,8 @@ impl Deref for Component {
         match self {
             Component::BsanDriver => &BsanDriver,
             Component::CargoBsan => &CargoBsan,
-            Component::BsanRuntime => &BsanRuntime,
-            Component::BsanLLVMPass => &BsanLLVMPlugin,
+            Component::BsanRt => &BsanRt,
+            Component::BsanPass => &BsanPass,
             Component::BsanShared => &BsanShared,
         }
     }
@@ -158,10 +163,12 @@ pub trait Buildable {
     fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()>;
 
     fn check(&self, env: &mut BsanEnv, args: &[String]) -> Result<()>;
+
+    fn miri(&self, env: &mut BsanEnv, args: &[String]) -> Result<()>;
 }
 
 macro_rules! impl_component {
-    ($struct_name:ident, $artifact_name:expr, $should_install:expr) => {
+    ($struct_name:ident, $artifact_name:expr, $should_install:expr, $should_miri:expr) => {
         struct $struct_name;
 
         impl Buildable for $struct_name {
@@ -203,20 +210,28 @@ macro_rules! impl_component {
             fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
                 env.test(self.artifact(), args)
             }
+
+            fn miri(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+                if $should_miri {
+                    env.miri(self.artifact(), args)
+                } else {
+                    Ok(())
+                }
+            }
         }
     };
 }
 
-impl_component!(BsanDriver, "bsan-driver", true);
-impl_component!(CargoBsan, "cargo-bsan", true);
-impl_component!(BsanShared, "bsan-shared", false);
+impl_component!(BsanDriver, "bsan-driver", true, false);
+impl_component!(CargoBsan, "cargo-bsan", true, false);
+impl_component!(BsanShared, "bsan-shared", false, true);
 
 static RT_FLAGS: &[&str] =
     &["-Cpanic=abort", "-Zpanic_abort_tests", "-Cembed-bitcode=yes", "-Clto"];
 
-struct BsanRuntime;
+struct BsanRt;
 
-impl Buildable for BsanRuntime {
+impl Buildable for BsanRt {
     fn artifact(&self) -> &'static str {
         "libbsan_rt.a"
     }
@@ -252,11 +267,15 @@ impl Buildable for BsanRuntime {
     fn check(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
         env.with_rust_flags(RT_FLAGS, |env| env.check("bsan-rt", args))
     }
+
+    fn miri(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+        env.miri("bsan-rt", args)
+    }
 }
 
-struct BsanLLVMPlugin;
+struct BsanPass;
 
-impl Buildable for BsanLLVMPlugin {
+impl Buildable for BsanPass {
     fn artifact(&self) -> &'static str {
         #[cfg(target_os = "macos")]
         let artifact = "libbsan_plugin.dylib";
@@ -299,6 +318,10 @@ impl Buildable for BsanLLVMPlugin {
     }
 
     fn check(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
+        Ok(())
+    }
+
+    fn miri(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
         Ok(())
     }
 }

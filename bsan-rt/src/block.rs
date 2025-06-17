@@ -5,6 +5,7 @@ use core::num::NonZeroUsize;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
+use crate::hooks::MUnmap;
 use crate::*;
 
 /// Types that implement this trait can act as elements
@@ -20,7 +21,7 @@ pub unsafe trait Linkable<T: Sized> {
 /// An mmap-ed chunk of memory that will munmap the chunk on drop.
 #[derive(Debug)]
 pub struct Block<T: Sized> {
-    pub size: NonZeroUsize,
+    pub num_elements: NonZeroUsize,
     pub base: NonNull<T>,
     pub munmap: MUnmap,
 }
@@ -28,7 +29,7 @@ pub struct Block<T: Sized> {
 impl<T: Sized> Block<T> {
     /// The last valid, addressable location within the block (at its high-end)
     fn last(&self) -> *mut T {
-        unsafe { self.base.as_ptr().add(self.size.get() - 1) }
+        unsafe { self.base.as_ptr().add(self.num_elements.get() - 1) }
     }
     /// The first valid, addressable location within the block (at its low-end)
     fn first(&self) -> *mut T {
@@ -43,7 +44,7 @@ impl<T> Drop for Block<T> {
         // it was allocated by mmap
         let success = unsafe {
             let ptr = mem::transmute::<*mut T, *mut libc::c_void>(self.base.as_ptr());
-            (self.munmap)(ptr, self.size.get())
+            (self.munmap)(ptr, self.num_elements.get())
         };
         if success != 0 {
             panic!("Failed to unmap block!");
@@ -146,8 +147,9 @@ mod test {
     use std::thread;
 
     use super::*;
-    use crate::global::DEFAULT_HOOKS;
+    use crate::hooks::DEFAULT_HOOKS;
     use crate::*;
+
     struct Link {
         link: UnsafeCell<*mut u8>,
     }
@@ -161,8 +163,7 @@ mod test {
     #[test]
     fn allocate_from_page_in_parallel() {
         let ctx = unsafe { init_global_ctx(DEFAULT_HOOKS) };
-        let ctx = unsafe { ctx };
-        let block = ctx.new_block::<Link>(unsafe { NonZero::new_unchecked(200) });
+        let block = ctx.hooks().new_block::<Link>(unsafe { NonZero::new_unchecked(200) });
         let page = Arc::new(BlockAllocator::<Link>::new(block));
         let mut threads = Vec::new();
 

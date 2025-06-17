@@ -34,59 +34,15 @@ mod diagnostics;
 mod shadow;
 mod span;
 
+mod hooks;
+mod utils;
+
 macro_rules! println {
     ($($arg:tt)*) => {
         libc_print::std_name::println!($($arg)*);
     };
 }
 pub(crate) use println;
-
-pub type MMap = unsafe extern "C" fn(*mut c_void, usize, i32, i32, i32, off_t) -> *mut c_void;
-pub type MUnmap = unsafe extern "C" fn(*mut c_void, usize) -> i32;
-pub type Malloc = unsafe extern "C" fn(usize) -> *mut c_void;
-pub type Free = unsafe extern "C" fn(*mut c_void);
-pub type Exit = unsafe extern "C" fn() -> !;
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct BsanHooks {
-    alloc: BsanAllocHooks,
-    mmap: MMap,
-    munmap: MUnmap,
-    exit: Exit,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct BsanAllocHooks {
-    malloc: Malloc,
-    free: Free,
-}
-
-unsafe impl Allocator for BsanAllocHooks {
-    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        unsafe {
-            match layout.size() {
-                0 => Ok(NonNull::slice_from_raw_parts(layout.dangling(), 0)),
-                size => {
-                    let ptr = (self.malloc)(layout.size());
-                    if ptr.is_null() {
-                        return Err(AllocError);
-                    }
-                    let ptr = NonNull::new_unchecked(ptr as *mut u8);
-                    Ok(NonNull::slice_from_raw_parts(ptr, size))
-                }
-            }
-        }
-    }
-
-    unsafe fn deallocate(&self, ptr: NonNull<u8>, _layout: Layout) {
-        unsafe {
-            let ptr = mem::transmute::<*mut u8, *mut libc::c_void>(ptr.as_ptr());
-            (self.free)(ptr);
-        }
-    }
-}
 
 /// Unique identifier for an allocation
 #[repr(transparent)]
@@ -236,7 +192,7 @@ impl AllocInfo {
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_init() {
     unsafe {
-        let ctx = init_global_ctx(global::DEFAULT_HOOKS);
+        let ctx = init_global_ctx(hooks::DEFAULT_HOOKS);
         init_local_ctx(ctx);
     }
     ui_test!("bsan_init");
