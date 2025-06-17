@@ -103,6 +103,14 @@ pub enum Command {
         #[arg(allow_hyphen_values(true), last(true))]
         args: Vec<String>,
     },
+    Miri {
+        /// Components to test.
+        #[arg(value_enum, hide_default_value(true), default_values_t = all_components!())]
+        components: Vec<Component>,
+        /// Flags that are passed through to the test harness.
+        #[arg(allow_hyphen_values(true), last(true))]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Parser)]

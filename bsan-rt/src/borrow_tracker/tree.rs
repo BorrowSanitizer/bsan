@@ -11,7 +11,8 @@ use bsan_shared::*;
 use super::unimap::*;
 use super::*;
 use crate::diagnostics::NodeDebugInfo;
-use crate::{BorTag, BsanAllocHooks};
+use crate::hooks::BsanAllocHooks;
+use crate::BorTag;
 
 /// Whether to continue exploring the children recursively or not.
 enum ContinueTraversal {

@@ -295,6 +295,18 @@ impl BsanEnv {
         Ok(())
     }
 
+    pub fn miri(&self, crate_dir: impl AsRef<OsStr>, args: &[String]) -> Result<()> {
+        let BsanEnv { cargo_extra_flags, .. } = self;
+        let manifest_path = path!(self.root_dir / crate_dir.as_ref() / "Cargo.toml");
+        self.cargo_cmd_base("miri")
+            .arg("test")
+            .arg(format!("--manifest-path={}", manifest_path.display()))
+            .args(cargo_extra_flags)
+            .args(args)
+            .run()?;
+        Ok(())
+    }
+
     pub fn build(&self, crate_dir: impl AsRef<OsStr>, args: &[String]) -> Result<()> {
         // We build all targets, since building *just* the bin target does not include
         // `dev-dependencies` and that changes feature resolution. This also gets us more

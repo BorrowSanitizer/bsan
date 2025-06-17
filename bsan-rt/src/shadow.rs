@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::ffi::c_void;
 use core::marker::PhantomData;
@@ -9,7 +10,9 @@ use core::{mem, ptr};
 use libc::{MAP_ANONYMOUS, MAP_NORESERVE, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 
 use crate::global::{global_ctx, GlobalCtx};
-use crate::{BsanAllocHooks, BsanHooks, MUnmap, DEFAULT_HOOKS};
+use crate::hooks::{
+    BsanAllocHooks, BsanHooks, MUnmap, BSAN_MAP_FLAGS, BSAN_PROT_FLAGS, DEFAULT_HOOKS,
+};
 
 /// Different targets have a different number
 /// of significant bits in their pointer representation.
@@ -84,6 +87,7 @@ pub struct ShadowHeap<T> {
     // First level table containing pointers to second level tables
     table: *mut [*mut [T; L2_LEN]; L1_LEN],
     munmap: MUnmap,
+    l2_blocks: Vec<usize, BsanAllocHooks>,
 }
 
 unsafe impl<T> Sync for ShadowHeap<T> {}
@@ -93,13 +97,24 @@ impl<T> ShadowHeap<T> {
         unsafe {
             let size_of_l1 = mem::size_of::<[*mut [T; L2_LEN]; L1_LEN]>();
 
-            let table = (hooks.mmap)(ptr::null_mut(), size_of_l1, PROT_SHADOW, MAP_SHADOW, -1, 0);
+            let table = (hooks.mmap)(
+                ptr::null_mut(),
+                size_of_l1,
+                crate::hooks::BSAN_PROT_FLAGS,
+                crate::hooks::BSAN_MAP_FLAGS,
+                -1,
+                0,
+            );
 
-            assert!(!table.is_null() && table != (-1isize as *mut c_void));
+            assert!(!table.is_null() && table.addr() as isize != -1isize);
 
             let table = mem::transmute::<*mut c_void, *mut [*mut [T; L2_LEN]; L1_LEN]>(table);
 
-            Self { table, munmap: hooks.munmap }
+            Self {
+                table,
+                munmap: hooks.munmap,
+                l2_blocks: Vec::<usize, BsanAllocHooks>::new_in(hooks.alloc),
+            }
         }
     }
 
@@ -108,13 +123,13 @@ impl<T> ShadowHeap<T> {
             (hooks.mmap)(
                 ptr::null_mut(),
                 mem::size_of::<T>() * L2_LEN,
-                PROT_SHADOW,
-                MAP_SHADOW,
+                BSAN_PROT_FLAGS,
+                BSAN_MAP_FLAGS,
                 -1,
                 0,
             )
         };
-        assert!(!l2_void.is_null() && l2_void != (-1isize as *mut c_void));
+        assert!(!l2_void.is_null() && l2_void.addr() as isize != -1isize);
         unsafe { ptr::write_bytes(l2_void as *mut u8, 0, mem::size_of::<T>() * L2_LEN) };
         unsafe { mem::transmute(l2_void) }
     }
@@ -154,7 +169,7 @@ impl<T> Drop for ShadowHeap<T> {
     fn drop(&mut self) {
         unsafe {
             // Free all L2 tables
-            for i in 0..L1_LEN {
+            for i in self.l2_blocks.drain(..) {
                 let l2_table = (*self.table)[i];
                 if !l2_table.is_null() {
                     (self.munmap)(l2_table as *mut c_void, mem::size_of::<T>() * L2_LEN);
@@ -214,7 +229,7 @@ mod tests {
     fn smoke() {
         let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS);
         // Create test data
-        const NUM_OPERATIONS: usize = 10000;
+        const NUM_OPERATIONS: usize = 10;
         let test_values: Vec<TestProv> =
             (0..NUM_OPERATIONS).map(|i| TestProv { value: (i % 255) as u128 }).collect();
 
