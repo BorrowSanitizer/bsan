@@ -2,10 +2,6 @@ name: CI
 on:
   push:
     branches: [ "main" ]
-    paths:
-      - '**/*.rs'
-      - '**/*.toml'
-      - '**/*.yml'
   pull_request:
     branches: [ "main" ]
   schedule:
@@ -27,7 +23,7 @@ jobs:
     name: '${{ matrix.config.target }}'
     steps:
     - uses: actions/checkout@v4
-    - name: Install Dependencies
+    - name: Install dependencies
       run: |
         rustup default nightly
     - name: CI
