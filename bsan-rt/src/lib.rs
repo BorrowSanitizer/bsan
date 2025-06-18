@@ -30,6 +30,7 @@ use borrow_tracker::tree::Tree;
 use borrow_tracker::*;
 use bsan_shared::{RetagInfo, Size};
 pub use global::*;
+use spin::Once;
 
 mod local;
 use libc::{off_t, LOCK_EX};
@@ -47,8 +48,7 @@ macro_rules! println {
         libc_print::std_name::println!($($arg)*);
     };
 }
-use lazy_static::lazy_static;
-use parking_lot::{Mutex, Once};
+use parking_lot::Mutex;
 pub(crate) use println;
 use span::Span;
 
@@ -60,8 +60,6 @@ pub type MUnmap = unsafe extern "C" fn(*mut c_void, usize) -> i32;
 pub type Malloc = unsafe extern "C" fn(usize) -> *mut c_void;
 pub type Free = unsafe extern "C" fn(*mut c_void);
 pub type Exit = unsafe extern "C" fn() -> !;
-
-static ALLOC_COUNTER: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -234,57 +232,6 @@ impl core::fmt::Debug for FreeListAddrUnion {
     }
 }
 
-// TODO: Implement thread-safety for c_void
-// reference: https://github.com/BorrowSanitizer/bsan/issues/35
-#[derive(Debug)]
-struct TreeThreadSafe(Mutex<*mut c_void>);
-
-unsafe impl Send for TreeThreadSafe {}
-unsafe impl Sync for TreeThreadSafe {}
-
-impl TreeThreadSafe {
-    pub fn new() -> Self {
-        TreeThreadSafe(Mutex::new(core::ptr::null_mut()))
-    }
-
-    // SAFETY: Locks the `tree_lock` before performing exclusive access via raw *mut pointer
-    unsafe fn lock_tree(&self, tree_lock: &AtomicBool) -> *mut Tree<BsanAllocHooks> {
-        let _tree_guard = TreeGuard::set(tree_lock);
-        unsafe { (&raw mut (*self.0.lock())) as *mut Tree<BsanAllocHooks> }
-    }
-}
-/// The tree pointer is a ~~lazily unitialized~~ global variable stored in a thread safe wrapper with
-/// a mutex
-/// The tree is initialized during an allocation via a call to `bt_init_tree`
-lazy_static! {
-    static ref TREE_PTR: Arc<TreeThreadSafe> = { Arc::new(TreeThreadSafe::new()) };
-}
-
-/// A simple RAII TreeGuard that tracks the tree's lock state
-// TODO: Discuss the usage of this tree guard, is it an extra abstraction over the existing mutex or is it neccessary?
-#[derive(Debug)]
-struct TreeGuard<'a> {
-    tree_lock: &'a AtomicBool,
-}
-
-impl<'a> TreeGuard<'a> {
-    pub fn set(flag: &'a AtomicBool) -> Self {
-        flag.store(true, Ordering::Release);
-
-        TreeGuard { tree_lock: flag }
-    }
-
-    pub fn get(&self) -> bool {
-        self.tree_lock.load(Ordering::Acquire)
-    }
-}
-
-impl<'a> Drop for TreeGuard<'a> {
-    fn drop(&mut self) {
-        self.tree_lock.store(false, Ordering::Release);
-    }
-}
-
 /// Every allocation is associated with a "lock" object, which is an instance of `AllocInfo`.
 /// Provenance is the "key" to this lock. To validate a memory access, we compare the allocation ID
 /// of a pointer's provenance with the value stored in its corresponding `AllocInfo` object. If the values
@@ -297,7 +244,7 @@ struct AllocInfo {
     pub base_addr: FreeListAddrUnion,
     pub size: usize,
     pub align: usize,
-    pub tree_lock: AtomicBool,
+    pub tree_lock: Mutex<Once<Tree<BsanAllocHooks>>>,
 }
 
 // TODO: Discuss whether the initialization and deallocation of the tree should happen
@@ -305,9 +252,8 @@ struct AllocInfo {
 impl AllocInfo {
     /// When we deallocate an allocation, we need to invalidate its metadata.
     /// so that any uses-after-free are detectable.
-    fn dealloc(&mut self) {
+    fn dealloc(&mut self, ctx: &GlobalCtx) {
         self.alloc_id = AllocId::invalid();
-        let base_addr_default = 0;
         self.base_addr = FreeListAddrUnion { base_addr: core::ptr::null() };
         self.size = 0;
         self.align = 1;
@@ -315,16 +261,32 @@ impl AllocInfo {
         // Tree is freed by `__bsan_dealloc`
         // Set the tree pointer to NULL
         let tree_lock = &self.tree_lock;
-        let _ = unsafe { TREE_PTR.lock_tree(tree_lock) };
+        let _lock = tree_lock.lock();
 
         // SAFETY: Exclusive access to *mut raw pointer is ensured by the above
         // tree lock
-        unsafe { *TREE_PTR.0.data_ptr() = core::ptr::null_mut() };
+        unsafe { *tree_lock.data_ptr() = Once::new() }
+        // Drop lock early so we can pass in mutable reference
+        core::mem::drop(_lock);
+        // Deallocate `AllocInfo`
+        unsafe { ctx.deallocate_lock_location(self) };
     }
 
     fn base_addr(&self) -> *const c_void {
         // SAFETY: Both union fields are raw pointers
         unsafe { self.base_addr.base_addr }
+    }
+
+    // Calculate the base offset: The difference in bytes between the object
+    // address and the base address
+    fn base_offset(&self, object_addr: usize) -> Size {
+        Size::from_bytes(object_addr.abs_diff(self.base_addr() as usize))
+    }
+
+    fn get_raw(prov: *const Provenance) -> *const Self {
+        // Casts the raw void ptr into an AllocInfo raw ptr and reborrows as a `AllocInfo` reference
+        let alloc_info_ptr = unsafe { (((*prov).alloc_info) as *const AllocInfo) };
+        alloc_info_ptr
     }
 }
 
@@ -361,6 +323,7 @@ extern "C" fn __bsan_deinit() {
 }
 
 /// Creates a new borrow tag for the given provenance object.
+// TODO: Retag is often called more than __bsan_alloc, should look into where we should init the tree
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_retag(prov: *mut Provenance, size: usize, perm_kind: u8, protector_kind: u8) {
     let retag_info = unsafe { RetagInfo::from_raw(size, perm_kind, protector_kind) };
@@ -370,26 +333,14 @@ extern "C" fn __bsan_retag(prov: *mut Provenance, size: usize, perm_kind: u8, pr
 
     // Run the validation `middleware`
     // TODO: Handle these results with proper errors
-    let alloc_ptr = unsafe { bt_validate_prov(prov, ctx).unwrap() };
-
-    let alloc_info = unsafe { &*alloc_ptr };
-    let tree_lock = &alloc_info.tree_lock;
+    let tree_ptr = unsafe { bt_validate_tree(prov, ctx, todo!("Object address")).unwrap() };
 
     let mut prov = unsafe { &mut *prov };
-
-    // Initialize the tree if it is uninitialized
-    unsafe {
-        bt_init_tree(
-            TREE_PTR.lock_tree(tree_lock),
-            prov.bor_tag,
-            Size::from_bytes(size),
-            ctx.allocator(),
-        )
-        .unwrap()
-    };
+    let alloc_info = unsafe { &*prov.alloc_info };
+    let tree = unsafe { &mut *(tree_ptr as *mut Tree<BsanAllocHooks>) };
 
     // Now we can assume tree is initialized
-    bt_retag(unsafe { &mut *TREE_PTR.lock_tree(tree_lock) }, prov, ctx, &retag_info).unwrap();
+    bt_retag(tree, prov, ctx, &retag_info, alloc_info).unwrap();
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -398,15 +349,19 @@ extern "C" fn __bsan_read(prov: *const Provenance, addr: usize, access_size: u64
     // Assuming root tag has been initialized in the tree
     let ctx = unsafe { global_ctx() };
 
-    let alloc_info_ptr = unsafe { bt_validate_prov(prov, ctx).unwrap() };
-    let alloc_info = unsafe { &*alloc_info_ptr };
-    let tree_lock = &alloc_info.tree_lock;
+    let tree_ptr = unsafe { bt_validate_tree(prov, ctx, addr).unwrap() };
+
+    // SAFETY: Casts to a mutable reference as it is guaranteed to be a mutually exclusive access
+    let tree = unsafe { &mut *(tree_ptr as *mut Tree<BsanAllocHooks>) };
 
     // Safety land
     let prov = unsafe { &*prov };
 
+    // Alloc Info
+    let alloc_info = unsafe { &*prov.alloc_info };
+
     bt_access(
-        unsafe { &mut *TREE_PTR.lock_tree(tree_lock) },
+        tree,
         prov,
         ctx,
         bsan_shared::AccessKind::Read,
@@ -423,15 +378,18 @@ extern "C" fn __bsan_write(prov: *const Provenance, addr: usize, access_size: u6
 
     let ctx = unsafe { global_ctx() };
 
-    let alloc_info_ptr = unsafe { bt_validate_prov(prov, ctx).unwrap() };
+    let tree_ptr = unsafe { bt_validate_tree(prov, ctx, addr).unwrap() };
 
     let prov = unsafe { &*prov };
 
-    let alloc_info = unsafe { &*alloc_info_ptr };
-    let tree_lock = &alloc_info.tree_lock;
+    let alloc_info = unsafe { &*prov.alloc_info };
 
+    // SAFETY: Guaranteed to be the only mutable reference access of `Tree`
+    let tree = unsafe { &mut *(tree_ptr as *mut Tree<BsanAllocHooks>) };
+
+    // TODO:
     bt_access(
-        unsafe { &mut *TREE_PTR.lock_tree(tree_lock) },
+        tree,
         prov,
         ctx,
         bsan_shared::AccessKind::Write,
@@ -509,14 +467,19 @@ extern "C" fn __bsan_alloc(
         base_addr: FreeListAddrUnion { base_addr: object_addr },
         size: alloc_size,
         align: 0,
-        tree_lock: AtomicBool::new(TREE_PTR.0.is_locked()),
+        tree_lock: Mutex::new(Once::new()),
     };
 
     let alloc_info = unsafe { alloc_info.write(info) as *mut AllocInfo };
 
+    // Initialize the tree if it is uninitialized
     unsafe {
-        //*(*prov).alloc_info = alloc_info;
-        // TODO: Discuss difference between the two
+        &(*alloc_info).tree_lock.lock().call_once(|| {
+            Tree::new_in(bor_tag, Size::from_bytes(alloc_size), Span::new(), ctx.allocator())
+        });
+    }
+
+    unsafe {
         (*prov).alloc_id = alloc_id;
         (*prov).bor_tag = bor_tag;
         (*prov).alloc_info = alloc_info;
@@ -538,23 +501,23 @@ extern "C" fn __bsan_dealloc(prov: *mut Provenance) {
     // Assuming root tag has been initialized in the tree
     let ctx = unsafe { global_ctx() };
 
-    let alloc_info_ptr = unsafe { bt_validate_prov(prov, ctx).unwrap() };
+    let tree_ptr = unsafe { bt_validate_tree(prov, ctx, todo!("object address")).unwrap() };
 
     let prov = unsafe { &*prov };
 
-    let alloc_info = unsafe { &mut *(alloc_info_ptr as *mut AllocInfo) };
-    let tree_lock = &alloc_info.tree_lock;
-    let tree = unsafe { &mut *TREE_PTR.lock_tree(tree_lock) };
+    // SAFETY: Guaranteed to be the only mutable reference to `AllocInfo` and `Tree`
+    let alloc_info = unsafe { &mut *prov.alloc_info };
+    let tree = unsafe { &mut *(tree_ptr as *mut Tree<BsanAllocHooks>) };
 
     let lock_addr_id = prov.alloc_id.get();
     let metadata_id = alloc_info.alloc_id.get();
 
     println!("Alloc Info: {:?}", unsafe { &*prov.alloc_info });
 
-    if lock_addr_id != metadata_id {
-        // TODO: Implement proper error handling, possibly via thiserror_no_std
-        println!("Allocation ID in pointer metadata does not match the one in the lock address.\nLock address ID: {:?}\nPointer metadata ID: {:?}", lock_addr_id, metadata_id);
-    }
+    // if lock_addr_id != metadata_id {
+    //     // TODO: Implement proper error handling, possibly via thiserror_no_std
+    //     println!("Allocation ID in pointer metadata does not match the one in the lock address.\nLock address ID: {:?}\nPointer metadata ID: {:?}", lock_addr_id, metadata_id);
+    // }
 
     // TODO: Handle the result properly
     // and lock the tree
@@ -571,9 +534,8 @@ extern "C" fn __bsan_dealloc(prov: *mut Provenance) {
     )
     .unwrap();
 
-    // // // TODO: Deallocate the AllocInfo
-    // // // Potentially using a port of `AllocMetadata::dealloc`
-    // alloc_info.dealloc();
+    // TODO: Deallocate the AllocInfo
+    alloc_info.dealloc(ctx);
 }
 
 /// Marks the borrow tag for `prov` as "exposed," allowing it to be resolved to

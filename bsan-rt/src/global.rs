@@ -38,6 +38,8 @@ pub struct GlobalCtx {
     shadow_heap: ShadowHeap<Provenance>,
 }
 
+static ALLOC_COUNTER: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 const BSAN_MMAP_PROT: i32 = libc::PROT_READ | libc::PROT_WRITE;
 const BSAN_MMAP_FLAGS: i32 = libc::MAP_ANONYMOUS | libc::MAP_PRIVATE;
 
@@ -86,6 +88,14 @@ impl GlobalCtx {
                 panic!("Failed to allocate lock location");
             }
         }
+    }
+
+    pub(crate) unsafe fn deallocate_lock_location(&self, ptr: *mut AllocInfo) {
+        unsafe {
+            // TODO: Validate correctness
+            self.alloc_metadata_map
+                .dealloc(NonNull::new_unchecked(ptr as *mut MaybeUninit<AllocInfo>))
+        };
     }
 
     fn generate_block<T>(mmap: MMap, munmap: MUnmap, num_elements: NonZeroUsize) -> Block<T> {
