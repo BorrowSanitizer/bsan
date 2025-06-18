@@ -1,5 +1,6 @@
 use core::mem::{self, MaybeUninit};
 use core::num::NonZeroUsize;
+use core::ptr::{self, NonNull};
 
 use cfg_if::cfg_if;
 use libc::{rlimit, RLIMIT_STACK};
@@ -49,5 +50,49 @@ impl Default for StackElementCounts {
         let provenance = nonzero_size!(stack_size_bytes, Provenance);
         let borrow_tag = nonzero_size!(stack_size_bytes, BorTag);
         Self { provenance, borrow_tag }
+    }
+}
+
+/// # Safety
+/// The pointer must be offset from the beginning of its allocation
+/// by at least `mem::size_of::<B>()` bytes.
+#[inline(always)]
+pub unsafe fn align_down<A, B>(ptr: NonNull<A>) -> NonNull<B> {
+    debug_assert!(ptr.as_ptr().is_aligned());
+    unsafe {
+        let ptr = mem::transmute::<*mut A, *mut u8>(ptr.as_ptr());
+
+        // round down to nearest aligned address
+        let addr = ptr.expose_provenance();
+        let addr = (addr & !(mem::align_of::<B>() - 1));
+        let ptr = ptr::with_exposed_provenance_mut(addr);
+
+        let ptr = mem::transmute::<*mut u8, *mut B>(ptr);
+        let ptr = ptr.sub(1);
+
+        debug_assert!(ptr.is_aligned());
+        NonNull::<B>::new_unchecked(ptr)
+    }
+}
+
+/// # Safety
+/// If the parameter is rounded up to the nearest multiple of `mem::align_of::<B>()` and
+/// then offset by `mem::size_of::<B>()`, it must still be within the allocation.
+#[inline(always)]
+pub unsafe fn align_up<A, B>(ptr: NonNull<A>) -> NonNull<B> {
+    debug_assert!(ptr.as_ptr().is_aligned());
+    unsafe {
+        let ptr = mem::transmute::<*mut A, *mut u8>(ptr.as_ptr());
+
+        // round up to nearest aligned address
+        let addr = ptr.expose_provenance();
+        let align = mem::align_of::<B>();
+        let addr = (addr + align - 1) & !(align - 1);
+        let ptr = ptr::with_exposed_provenance_mut(addr);
+
+        let ptr = mem::transmute::<*mut u8, *mut B>(ptr);
+
+        debug_assert!(ptr.is_aligned());
+        NonNull::<B>::new_unchecked(ptr)
     }
 }
