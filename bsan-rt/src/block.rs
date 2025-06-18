@@ -154,7 +154,7 @@ impl<T: Linkable<T>> BlockAllocator<T> {
     /// since "freed" allocations are added to a list and reused for subsequent
     /// calls to alloc. The allocation does not need to be initialized; you can pass
     /// the result of `BlockAllocator::alloc` directly to this function.
-    unsafe fn dealloc(&self, ptr: NonNull<MaybeUninit<T>>) {
+    pub unsafe fn dealloc(&self, ptr: NonNull<MaybeUninit<T>>) {
         while self.free_lock.swap(true, Ordering::Acquire) {
             hint::spin_loop();
         }
