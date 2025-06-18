@@ -285,8 +285,7 @@ impl AllocInfo {
 
     fn get_raw(prov: *const Provenance) -> *const Self {
         // Casts the raw void ptr into an AllocInfo raw ptr and reborrows as a `AllocInfo` reference
-        let alloc_info_ptr = unsafe { (((*prov).alloc_info) as *const AllocInfo) };
-        alloc_info_ptr
+        unsafe { (((*prov).alloc_info) as *const AllocInfo) }
     }
 }
 
@@ -345,7 +344,7 @@ extern "C" fn __bsan_retag(prov: *mut Provenance, size: usize, perm_kind: u8, pr
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_read(prov: *const Provenance, addr: usize, access_size: u64) {
+extern "C" fn __bsan_read(prov: *const Provenance, addr: *const c_void, access_size: u64) {
     // Assuming root tag has been initialized in the tree
     let ctx = unsafe { global_ctx() };
 
@@ -365,7 +364,7 @@ extern "C" fn __bsan_read(prov: *const Provenance, addr: usize, access_size: u64
         prov,
         ctx,
         bsan_shared::AccessKind::Read,
-        Size::from_bytes(addr),
+        Size::from_bytes(addr as usize),
         Size::from_bytes(access_size),
     )
     .unwrap();
@@ -373,7 +372,7 @@ extern "C" fn __bsan_read(prov: *const Provenance, addr: usize, access_size: u64
 
 /// Records a write access of size `access_size` at the given address `addr` using the provenance `prov`.
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_write(prov: *const Provenance, addr: usize, access_size: u64) {
+extern "C" fn __bsan_write(prov: *const Provenance, addr: *const c_void, access_size: u64) {
     // Assuming root tag has been initialized in the tree
 
     let ctx = unsafe { global_ctx() };
@@ -393,7 +392,7 @@ extern "C" fn __bsan_write(prov: *const Provenance, addr: usize, access_size: u6
         prov,
         ctx,
         bsan_shared::AccessKind::Write,
-        Size::from_bytes(addr),
+        Size::from_bytes(addr as usize),
         Size::from_bytes(access_size),
     )
     .unwrap();
@@ -474,7 +473,7 @@ extern "C" fn __bsan_alloc(
 
     // Initialize the tree if it is uninitialized
     unsafe {
-        &(*alloc_info).tree_lock.lock().call_once(|| {
+        (*alloc_info).tree_lock.lock().call_once(|| {
             Tree::new_in(bor_tag, Size::from_bytes(alloc_size), Span::new(), ctx.allocator())
         });
     }
