@@ -14,7 +14,7 @@ smallvec = { version = "1.14.0" }
 libc-print = { version = "0.1.23" }
 bsan-shared = { path = "../bsan-shared" }
 parking_lot = { version = "0.12.4" }
-lazy_static = { version = "1.5.0", default-features = false }
+spin = "0.10.0"
 
 [lib]
 name = "bsan_rt"
