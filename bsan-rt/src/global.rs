@@ -93,6 +93,14 @@ impl GlobalCtx {
         }
     }
 
+    pub(crate) unsafe fn deallocate_lock_location(&self, ptr: *mut AllocInfo) {
+        unsafe {
+            // TODO: Validate correctness
+            self.alloc_metadata_map
+                .dealloc(NonNull::new_unchecked(ptr as *mut MaybeUninit<AllocInfo>))
+        };
+    }
+
     pub fn new_block<T>(&self, num_elements: NonZeroUsize) -> Block<T> {
         Block::new(self.hooks(), num_elements)
     }

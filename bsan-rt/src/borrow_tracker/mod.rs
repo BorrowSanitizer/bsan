@@ -1,8 +1,15 @@
 use core::alloc::Allocator;
+use core::cell::LazyCell;
+use core::ffi::c_void;
 
-use bsan_shared::{AccessKind, AccessRelatedness, Permission, ProtectorKind, RetagInfo, Size};
+use bsan_shared::{
+    AccessKind, AccessRelatedness, Permission, ProtectorKind, RangeMap, RetagInfo, Size,
+};
+use parking_lot::Mutex;
+use spin::Once;
 use tree::{AllocRange, Tree};
 
+use crate::borrow_tracker::tree::{ChildParams, LocationState};
 use crate::diagnostics::AccessCause;
 use crate::hooks::BsanAllocHooks;
 use crate::span::Span;
@@ -16,26 +23,19 @@ pub mod unimap;
 
 // Potential validation middleware should be part of wrapper API?
 
-pub unsafe fn bt_init_tree(
+pub fn bt_init_tree(
     // This is an output pointer
-    tree_ptr: *mut Tree<BsanAllocHooks>,
+    tree: Once<Tree<BsanAllocHooks>>,
     bor_tag: BorTag,
     size: Size,
     allocator: BsanAllocHooks,
 ) -> Result<(), ()> {
-    // Check if the `Tree` (root node) exists, otherwise create it
-    if (tree_ptr.is_null()) {
-        // Create the tree
+    // Create the tree
+    let tree_allocator = || Tree::new_in(bor_tag, size, Span::new(), allocator);
+    // Initialize the tree
+    tree.call_once(tree_allocator);
 
-        // ATTENTION: Using the allocator provided by `global_ctx`, with a dummy Span for now
-        unsafe {
-            let tree: Tree<BsanAllocHooks> = Tree::new_in(bor_tag, size, Span::new(), allocator);
-
-            *tree_ptr = tree;
-        };
-        // Now `Tree` reference should be valid
-    }
-
+    // Now `Tree` reference should be valid
     Ok(())
 }
 
@@ -44,12 +44,14 @@ pub unsafe fn bt_init_tree(
 ///
 /// This function should be called as middleware to verify the provenance and optionally
 /// initialize the tree on retags
+/// Checks if the pointer's address is within bounds of the allocation
 #[allow(clippy::result_unit_err)]
 #[allow(private_interfaces)]
-pub unsafe fn bt_validate_prov(
+pub unsafe fn bt_validate_tree(
     prov: *const Provenance,
     ctx: &GlobalCtx,
-) -> Result<*const AllocInfo, ()> {
+    object_address: usize,
+) -> Result<(*const Tree<BsanAllocHooks>), ()> {
     // Get global allocator
     let allocator = ctx.allocator();
 
@@ -61,38 +63,96 @@ pub unsafe fn bt_validate_prov(
     // We assert that the tree ptr exists in the alloc metadata (and that the alloc metadata exists)
     debug_assert!(unsafe { !((*prov).alloc_info).is_null() });
 
-    // Casts the raw void ptr into an AllocInfo raw ptr and reborrows as a `AllocInfo` reference
-    let alloc_info_ptr = unsafe { (((*prov).alloc_info) as *const AllocInfo) };
+    let alloc_info_ptr = AllocInfo::get_raw(prov);
 
-    // This should be valid
-    // Returning pointers as we do not want any lifetime restrictions with this method
-    Ok(alloc_info_ptr)
-}
+    let alloc_info = unsafe { &*alloc_info_ptr };
 
-#[allow(clippy::result_unit_err)]
-pub fn bt_retag(
-    tree: &mut Tree<BsanAllocHooks>,
-    prov: &mut Provenance,
-    global_ctx: &GlobalCtx,
-    retag_info: &RetagInfo,
-) -> Result<(), ()> {
-    // TODO: Potentially also update prov.alloc_info?
+    let prov = unsafe { &*prov };
 
-    if tree.is_allocation_of(prov.bor_tag) {
-        unreachable!("BT: Tag exists in Tree indicating an erroneous retag");
+    if prov.alloc_id != alloc_info.alloc_id {
+        // TODO: Add proper error handling and bailing
+        // Use after free error as alloc_ids do not match
         return Err(());
     }
 
-    bt_access(
-        tree,
-        prov,
-        global_ctx,
-        AccessKind::Read,
-        Size::from_bytes(0),
-        Size::from_bytes(retag_info.size),
+    let base_offset = alloc_info.base_offset(object_address);
+
+    // Check for out of bounds accessess
+    // TODO: Checkout lib functions to compare pointers instead of using usize
+    if (object_address as usize) < alloc_info.base_addr() as usize
+        || (object_address as usize) >= alloc_info.base_addr() as usize + alloc_info.size
+    {
+        // TODO: Add proper error handling and bailing
+        // Access out-of-bounds error
+        return Err(());
+    }
+
+    let mut tree_lock = alloc_info.tree_lock.lock();
+
+    // Cast the Tree void ptr into `Tree` by locking the Tree
+    let tree_ptr = unsafe { &raw mut tree_lock as *mut Tree<BsanAllocHooks> };
+
+    // This should be valid
+    // Returning pointers as we do not want any lifetime restrictions with this method
+    Ok((tree_ptr))
+}
+
+#[allow(clippy::result_unit_err)]
+#[allow(private_interfaces)]
+pub fn bt_retag(
+    tree: &mut Tree<BsanAllocHooks>,
+    prov: &mut Provenance,
+    ctx: &GlobalCtx,
+    retag_info: &RetagInfo,
+    // TODO: Potentially pass this in as a part of `RetagInfo`
+    alloc_info: &AllocInfo,
+) {
+    // TODO: Potentially also update prov.alloc_info?
+    #[cfg(debug_assertions)]
+    if tree.is_allocation_of(prov.bor_tag) {
+        unreachable!("BT: Tag exists in Tree indicating an erroneous retag");
+        return;
+    }
+
+    let allocator = ctx.allocator();
+
+    // TODO: Pass this in
+
+    let mut perms_map = RangeMap::new_in(
+        Size::from_bytes(alloc_info.size),
+        LocationState::new_accessed(
+            Permission::new_disabled(),
+            bsan_shared::IdempotentForeignAccess::None,
+        ),
+        allocator,
     );
 
-    Ok(())
+    for (perm_range, perm) in perms_map.iter_mut_all() {
+        if perm.is_accessed() {
+            // Some reborrows incura  read access to the parent.
+            // Adjust range to be relative to allocation start
+            let range_in_alloc = AllocRange {
+                start: Size::from_bytes(perm_range.start)
+                    + alloc_info.base_offset(todo!("object address")),
+                size: Size::from_bytes(perm_range.end - perm_range.start),
+            };
+
+            bt_access(tree, prov, ctx, AccessKind::Read, range_in_alloc.start, range_in_alloc.size)
+                .unwrap()
+        }
+    }
+
+    let child_params: ChildParams = ChildParams {
+        base_offset: alloc_info.base_offset(todo!("object address")),
+        parent_tag: prov.bor_tag,
+        new_tag: ctx.new_bor_tag(),
+        initial_perms: perms_map,
+        default_perm: todo!("Implement default perm"),
+        protected: todo!("Implement protected"),
+        span: Span::new(),
+    };
+
+    tree.new_child(child_params);
 }
 
 #[allow(clippy::result_unit_err)]
