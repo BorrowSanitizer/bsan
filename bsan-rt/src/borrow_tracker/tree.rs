@@ -698,13 +698,13 @@ where
 }
 
 pub(super) struct ChildParams {
-    base_offset: Size,
-    parent_tag: BorTag,
-    new_tag: BorTag,
-    initial_perms: RangeMap<LocationState>,
-    default_perm: Permission,
-    protected: bool,
-    span: Span,
+    pub base_offset: Size,
+    pub parent_tag: BorTag,
+    pub new_tag: BorTag,
+    pub initial_perms: RangeMap<LocationState, BsanAllocHooks>,
+    pub default_perm: Permission,
+    pub protected: bool,
+    pub span: Span,
 }
 
 impl<'tcx, A> Tree<A>

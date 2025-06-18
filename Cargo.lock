@@ -145,12 +145,12 @@ version = "0.1.0"
 dependencies = [
  "bsan-shared",
  "hashbrown",
- "lazy_static",
  "libc",
  "libc-print",
  "parking_lot",
  "rustc-hash",
  "smallvec",
+ "spin",
 ]
 
 [[package]]
@@ -1084,6 +1084,15 @@ checksum = "86af297923fbcfd107c20a189a6e9c872160df71a7190ae4a7a6c5dce4b2feb6"
 dependencies = [
  "bstr",
  "color-eyre",
+]
+
+[[package]]
+name = "spin"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5fe4ccb98d9c292d56fec89a5e07da7fc4cf0dc11e156b41793132775d3e591"
+dependencies = [
+ "lock_api",
 ]
 
 [[package]]
