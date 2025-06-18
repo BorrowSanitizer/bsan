@@ -19,25 +19,7 @@ use crate::{AllocInfo, BorTag, GlobalCtx, Provenance};
 pub mod tree;
 pub mod unimap;
 
-// TODO: Create trait for this wrapper functionality
-
-// Potential validation middleware should be part of wrapper API?
-
-pub fn bt_init_tree(
-    // This is an output pointer
-    tree: Once<Tree<BsanAllocHooks>>,
-    bor_tag: BorTag,
-    size: Size,
-    allocator: BsanAllocHooks,
-) -> Result<(), ()> {
-    // Create the tree
-    let tree_allocator = || Tree::new_in(bor_tag, size, Span::new(), allocator);
-    // Initialize the tree
-    tree.call_once(tree_allocator);
-
-    // Now `Tree` reference should be valid
-    Ok(())
-}
+// TODO: Create struct for this wrapper functionality
 
 // TODO: Replace with custom `Result` type
 /// # Safety
@@ -50,7 +32,7 @@ pub fn bt_init_tree(
 pub unsafe fn bt_validate_tree(
     prov: *const Provenance,
     ctx: &GlobalCtx,
-    object_address: usize,
+    object_address: *const c_void,
 ) -> Result<(*const Tree<BsanAllocHooks>), ()> {
     // Get global allocator
     let allocator = ctx.allocator();
@@ -75,7 +57,7 @@ pub unsafe fn bt_validate_tree(
         return Err(());
     }
 
-    let base_offset = alloc_info.base_offset(object_address);
+    let base_offset = alloc_info.base_offset(object_address as usize);
 
     // Check for out of bounds accessess
     // TODO: Checkout lib functions to compare pointers instead of using usize
@@ -94,7 +76,7 @@ pub unsafe fn bt_validate_tree(
 
     // This should be valid
     // Returning pointers as we do not want any lifetime restrictions with this method
-    Ok((tree_ptr))
+    Ok(tree_ptr)
 }
 
 #[allow(clippy::result_unit_err)]
