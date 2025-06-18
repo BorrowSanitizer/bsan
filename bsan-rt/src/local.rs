@@ -3,58 +3,22 @@ use core::mem::{self, MaybeUninit};
 use crate::block::{Block, BlockAllocator};
 use crate::*;
 
+/// The type of the counter tracking the number of elements for each frame.
 type C = u32;
 
+/// A bump allocator with support for handling frames of values.
+/// When created, an initial empty frame is established. Elements can be pushed or popped from
+/// an existing frame, or a new frame can be created with an initial allocation of elements.
+/// Each frame contains an integer tracking the number of elements, allowing frames to be popped
+/// without specifying a number of elements to pop. This abstraction supports situations where you have
+/// a statically known lower bound on the number of allocations associated with a given stack frame, but not
+/// an upper bound.
 #[derive(Debug)]
 pub struct Stack<T> {
     elems: Block<T>,
     frame_top: NonNull<T>,
-    prev_frame_len_slot: *mut u32,
-    curr_frame_len: u32,
-}
-
-/// # Safety
-/// The pointer must be offset from the beginning of its allocation
-/// by at least `mem::size_of::<B>()` bytes.
-#[inline(always)]
-unsafe fn align_down<A, B>(ptr: NonNull<A>) -> NonNull<B> {
-    debug_assert!(ptr.as_ptr().is_aligned());
-    unsafe {
-        let ptr = mem::transmute::<*mut A, *mut u8>(ptr.as_ptr());
-
-        // round down to nearest aligned address
-        let addr = ptr.expose_provenance();
-        let addr = (addr & !(mem::align_of::<B>() - 1));
-        let ptr = ptr::with_exposed_provenance_mut(addr);
-
-        let ptr = mem::transmute::<*mut u8, *mut B>(ptr);
-        let ptr = ptr.sub(1);
-
-        debug_assert!(ptr.is_aligned());
-        NonNull::<B>::new_unchecked(ptr)
-    }
-}
-
-/// # Safety
-/// If the parameter is rounded up to the nearest multiple of `mem::align_of::<B>()` and
-/// then offset by `mem::size_of::<B>()`, it must still be within the allocation.
-#[inline(always)]
-unsafe fn align_up<A, B>(ptr: NonNull<A>) -> NonNull<B> {
-    debug_assert!(ptr.as_ptr().is_aligned());
-    unsafe {
-        let ptr = mem::transmute::<*mut A, *mut u8>(ptr.as_ptr());
-
-        // round up to nearest aligned address
-        let addr = ptr.expose_provenance();
-        let align = mem::align_of::<B>();
-        let addr = (addr + align - 1) & !(align - 1);
-        let ptr = ptr::with_exposed_provenance_mut(addr);
-
-        let ptr = mem::transmute::<*mut u8, *mut B>(ptr);
-
-        debug_assert!(ptr.is_aligned());
-        NonNull::<B>::new_unchecked(ptr)
-    }
+    prev_frame_len_slot: *mut C,
+    curr_frame_len: C,
 }
 
 impl<T> Stack<T> {
@@ -76,7 +40,7 @@ impl<T> Stack<T> {
         let frame_top = self.frame_top;
         self.frame_top = unsafe { self.frame_top.sub(elems) };
         self.curr_frame_len += elems as u32;
-        assert!(self.frame_top >= self.elems.base);
+        debug_assert!(self.frame_top >= self.elems.base);
         frame_top
     }
 
@@ -89,17 +53,19 @@ impl<T> Stack<T> {
     /// # Safety
     /// The stack allocation must be large enough to contain the additional elements.
     pub unsafe fn push_frame(&mut self, elems: usize) -> NonNull<T> {
-        self.prev_frame_len_slot = unsafe { align_down::<T, C>(self.frame_top.add(1)) }.as_ptr();
+        self.prev_frame_len_slot =
+            unsafe { utils::align_down::<T, C>(self.frame_top.add(1)) }.as_ptr();
 
         unsafe {
             *self.prev_frame_len_slot = self.curr_frame_len;
         }
+
         self.curr_frame_len = 0;
 
         self.frame_top = unsafe {
             debug_assert!(!self.prev_frame_len_slot.is_null());
             let prev_slot = NonNull::new_unchecked(self.prev_frame_len_slot);
-            align_down::<C, T>(prev_slot)
+            utils::align_down::<C, T>(prev_slot)
         };
 
         unsafe { self.push_elems(elems) }
@@ -110,26 +76,26 @@ impl<T> Stack<T> {
     /// been pushed.
     pub unsafe fn pop_frame(&mut self) {
         debug_assert!(!self.prev_frame_len_slot.is_null());
+        debug_assert!(self.prev_frame_len_slot.is_aligned());
+
         let counter = unsafe { NonNull::new_unchecked(self.prev_frame_len_slot) };
 
-        let frame_top = unsafe { align_up::<C, T>(counter) };
+        let frame_top = unsafe { utils::align_up::<C, T>(counter) };
 
         self.prev_frame_len_slot = unsafe {
             let ptr = frame_top.as_ptr();
-            let ptr = mem::transmute::<*mut T, *mut u8>(ptr);
             let ptr = ptr.add(*self.prev_frame_len_slot as usize);
-            mem::transmute::<*mut u8, *mut C>(ptr)
+            let ptr = NonNull::new_unchecked(ptr);
+            utils::align_up::<T, C>(ptr).as_ptr()
         };
 
-        self.curr_frame_len = unsafe {
-            *self.prev_frame_len_slot
-        };
+        self.curr_frame_len = unsafe { *self.prev_frame_len_slot };
     }
 }
 
 #[derive(Debug)]
 pub struct LocalCtx {
-    thread_id: ThreadId,
+    pub thread_id: ThreadId,
     provenance: Stack<Provenance>,
     protected_tags: Stack<BorTag>,
 }
@@ -204,7 +170,42 @@ mod test {
     }
 
     #[test]
-    fn push_frames() {
+    fn mixed_dynamic_on_initial_frame() {
+        let global_ctx = unsafe { init_global_ctx(DEFAULT_HOOKS) };
+        let mut prov = Stack::<Provenance>::new(global_ctx, global_ctx.counts.provenance);
+        unsafe {
+            prov.push_frame(1);
+            prov.push_elems(2);
+
+            prov.pop_elems(1);
+
+            prov.push_frame(3);
+            prov.push_elems(3);
+
+            prov.pop_elems(3);
+            prov.pop_frame();
+            prov.pop_elems(1);
+            prov.pop_frame();
+        }
+    }
+
+    #[test]
+    fn without_initial_frame() {
+        let global_ctx = unsafe { init_global_ctx(DEFAULT_HOOKS) };
+        let mut prov = Stack::<Provenance>::new(global_ctx, global_ctx.counts.provenance);
+        unsafe {
+            prov.push_elems(2);
+
+            prov.push_frame(3);
+
+            assert!(prov.curr_frame_len == 3);
+
+            prov.pop_frame();
+        }
+    }
+
+    #[test]
+    fn push_pop_frames_sequential() {
         let global_ctx = unsafe { init_global_ctx(DEFAULT_HOOKS) };
         let mut prov = Stack::<Provenance>::new(global_ctx, global_ctx.counts.provenance);
         let mut tag = Stack::<BorTag>::new(global_ctx, global_ctx.counts.provenance);
@@ -215,18 +216,20 @@ mod test {
         for i in 0..n_frames {
             unsafe {
                 prov.push_frame(n_elem as usize);
+                tag.push_frame(n_elem as usize);
             }
             assert!(prov.curr_frame_len == n_elem);
+            assert!(tag.curr_frame_len == n_elem);
+
             if i > 0 {
-                unsafe { assert!(*prov.prev_frame_len_slot == n_elem) }
+                unsafe {
+                    assert!(*prov.prev_frame_len_slot == n_elem);
+                    assert!(*tag.prev_frame_len_slot == n_elem);
+                }
             }
         }
-    }
-
-    #[test]
-    fn pop_frames() {
-        let global_ctx = unsafe { init_global_ctx(DEFAULT_HOOKS) };
-        let _ = Stack::<Provenance>::new(global_ctx, global_ctx.counts.provenance);
-        let _ = Stack::<BorTag>::new(global_ctx, global_ctx.counts.provenance);
+        for i in 0..n_frames {
+            unsafe { prov.pop_frame() }
+        }
     }
 }

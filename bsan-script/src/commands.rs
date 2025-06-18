@@ -241,7 +241,7 @@ impl Buildable for BsanRt {
     }
 
     fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
-        env.with_rust_flags(RT_FLAGS, |env| env.build("bsan-rt", args))?;
+        env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.build("bsan-rt", args))?;
         let artifact = env.assert_artifact(self.artifact());
         let llvm_objcopy = env.target_binary("llvm-objcopy");
         cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_*").arg(&artifact).quiet().run()?;
@@ -249,11 +249,11 @@ impl Buildable for BsanRt {
     }
 
     fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.with_rust_flags(RT_FLAGS, |env| env.test("bsan-rt", args))
+        env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.test("bsan-rt", args))
     }
 
     fn clippy(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.with_rust_flags(RT_FLAGS, |env| env.clippy("bsan-rt", args))
+        env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.clippy("bsan-rt", args))
     }
 
     fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
@@ -265,11 +265,13 @@ impl Buildable for BsanRt {
     }
 
     fn check(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.with_rust_flags(RT_FLAGS, |env| env.check("bsan-rt", args))
+        env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.check("bsan-rt", args))
     }
 
     fn miri(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.miri("bsan-rt", args)
+        env.with_flags("MIRIFLAGS", &["-Zmiri-permissive-provenance"], |env| {
+            env.miri("bsan-rt", args)
+        })
     }
 }
 
@@ -303,11 +305,11 @@ impl Buildable for BsanPass {
     }
 
     fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.with_rust_flags(RT_FLAGS, |env| env.test("bsan-rt", args))
+        env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.test("bsan-rt", args))
     }
 
     fn clippy(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.with_rust_flags(RT_FLAGS, |env| env.clippy("bsan-rt", args))
+        env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.clippy("bsan-rt", args))
     }
 
     fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {

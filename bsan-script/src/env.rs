@@ -181,19 +181,19 @@ impl BsanEnv {
         })
     }
 
-    pub fn with_rust_flags<F>(&mut self, flags: &[&str], f: F) -> Result<()>
+    pub fn with_flags<F>(&mut self, var: &str, flags: &[&str], f: F) -> Result<()>
     where
         F: Fn(&mut BsanEnv) -> Result<()>,
     {
-        let prev_flags = self.sh.var("RUSTFLAGS").ok().unwrap();
+        let prev_flags = self.sh.var(var).ok().unwrap_or(String::from(""));
         let mut curr_flags = prev_flags.clone();
         for flag in flags {
             curr_flags.push(' ');
             curr_flags.push_str(flag);
         }
-        self.sh.set_var("RUSTFLAGS", curr_flags);
+        self.sh.set_var(var, curr_flags);
         f(&mut *self)?;
-        self.sh.set_var("RUSTFLAGS", prev_flags);
+        self.sh.set_var(var, prev_flags);
         Ok(())
     }
 
