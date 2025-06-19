@@ -45,7 +45,8 @@ jobs:
         - name: Prepare Config
           id: variables
           run: |
-            platform=${${{ matrix.config.platform }}//\//-} 
+            platform=${{ matrix.config.platform }}
+            platform=${$platform//\//-} 
             tag=$(jq -r '.build.args.TAG' .devcontainer/devcontainer.json)
             echo "platform=$platform" >> "$GITHUB_OUTPUT"
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
