@@ -42,16 +42,14 @@ jobs:
       steps:
         - name: Checkout
           uses: actions/checkout@v4
-        - name: Prepare
+        - name: Prepare Config
+          id: variables
           run: |
             platform=${{ matrix.config.platform }}
-            echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
-            echo "VERSION=$(cat src/version)" >> $GITHUB_ENV
-
-        - name: Get base image tag from config
-          id: lookup_tag
-          run: |
-            echo "tag=$(jq '.build.args.TAG' .devcontainer/devcontainer.json)" >> '$GITHUB_OUTPUT'
+            platform=${platform//\//-} 
+            tag=$(jq -r '.build.args.TAG' .devcontainer/devcontainer.json)
+            echo "platform=$platform" >> "$GITHUB_OUTPUT"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
         - name: Docker meta
           id: meta
@@ -84,7 +82,7 @@ jobs:
             pull: false
             outputs: type=image,push-by-digest=true,name-canonical=true,push=true
             build-args: |
-              TAG=${{ steps.lookup_tag.outputs.tag }}
+              TAG=${{ steps.variables.outputs.tag }}
               
         - name: Export digest
           run: |
@@ -95,7 +93,7 @@ jobs:
         - name: Upload digest
           uses: actions/upload-artifact@v4
           with:
-            name: digests-${{ env.PLATFORM_PAIR }}
+            name: digests-${{ steps.variables.outputs.platform }}
             path: ${{ runner.temp }}/digests/*
             if-no-files-found: error
             retention-days: 1
