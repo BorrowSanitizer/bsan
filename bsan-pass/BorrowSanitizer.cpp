@@ -47,7 +47,6 @@ const char kBsanFuncRetagName[] = "__bsan_retag";
 const char kBsanFuncStoreProvName[] = "__bsan_store_prov";
 const char kBsanFuncLoadProvName[] = "__bsan_load_prov";
 const char kBsanFuncAllocName[] = "__bsan_alloc";
-const char kBsanFuncExtendFrameName[] = "__bsan_extend_frame";
 const char kBsanFuncDeallocName[] = "__bsan_dealloc";
 const char kBsanFuncExposeTagName[] = "__bsan_expose_tag";
 const char kBsanFuncReadName[] = "__bsan_read";
@@ -137,7 +136,6 @@ namespace
         FunctionCallee BsanFuncStoreProv;
         FunctionCallee BsanFuncLoadProv;
         FunctionCallee BsanFuncAlloc;
-        FunctionCallee BsanFuncExtendFrame;
         FunctionCallee BsanFuncDealloc;
         FunctionCallee BsanFuncExposeTag;
         FunctionCallee BsanFuncRead;
@@ -159,6 +157,8 @@ namespace
         SmallVector<AllocaInst *, 1> DynamicAllocaVec;
         SmallVector<StoreInst *, 16> StoreVec;
 
+        Value *ShadowStackBase = nullptr;
+        
         ValueMap<Value *, Value *> ProvenanceMap;
         ValueMap<Value *, ArrayRef<Value *>> AggregateProvenanceMap;
 
@@ -222,7 +222,6 @@ namespace
                 return false;
 
             initStack();
-
             for (Instruction *I : Instructions)
             {
                 InstVisitor<BorrowSanitizerVisitor>::visit(*I);
@@ -233,20 +232,83 @@ namespace
             return true;
         }
 
-        void initStack()
-        {
-            BasicBlock *EntryBlock = &F.getEntryBlock();
-            InstrumentationIRBuilder IRB(EntryBlock, EntryBlock->getFirstNonPHIIt());
-            IRB.CreateCall(BS.BsanFuncPushFrame, {ConstantInt::get(BS.IntptrTy, 0)});
+        void initStack() {
+            InstrumentationIRBuilder IRB(&F.getEntryBlock(),
+                                        F.getEntryBlock().getFirstNonPHIIt());
+
+            // Create separate provenance slots for each stack variable.
+            // If we're combining all stack variables into a single frame,
+            // then we only need one slot for its provenance.
+            size_t NumStaticStackSlots = ClSingleStack ? 1 : StaticAllocaVec.size();
+            size_t NumStackSlots = NumStaticStackSlots + DynamicAllocaVec.size();
+
+            ShadowStackBase = IRB.CreateCall(BS.BsanFuncPushFrame, {
+                ConstantInt::get(BS.IntptrTy, NumStackSlots)
+            });
+
+            if (!StaticAllocaVec.empty()) {
+                if(ClSingleStack) {
+                    initStackWithSingleAlloc();
+                }else {
+                    initStackWithSeparateAllocs();
+                }
+            }
+            for (AllocaInst *AI : DynamicAllocaVec) {
+                initializeProvenanceForAlloca(AI);
+            }
+        }
+        
+        void initStackWithSeparateAllocs() {
+            InstrumentationIRBuilder IRB(&F.getEntryBlock(),
+                                        F.getEntryBlock().getFirstNonPHIIt());
+
+            // Create separate provenance slots for each stack variable.
+            size_t NumStackAllocations = StaticAllocaVec.size() + DynamicAllocaVec.size();
+            ShadowStackBase = IRB.CreateCall(BS.BsanFuncPushFrame, {
+                ConstantInt::get(BS.IntptrTy, NumStackAllocations)
+            });
+    
+            // After each alloca, insert a call to __bsan_alloc, which will
+            // initialize the provenance for the corresponding slot. 
+            for (AllocaInst *AI : StaticAllocaVec) {
+                initializeProvenanceForAlloca(AI);
+            }
         }
 
-        void deinitStack()
-        {
-            EscapeEnumerator EE(F, "bsan_cleanup", ClHandleCxxExceptions);
-            while (IRBuilder<> *AtExit = EE.Next())
-            {
-                InstrumentationIRBuilder::ensureDebugInfo(*AtExit, F);
-                AtExit->CreateCall(BS.BsanFuncPopFrame);
+        void initStackWithSingleAlloc() {
+            Instruction *InsBefore = StaticAllocaVec[0];
+            IRBuilder<> IRB(InsBefore);
+
+
+        }
+
+        void initializeProvenanceForAlloca(AllocaInst *AI) {
+            InstrumentationIRBuilder IRB(AI->getNextNode());
+            
+            Value *Base = IRB.CreatePointerCast(ShadowStackBase, BS.IntptrTy);
+            Value *Offset = ConstantInt::get(BS.IntptrTy, StackOffset * kProvenanceSize);
+
+            Value *Provenance = IRB.CreateIntToPtr(IRB.CreateAdd(Base, Offset), BS.PtrTy);
+            TypeSize TS = BS.getAllocaSizeInBytes(*AI);
+            Value *Size = IRB.CreateTypeSize(BS.IntptrTy, TS);
+            Value *ObjectAddress = AI;
+
+            IRB.CreateCall(BS.BsanFuncAlloc, {Provenance, ObjectAddress, Size});
+
+            setProvenance(ObjectAddress, Provenance);
+
+            StackOffset += 1;
+        }
+
+        void deinitStack() {
+            // We only need to pop a stack frame if one has already been pushed.
+            if(ShadowStackBase != nullptr) {
+                EscapeEnumerator EE(F, "bsan_cleanup", ClHandleCxxExceptions);
+                while (IRBuilder<> *AtExit = EE.Next())
+                {
+                    InstrumentationIRBuilder::ensureDebugInfo(*AtExit, F);
+                    AtExit->CreateCall(BS.BsanFuncPopFrame);
+                }
             }
         }
 
@@ -431,7 +493,7 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
                                           PtrTy, IntptrTy, Int8Ty, Int8Ty);
 
     BsanFuncPushFrame = M.getOrInsertFunction(
-        kBsanFuncPushFrameName, FunctionType::get(PtrTy, IntptrTy, /*isVarArg=*/false));
+        kBsanFuncPushFrameName, PtrTy, IntptrTy);
 
     BsanFuncPopFrame = M.getOrInsertFunction(
         kBsanFuncPopFrameName,
@@ -450,10 +512,8 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
                                              IRB.getVoidTy(), PtrTy, IntptrTy);
 
     BsanFuncAlloc = M.getOrInsertFunction(kBsanFuncAllocName, IRB.getVoidTy(),
-                                          PtrTy, IntptrTy);
+                                          PtrTy, PtrTy, IntptrTy);
 
-    BsanFuncExtendFrame = M.getOrInsertFunction(kBsanFuncExtendFrameName,
-                                               IRB.getVoidTy(), IntptrTy);
 
     BsanFuncDealloc =
         M.getOrInsertFunction(kBsanFuncDeallocName, IRB.getVoidTy(), PtrTy);

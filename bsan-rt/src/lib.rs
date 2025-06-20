@@ -286,21 +286,13 @@ unsafe extern "C" fn __bsan_pop_frame() {
 
 // Registers a heap allocation of size `size`, storing its provenance in the return pointer.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_alloc(prov: *mut MaybeUninit<Provenance>, addr: usize, size: usize) {
+unsafe extern "C" fn __bsan_alloc(prov: *mut MaybeUninit<Provenance>, addr: *mut u8, size: usize) {
     debug_assert!(!prov.is_null());
     unsafe {
         (*prov).write(Provenance::null());
     }
 }
 
-/// Extends the current stack frame to store `num_elems` additional provenance values.
-#[unsafe(no_mangle)]
-extern "C" fn __bsan_extend_frame(num_elems: usize) {
-    let local_ctx = unsafe { local_ctx_mut() };
-    unsafe {
-        local_ctx.provenance.push_elems(num_elems);
-    }
-}
 
 /// Deregisters a heap allocation
 #[unsafe(no_mangle)]
