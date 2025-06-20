@@ -47,7 +47,7 @@ const char kBsanFuncRetagName[] = "__bsan_retag";
 const char kBsanFuncStoreProvName[] = "__bsan_store_prov";
 const char kBsanFuncLoadProvName[] = "__bsan_load_prov";
 const char kBsanFuncAllocName[] = "__bsan_alloc";
-const char kBsanFuncAllocStackName[] = "__bsan_alloc_stack";
+const char kBsanFuncExtendFrameName[] = "__bsan_extend_frame";
 const char kBsanFuncDeallocName[] = "__bsan_dealloc";
 const char kBsanFuncExposeTagName[] = "__bsan_expose_tag";
 const char kBsanFuncReadName[] = "__bsan_read";
@@ -137,7 +137,7 @@ namespace
         FunctionCallee BsanFuncStoreProv;
         FunctionCallee BsanFuncLoadProv;
         FunctionCallee BsanFuncAlloc;
-        FunctionCallee BsanFuncAllocStack;
+        FunctionCallee BsanFuncExtendFrame;
         FunctionCallee BsanFuncDealloc;
         FunctionCallee BsanFuncExposeTag;
         FunctionCallee BsanFuncRead;
@@ -161,7 +161,6 @@ namespace
 
         ValueMap<Value *, Value *> ProvenanceMap;
         ValueMap<Value *, ArrayRef<Value *>> AggregateProvenanceMap;
-        Value *CurrentShadowStackPointer;
 
         BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
                                const TargetLibraryInfo &TLI)
@@ -205,6 +204,12 @@ namespace
 
         void instrumentAggregateStore(StoreInst &I) {}
 
+        void instrumentRetag(IntrinsicInst &I) {
+            CallInst *CIRetag = CallInst::Create(
+                BS.BsanFuncRetag, {I.getOperand(0), I.getOperand(1), I.getOperand(2), I.getOperand(3)});
+            ReplaceInstWithInst(&I, CIRetag);
+        }
+
         bool runOnFunction()
         {
             for (BasicBlock *BB :
@@ -232,7 +237,7 @@ namespace
         {
             BasicBlock *EntryBlock = &F.getEntryBlock();
             InstrumentationIRBuilder IRB(EntryBlock, EntryBlock->getFirstNonPHIIt());
-            CurrentShadowStackPointer = IRB.CreateCall(BS.BsanFuncPushFrame);
+            IRB.CreateCall(BS.BsanFuncPushFrame, {ConstantInt::get(BS.IntptrTy, 0)});
         }
 
         void deinitStack()
@@ -293,6 +298,16 @@ namespace
             else
             {
                 // TODO: handle passing provenance through the shadow stack or TLS.
+            }
+        }
+
+        void visitIntrinsicInst(IntrinsicInst &I) {
+            switch (I.getIntrinsicID()) {
+                case Intrinsic::retag: {
+                    instrumentRetag(I);
+                } break;
+                default:
+                    break;
             }
         }
     };
@@ -413,10 +428,10 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
     IRBuilder<> IRB(*C);
 
     BsanFuncRetag = M.getOrInsertFunction(kBsanFuncRetagName, IRB.getVoidTy(),
-                                          PtrTy, Int8Ty, Int8Ty);
+                                          PtrTy, IntptrTy, Int8Ty, Int8Ty);
 
     BsanFuncPushFrame = M.getOrInsertFunction(
-        kBsanFuncPushFrameName, FunctionType::get(PtrTy, /*isVarArg=*/false));
+        kBsanFuncPushFrameName, FunctionType::get(PtrTy, IntptrTy, /*isVarArg=*/false));
 
     BsanFuncPopFrame = M.getOrInsertFunction(
         kBsanFuncPopFrameName,
@@ -437,8 +452,8 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
     BsanFuncAlloc = M.getOrInsertFunction(kBsanFuncAllocName, IRB.getVoidTy(),
                                           PtrTy, IntptrTy);
 
-    BsanFuncAllocStack = M.getOrInsertFunction(kBsanFuncAllocStackName,
-                                               IRB.getVoidTy(), PtrTy, IntptrTy);
+    BsanFuncExtendFrame = M.getOrInsertFunction(kBsanFuncExtendFrameName,
+                                               IRB.getVoidTy(), IntptrTy);
 
     BsanFuncDealloc =
         M.getOrInsertFunction(kBsanFuncDeallocName, IRB.getVoidTy(), PtrTy);

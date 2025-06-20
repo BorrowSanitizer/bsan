@@ -18,7 +18,8 @@ use rustc_hash::FxBuildHasher;
 
 use crate::hooks::{BsanAllocHooks, BsanHooks};
 use crate::shadow::ShadowHeap;
-use crate::utils::StackElementCounts;
+use crate::stack::Stack;
+use crate::utils::Sizes;
 use crate::*;
 
 /// Every action that requires a heap allocation must be performed through a globally
@@ -36,20 +37,19 @@ pub struct GlobalCtx {
     next_alloc_id: AtomicUsize,
     next_thread_id: AtomicUsize,
     shadow_heap: ShadowHeap<Provenance>,
-    pub counts: StackElementCounts,
+    pub sizes: Sizes,
 }
 
 impl GlobalCtx {
     /// Creates a new instance of `GlobalCtx` using the given `BsanHooks`.
     /// This function will also initialize our shadow heap
     fn new(hooks: BsanHooks) -> Self {
-        let counts = StackElementCounts::default();
         Self {
             hooks,
             next_alloc_id: AtomicUsize::new(AllocId::min().get()),
             next_thread_id: AtomicUsize::new(0),
             shadow_heap: ShadowHeap::new(&hooks),
-            counts,
+            sizes: Sizes::default(),
         }
     }
 
@@ -77,6 +77,10 @@ impl GlobalCtx {
     pub fn new_alloc_id(&self) -> AllocId {
         let id = self.next_alloc_id.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         AllocId::new(id)
+    }
+
+    pub fn new_stack<T>(&self) -> Stack<T> {
+        Stack::new(self)
     }
 }
 

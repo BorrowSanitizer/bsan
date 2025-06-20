@@ -5,7 +5,7 @@ use core::num::NonZeroUsize;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
-use crate::hooks::MUnmap;
+use crate::hooks::{BsanHooks, MUnmap, BSAN_MAP_FLAGS, BSAN_PROT_FLAGS};
 use crate::*;
 
 /// Types that implement this trait can act as elements
@@ -21,19 +21,45 @@ pub unsafe trait Linkable<T: Sized> {
 /// An mmap-ed chunk of memory that will munmap the chunk on drop.
 #[derive(Debug)]
 pub struct Block<T: Sized> {
-    pub num_elements: NonZeroUsize,
-    pub base: NonNull<T>,
-    pub munmap: MUnmap,
+    num_elements: NonZero<usize>,
+    base: NonNull<T>,
+    munmap: MUnmap,
 }
 
 impl<T: Sized> Block<T> {
-    /// The last valid, addressable location within the block (at its high-end)
-    fn last(&self) -> *mut T {
-        unsafe { self.base.as_ptr().add(self.num_elements.get() - 1) }
+    pub fn new(hooks: &BsanHooks, num_elements: NonZero<usize>) -> Block<T> {
+        // Only sized types are allowed.
+        let ty_size = unsafe { NonZero::new_unchecked(mem::size_of::<T>()) };
+
+        #[cfg(debug_assertions)]
+        let num_bytes =
+            num_elements.checked_mul(ty_size).expect("Overflow when computing size of block.");
+
+        #[cfg(not(debug_assertions))]
+        let num_bytes = unsafe { NonZero::new_unchecked(num_elements.get() * ty_size.get()) };
+
+        let base =
+            unsafe { utils::mmap(hooks.mmap_ptr, num_bytes, BSAN_PROT_FLAGS, BSAN_MAP_FLAGS) };
+
+        Block { num_elements, base, munmap: hooks.munmap_ptr }
     }
+
+    // The last valid, addressable element in the block.
+    #[inline]
+    pub fn last(&self) -> NonNull<T> {
+        unsafe { self.end().sub(mem::size_of::<T>()) }
+    }
+
+    // The upper end of the block; an invalid address.
+    #[inline]
+    pub fn end(&self) -> NonNull<T> {
+        unsafe { NonNull::new_unchecked(self.base.as_ptr().add(self.num_elements.get())) }
+    }
+
     /// The first valid, addressable location within the block (at its low-end)
-    fn first(&self) -> *mut T {
-        self.base.as_ptr()
+    #[inline]
+    pub fn start(&self) -> NonNull<T> {
+        self.base
     }
 }
 
@@ -77,7 +103,7 @@ impl<T: Linkable<T>> BlockAllocator<T> {
     fn new(block: Block<T>) -> Self {
         BlockAllocator {
             // we begin at the high-end of the block and decrement downward
-            cursor: AtomicPtr::new(block.last() as *mut MaybeUninit<T>),
+            cursor: AtomicPtr::new(block.last().as_ptr() as *mut MaybeUninit<T>),
             free_list: UnsafeCell::new(core::ptr::null::<T>() as *mut T),
             free_lock: AtomicBool::new(false),
             block,
@@ -109,7 +135,7 @@ impl<T: Linkable<T>> BlockAllocator<T> {
                 if val.is_null() {
                     // We have reached the end of the block
                     None
-                } else if val.addr() == self.block.first().addr() {
+                } else if val.addr() == self.block.start().addr().get() {
                     // We are handing out the last element of the block
                     Some(core::ptr::null_mut())
                 } else {
@@ -163,7 +189,8 @@ mod test {
     #[test]
     fn allocate_from_page_in_parallel() {
         let ctx = unsafe { init_global_ctx(DEFAULT_HOOKS) };
-        let block = ctx.hooks().new_block::<Link>(unsafe { NonZero::new_unchecked(200) });
+        let block = Block::new(ctx.hooks(), unsafe { NonZero::new_unchecked(200) });
+
         let page = Arc::new(BlockAllocator::<Link>::new(block));
         let mut threads = Vec::new();
 
