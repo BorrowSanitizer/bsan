@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::ffi::c_void;
 use core::marker::PhantomData;
+use core::num::NonZero;
 use core::ops::{Add, BitAnd, Deref, DerefMut, Shr};
 use core::ptr::NonNull;
 use core::slice::SliceIndex;
@@ -13,6 +14,7 @@ use crate::global::{global_ctx, GlobalCtx};
 use crate::hooks::{
     BsanAllocHooks, BsanHooks, MUnmap, BSAN_MAP_FLAGS, BSAN_PROT_FLAGS, DEFAULT_HOOKS,
 };
+use crate::utils;
 
 /// Different targets have a different number
 /// of significant bits in their pointer representation.
@@ -85,7 +87,7 @@ pub fn table_indices(address: usize) -> (usize, usize) {
 #[derive(Debug)]
 pub struct ShadowHeap<T> {
     // First level table containing pointers to second level tables
-    table: *mut [*mut [T; L2_LEN]; L1_LEN],
+    table: NonNull<[*mut [T; L2_LEN]; L1_LEN]>,
     munmap: MUnmap,
     l2_blocks: Vec<usize, BsanAllocHooks>,
 }
@@ -95,43 +97,26 @@ unsafe impl<T> Sync for ShadowHeap<T> {}
 impl<T> ShadowHeap<T> {
     pub fn new(hooks: &BsanHooks) -> Self {
         unsafe {
-            let size_of_l1 = mem::size_of::<[*mut [T; L2_LEN]; L1_LEN]>();
-
-            let table = (hooks.mmap)(
-                ptr::null_mut(),
-                size_of_l1,
-                crate::hooks::BSAN_PROT_FLAGS,
-                crate::hooks::BSAN_MAP_FLAGS,
-                -1,
-                0,
-            );
-
-            assert!(!table.is_null() && table.addr() as isize != -1isize);
-
-            let table = mem::transmute::<*mut c_void, *mut [*mut [T; L2_LEN]; L1_LEN]>(table);
+            let table: NonNull<[*mut [T; L2_LEN]; L1_LEN]> = {
+                let size_bytes =
+                    NonZero::new_unchecked(mem::size_of::<[*mut [T; L2_LEN]; L1_LEN]>());
+                utils::mmap(hooks.mmap_ptr, size_bytes, BSAN_PROT_FLAGS, BSAN_MAP_FLAGS)
+            };
 
             Self {
                 table,
-                munmap: hooks.munmap,
+                munmap: hooks.munmap_ptr,
                 l2_blocks: Vec::<usize, BsanAllocHooks>::new_in(hooks.alloc),
             }
         }
     }
 
     unsafe fn allocate_l2_table(&self, hooks: &BsanHooks) -> *mut [T; L2_LEN] {
-        let l2_void = unsafe {
-            (hooks.mmap)(
-                ptr::null_mut(),
-                mem::size_of::<T>() * L2_LEN,
-                BSAN_PROT_FLAGS,
-                BSAN_MAP_FLAGS,
-                -1,
-                0,
-            )
+        let l2_page: NonNull<[T; L2_LEN]> = unsafe {
+            let size_bytes = NonZero::new_unchecked(mem::size_of::<T>() * L2_LEN);
+            utils::mmap(hooks.mmap_ptr, size_bytes, BSAN_PROT_FLAGS, BSAN_MAP_FLAGS)
         };
-        assert!(!l2_void.is_null() && l2_void.addr() as isize != -1isize);
-        unsafe { ptr::write_bytes(l2_void as *mut u8, 0, mem::size_of::<T>() * L2_LEN) };
-        unsafe { mem::transmute(l2_void) }
+        l2_page.as_ptr()
     }
 }
 
@@ -140,7 +125,7 @@ impl<T: Default + Copy> ShadowHeap<T> {
         unsafe {
             let (l1_index, l2_index) = table_indices(addr);
 
-            let l2_table: *mut [T; L2_LEN] = (*self.table)[l1_index];
+            let l2_table: *mut [T; L2_LEN] = (*self.table.as_ptr())[l1_index];
 
             if l2_table.is_null() {
                 return T::default();
@@ -153,7 +138,7 @@ impl<T: Default + Copy> ShadowHeap<T> {
     pub fn store_prov(&self, hooks: &BsanHooks, prov: *const T, addr: usize) {
         let (l1_index, l2_index) = table_indices(addr);
         unsafe {
-            let l2_table_ptr: *mut *mut [T; L2_LEN] = &raw mut (*self.table)[l1_index];
+            let l2_table_ptr: *mut *mut [T; L2_LEN] = &raw mut (*self.table.as_ptr())[l1_index];
 
             if (*l2_table_ptr).is_null() {
                 *l2_table_ptr = self.allocate_l2_table(hooks);
@@ -170,15 +155,22 @@ impl<T> Drop for ShadowHeap<T> {
         unsafe {
             // Free all L2 tables
             for i in self.l2_blocks.drain(..) {
-                let l2_table = (*self.table)[i];
+                let l2_table = (*self.table.as_ptr())[i];
                 if !l2_table.is_null() {
-                    (self.munmap)(l2_table as *mut c_void, mem::size_of::<T>() * L2_LEN);
+                    unsafe {
+                        let l2_table_size = NonZero::new_unchecked(mem::size_of::<T>() * L2_LEN);
+                        let l2_table = NonNull::new_unchecked(l2_table);
+                        utils::munmap(self.munmap, l2_table, l2_table_size);
+                    }
                 }
             }
-            let size_of_l1 = mem::size_of::<[*mut [T; L2_LEN]; L1_LEN]>();
 
+            unsafe {
+                let size_bytes =
+                    NonZero::new_unchecked(mem::size_of::<[*mut [T; L2_LEN]; L1_LEN]>());
+                utils::munmap::<[*mut [T; L2_LEN]; L1_LEN]>(self.munmap, self.table, size_bytes);
+            }
             // Free L1 table
-            (self.munmap)(self.table as *mut c_void, size_of_l1);
         }
     }
 }

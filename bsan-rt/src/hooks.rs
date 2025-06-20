@@ -1,12 +1,10 @@
 use alloc::alloc::{AllocError, Allocator, Layout};
 use core::ffi::c_void;
 use core::mem;
-use core::num::NonZeroUsize;
+use core::num::{NonZero, NonZeroUsize};
 use core::ptr::{self, NonNull};
 
 use libc::off_t;
-
-use crate::block::Block;
 
 pub static BSAN_PROT_FLAGS: i32 = libc::PROT_READ | libc::PROT_WRITE;
 #[cfg(not(miri))]
@@ -24,8 +22,8 @@ pub type Exit = unsafe extern "C" fn() -> !;
 #[derive(Debug, Copy, Clone)]
 pub struct BsanHooks {
     pub alloc: BsanAllocHooks,
-    pub mmap: MMap,
-    pub munmap: MUnmap,
+    pub mmap_ptr: MMap,
+    pub munmap_ptr: MUnmap,
     pub exit: Exit,
 }
 
@@ -34,23 +32,6 @@ pub struct BsanHooks {
 pub struct BsanAllocHooks {
     malloc: Malloc,
     free: Free,
-}
-
-impl BsanHooks {
-    pub fn new_block<T>(&self, num_elements: NonZeroUsize) -> Block<T> {
-        let layout = Layout::array::<T>(num_elements.into()).unwrap();
-        let base = unsafe {
-            (self.mmap)(ptr::null_mut(), layout.size(), BSAN_PROT_FLAGS, BSAN_MAP_FLAGS, -1, 0)
-        };
-
-        assert!(!base.is_null());
-        assert!(base.addr() as isize != -1isize);
-
-        let base = unsafe { mem::transmute::<*mut c_void, *mut T>(base) };
-        let base = unsafe { NonNull::new_unchecked(base) };
-        let munmap = self.munmap;
-        Block { num_elements, base, munmap }
-    }
 }
 
 unsafe impl Allocator for BsanAllocHooks {
@@ -84,7 +65,7 @@ unsafe extern "C" fn default_exit() -> ! {
 
 pub static DEFAULT_HOOKS: BsanHooks = BsanHooks {
     alloc: BsanAllocHooks { malloc: libc::malloc, free: libc::free },
-    mmap: libc::mmap,
-    munmap: libc::munmap,
+    mmap_ptr: libc::mmap,
+    munmap_ptr: libc::munmap,
     exit: default_exit,
 };

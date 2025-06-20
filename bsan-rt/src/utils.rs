@@ -1,56 +1,57 @@
+use core::ffi::c_void;
 use core::mem::{self, MaybeUninit};
-use core::num::NonZeroUsize;
+use core::num::{NonZero, NonZeroUsize};
 use core::ptr::{self, NonNull};
 
 use cfg_if::cfg_if;
-use libc::{rlimit, RLIMIT_STACK};
+use libc::{rlimit, RLIMIT_STACK, _SC_PAGESIZE};
 
+use crate::hooks::{MMap, MUnmap};
 use crate::{BorTag, Provenance};
 
 #[derive(Debug)]
-pub struct StackElementCounts {
-    pub provenance: NonZeroUsize,
-    pub borrow_tag: NonZeroUsize,
+pub struct Sizes {
+    pub page: NonZero<usize>,
+    pub stack: NonZero<usize>,
 }
 
-macro_rules! nonzero_size {
-    ($s:expr, $p:ty) => {{
-        let expr: usize = ($s / core::mem::size_of::<$p>()) as usize;
-        cfg_if! {
-            if #[cfg(debug_assertions)] {
-                NonZeroUsize::new(expr).expect("Zero size in stack element count.")
-            }else{
-                unsafe {
-                    NonZeroUsize::new_unchecked(expr)
-                }
-            }
-        }
-    }};
-}
-
-impl Default for StackElementCounts {
+impl Default for Sizes {
     fn default() -> Self {
-        let mut limits = MaybeUninit::<rlimit>::uninit();
-        #[cfg(not(miri))]
-        let exit_code = unsafe { libc::getrlimit(RLIMIT_STACK, limits.as_mut_ptr()) };
-
-        #[cfg(miri)]
-        let exit_code = unsafe {
-            (*limits.as_mut_ptr()).rlim_cur = 1024;
-            (*limits.as_mut_ptr()).rlim_max = 1024;
-            0
-        };
-
-        let stack_size_bytes = if (exit_code != 0) {
-            panic!("Failed to obtain stack size limit.");
-        } else {
-            let limits = unsafe { MaybeUninit::assume_init(limits) };
-            limits.rlim_cur as usize
-        };
-        let provenance = nonzero_size!(stack_size_bytes, Provenance);
-        let borrow_tag = nonzero_size!(stack_size_bytes, BorTag);
-        Self { provenance, borrow_tag }
+        let page = get_page_size().expect("Page size set to 0.");
+        let stack = get_stack_size().expect("Stack size set to 0.");
+        Self { page, stack }
     }
+}
+
+#[allow(unused)]
+pub fn get_page_size() -> Option<NonZero<usize>> {
+    unsafe {
+        let page_size = libc::sysconf(_SC_PAGESIZE) as usize;
+        NonZero::new(page_size)
+    }
+}
+
+#[allow(unused)]
+pub fn get_stack_size() -> Option<NonZero<usize>> {
+    let mut limits = MaybeUninit::<rlimit>::uninit();
+    #[cfg(not(miri))]
+    let exit_code = unsafe { libc::getrlimit(RLIMIT_STACK, limits.as_mut_ptr()) };
+
+    #[cfg(miri)]
+    let exit_code = unsafe {
+        (*limits.as_mut_ptr()).rlim_cur = 1024;
+        (*limits.as_mut_ptr()).rlim_max = 1024;
+        0
+    };
+
+    let stack_size_bytes = if (exit_code != 0) {
+        panic!("Failed to obtain stack size limit.");
+    } else {
+        let limits = unsafe { MaybeUninit::assume_init(limits) };
+        limits.rlim_cur as usize
+    };
+
+    NonZero::new(stack_size_bytes)
 }
 
 /// # Safety
@@ -94,5 +95,29 @@ pub unsafe fn align_up<A, B>(ptr: NonNull<A>) -> NonNull<B> {
 
         debug_assert!(ptr.is_aligned());
         NonNull::<B>::new_unchecked(ptr)
+    }
+}
+
+#[inline(always)]
+pub unsafe fn mmap<T>(mmap: MMap, size_bytes: NonZero<usize>, prot: i32, flags: i32) -> NonNull<T> {
+    let size_bytes = size_bytes.get();
+    unsafe {
+        let ptr = (mmap)(ptr::null_mut(), size_bytes, prot, flags, -1, 0);
+        let ptr = mem::transmute::<*mut c_void, *mut T>(ptr);
+        if ptr.is_null() || ptr.addr() as isize == -1 {
+            panic!("Failed to allocate page of size {size_bytes:?}.");
+        } else {
+            NonNull::<T>::new_unchecked(ptr)
+        }
+    }
+}
+
+#[inline(always)]
+pub unsafe fn munmap<T>(munmap: MUnmap, ptr: NonNull<T>, size_bytes: NonZero<usize>) {
+    let size_bytes = size_bytes.get();
+    unsafe {
+        let ptr = ptr.as_ptr();
+        let ptr = mem::transmute::<*mut T, *mut c_void>(ptr);
+        (munmap)(ptr, size_bytes);
     }
 }
