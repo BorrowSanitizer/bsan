@@ -16,7 +16,10 @@ use hashbrown::{DefaultHashBuilder, HashMap};
 use libc_print::std_name::*;
 use rustc_hash::FxBuildHasher;
 
+use crate::hooks::{BsanAllocHooks, BsanHooks};
 use crate::shadow::ShadowHeap;
+use crate::stack::Stack;
+use crate::utils::Sizes;
 use crate::*;
 
 /// Every action that requires a heap allocation must be performed through a globally
@@ -34,10 +37,8 @@ pub struct GlobalCtx {
     next_alloc_id: AtomicUsize,
     next_thread_id: AtomicUsize,
     shadow_heap: ShadowHeap<Provenance>,
+    pub sizes: Sizes,
 }
-
-const BSAN_MMAP_PROT: i32 = libc::PROT_READ | libc::PROT_WRITE;
-const BSAN_MMAP_FLAGS: i32 = libc::MAP_ANONYMOUS | libc::MAP_PRIVATE;
 
 impl GlobalCtx {
     /// Creates a new instance of `GlobalCtx` using the given `BsanHooks`.
@@ -48,6 +49,7 @@ impl GlobalCtx {
             next_alloc_id: AtomicUsize::new(AllocId::min().get()),
             next_thread_id: AtomicUsize::new(0),
             shadow_heap: ShadowHeap::new(&hooks),
+            sizes: Sizes::default(),
         }
     }
 
@@ -57,29 +59,6 @@ impl GlobalCtx {
 
     pub fn hooks(&self) -> &BsanHooks {
         &self.hooks
-    }
-
-    pub fn new_block<T>(&self, num_elements: NonZeroUsize) -> Block<T> {
-        let layout = Layout::array::<T>(num_elements.into()).unwrap();
-        let size = NonZeroUsize::new(layout.size()).unwrap();
-        let base = unsafe {
-            (self.hooks.mmap)(
-                ptr::null_mut(),
-                layout.size(),
-                BSAN_MMAP_PROT,
-                BSAN_MMAP_FLAGS,
-                -1,
-                0,
-            )
-        };
-
-        if base.is_null() {
-            panic!("Allocation failed");
-        }
-        let base = unsafe { mem::transmute::<*mut c_void, *mut T>(base) };
-        let base = unsafe { NonNull::new_unchecked(base) };
-        let munmap = self.hooks.munmap;
-        Block { size, base, munmap }
     }
 
     fn allocator(&self) -> BsanAllocHooks {
@@ -98,6 +77,10 @@ impl GlobalCtx {
     pub fn new_alloc_id(&self) -> AllocId {
         let id = self.next_alloc_id.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         AllocId::new(id)
+    }
+
+    pub fn new_stack<T>(&self) -> Stack<T> {
+        Stack::new(self)
     }
 }
 
@@ -263,14 +246,3 @@ pub unsafe fn global_ctx<'a>() -> &'a GlobalCtx {
     let ctx = GLOBAL_CTX.get();
     unsafe { &*mem::transmute::<*mut MaybeUninit<GlobalCtx>, *mut GlobalCtx>(ctx) }
 }
-
-unsafe extern "C" fn default_exit() -> ! {
-    unsafe { libc::exit(0) }
-}
-
-pub static DEFAULT_HOOKS: BsanHooks = BsanHooks {
-    alloc: BsanAllocHooks { malloc: libc::malloc, free: libc::free },
-    mmap: libc::mmap,
-    munmap: libc::munmap,
-    exit: default_exit,
-};

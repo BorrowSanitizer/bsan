@@ -1,15 +1,31 @@
 use core::mem::{self, MaybeUninit};
 
+use crate::block::{Block, BlockAllocator};
+use crate::stack::Stack;
 use crate::*;
 
 #[derive(Debug)]
 pub struct LocalCtx {
-    thread_id: ThreadId,
+    pub thread_id: ThreadId,
+    pub provenance: Stack<Provenance>,
+    pub protected_tags: Stack<BorTag>,
 }
+
 impl LocalCtx {
     pub fn new(ctx: &GlobalCtx) -> Self {
         let thread_id = ctx.new_thread_id();
-        Self { thread_id }
+        let provenance = ctx.new_stack::<Provenance>();
+        let protected_tags = ctx.new_stack::<BorTag>();
+        Self { thread_id, provenance, protected_tags }
+    }
+
+    /// # Safety
+    #[inline]
+    pub unsafe fn push_frame(&mut self, elems: usize) -> NonNull<MaybeUninit<Provenance>> {
+        unsafe {
+            self.protected_tags.push_frame();
+            self.provenance.push_frame_with(elems)
+        }
     }
 }
 

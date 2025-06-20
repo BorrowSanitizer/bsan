@@ -181,19 +181,19 @@ impl BsanEnv {
         })
     }
 
-    pub fn with_rust_flags<F>(&mut self, flags: &[&str], f: F) -> Result<()>
+    pub fn with_flags<F>(&mut self, var: &str, flags: &[&str], f: F) -> Result<()>
     where
         F: Fn(&mut BsanEnv) -> Result<()>,
     {
-        let prev_flags = self.sh.var("RUSTFLAGS").ok().unwrap();
+        let prev_flags = self.sh.var(var).ok().unwrap_or(String::from(""));
         let mut curr_flags = prev_flags.clone();
         for flag in flags {
             curr_flags.push(' ');
             curr_flags.push_str(flag);
         }
-        self.sh.set_var("RUSTFLAGS", curr_flags);
+        self.sh.set_var(var, curr_flags);
         f(&mut *self)?;
-        self.sh.set_var("RUSTFLAGS", prev_flags);
+        self.sh.set_var(var, prev_flags);
         Ok(())
     }
 
@@ -292,6 +292,18 @@ impl BsanEnv {
 
     pub fn test(&self, crate_dir: impl AsRef<OsStr>, args: &[String]) -> Result<()> {
         self.cargo_cmd(crate_dir, "test").args(args).run()?;
+        Ok(())
+    }
+
+    pub fn miri(&self, crate_dir: impl AsRef<OsStr>, args: &[String]) -> Result<()> {
+        let BsanEnv { cargo_extra_flags, .. } = self;
+        let manifest_path = path!(self.root_dir / crate_dir.as_ref() / "Cargo.toml");
+        self.cargo_cmd_base("miri")
+            .arg("test")
+            .arg(format!("--manifest-path={}", manifest_path.display()))
+            .args(cargo_extra_flags)
+            .args(args)
+            .run()?;
         Ok(())
     }
 
