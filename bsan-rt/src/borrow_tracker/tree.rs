@@ -13,6 +13,9 @@ use hashbrown::HashSet;
 
 use super::unimap::*;
 use super::*;
+use crate::borrow_tracker::errors::{
+    BsanTreeError, TransitionError, TreeError, TreeResult, TreeTransitionResult,
+};
 use crate::diagnostics::{AccessCause, Event, NodeDebugInfo, TbError};
 use crate::hooks::BsanAllocHooks;
 use crate::span::*;
@@ -50,30 +53,7 @@ impl AllocRange {
     }
 }
 
-// Basic errors and Result
-// TODO: Used as a placeholder more or less, should be redesigned properly in the future
-pub type BsanTreeResult<T> = Result<T, Box<BsanTreeError>>;
-
 // Is essentially a mirror of TbError, not 100% idiomatic to Miri but it does not need to be
-#[derive(Debug, Clone)]
-pub struct BsanTreeError {
-    /// What failure occurred.
-    pub error_kind: TransitionError,
-    /// The allocation in which the error is happening.
-    pub alloc_id: AllocId,
-    /// The offset (into the allocation) at which the conflict occurred.
-    pub error_offset: u64,
-    /// The tag on which the error was triggered.
-    /// On protector violations, this is the tag that was protected.
-    /// On accesses rejected due to insufficient permissions, this is the
-    /// tag that lacked those permissions.
-    pub conflicting_info: NodeDebugInfo,
-    // What kind of access caused this error (read, write, reborrow, deallocation)
-    pub access_cause: AccessCause,
-    /// Which tag the access that caused this error was made through, i.e.
-    /// which tag was used to read/write/deallocate.
-    pub accessed_info: NodeDebugInfo,
-}
 
 impl Display for BsanTreeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -348,9 +328,9 @@ struct NodeAppArgs<'node> {
     rel_pos: AccessRelatedness,
 }
 /// Data given to the error handler
-struct ErrHandlerArgs<'node, InErr> {
+struct ErrHandlerArgs<'node> {
     /// Kind of error that occurred
-    error_kind: InErr,
+    error_kind: TransitionError,
     /// Tag that triggered the error (not the tag that was accessed,
     /// rather the parent tag that had insufficient permissions or the
     /// non-parent tag that had a protector).
@@ -403,12 +383,10 @@ struct TreeVisitorStack<NodeContinue, NodeApp, ErrHandler, A: Allocator = Global
     stack: Vec<(UniIndex, AccessRelatedness, RecursionState), A>,
 }
 
-impl<NodeContinue, NodeApp, InnErr, OutErr, ErrHandler, A>
-    TreeVisitorStack<NodeContinue, NodeApp, ErrHandler, A>
+impl<NodeContinue, NodeApp, ErrHandler, A> TreeVisitorStack<NodeContinue, NodeApp, ErrHandler, A>
 where
     NodeContinue: Fn(&NodeAppArgs<'_>) -> ContinueTraversal,
-    NodeApp: Fn(NodeAppArgs<'_>) -> Result<(), InnErr>,
-    ErrHandler: Fn(ErrHandlerArgs<'_, InnErr>) -> OutErr,
+    NodeApp: Fn(NodeAppArgs<'_>) -> Result<(), TransitionError>,
     A: Allocator,
 {
     fn should_continue_at(
@@ -427,15 +405,16 @@ where
         this: &mut TreeVisitor<'_, A>,
         idx: UniIndex,
         rel_pos: AccessRelatedness,
-    ) -> Result<(), OutErr> {
+    ) -> TreeResult<()> {
         let node = this.nodes.get_mut(idx).unwrap();
         (self.f_propagate)(NodeAppArgs { node, perm: this.perms.entry(idx), rel_pos }).map_err(
             |error_kind| {
-                (self.err_builder)(ErrHandlerArgs {
-                    error_kind,
-                    conflicting_info: &this.nodes.get(idx).unwrap().debug_info,
-                    accessed_info: &this.nodes.get(self.initial).unwrap().debug_info,
-                })
+                TreeError::SoftTreeError(errors::SoftError::Bsan(BsanTreeError {
+                    error_kind: Some(error_kind),
+                    conflicting_info: Some(this.nodes.get(idx).unwrap().debug_info.clone()),
+                    accessed_info: Some(this.nodes.get(self.initial).unwrap().debug_info.clone()),
+                    ..Default::default()
+                }))
             },
         )
     }
@@ -445,7 +424,7 @@ where
         this: &mut TreeVisitor<'_, A>,
         accessed_node: UniIndex,
         visit_children: ChildrenVisitMode,
-    ) -> Result<(), OutErr> {
+    ) -> TreeResult<()> {
         // We want to visit the accessed node's children first.
         // However, we will below walk up our parents and push their children (our cousins)
         // onto the stack. To ensure correct iteration order, this method thus finishes
@@ -493,7 +472,7 @@ where
         Ok(())
     }
 
-    fn finish_foreign_accesses(&mut self, this: &mut TreeVisitor<'_, A>) -> Result<(), OutErr> {
+    fn finish_foreign_accesses(&mut self, this: &mut TreeVisitor<'_, A>) -> TreeResult<()> {
         while let Some((idx, rel_pos, step)) = self.stack.last_mut() {
             let idx = *idx;
             let rel_pos = *rel_pos;
@@ -593,14 +572,14 @@ where
     /// Finally, remember that the iteration order is not relevant for UB, it only affects
     /// diagnostics. It also affects tree traversal optimizations built on top of this, so
     /// those need to be reviewed carefully as well whenever this changes.
-    fn traverse_this_parents_children_other<InnErr, OutErr>(
+    fn traverse_this_parents_children_other(
         mut self,
         start: BorTag,
         f_continue: impl Fn(&NodeAppArgs<'_>) -> ContinueTraversal,
-        f_propagate: impl Fn(NodeAppArgs<'_>) -> Result<(), InnErr>,
-        err_builder: impl Fn(ErrHandlerArgs<'_, InnErr>) -> OutErr,
+        f_propagate: impl Fn(NodeAppArgs<'_>) -> Result<(), TransitionError>,
+        err_builder: impl Fn(ErrHandlerArgs<'_>) -> TreeError,
         allocator: A,
-    ) -> Result<(), OutErr> {
+    ) -> TreeResult<()> {
         let start_idx = self.tag_mapping.get(&start).unwrap();
         let mut stack =
             TreeVisitorStack::new(start_idx, f_continue, f_propagate, err_builder, allocator);
@@ -620,14 +599,14 @@ where
     }
 
     /// Like `traverse_this_parents_children_other`, but skips the children of `start`.
-    fn traverse_nonchildren<InnErr, OutErr>(
+    fn traverse_nonchildren(
         mut self,
         start: BorTag,
         f_continue: impl Fn(&NodeAppArgs<'_>) -> ContinueTraversal,
-        f_propagate: impl Fn(NodeAppArgs<'_>) -> Result<(), InnErr>,
-        err_builder: impl Fn(ErrHandlerArgs<'_, InnErr>) -> OutErr,
+        f_propagate: impl Fn(NodeAppArgs<'_>) -> TreeTransitionResult<()>,
+        err_builder: impl Fn(ErrHandlerArgs<'_>) -> TreeError,
         allocator: A,
-    ) -> Result<(), OutErr> {
+    ) -> TreeResult<()> {
         let start_idx = self.tag_mapping.get(&start).unwrap();
         let mut stack =
             TreeVisitorStack::new(start_idx, f_continue, f_propagate, err_builder, allocator);
@@ -722,7 +701,7 @@ where
     /// For all non-accessed locations in the RangeMap (those that haven't had an
     /// implicit read), their SIFA must be weaker than or as weak as the SIFA of
     /// `default_perm`.
-    pub(super) fn new_child(&mut self, params: ChildParams) -> BsanTreeResult<()> {
+    pub(super) fn new_child(&mut self, params: ChildParams) -> TreeResult<()> {
         use core::ops::Range;
 
         let ChildParams {
@@ -834,7 +813,7 @@ where
         alloc_id: AllocId, // diagnostics
         span: Span,        // diagnostics
         allocator: A,
-    ) -> BsanTreeResult<()> {
+    ) -> TreeResult<()> {
         self.perform_access(
             tag,
             Some((access_range, AccessKind::Write, AccessCause::Dealloc)),
@@ -865,19 +844,19 @@ where
                         //
                         Ok(())
                     },
-                    |args: ErrHandlerArgs<'_, TransitionError>| -> BsanTreeError {
+                    |args: ErrHandlerArgs<'_>| -> TreeError {
                         let ErrHandlerArgs { error_kind, conflicting_info, accessed_info } = args;
-                        let conflicting_info = conflicting_info.clone();
-                        let accessed_info = accessed_info.clone();
+                        let conflicting_info = Some(conflicting_info.clone());
+                        let accessed_info = Some(accessed_info.clone());
                         // For now this is a mirror of a TbError provided by Miri
-                        BsanTreeError {
+                        TreeError::SoftTreeError(errors::SoftError::Bsan(BsanTreeError {
                             conflicting_info,
-                            access_cause: AccessCause::Dealloc,
-                            alloc_id,
-                            error_offset: perms_range.start,
-                            error_kind,
+                            access_cause: Some(AccessCause::Dealloc),
+                            alloc_id: Some(alloc_id),
+                            error_offset: Some(perms_range.start),
+                            error_kind: Some(error_kind),
                             accessed_info,
-                        }
+                        }))
                     },
                     allocator,
                 )?
@@ -912,7 +891,7 @@ where
         alloc_id: AllocId, // diagnostics
         span: Span,        // diagnostics
         allocator: A,
-    ) -> BsanTreeResult<()> {
+    ) -> TreeResult<()> {
         use core::ops::Range;
         // Performs the per-node work:
         // - insert the permission if it does not exist
@@ -967,21 +946,21 @@ where
         // Wraps the faulty transition in more context for diagnostics.
         let err_handler = |perms_range: Range<u64>,
                            access_cause: AccessCause,
-                           args: ErrHandlerArgs<'_, TransitionError>|
-         -> BsanTreeError {
+                           args: ErrHandlerArgs<'_>|
+         -> TreeError {
             let ErrHandlerArgs { error_kind, conflicting_info, accessed_info } = args;
 
-            let conflicting_info = conflicting_info.clone();
-            let accessed_info = accessed_info.clone();
+            let conflicting_info = Some(conflicting_info.clone());
+            let accessed_info = Some(accessed_info.clone());
 
-            BsanTreeError {
+            TreeError::SoftTreeError(errors::SoftError::Bsan(BsanTreeError {
                 conflicting_info,
-                access_cause,
-                alloc_id,
-                error_offset: perms_range.start,
-                error_kind,
+                access_cause: Some(access_cause),
+                alloc_id: Some(alloc_id),
+                error_offset: Some(perms_range.start),
+                error_kind: Some(error_kind),
                 accessed_info,
-            }
+            }))
             // .build();
         };
 

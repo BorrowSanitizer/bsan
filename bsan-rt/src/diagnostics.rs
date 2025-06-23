@@ -12,7 +12,8 @@ use core::ops::Range;
 use bsan_shared::diagnostics::*;
 use bsan_shared::{Size, *};
 
-use crate::borrow_tracker::tree::{AllocRange, BsanTreeResult, LocationState, Tree};
+use crate::borrow_tracker::errors::TreeResult;
+use crate::borrow_tracker::tree::{AllocRange, LocationState, Tree};
 use crate::borrow_tracker::unimap::UniIndex;
 use crate::span::*;
 use crate::{println, AllocId, BorTag, GlobalCtx};
@@ -256,7 +257,7 @@ where
         tag: BorTag,
         nth_parent: u8,
         name: &str,
-    ) -> BsanTreeResult<()> {
+    ) -> TreeResult<()> {
         let tag = self.nth_parent(tag, nth_parent).unwrap();
         let idx = self.tag_mapping.get(&tag).unwrap();
         if let Some(node) = self.nodes.get_mut(idx) {
