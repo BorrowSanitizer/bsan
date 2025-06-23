@@ -164,7 +164,7 @@ impl<'a> BorrowTracker<'a> {
             self.prov.bor_tag,
             // TODO: Validate the Range
             Some((alloc_range, access_kind, AccessCause::Explicit(access_kind))),
-            &self.ctx,
+            self.ctx,
             self.prov.alloc_id,
             Span::new(),
             // Passing in allocator explicitly to stay consistent with API

@@ -87,7 +87,7 @@ pub struct BsanTreeError {
 #[derive(Error, Debug, Clone)]
 pub enum SoftError {
     #[error("Tree Error: {0:?}")]
-    Bsan(#[from] BsanTreeError),
+    Bsan(#[from] Box<BsanTreeError>),
     #[error("Internal Transition Error: {0:?}")]
     Transition(#[from] TransitionError),
 }
