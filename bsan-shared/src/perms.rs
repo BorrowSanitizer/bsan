@@ -450,6 +450,7 @@ impl Permission {
 
 pub mod diagnostics {
     use super::*;
+
     impl fmt::Display for PermissionPriv {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(
@@ -479,6 +480,9 @@ pub mod diagnostics {
         }
     }
 
+    // ATTENTION: This is a duplicate of TransitionError in `bsan-rt/borrow_tracker/errors.rs`
+    // Might get refactored out but has to be here due to the way bsan-shared and bsan-rt are structured
+    // and the way this was implemented/ported from Miri
     #[derive(Debug, Clone, Copy)]
     pub enum TransitionError {
         /// This access is not allowed because some parent tag has insufficient permissions.
