@@ -28,6 +28,8 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
 
+#include <optional>
+
 using namespace llvm;
 
 #define DEBUG_TYPE "bsan"
@@ -38,6 +40,10 @@ const char kBsanModuleCtorName[] = "bsan.module_ctor";
 const char kBsanModuleDtorName[] = "bsan.module_dtor";
 const char kBsanFuncInitName[] = "__bsan_init";
 const char kBsanFuncDeinitName[] = "__bsan_deinit";
+
+const char kBsanFuncStackTopName[] = "__bsan_stack_top";
+const char kBsanFuncExtendFrameName[] = "__bsan_extend_frame";
+const char kBsanFuncContractFrameName[] = "__bsan_contract_frame";
 
 const char kBsanFuncPushFrameName[] = "__bsan_push_frame";
 const char kBsanFuncPopFrameName[] = "__bsan_pop_frame";
@@ -51,6 +57,10 @@ const char kBsanFuncDeallocName[] = "__bsan_dealloc";
 const char kBsanFuncExposeTagName[] = "__bsan_expose_tag";
 const char kBsanFuncReadName[] = "__bsan_read";
 const char kBsanFuncWriteName[] = "__bsan_write";
+
+const char kBsanWildcardProvenance[] = "__WILDCARD_PROVENANCE";
+const char kBsanNullProvenance[] = "__NULL_PROVENANCE";
+const char kVScale[] = "__VSCALE";
 
 // Provenance is three words
 static const unsigned kProvenanceSize = 24;
@@ -92,6 +102,7 @@ namespace
             LongSize = M.getDataLayout().getPointerSizeInBits();
             TargetTriple = Triple(M.getTargetTriple());
             Int8Ty = Type::getInt8Ty(*C);
+            Int64Ty = Type::getInt64Ty(*C);
             PtrTy = PointerType::getUnqual(*C);
             IntptrTy = Type::getIntNTy(*C, LongSize);
             ProvenanceTy = StructType::get(IntptrTy, IntptrTy, PtrTy);
@@ -121,6 +132,7 @@ namespace
         int LongSize;
         Triple TargetTriple;
         Type *Int8Ty;
+        Type *Int64Ty;
         PointerType *PtrTy;
         Type *IntptrTy;
         StructType *ProvenanceTy;
@@ -140,6 +152,13 @@ namespace
         FunctionCallee BsanFuncExposeTag;
         FunctionCallee BsanFuncRead;
         FunctionCallee BsanFuncWrite;
+        FunctionCallee BsanFuncContractFrame;
+        FunctionCallee BsanFuncExtendFrame;
+        FunctionCallee BsanFuncStackTop;
+
+        Value *WildcardProvenance;
+        Value *NullProvenance;
+        Value *VScale;
     };
 
     struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor>
@@ -155,12 +174,19 @@ namespace
         SmallVector<Instruction *, 16> Instructions;
         SmallVector<AllocaInst *, 16> StaticAllocaVec;
         SmallVector<AllocaInst *, 1> DynamicAllocaVec;
-        SmallVector<StoreInst *, 16> StoreVec;
 
+        SmallVector<StoreInst *, 16> StoreVec;
+        SmallVector<LoadInst *, 16> LoadVec;
+
+
+        SmallVector<std::tuple<Value*, Instruction *>, 16> FreeVec;
+        SmallVector<PHINode *, 16> ShadowPHINodes;
+
+
+
+        Value *PrevShadowFrameTop = nullptr;
         Value *ShadowStackBase = nullptr;
-        
-        ValueMap<Value *, Value *> ProvenanceMap;
-        ValueMap<Value *, ArrayRef<Value *>> AggregateProvenanceMap;
+        ValueMap<Value *, SmallVector<Value *>> ProvenanceMap;
 
         BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
                                const TargetLibraryInfo &TLI)
@@ -171,19 +197,25 @@ namespace
         }
 
         /// Set Provenance to be the provenance value for V.
-        void setProvenance(Value *V, Value *Provenance)
+        void appendProvenance(Value *Key, Value *Val)
         {
-            assert(!ProvenanceMap.count(V) &&
-                   "Values may only have one provenance value");
-            ProvenanceMap[V] = Provenance;
+            ProvenanceMap[Key].push_back(Val);
         }
 
         /// Gets the Provenance value for V
         Value *getProvenance(Value *V)
         {
-            Value *Provenance = ProvenanceMap[V];
-            assert(Provenance && "Missing provenance");
-            return Provenance;
+            return getProvenanceAtIndex(V, 0);
+        }
+
+        Value *getProvenanceAtIndex(Value *V, int i) {
+            SmallVector<Value*> ProvenanceValues = ProvenanceMap[V];
+            if(ProvenanceMap.count(V)) {
+                assert(ProvenanceValues.size() > i);
+                return ProvenanceValues[i];
+            }else {
+                return BS.WildcardProvenance;
+            }
         }
 
         /// Get the Provenance for i-th argument of the instruction I.
@@ -210,8 +242,7 @@ namespace
             ReplaceInstWithInst(&I, CIRetag);
         }
 
-        bool runOnFunction()
-        {
+        bool runOnFunction() {
             for (BasicBlock *BB :
                  ReversePostOrderTraversal<BasicBlock *>(&F.getEntryBlock()))
             {
@@ -222,46 +253,90 @@ namespace
                 return false;
 
             initStack();
+
             for (Instruction *I : Instructions)
             {
                 InstVisitor<BorrowSanitizerVisitor>::visit(*I);
             }
 
+            // Finalize PHI nodes.
+            for (PHINode *PN : ShadowPHINodes) {
+                size_t NumValues = PN->getNumIncomingValues();
+                size_t NumPointersInType = numPointersInType(PN->getType());
+                for(unsigned ProvIdx = 0; ProvIdx < NumPointersInType; ProvIdx++){
+                    PHINode *ShadowPN = cast<PHINode>(getProvenanceAtIndex(PN, ProvIdx));
+                    for(unsigned ValIdx = 0; ValIdx < NumValues; ++ValIdx) {
+                        Value *IncomingValue = PN->getIncomingValue(ValIdx);
+                        Value *IncomingProvenance = getProvenanceAtIndex(IncomingValue, ProvIdx);
+                        ShadowPN->addIncoming(IncomingProvenance, PN->getIncomingBlock(ValIdx));
+                    }
+                }
+            }
+            handleStores();
+            insertDereferenceChecks();
             deinitStack();
-
             return true;
         }
 
+        void handleStores() {
+
+        }
+
+        void insertDereferenceChecks() {
+
+        }
+
         void initStack() {
+            processArguments();
+            processStaticAllocas();
+            processDynamicAllocas();
+        }
+
+        void processArguments() {
             InstrumentationIRBuilder IRB(&F.getEntryBlock(),
-                                        F.getEntryBlock().getFirstNonPHIIt());
+                F.getEntryBlock().getFirstNonPHIIt());
+            uint64_t Offset = 1;
+            
+            for (auto &FArg : F.args()) {
+                uint64_t NumPointersInType = numPointersInType(FArg.getType());
+                if(NumPointersInType > 0) {
+                    for(unsigned i = 0; i < NumPointersInType; ++i) {
+                        Offset += i;
+                        
+                        if(PrevShadowFrameTop == nullptr) {
+                            PrevShadowFrameTop = IRB.CreateCall(BS.BsanFuncStackTop, {});
+                        }
+
+                        Value *Base = IRB.CreatePointerCast(PrevShadowFrameTop, BS.IntptrTy);
+                        int64_t OffsetNegative = -((int64_t) Offset * kProvenanceSize);
+                        Value *Offset = ConstantInt::get(BS.IntptrTy, OffsetNegative);
+                        Value *Provenance = IRB.CreateIntToPtr(IRB.CreateAdd(Base, Offset), BS.PtrTy);
+                        appendProvenance(&FArg, Provenance);
+                    }
+                }   
+            }   
+        }
+
+        void processStaticAllocas() {
+            Instruction* Position;
+            if(PrevShadowFrameTop == nullptr) {
+                Position = &*F.getEntryBlock().getFirstNonPHIIt();
+            }else{
+                Position = ((CallInst *)PrevShadowFrameTop)->getNextNode();
+            }
+
+            InstrumentationIRBuilder IRB(Position);
 
             // Create separate provenance slots for each stack variable.
-            // If we're combining all stack variables into a single frame,
-            // then we only need one slot for its provenance.
-            size_t NumStaticStackSlots = ClSingleStack ? 1 : StaticAllocaVec.size();
-            size_t NumStackSlots = NumStaticStackSlots + DynamicAllocaVec.size();
-
             ShadowStackBase = IRB.CreateCall(BS.BsanFuncPushFrame, {
-                ConstantInt::get(BS.IntptrTy, NumStackSlots)
+                ConstantInt::get(BS.IntptrTy, StaticAllocaVec.size())
             });
-
-            if (!StaticAllocaVec.empty()) {
-                if(ClSingleStack) {
-                    initStackWithSingleAlloc();
-                }else {
-                    initStackWithSeparateAllocs();
-                }
-            }
-            for (AllocaInst *AI : DynamicAllocaVec) {
-                initializeProvenanceForAlloca(AI);
-            }
+            initStackWithSeparateAllocs();
         }
         
         void initStackWithSeparateAllocs() {
             InstrumentationIRBuilder IRB(&F.getEntryBlock(),
                                         F.getEntryBlock().getFirstNonPHIIt());
-
             // Create separate provenance slots for each stack variable.
             size_t NumStackAllocations = StaticAllocaVec.size() + DynamicAllocaVec.size();
             ShadowStackBase = IRB.CreateCall(BS.BsanFuncPushFrame, {
@@ -271,33 +346,34 @@ namespace
             // After each alloca, insert a call to __bsan_alloc, which will
             // initialize the provenance for the corresponding slot. 
             for (AllocaInst *AI : StaticAllocaVec) {
-                initializeProvenanceForAlloca(AI);
+                InstrumentationIRBuilder IRB(AI->getNextNode());
+                
+                Value *Base = IRB.CreatePointerCast(ShadowStackBase, BS.IntptrTy);
+                Value *Offset = ConstantInt::get(BS.IntptrTy, StackOffset * kProvenanceSize);
+                Value *Provenance = IRB.CreateIntToPtr(IRB.CreateAdd(Base, Offset), BS.PtrTy);
+                initializeProvenanceForAlloca(IRB, AI, Provenance);
+                StackOffset += 1;
             }
         }
 
-        void initStackWithSingleAlloc() {
-            Instruction *InsBefore = StaticAllocaVec[0];
-            IRBuilder<> IRB(InsBefore);
-
-
+        void processDynamicAllocas() {
+            for (AllocaInst *AI : DynamicAllocaVec) {
+                InstrumentationIRBuilder IRB(AI->getNextNode());
+                CallInst* Provenance = IRB.CreateCall(BS.BsanFuncExtendFrame, {
+                    ConstantInt::get(BS.IntptrTy, 1)
+                });
+                initializeProvenanceForAlloca(IRB, AI, Provenance);
+            }
         }
 
-        void initializeProvenanceForAlloca(AllocaInst *AI) {
-            InstrumentationIRBuilder IRB(AI->getNextNode());
-            
-            Value *Base = IRB.CreatePointerCast(ShadowStackBase, BS.IntptrTy);
-            Value *Offset = ConstantInt::get(BS.IntptrTy, StackOffset * kProvenanceSize);
-
-            Value *Provenance = IRB.CreateIntToPtr(IRB.CreateAdd(Base, Offset), BS.PtrTy);
+        void initializeProvenanceForAlloca(IRBuilder<> &IRB, AllocaInst *AI, Value *Provenance) {
             TypeSize TS = BS.getAllocaSizeInBytes(*AI);
             Value *Size = IRB.CreateTypeSize(BS.IntptrTy, TS);
             Value *ObjectAddress = AI;
-
-            IRB.CreateCall(BS.BsanFuncAlloc, {Provenance, ObjectAddress, Size});
-
-            setProvenance(ObjectAddress, Provenance);
-
-            StackOffset += 1;
+            IRB.CreateCall(BS.BsanFuncAlloc, {
+                Provenance, ObjectAddress, Size
+            });
+            appendProvenance(ObjectAddress, Provenance);
         }
 
         void deinitStack() {
@@ -328,38 +404,48 @@ namespace
         {
             if (I.getMetadata(LLVMContext::MD_nosanitize))
                 return;
-            if (I.getOpcode() == Instruction::Alloca)
-            {
+            if (I.getOpcode() == Instruction::Alloca) {
                 AllocaInst &AI = static_cast<AllocaInst &>(I);
-                if (shouldInstrumentAlloca(AI))
-                {
+                if (shouldInstrumentAlloca(AI)) {
                     if (AI.isStaticAlloca())
                         StaticAllocaVec.push_back(&AI);
                     else
                         DynamicAllocaVec.push_back(&AI);
                 }
-            }
-            else
-            {
+            } else {
                 Instructions.push_back(&I);
             }
         }
 
-        void visitCallInst(CallInst &I)
-        {
+        void processDynamicAllocation(CallBase *CB, std::optional<APInt> &AllocSize) {
+            if(AllocSize.has_value()) {
+                InstrumentationIRBuilder IRBAfter = getInsertionPointAfterCall(CB);
+                Value *Size = ConstantInt::get(BS.IntptrTy, AllocSize->getZExtValue());
+
+                CallInst* Provenance = IRBAfter.CreateCall(BS.BsanFuncExtendFrame, {
+                    ConstantInt::get(BS.IntptrTy, 1)
+                });
+                CallInst *Call = IRBAfter.CreateCall(BS.BsanFuncAlloc, {Provenance, CB, Size});
+                appendProvenance(CB, Provenance);
+            }
+        }
+
+        void visitCallBase(CallBase &I) {
             LibFunc TLIFn;
             Function *Callee = I.getCalledFunction();
-            // TODO: Handle CallBr and Invoke
-            if (isAllocLikeFn(&I, TLI))
-            {
-            }
-            else if (Callee && TLI->getLibFunc(*Callee, TLIFn) && TLI->has(TLIFn) &&
-                     isLibFreeFunction(Callee, TLIFn))
-            {
-            }
-            else
-            {
-                // TODO: handle passing provenance through the shadow stack or TLS.
+            std::optional<APInt> AllocSize = getAllocSize(&I, TLI);
+            if (isAllocLikeFn(&I, TLI)){
+                processDynamicAllocation(&I, AllocSize);
+            }else if(Callee && isReallocLikeFn(Callee)) {
+                processDynamicAllocation(&I, AllocSize);
+                Value *Operand = getReallocatedOperand(&I);
+                FreeVec.push_back(std::make_tuple(Operand, &I));
+            }else if(Callee && TLI->getLibFunc(*Callee, TLIFn) && TLI->has(TLIFn) &&
+                isLibFreeFunction(Callee, TLIFn)) {
+                Value* Operand = getFreedOperand(&I, TLI);
+                FreeVec.push_back(std::make_tuple(Operand, &I));
+            }else{
+                
             }
         }
 
@@ -370,6 +456,28 @@ namespace
                 } break;
                 default:
                     break;
+            }
+        }
+
+        void visitLoadInst(LoadInst &I) {
+            LoadVec.push_back(&I);
+            InstrumentationIRBuilder IRB(I.getNextNode());
+        }
+
+        void visitStoreInst(StoreInst &I) {
+            StoreVec.push_back(&I);
+            InstrumentationIRBuilder IRB(I.getNextNode());
+        }
+
+        void visitPHINode(PHINode &I) {
+            IRBuilder<> IRB(&I);
+            uint64_t NumPointers = numPointersInType(I.getType());
+            if(NumPointers > 0) {
+                ShadowPHINodes.push_back(&I);
+                for(unsigned i = 0; i < NumPointers; ++i) {
+                    appendProvenance(&I, IRB.CreatePHI(BS.PtrTy, I.getNumIncomingValues(),
+                            "_bsphi"));
+                } 
             }
         }
     };
@@ -478,6 +586,8 @@ void BorrowSanitizer::instrumentGlobals(IRBuilder<> &IRB, Module &M,
                                         bool *CtorComdat)
 {
     CreateBsanModuleDtor(M);
+    WildcardProvenance = getOrInsertGlobal(M, kBsanWildcardProvenance, ProvenanceTy);
+    NullProvenance = getOrInsertGlobal(M, kBsanWildcardProvenance, ProvenanceTy);
 }
 
 void BorrowSanitizer::initializeCallbacks(Module &M,
@@ -514,7 +624,6 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
     BsanFuncAlloc = M.getOrInsertFunction(kBsanFuncAllocName, IRB.getVoidTy(),
                                           PtrTy, PtrTy, IntptrTy);
 
-
     BsanFuncDealloc =
         M.getOrInsertFunction(kBsanFuncDeallocName, IRB.getVoidTy(), PtrTy);
 
@@ -527,6 +636,12 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
     BsanFuncWrite = M.getOrInsertFunction(kBsanFuncWriteName, IRB.getVoidTy(),
                                           PtrTy, IntptrTy, IntptrTy);
 
+    BsanFuncContractFrame = M.getOrInsertFunction(kBsanFuncContractFrameName, IRB.getVoidTy(), IntptrTy);
+
+    BsanFuncExtendFrame = M.getOrInsertFunction(kBsanFuncExtendFrameName, PtrTy, IntptrTy);
+
+    BsanFuncStackTop = M.getOrInsertFunction(kBsanFuncStackTopName, FunctionType::get(PtrTy, /*isVarArg=*/false));
+    
     if (CompileKernel)
     {
         createKernelApi(M, TLI);

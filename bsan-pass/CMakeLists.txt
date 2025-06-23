@@ -12,11 +12,13 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${LLVM_CXXFLAGS}")
 set(BSAN_SOURCES
   BorrowSanitizer.cpp
   BsanStackFrameLayout.cpp
+  Utils.cpp
 )
 
 set(BSAN_HEADERS
   BorrowSanitizer.h
   BsanStackFrameLayout.h
+  Utils.h
 )
 
 add_library(bsan_plugin SHARED ${BSAN_SOURCES} ${BSAN_HEADERS})

@@ -12,6 +12,7 @@
 #ifndef LLVM_TRANSFORMS_INSTRUMENTATION_BORROWSANITIZER_H
 #define LLVM_TRANSFORMS_INSTRUMENTATION_BORROWSANITIZER_H
 
+#include "Utils.h"
 #include "llvm/IR/PassManager.h"
 
 namespace llvm {
