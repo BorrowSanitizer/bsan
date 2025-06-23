@@ -330,16 +330,11 @@ extern "C" fn __bsan_retag(prov: *mut Provenance, size: usize, perm_kind: u8, pr
     // Get the global context (used for the allocator for now)
     let ctx = unsafe { global_ctx() };
 
-    // Run the validation `middleware`
     // TODO: Handle these results with proper errors
-    let tree_ptr = unsafe { bt_validate_tree(prov, ctx, todo!("Object address")).unwrap() };
-
-    let mut prov = unsafe { &mut *prov };
-    let alloc_info = unsafe { &*prov.alloc_info };
-    let tree = unsafe { &mut *(tree_ptr as *mut Tree<BsanAllocHooks>) };
+    let bt = unsafe { BorrowTracker::new(prov, ctx, todo!("object address")).unwrap() };
 
     // Now we can assume tree is initialized
-    bt_retag(tree, prov, ctx, &retag_info, alloc_info).unwrap();
+    bt.retag(&retag_info).unwrap();
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -348,24 +343,11 @@ extern "C" fn __bsan_read(prov: *const Provenance, addr: *const c_void, access_s
     // Assuming root tag has been initialized in the tree
     let ctx = unsafe { global_ctx() };
 
-    let tree_ptr = unsafe { bt_validate_tree(prov, ctx, addr).unwrap() };
+    let bt = unsafe { BorrowTracker::new(prov, ctx, todo!("object address")).unwrap() };
 
-    // SAFETY: Casts to a mutable reference as it is guaranteed to be a mutually exclusive access
-    let tree = unsafe { &mut *(tree_ptr as *mut Tree<BsanAllocHooks>) };
-
-    // Safety land
-    let prov = unsafe { &*prov };
-
-    // Alloc Info
-    let alloc_info = unsafe { &*prov.alloc_info };
-
-    bt_access(
-        tree,
-        prov,
-        ctx,
+    bt.access(
         bsan_shared::AccessKind::Read,
-        Size::from_bytes(addr as usize),
-        Size::from_bytes(access_size),
+        AllocRange { start: Size::from_bytes(addr as usize), size: Size::from_bytes(access_size) },
     )
     .unwrap();
 }
@@ -377,23 +359,11 @@ extern "C" fn __bsan_write(prov: *const Provenance, addr: *const c_void, access_
 
     let ctx = unsafe { global_ctx() };
 
-    let tree_ptr = unsafe { bt_validate_tree(prov, ctx, addr).unwrap() };
+    let bt = unsafe { BorrowTracker::new(prov, ctx, todo!("object address")).unwrap() };
 
-    let prov = unsafe { &*prov };
-
-    let alloc_info = unsafe { &*prov.alloc_info };
-
-    // SAFETY: Guaranteed to be the only mutable reference access of `Tree`
-    let tree = unsafe { &mut *(tree_ptr as *mut Tree<BsanAllocHooks>) };
-
-    // TODO:
-    bt_access(
-        tree,
-        prov,
-        ctx,
+    bt.access(
         bsan_shared::AccessKind::Write,
-        Size::from_bytes(addr as usize),
-        Size::from_bytes(access_size),
+        AllocRange { start: Size::from_bytes(addr as usize), size: Size::from_bytes(access_size) },
     )
     .unwrap();
 }
@@ -499,42 +469,14 @@ extern "C" fn __bsan_alloc_stack(prov: *mut MaybeUninit<Provenance>, size: usize
 extern "C" fn __bsan_dealloc(prov: *mut Provenance) {
     // Assuming root tag has been initialized in the tree
     let ctx = unsafe { global_ctx() };
+    let bt = unsafe { BorrowTracker::new(prov, ctx, todo!("object address")).unwrap() };
 
-    let tree_ptr = unsafe { bt_validate_tree(prov, ctx, todo!("object address")).unwrap() };
-
-    let prov = unsafe { &*prov };
-
-    // SAFETY: Guaranteed to be the only mutable reference to `AllocInfo` and `Tree`
-    let alloc_info = unsafe { &mut *prov.alloc_info };
-    let tree = unsafe { &mut *(tree_ptr as *mut Tree<BsanAllocHooks>) };
-
-    let lock_addr_id = prov.alloc_id.get();
-    let metadata_id = alloc_info.alloc_id.get();
-
-    println!("Alloc Info: {:?}", unsafe { &*prov.alloc_info });
-
-    // if lock_addr_id != metadata_id {
-    //     // TODO: Implement proper error handling, possibly via thiserror_no_std
-    //     println!("Allocation ID in pointer metadata does not match the one in the lock address.\nLock address ID: {:?}\nPointer metadata ID: {:?}", lock_addr_id, metadata_id);
-    // }
-
-    // TODO: Handle the result properly
-    // and lock the tree
-    tree.dealloc(
-        prov.bor_tag,
-        AllocRange {
-            start: Size::from_bytes(unsafe { *(alloc_info.base_addr() as *const usize) }),
-            size: Size::from_bytes(alloc_info.size),
-        },
-        ctx,
-        prov.alloc_id,
-        Span::new(),
-        ctx.allocator(),
-    )
-    .unwrap();
-
-    // TODO: Deallocate the AllocInfo
-    alloc_info.dealloc(ctx);
+    match bt.dealloc() {
+        Ok(_) => {}
+        Err(e) => {
+            // TODO: Handle errors here
+        }
+    };
 }
 
 /// Marks the borrow tag for `prov` as "exposed," allowing it to be resolved to
