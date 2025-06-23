@@ -408,12 +408,12 @@ where
         let node = this.nodes.get_mut(idx).unwrap();
         (self.f_propagate)(NodeAppArgs { node, perm: this.perms.entry(idx), rel_pos }).map_err(
             |error_kind| {
-                TreeError::SoftTreeError(errors::SoftError::Bsan(BsanTreeError {
+                TreeError::SoftTreeError(errors::SoftError::Bsan(Box::new(BsanTreeError {
                     error_kind: Some(error_kind),
                     conflicting_info: Some(this.nodes.get(idx).unwrap().debug_info.clone()),
                     accessed_info: Some(this.nodes.get(self.initial).unwrap().debug_info.clone()),
                     ..Default::default()
-                }))
+                })))
             },
         )
     }
@@ -848,14 +848,14 @@ where
                         let conflicting_info = Some(conflicting_info.clone());
                         let accessed_info = Some(accessed_info.clone());
                         // For now this is a mirror of a TbError provided by Miri
-                        TreeError::SoftTreeError(errors::SoftError::Bsan(BsanTreeError {
+                        TreeError::SoftTreeError(errors::SoftError::Bsan(Box::new(BsanTreeError {
                             conflicting_info,
                             access_cause: Some(AccessCause::Dealloc),
                             alloc_id: Some(alloc_id),
                             error_offset: Some(perms_range.start),
                             error_kind: Some(error_kind),
                             accessed_info,
-                        }))
+                        })))
                     },
                     allocator,
                 )?
@@ -952,14 +952,14 @@ where
             let conflicting_info = Some(conflicting_info.clone());
             let accessed_info = Some(accessed_info.clone());
 
-            TreeError::SoftTreeError(errors::SoftError::Bsan(BsanTreeError {
+            TreeError::SoftTreeError(errors::SoftError::Bsan(Box::new(BsanTreeError {
                 conflicting_info,
                 access_cause: Some(access_cause),
                 alloc_id: Some(alloc_id),
                 error_offset: Some(perms_range.start),
                 error_kind: Some(error_kind),
                 accessed_info,
-            }))
+            })))
             // .build();
         };
 
