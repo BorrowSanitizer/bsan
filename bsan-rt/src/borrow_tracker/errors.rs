@@ -101,3 +101,94 @@ pub enum TreeError {
     #[error("Unknown Error: Likely caused by an internal failure")]
     UnknownError,
 }
+
+// Some helper macros
+
+// --- TreeError Macros ---
+
+/// Constructs a `TreeError::SoftTreeError` from a `TransitionError`.
+///
+/// This macro abstracts away the `SoftError` layer, providing a direct
+/// path from a high-level transition error to the `TreeError` enum.
+///
+/// # Arguments
+///
+/// * `$variant`: The `TransitionError` variant to create (e.g., `ProtectedDealloc`).
+/// * `$(, $value:expr)?`: An optional single value for `TransitionError` variants
+///   that take a `Permission` (e.g., `ChildAccessForbidden`).
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// // For a variant without arguments:
+/// let err = transition_error!(ProtectedDealloc);
+///
+/// // For a variant with an argument:
+/// let err = transition_error!(ChildAccessForbidden, parent_perm);
+/// ```
+#[macro_export]
+macro_rules! transition_error {
+    // Matches variants that take one argument, e.g., `ChildAccessForbidden(Permission)`.
+    ($variant:ident, $value:expr) => {
+        TreeError::SoftTreeError(SoftError::Transition(TransitionError::$variant($value)))
+    };
+    // Matches variants with no arguments, e.g., `ProtectedDealloc`.
+    ($variant:ident) => {
+        TreeError::SoftTreeError(SoftError::Transition(TransitionError::$variant))
+    };
+}
+
+/// Builds a `TreeError` for a borrow-checking violation (`BsanTreeError`).
+///
+/// This macro simplifies creating the deeply nested `TreeError::SoftTreeError(SoftError::Bsan(Box<BsanTreeError>))`
+/// structure. It uses a builder-like pattern where any field of `BsanTreeError`
+/// can be specified by name.
+///
+/// The macro automatically wraps each provided value in `Some(...)`, so callers
+/// should provide the raw values directly. Any fields that are not provided will
+/// be initialized to `None` via `..Default::default()`.
+///
+/// # Arguments
+///
+/// * `$(, $field:ident: $value:expr)*`: A comma-separated list of `field: value`
+///   pairs corresponding to the fields of `BsanTreeError`.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// // 1. Retrieve the required diagnostic info.
+/// let conflicting_info = this.nodes.get(idx).unwrap().debug_info.clone();
+/// let accessed_info = this.nodes.get(this.initial).unwrap().debug_info.clone();
+///
+/// // 2. Construct the error, naming each field. The macro handles wrapping in `Some`.
+/// let err = bsan_error!(
+///     error_kind: TransitionError::ChildAccessForbidden(parent_perm),
+///     conflicting_info: conflicting_info,
+///     accessed_info: accessed_info,
+///     alloc_id: this.alloc_id,
+/// );
+///
+/// // A minimal error can also be constructed.
+/// let minimal_err = bsan_error!(
+///     error_kind: TransitionError::ProtectedDealloc
+/// );
+/// ```
+#[macro_export]
+macro_rules! bsan_error {
+    ($($field:ident: $value:expr),* $(,)?) => {
+        TreeError::SoftTreeError(
+            SoftError::Bsan(
+                Box::new(BsanTreeError {
+
+                    // --- Optional Fields ---
+                    $(
+                        $field: Some($value),
+                    )*
+
+                    // --- Defaulting ---
+                    ..Default::default()
+                })
+            )
+        )
+    };
+}
