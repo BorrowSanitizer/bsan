@@ -14,12 +14,12 @@ use hashbrown::HashSet;
 use super::unimap::*;
 use super::*;
 use crate::borrow_tracker::errors::{
-    BsanTreeError, TransitionError, TreeError, TreeResult, TreeTransitionResult,
+    BsanTreeError, SoftError, TransitionError, TreeError, TreeResult, TreeTransitionResult,
 };
 use crate::diagnostics::{AccessCause, Event, NodeDebugInfo, TbError};
 use crate::hooks::BsanAllocHooks;
 use crate::span::*;
-use crate::{global_ctx, AllocId, BorTag, GlobalCtx, GLOBAL_CTX};
+use crate::{bsan_error, global_ctx, AllocId, BorTag, GlobalCtx, GLOBAL_CTX};
 
 // Ported from https://doc.rust-lang.org/stable/nightly-rustc/src/rustc_middle/mir/interpret/allocation.rs.html#336-384
 
@@ -409,12 +409,11 @@ where
         let node = this.nodes.get_mut(idx).unwrap();
         (self.f_propagate)(NodeAppArgs { node, perm: this.perms.entry(idx), rel_pos }).map_err(
             |error_kind| {
-                TreeError::SoftTreeError(errors::SoftError::Bsan(Box::new(BsanTreeError {
-                    error_kind: Some(error_kind),
-                    conflicting_info: Some(this.nodes.get(idx).unwrap().debug_info.clone()),
-                    accessed_info: Some(this.nodes.get(self.initial).unwrap().debug_info.clone()),
-                    ..Default::default()
-                })))
+                bsan_error!(
+                    error_kind: error_kind,
+                    conflicting_info: this.nodes.get(idx).unwrap().debug_info.clone(),
+                    accessed_info: this.nodes.get(self.initial).unwrap().debug_info.clone()
+                )
             },
         )
     }
@@ -849,7 +848,7 @@ where
                         let conflicting_info = Some(conflicting_info.clone());
                         let accessed_info = Some(accessed_info.clone());
                         // For now this is a mirror of a TbError provided by Miri
-                        TreeError::SoftTreeError(errors::SoftError::Bsan(Box::new(BsanTreeError {
+                        TreeError::SoftTreeError(SoftError::Bsan(Box::new(BsanTreeError {
                             conflicting_info,
                             access_cause: Some(AccessCause::Dealloc),
                             alloc_id: Some(alloc_id),
@@ -953,7 +952,7 @@ where
             let conflicting_info = Some(conflicting_info.clone());
             let accessed_info = Some(accessed_info.clone());
 
-            TreeError::SoftTreeError(errors::SoftError::Bsan(Box::new(BsanTreeError {
+            TreeError::SoftTreeError(SoftError::Bsan(Box::new(BsanTreeError {
                 conflicting_info,
                 access_cause: Some(access_cause),
                 alloc_id: Some(alloc_id),
