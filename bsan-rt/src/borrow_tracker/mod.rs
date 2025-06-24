@@ -107,7 +107,7 @@ impl<'a> BorrowTracker<'a> {
 
     pub fn retag(&mut self, retag_info: &RetagInfo) -> BtResult<()> {
         // TODO: Potentially also update prov.alloc_info?
-        #[cfg(debug)]
+        // #[cfg(debug)]
         if self.tree.is_allocation_of(self.prov.bor_tag) {
             use crate::borrow_tracker::errors::BorrowTrackerError;
 
