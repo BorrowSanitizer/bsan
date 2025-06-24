@@ -33,6 +33,8 @@ pub struct BorrowTracker<'a> {
 }
 
 impl<'a> BorrowTracker<'a> {
+    // # SAFETY
+    // Takes in provenance pointer that is checked via debug_asserts
     pub unsafe fn new(
         prov: *const Provenance,
         ctx: &'a GlobalCtx,
