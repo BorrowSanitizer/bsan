@@ -14,6 +14,7 @@
 
 #![allow(dead_code)]
 
+use alloc::alloc::Global;
 use alloc::vec::Vec;
 use core::alloc::Allocator;
 use core::hash::Hash;
@@ -48,13 +49,26 @@ impl<K: Clone, A: Allocator + Clone> Clone for UniKeyMap<K, A> {
 
 /// From UniIndex to V
 #[derive(Debug, Clone, Eq)]
-pub struct UniValMap<V> {
+pub struct UniValMap<V, A: Allocator> {
     /// The mapping data. Thanks to Vec we get both fast accesses, and
     /// a memory-optimal representation if there are few deletions.
-    data: Vec<Option<V>>,
+    data: Vec<Option<V>, A>,
 }
 
-impl<V: PartialEq> UniValMap<V> {
+impl<V, A> UniValMap<V, A>
+where
+    A: Allocator,
+{
+    /// Create a UniValMap with custom allocator
+    pub fn new_in(allocator: A) -> UniValMap<V, A> {
+        Self { data: Vec::new_in(allocator) }
+    }
+}
+
+impl<V: PartialEq, A> UniValMap<V, A>
+where
+    A: Allocator,
+{
     /// Exact equality of two maps.
     /// Less accurate but faster than `equivalent`, mostly because
     /// of the fast path when the lengths are different.
@@ -72,7 +86,10 @@ impl<V: PartialEq> UniValMap<V> {
     }
 }
 
-impl<V: PartialEq> PartialEq for UniValMap<V> {
+impl<V: PartialEq, A> PartialEq for UniValMap<V, A>
+where
+    A: Allocator,
+{
     /// 2023-05: We found that using `equivalent` rather than `identical`
     /// in the equality testing of the `RangeMap` is neutral for most
     /// benchmarks, while being quite beneficial for `zip-equal`
@@ -83,9 +100,9 @@ impl<V: PartialEq> PartialEq for UniValMap<V> {
     }
 }
 
-impl<V> Default for UniValMap<V> {
+impl<V> Default for UniValMap<V, Global> {
     fn default() -> Self {
-        Self { data: Vec::default() }
+        Self { data: Vec::new_in(Global) }
     }
 }
 
@@ -103,8 +120,9 @@ where
         self.mapping.len()
     }
 
+    /// Checks if the map is empty
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.mapping.is_empty()
     }
 
     /// Whether this key has an associated index or not.
@@ -174,7 +192,10 @@ where
     }
 }
 
-impl<V> UniValMap<V> {
+impl<V, A> UniValMap<V, A>
+where
+    A: Allocator,
+{
     /// Whether this index has an associated value.
     pub fn contains_idx(&self, idx: UniIndex) -> bool {
         self.data.get(idx.idx as usize).and_then(Option::as_ref).is_some()
@@ -230,7 +251,10 @@ pub struct UniEntry<'a, V> {
     inner: &'a mut Option<V>,
 }
 
-impl<'a, V> UniValMap<V> {
+impl<'a, V, A> UniValMap<V, A>
+where
+    A: Allocator,
+{
     /// Get a wrapper around a mutable access to the value corresponding to `idx`.
     pub fn entry(&'a mut self, idx: UniIndex) -> UniEntry<'a, V> {
         self.extend_to_length(idx.idx as usize + 1);
@@ -254,13 +278,14 @@ impl<'a, V> UniEntry<'a, V> {
 
 #[cfg(test)]
 mod tests {
+    // Using `Global` allocator for tests
     use core::fmt::Debug;
 
     use super::*;
 
     #[test]
     fn extend_to_length() {
-        let mut km = UniValMap::<char>::default();
+        let mut km = UniValMap::<char, Global>::default();
         km.extend_to_length(10);
         assert!(km.data.len() == 10);
         km.extend_to_length(0);
@@ -274,7 +299,7 @@ mod tests {
     #[derive(Default)]
     struct MapWitness<K, V, A: Allocator> {
         key: UniKeyMap<K, A>,
-        val: UniValMap<V>,
+        val: UniValMap<V, Global>,
         map: HashMap<K, V>,
     }
 

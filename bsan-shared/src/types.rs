@@ -1,4 +1,4 @@
-use core::fmt;
+use core::{fmt, ops};
 
 // Ported from rustc_abi
 
@@ -20,7 +20,7 @@ impl Size {
         // Avoid potential overflow from `bits + 7`.
         Size(bits / 8 + (bits % 8).div_ceil(8))
     }
-    /// Get a Size defined by a number of bytesi
+    /// Get a Size defined by a number of bytes
     pub fn from_bytes(bytes: impl TryInto<u64>) -> Size {
         Size(bytes.try_into().ok().unwrap())
     }
@@ -51,5 +51,15 @@ impl fmt::Debug for Size {
         } else {
             write!(f, "size{}", self.0)
         }
+    }
+}
+
+impl ops::Add for Size {
+    type Output = Size;
+
+    fn add(self, other: Size) -> Size {
+        Size::from_bytes(self.bytes().checked_add(other.bytes()).unwrap_or_else(|| {
+            panic!("Size::add: {} + {} doesn't fit in u64", self.bytes(), other.bytes())
+        }))
     }
 }
