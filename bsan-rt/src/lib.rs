@@ -210,25 +210,7 @@ pub struct AllocInfo {
 impl AllocInfo {
     /// When we deallocate an allocation, we need to invalidate its metadata.
     /// so that any uses-after-free are detectable.
-    fn dealloc(&mut self, ctx: &GlobalCtx) {
-        self.alloc_id = AllocId::invalid();
-        self.base_addr = FreeListAddrUnion { base_addr: core::ptr::null() };
-        self.size = 0;
-        self.align = 1;
-
-        // Tree is freed by `__bsan_dealloc`
-        // Set the tree pointer to NULL
-        let tree_lock = &self.tree_lock;
-        let _lock = tree_lock.lock();
-
-        // SAFETY: Exclusive access to *mut raw pointer is ensured by the above
-        // tree lock
-        unsafe { *tree_lock.data_ptr() = Once::new() }
-        // Drop lock early so we can pass in mutable reference
-        core::mem::drop(_lock);
-        // Deallocate `AllocInfo`
-        unsafe { ctx.deallocate_lock_location(self) };
-    }
+    fn dealloc(&mut self, ctx: &GlobalCtx) {}
 
     fn base_addr(&self) -> *const c_void {
         // SAFETY: Both union fields are raw pointers
@@ -241,9 +223,9 @@ impl AllocInfo {
         Size::from_bytes(object_addr.abs_diff(self.base_addr() as usize))
     }
 
-    fn get_raw(prov: *const Provenance) -> *const Self {
+    fn get_raw(prov: *const Provenance) -> *mut Self {
         // Casts the raw void ptr into an AllocInfo raw ptr and reborrows as a `AllocInfo` reference
-        unsafe { (((*prov).alloc_info) as *const AllocInfo) }
+        unsafe { (((*prov).alloc_info) as *mut AllocInfo) }
     }
 }
 
