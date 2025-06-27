@@ -219,8 +219,8 @@ impl AllocInfo {
 
     // Calculate the base offset: The difference in bytes between the object
     // address and the base address
-    fn base_offset(&self, object_addr: usize) -> Size {
-        Size::from_bytes(object_addr.abs_diff(self.base_addr() as usize))
+    fn base_offset(&self, object_addr: *const c_void) -> Size {
+        Size::from_bytes((object_addr as usize).abs_diff(self.base_addr() as usize))
     }
 
     fn get_raw(prov: *const Provenance) -> *mut Self {
@@ -264,14 +264,20 @@ unsafe extern "C" fn __bsan_deinit() {
 /// Creates a new borrow tag for the given provenance object.
 // TODO: Retag is often called more than __bsan_alloc, should look into where we should init the tree
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_retag(prov: *mut Provenance, size: usize, perm_kind: u8, protector_kind: u8) {
+extern "C" fn __bsan_retag(
+    prov: *mut Provenance,
+    size: usize,
+    perm_kind: u8,
+    protector_kind: u8,
+    object_addr: *const c_void,
+) {
     let retag_info = unsafe { RetagInfo::from_raw(size, perm_kind, protector_kind) };
 
     // Get the global context (used for the allocator for now)
     let ctx = unsafe { global_ctx() };
 
     // TODO: Handle these results with proper errors
-    let bt = unsafe { BorrowTracker::new(prov, ctx, todo!("object address")).unwrap() };
+    let bt = unsafe { BorrowTracker::new(prov, ctx, object_addr).unwrap() };
 
     // Now we can assume tree is initialized
     bt.retag(&retag_info).unwrap();
@@ -391,7 +397,7 @@ extern "C" fn __bsan_alloc(
 
     let alloc_info = unsafe { alloc_info.write(info) as *mut AllocInfo };
 
-    // Initialize the tree if it is uninitialized
+    // Initialize the tree once
     unsafe {
         (*alloc_info).tree_lock.lock().call_once(|| {
             Tree::new_in(bor_tag, Size::from_bytes(alloc_size), Span::new(), ctx.allocator())
@@ -416,12 +422,12 @@ extern "C" fn __bsan_extend_frame(num_elems: usize) {
 
 /// Deregisters a heap allocation
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_dealloc(prov: *mut Provenance) {
+extern "C" fn __bsan_dealloc(prov: *mut Provenance, object_addr: *const c_void) {
     // Assuming root tag has been initialized in the tree
     let ctx = unsafe { global_ctx() };
-    let bt = unsafe { BorrowTracker::new(prov, ctx, todo!("object address")).unwrap() };
+    let mut bt = unsafe { BorrowTracker::new(prov, ctx, object_addr).unwrap() };
 
-    match bt.dealloc() {
+    match bt.dealloc(object_addr) {
         Ok(_) => {}
         Err(e) => {
             // TODO: Handle errors here
@@ -437,6 +443,7 @@ extern "C" fn __bsan_expose_tag(prov: *const Provenance) {}
 #[cfg(test)]
 mod test {
     use core::alloc::{GlobalAlloc, Layout};
+    use core::fmt::Pointer;
     use core::mem::MaybeUninit;
     use core::ptr::NonNull;
 
@@ -450,12 +457,11 @@ mod test {
         }
     }
 
-    fn create_metadata() -> Provenance {
+    fn create_metadata(object_addr: *const c_void) -> Provenance {
         let mut prov = MaybeUninit::<Provenance>::uninit();
         let prov_ptr = (&mut prov) as *mut _;
         unsafe {
-            // TODO: Discuss this object address
-            __bsan_alloc(prov_ptr, 0xaaaaaaa8 as *const c_void, 10);
+            __bsan_alloc(prov_ptr, object_addr, 20);
             prov.assume_init()
         }
     }
@@ -463,53 +469,59 @@ mod test {
     #[test]
     fn bsan_alloc_increasing_alloc_id() {
         init_bsan_with_test_hooks();
+        let some_object_addr = unsafe { libc::malloc(20) };
         unsafe {
             // log::debug!("before bsan_alloc");
-            let prov1 = create_metadata();
+            let prov1 = create_metadata(some_object_addr);
             // log::debug!("directly after bsan_alloc");
             assert_eq!(prov1.alloc_id.get(), 3);
             assert_eq!(AllocId::min().get(), 3);
-            let prov2 = create_metadata();
+            let prov2 = create_metadata(some_object_addr);
             assert_eq!(prov2.alloc_id.get(), 4);
         }
     }
 
-    // FIXME: Fix these tests
-    // #[test]
-    // fn bsan_alloc_and_dealloc() {
-    //     init_bsan_with_test_hooks();
-    //     unsafe {
-    //         let mut prov = create_metadata();
-    //         println!("Alloc Info before dealloc: {:?}", *prov.alloc_info);
-    //         __bsan_dealloc(&mut prov as *mut _);
-    //         let alloc_metadata = &*prov.alloc_info;
-    //         assert_eq!(alloc_metadata.alloc_id.get(), AllocId::invalid().get());
-    //         assert_eq!(alloc_metadata.alloc_id.get(), 0);
-    //     }
-    // }
+    fn bsan_alloc_and_dealloc() {
+        init_bsan_with_test_hooks();
+        unsafe {
+            let some_object_addr = unsafe { libc::malloc(20) };
+            let mut prov = create_metadata(some_object_addr);
+            __bsan_dealloc(&mut prov as *mut _, some_object_addr);
+            let alloc_metadata = &*prov.alloc_info;
+            assert_eq!(alloc_metadata.alloc_id.get(), AllocId::invalid().get());
+            assert_eq!(alloc_metadata.alloc_id.get(), 0);
+        }
+    }
 
-    // #[test]
-    // fn bsan_dealloc_detect_double_free() {
-    //     init_bsan_with_test_hooks();
-    //     unsafe {
-    //         let mut prov = create_metadata();
-    //         let _ = __inner_bsan_dealloc(Span::new(), &mut prov as *mut _);
-    //         let result = __inner_bsan_dealloc(Span::new(), &mut prov as *mut _);
-    //         assert!(result.is_err());
-    //     }
-    // }
+    // Below tests should panic due to unwrap call in end points
+    // Should display correct error messages in stdout
+    #[test]
+    #[should_panic]
+    fn bsan_dealloc_detect_double_free() {
+        init_bsan_with_test_hooks();
 
-    // #[test]
-    // fn bsan_dealloc_detect_invalid_free() {
-    //     init_bsan_with_test_hooks();
-    //     unsafe {
-    //         let mut prov = create_metadata();
-    //         let mut modified_prov = prov;
-    //         modified_prov.alloc_id = AllocId::new(99);
-    //         let result = __inner_bsan_dealloc(span, &mut modified_prov as *mut _);
-    //         assert!(result.is_err());
-    //     }
-    // }
+        let some_object_addr = unsafe { libc::malloc(20) };
+        unsafe {
+            let mut prov = create_metadata(some_object_addr);
+
+            //__bsan_retag(&raw mut prov, 20, 0, 0, some_object_addr);
+            __bsan_dealloc(&raw mut prov, some_object_addr);
+            __bsan_dealloc(&mut prov as *mut _, some_object_addr);
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn bsan_dealloc_detect_invalid_free() {
+        init_bsan_with_test_hooks();
+        let some_object_addr = unsafe { libc::malloc(20) };
+        unsafe {
+            let mut prov = create_metadata(some_object_addr);
+            let mut modified_prov = prov;
+            modified_prov.alloc_id = AllocId::new(99);
+            let result = __bsan_dealloc(&mut modified_prov as *mut _, some_object_addr);
+        }
+    }
 }
 
 // TODO: Figure out why this is giving an error

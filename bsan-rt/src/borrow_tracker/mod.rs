@@ -22,6 +22,9 @@ pub mod errors;
 pub mod tree;
 pub mod unimap;
 
+#[macro_use]
+use crate::println;
+
 // TODO: Create struct for this wrapper functionality
 
 #[derive(Debug)]
@@ -29,6 +32,7 @@ pub struct BorrowTracker<'a> {
     prov: &'a Provenance,
     ctx: &'a GlobalCtx,
     allocator: BsanAllocHooks,
+    object_address: *const c_void,
     // We treat AllocInfo as mutable as it is vulnerable to data races.
     // Data races are not undefined behavior on our end, but may be undefined
     // if the compiler optimizes an immutable borrow
@@ -50,8 +54,6 @@ impl<'a> BorrowTracker<'a> {
         // TODO: Validate provenance and return a "safe" reference
         debug_assert!(unsafe { prov.as_ref().is_some() });
 
-        // Initialize `Tree` if first retag
-
         // We assert that the tree ptr exists in the alloc metadata (and that the alloc metadata exists)
         debug_assert!(unsafe { !((*prov).alloc_info).is_null() });
 
@@ -72,14 +74,14 @@ impl<'a> BorrowTracker<'a> {
             }));
         }
 
-        let base_offset = unsafe { (*alloc_info_ptr).base_offset(object_address as usize) };
+        // Initialize `Tree`
+        let base_offset = unsafe { (*alloc_info_ptr).base_offset(object_address) };
 
         // Check for out of bounds accessess
         let lower_bound = unsafe { (*alloc_info_ptr).base_addr() as usize };
-        let upper_bound =
-            unsafe { (*alloc_info_ptr).base_addr() as usize + (*alloc_info_ptr).size };
+        let upper_bound = unsafe { lower_bound as usize + (*alloc_info_ptr).size };
         // TODO: Checkout lib functions to compare pointers instead of using usize
-        if (object_address as usize) < lower_bound || (object_address as usize) >= upper_bound {
+        if (object_address as usize) < lower_bound || object_address as usize >= upper_bound {
             // TODO: Add proper error handling and bailing
             // Access out-of-bounds error
             return Err(errors::BorrowTrackerError::OutOfBounds(BtOp {
@@ -89,7 +91,7 @@ impl<'a> BorrowTracker<'a> {
                 reason: Some(
                     format!(
                         "Object address is outside of the allocation range.\nObject Address: {:?}\nLower Bound: {:?}\nUpper Bound: {:?}",
-                        object_address,
+                        (object_address as usize),
                         lower_bound,
                         upper_bound
                     )
@@ -103,15 +105,14 @@ impl<'a> BorrowTracker<'a> {
             prov,
             ctx,
             allocator,
+            object_address,
             tree_lock: unsafe { &(*alloc_info_ptr).tree_lock },
             alloc_info: alloc_info_ptr,
         })
     }
 
     pub fn retag(&self, retag_info: &RetagInfo) -> BtResult<()> {
-        // Tree is initialized
-        let lock = self.tree_lock.lock();
-        let tree = lock.get().unwrap();
+        // Tree is assumed to be  initialized
 
         #[cfg(debug)]
         if tree.is_allocation_of(self.prov.bor_tag) {
@@ -135,33 +136,39 @@ impl<'a> BorrowTracker<'a> {
             self.allocator,
         );
 
+        let base_offset = unsafe { (*self.alloc_info).base_offset(self.object_address) };
+
         for (perm_range, perm) in perms_map.iter_mut_all() {
             if perm.is_accessed() {
                 // Some reborrows incur a read access to the parent.
                 // Adjust range to be relative to allocation start
                 let range_in_alloc = unsafe {
                     AllocRange {
-                        start: Size::from_bytes(perm_range.start)
-                            + (*self.alloc_info).base_offset(todo!("object address")),
+                        start: Size::from_bytes(perm_range.start) + base_offset,
                         size: Size::from_bytes(perm_range.end - perm_range.start),
                     }
                 };
 
-                self.access(AccessKind::Read, range_in_alloc).unwrap()
+                println!("{:?}", range_in_alloc);
+
+                self.access(AccessKind::Read, range_in_alloc)?
             }
         }
 
-        let child_params: ChildParams = ChildParams {
-            base_offset: unsafe { (*self.alloc_info).base_offset(todo!("object address")) },
-            parent_tag: self.prov.bor_tag,
-            new_tag: self.ctx.new_bor_tag(),
-            initial_perms: perms_map,
-            default_perm: todo!("Implement default perm"),
-            protected: todo!("Implement protected"),
-            span: Span::new(),
-        };
+        // let child_params: ChildParams = ChildParams {
+        //     base_offset,
+        //     parent_tag: self.prov.bor_tag,
+        //     new_tag: self.ctx.new_bor_tag(),
+        //     initial_perms: perms_map,
+        //     default_perm: todo!("Implement default perm"),
+        //     protected: todo!("Implement protected"),
+        //     span: Span::new(),
+        // };
 
-        tree.new_child(child_params)?;
+        // let lock = self.tree_lock.lock();
+        // let tree = lock.get().unwrap();
+
+        // tree.new_child(child_params)?;
 
         Ok(())
     }
@@ -186,14 +193,12 @@ impl<'a> BorrowTracker<'a> {
         Ok(())
     }
 
-    pub fn dealloc(&mut self) -> BtResult<()> {
+    pub fn dealloc(&mut self, object_address: *const c_void) -> BtResult<()> {
         // Tree is initialized
-        let mut lock = self.tree_lock.lock();
-        let mut tree = lock.get_mut().unwrap();
-
         let lock_addr_id = self.prov.alloc_id.get();
         let metadata_id = unsafe { (*self.alloc_info).alloc_id.get() };
 
+        println!("Prov alloc id: {:?}, alloc info alloc id: {:?}", lock_addr_id, metadata_id);
         // println!("Alloc Info: {:?}", self.prov.alloc_info);
 
         if lock_addr_id != metadata_id {
@@ -211,11 +216,16 @@ impl<'a> BorrowTracker<'a> {
 
         // TODO: Handle the result properly
         // and lock the tree
+
+        let mut lock = self.tree_lock.lock();
+        let mut tree = lock.get_mut().unwrap();
+
+        println!("Perms range map {:?}", tree.rperms);
         tree.dealloc(
             self.prov.bor_tag,
             unsafe {
                 AllocRange {
-                    start: Size::from_bytes((*self.alloc_info).base_addr() as usize),
+                    start: (*self.alloc_info).base_offset(object_address),
                     size: Size::from_bytes((*self.alloc_info).size),
                 }
             },
@@ -231,10 +241,6 @@ impl<'a> BorrowTracker<'a> {
             (*self.alloc_info).size = 0;
             (*self.alloc_info).align = 1;
         }
-        // Tree is freed by `__bsan_dealloc`
-        // Set the tree pointer to NULL
-        let tree_lock = &self.tree_lock;
-        let _lock = tree_lock.lock();
 
         // SAFETY: Exclusive access to *mut raw pointer is ensured by the above
         // tree lock
