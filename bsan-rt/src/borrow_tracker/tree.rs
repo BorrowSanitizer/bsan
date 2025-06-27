@@ -964,7 +964,6 @@ where
         };
 
         if let Some((access_range, access_kind, access_cause)) = access_range_and_kind {
-            self::println!("Dealloc access range {:?}", access_range);
             // Default branch: this is a "normal" access through a known range.
             // We iterate over affected locations and traverse the tree for each of them.
             for (perms_range, perms) in self.rperms.iter_mut(access_range.start, access_range.size)
