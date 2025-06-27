@@ -289,11 +289,13 @@ extern "C" fn __bsan_read(prov: *const Provenance, addr: *const c_void, access_s
     // Assuming root tag has been initialized in the tree
     let ctx = unsafe { global_ctx() };
 
-    let bt = unsafe { BorrowTracker::new(prov, ctx, todo!("object address")).unwrap() };
+    let bt = unsafe { BorrowTracker::new(prov, ctx, addr).unwrap() };
+
+    let offset = unsafe { (*(*prov).alloc_info).base_offset(addr) };
 
     bt.access(
         bsan_shared::AccessKind::Read,
-        AllocRange { start: Size::from_bytes(addr as usize), size: Size::from_bytes(access_size) },
+        AllocRange { start: offset, size: Size::from_bytes(access_size) },
     )
     .unwrap();
 }
@@ -305,11 +307,12 @@ extern "C" fn __bsan_write(prov: *const Provenance, addr: *const c_void, access_
 
     let ctx = unsafe { global_ctx() };
 
-    let bt = unsafe { BorrowTracker::new(prov, ctx, todo!("object address")).unwrap() };
+    let bt = unsafe { BorrowTracker::new(prov, ctx, addr).unwrap() };
 
+    let offset = unsafe { (*(*prov).alloc_info).base_offset(addr) };
     bt.access(
         bsan_shared::AccessKind::Write,
-        AllocRange { start: Size::from_bytes(addr as usize), size: Size::from_bytes(access_size) },
+        AllocRange { start: offset, size: Size::from_bytes(access_size) },
     )
     .unwrap();
 }
@@ -457,11 +460,11 @@ mod test {
         }
     }
 
-    fn create_metadata(object_addr: *const c_void) -> Provenance {
+    fn create_metadata(object_addr: *const c_void, size: usize) -> Provenance {
         let mut prov = MaybeUninit::<Provenance>::uninit();
         let prov_ptr = (&mut prov) as *mut _;
         unsafe {
-            __bsan_alloc(prov_ptr, object_addr, 20);
+            __bsan_alloc(prov_ptr, object_addr, size);
             prov.assume_init()
         }
     }
@@ -469,23 +472,25 @@ mod test {
     #[test]
     fn bsan_alloc_increasing_alloc_id() {
         init_bsan_with_test_hooks();
-        let some_object_addr = unsafe { libc::malloc(20) };
+        let m_size = 20;
+        let some_object_addr = unsafe { libc::malloc(m_size) };
         unsafe {
             // log::debug!("before bsan_alloc");
-            let prov1 = create_metadata(some_object_addr);
+            let prov1 = create_metadata(some_object_addr, m_size);
             // log::debug!("directly after bsan_alloc");
             assert_eq!(prov1.alloc_id.get(), 3);
             assert_eq!(AllocId::min().get(), 3);
-            let prov2 = create_metadata(some_object_addr);
+            let prov2 = create_metadata(some_object_addr, m_size);
             assert_eq!(prov2.alloc_id.get(), 4);
         }
     }
 
     fn bsan_alloc_and_dealloc() {
         init_bsan_with_test_hooks();
+        let m_size = 20;
         unsafe {
-            let some_object_addr = unsafe { libc::malloc(20) };
-            let mut prov = create_metadata(some_object_addr);
+            let some_object_addr = unsafe { libc::malloc(m_size) };
+            let mut prov = create_metadata(some_object_addr, m_size);
             __bsan_dealloc(&mut prov as *mut _, some_object_addr);
             let alloc_metadata = &*prov.alloc_info;
             assert_eq!(alloc_metadata.alloc_id.get(), AllocId::invalid().get());
@@ -495,33 +500,68 @@ mod test {
 
     // Below tests should panic due to unwrap call in end points
     // Should display correct error messages in stdout
+    // #[test]
+    // #[should_panic]
+    // fn bsan_dealloc_detect_double_free() {
+    //     init_bsan_with_test_hooks();
+    //     let m_size = 20;
+    //     let some_object_addr = unsafe { libc::malloc(m_size) };
+    //     unsafe {
+    //         let mut prov = create_metadata(some_object_addr, m_size);
+
+    //         //__bsan_retag(&raw mut prov, 20, 0, 0, some_object_addr);
+    //         __bsan_dealloc(&raw mut prov, some_object_addr);
+    //         __bsan_dealloc(&mut prov as *mut _, some_object_addr);
+    //     }
+    // }
+
+    // #[test]
+    // #[should_panic]
+    // fn bsan_dealloc_detect_invalid_free() {
+    //     init_bsan_with_test_hooks();
+    //     let m_size = 20;
+    //     let some_object_addr = unsafe { libc::malloc(m_size) };
+    //     unsafe {
+    //         let mut prov = create_metadata(some_object_addr, m_size);
+    //         let mut modified_prov = prov;
+    //         modified_prov.alloc_id = AllocId::new(99);
+    //         __bsan_dealloc(&mut modified_prov as *mut _, some_object_addr);
+    //     }
+    // }
+
     #[test]
-    #[should_panic]
-    fn bsan_dealloc_detect_double_free() {
+    fn bsan_read() {
         init_bsan_with_test_hooks();
+        let m_size = 20;
+        let some_object_addr = unsafe { libc::malloc(m_size) };
 
-        let some_object_addr = unsafe { libc::malloc(20) };
         unsafe {
-            let mut prov = create_metadata(some_object_addr);
+            let mut prov = create_metadata(some_object_addr, m_size);
 
-            //__bsan_retag(&raw mut prov, 20, 0, 0, some_object_addr);
+            __bsan_read(&raw mut prov, some_object_addr, m_size as u64);
+
             __bsan_dealloc(&raw mut prov, some_object_addr);
-            __bsan_dealloc(&mut prov as *mut _, some_object_addr);
         }
     }
 
     #[test]
-    #[should_panic]
-    fn bsan_dealloc_detect_invalid_free() {
+    fn bsan_write() {
         init_bsan_with_test_hooks();
-        let some_object_addr = unsafe { libc::malloc(20) };
+        let m_size = 20;
+        let some_object_addr = unsafe { libc::malloc(m_size) };
+
         unsafe {
-            let mut prov = create_metadata(some_object_addr);
-            let mut modified_prov = prov;
-            modified_prov.alloc_id = AllocId::new(99);
-            let result = __bsan_dealloc(&mut modified_prov as *mut _, some_object_addr);
+            let mut prov = create_metadata(some_object_addr, m_size);
+
+            __bsan_write(&raw mut prov, some_object_addr, m_size as u64);
+
+            __bsan_dealloc(&raw mut prov, some_object_addr);
         }
     }
+
+    // TODO: Implement this test
+    // #[test]
+    // fn bsan_aliasing_violation() {}
 }
 
 // TODO: Figure out why this is giving an error

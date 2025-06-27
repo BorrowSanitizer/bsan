@@ -213,7 +213,6 @@ impl<'a> BorrowTracker<'a> {
         let mut lock = self.tree_lock.lock();
         let mut tree = lock.get_mut().unwrap();
 
-        println!("Perms range map {:?}", tree.rperms);
         tree.dealloc(
             self.prov.bor_tag,
             unsafe {
