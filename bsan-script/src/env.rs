@@ -144,7 +144,7 @@ impl BsanEnv {
             }
             // Enable rustc-specific lints (ignored without `-Zunstable-options`).
             flags.push(
-                " -Zunstable-options -Wrustc::internal -Wrust_2018_idioms -Wunused_lifetimes",
+                " -Zunstable-options -Zdylib-lto -Wrustc::internal -Wrust_2018_idioms -Wunused_lifetimes",
             );
             // Add user-defined flags.
             if let Some(value) = std::env::var_os("RUSTFLAGS") {

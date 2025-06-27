@@ -13,6 +13,9 @@ rustc-hash = { version = "2.1.1", default-features = false }
 smallvec = { version = "1.14.0" }
 libc-print = { version = "0.1.23" }
 bsan-shared = { path = "../bsan-shared" }
+parking_lot = { version = "0.12.4" }
+spin = "0.10.0"
+thiserror-no-std = "2.0.2"
 
 [lib]
 name = "bsan_rt"
