@@ -25,8 +25,6 @@ pub mod unimap;
 #[macro_use]
 use crate::println;
 
-// TODO: Create struct for this wrapper functionality
-
 #[derive(Debug)]
 pub struct BorrowTracker<'a> {
     prov: &'a Provenance,
@@ -74,7 +72,6 @@ impl<'a> BorrowTracker<'a> {
             }));
         }
 
-        // Initialize `Tree`
         let base_offset = unsafe { (*alloc_info_ptr).base_offset(object_address) };
 
         // Check for out of bounds accessess
@@ -155,20 +152,20 @@ impl<'a> BorrowTracker<'a> {
             }
         }
 
-        // let child_params: ChildParams = ChildParams {
-        //     base_offset,
-        //     parent_tag: self.prov.bor_tag,
-        //     new_tag: self.ctx.new_bor_tag(),
-        //     initial_perms: perms_map,
-        //     default_perm: todo!("Implement default perm"),
-        //     protected: todo!("Implement protected"),
-        //     span: Span::new(),
-        // };
+        let child_params: ChildParams = ChildParams {
+            base_offset,
+            parent_tag: self.prov.bor_tag,
+            new_tag: self.ctx.new_bor_tag(),
+            initial_perms: perms_map,
+            default_perm: todo!("Implement default perm"),
+            protected: todo!("Implement protected"),
+            span: Span::new(),
+        };
 
-        // let lock = self.tree_lock.lock();
-        // let tree = lock.get().unwrap();
+        let lock = self.tree_lock.lock();
+        let tree = lock.get().unwrap();
 
-        // tree.new_child(child_params)?;
+        tree.new_child(child_params)?;
 
         Ok(())
     }
@@ -198,8 +195,7 @@ impl<'a> BorrowTracker<'a> {
         let lock_addr_id = self.prov.alloc_id.get();
         let metadata_id = unsafe { (*self.alloc_info).alloc_id.get() };
 
-        println!("Prov alloc id: {:?}, alloc info alloc id: {:?}", lock_addr_id, metadata_id);
-        // println!("Alloc Info: {:?}", self.prov.alloc_info);
+        //println!("Prov alloc id: {:?}, alloc info alloc id: {:?}", lock_addr_id, metadata_id);
 
         if lock_addr_id != metadata_id {
             return Err(errors::BorrowTrackerError::UseAfterFree(BtOp {
@@ -213,9 +209,6 @@ impl<'a> BorrowTracker<'a> {
                     )),
             }));
         }
-
-        // TODO: Handle the result properly
-        // and lock the tree
 
         let mut lock = self.tree_lock.lock();
         let mut tree = lock.get_mut().unwrap();
@@ -245,8 +238,6 @@ impl<'a> BorrowTracker<'a> {
         // SAFETY: Exclusive access to *mut raw pointer is ensured by the above
         // tree lock
         unsafe { *self.tree_lock.data_ptr() = Once::new() }
-        // // Drop lock early so we can pass in mutable reference
-        // core::mem::drop(_lock);
         // Deallocate `AllocInfo`
         unsafe { self.ctx.deallocate_lock_location(self.alloc_info) };
         Ok(())
