@@ -4,6 +4,16 @@ use crate::block::{Block, BlockAllocator};
 use crate::stack::Stack;
 use crate::*;
 
+static TLS_SIZE: usize = 100;
+
+#[thread_local]
+#[unsafe(no_mangle)]
+pub static mut __BSAN_RETVAL_TLS: [Provenance; TLS_SIZE] = [Provenance::null(); TLS_SIZE];
+
+#[thread_local]
+#[unsafe(no_mangle)]
+pub static mut __BSAN_PARAM_TLS: [Provenance; TLS_SIZE] = [Provenance::null(); TLS_SIZE];
+
 #[derive(Debug)]
 pub struct LocalCtx {
     pub thread_id: ThreadId,
