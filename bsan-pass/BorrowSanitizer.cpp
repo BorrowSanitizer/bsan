@@ -270,7 +270,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         std::optional<LoadedProvenance> OptProv = getProvenanceAtIndex(V, Idx);
         if(OptProv.has_value()) { 
             LoadedProvenance Prov = OptProv.value();
-            if(Prov.isScalableVector()) {
+            if(Prov.isVector()) {
                 return Prov.getVectorProvenance().value();
             }else{
                 report_fatal_error("Expected scalable vector provenance, but found scalar provenance!");
@@ -292,12 +292,12 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         std::optional<LoadedProvenance> OptProv = getProvenanceAtIndex(V, Idx);
         if(OptProv.has_value()) {
             LoadedProvenance Prov = OptProv.value();
-            if(Prov.isScalableVector() != Comp.isScalableVector()) {
+            if(Prov.isVector() != Comp.isVector()) {
                 report_fatal_error("Provenance type mismatch.");
             }
             return Prov;
         }else{
-            if(Comp.isScalableVector()) {
+            if(Comp.isVector()) {
                 return BS.NullVectorProvenance;
             }else{
                 return BS.NullScalarProvenance;
@@ -399,6 +399,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
                     NextProvOffset = POffset;
                 }
             } break;
+            case Type::ScalableVectorTyID:
             case Type::FixedVectorTyID: {
                 FixedVectorType *VT = cast<FixedVectorType>(CurrentTy);
                 Value *CurrByteOffset = ByteOffset;
@@ -409,16 +410,6 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
                         CurrByteOffset = BOffset;
                         NextProvOffset = POffset;
                     }
-                }
-            } break;
-            case Type::ScalableVectorTyID: {
-                ScalableVectorType *VT = cast<ScalableVectorType>(CurrentTy);
-                ElementCount ElemCount = VT->getElementCount();
-                if(VT->getElementType()->isPointerTy()){
-                    Value *DynElemCount = IRB.CreateElementCount(BS.IntptrTy, ElemCount);
-                    ProvenanceComponent Comp(ByteOffset, TypeSize, ProvOffset, DynElemCount, ElemCount);
-                    Components.push_back(Comp);
-                    NextProvOffset = IRB.CreateAdd(ProvOffset, DynElemCount);
                 }
             } break;
             default: break;
@@ -456,7 +447,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 
     // Stores a provenance value into shadow memory, starting at the given object address.
     void storeProvenanceToShadow(IRBuilder<> &IRB, Value *ObjAddr, LoadedProvenance Prov) {
-        if(Prov.isScalableVector()) {
+        if(Prov.isVector()) {
             VectorProvenance PV = Prov.getVectorProvenance().value();
             IRB.CreateCall(BS.BsanFuncShadowStoreVector, {ObjAddr, PV.Length, PV.IDVector, PV.TagVector, PV.InfoVector});
         }else{
@@ -469,7 +460,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     // Stores a provenance values into an array, where we expect that each element of the array
     // will be a provenance value.
     Value *storeProvenance(IRBuilder<> &IRB, LoadedProvenance Prov, Value *Dest) {
-        if(Prov.isScalableVector()) {
+        if(Prov.isVector()) {
             VectorProvenance PV = Prov.getVectorProvenance().value();
             // To store a vector provenance value into the array, we need to join each of its components into
             // an array of provenance values. To do this, we call a special helper function in our runtime library.
@@ -486,7 +477,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 
     // Loads a provenance value into shadow memory, starting at the given object address.
     LoadedProvenance loadProvenanceFromShadow(IRBuilder<> &IRB, ProvenanceComponent &Comp, Value *ObjAddr) {
-        if(Comp.isScalableVector()) {
+        if(Comp.isVector()) {
             // We're dealing with a scalable vector of pointers.
             // First, we create vectors to store each of the three components 
             // of provenance values. We can't create an array of provenance values 
@@ -507,7 +498,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     // Stores a provenance value into an array, where we expect that each element of the array
     // will be a provenance value.
     LoadedProvenance loadProvenance(IRBuilder<> &IRB, ProvenancePointer Prov) {
-        if(Prov.isScalableVector()) {
+        if(Prov.isVector()) {
             // We're dealing with a scalable vector of pointers.
             // First, we create vectors to store each of the three components 
             // of provenance values. We can't create an array of provenance values 
@@ -861,7 +852,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
             ShadowFootprint Footprint = Comp.Footprint;
             Value *ObjAddr = offsetPointer(IRB, Base, Footprint.ByteOffset);
-            if(Comp.isScalableVector()) {
+            if(Comp.isVector()) {
                 std::optional<LoadedProvenance> Prov = assertVectorProvenanceAtIndex(SI.getValueOperand(), Idx);
                 if(Prov.has_value()) {
                     storeProvenanceToShadow(IRB, ObjAddr, Prov.value());
@@ -960,7 +951,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         // A select instruction returns one of two inputs depending on a boolean value. This means that if
         // the output type has provenance, then we need to conditionally assign the result a provenance value.
         for (auto [Idx, Comp] : llvm::enumerate(*Components)) {
-            if(Comp.isScalableVector()) {
+            if(Comp.isVector()) {
 
                 // For scalable vectors, we need a select instruction for each component vector, as well as
                 // for the length. Even though the length of a scalable vector will be fixed at runtime (only
@@ -1025,7 +1016,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         // to insert the shadow PHI nodes here, and then later, after we visit every other instruction, we'd
         // return to them and "patch in" the missing input values. 
         for (auto [Idx, Comp] : llvm::enumerate(*Components)) {
-            if(Comp.isScalableVector()) {
+            if(Comp.isVector()) {
                 // TODO: we only create a PHI node for the length to handle situations where one or more
                 // of the possibly incoming values has null provenance. That way, we can ensure that the
                 // resulting provenance value will have a length of 0, instead of the fixed length of the

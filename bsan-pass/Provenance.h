@@ -55,7 +55,7 @@ struct LoadedProvenance {
     LoadedProvenance(ScalarProvenance P) : Kind(Scalar), SingleProv(P) {}
     LoadedProvenance(VectorProvenance V) : Kind(Vector), VectorProv(V) {}
 
-    bool isScalableVector() {
+    bool isVector() {
         return Kind == ProvenanceKind::Vector;
     }
 
@@ -72,7 +72,7 @@ struct LoadedProvenance {
     }
 
     std::optional<VectorProvenance> getVectorProvenance() {
-        if(isScalableVector()) {
+        if(isVector()) {
             return VectorProv;
         }else{
             return std::nullopt;
@@ -95,7 +95,7 @@ struct ProvenancePointer {
     ElementCount Elems;
     ProvenancePointer(Value *B, Value *L, ElementCount E) : Base(B), Length(L), Elems(E) {}
 
-    bool isScalableVector() {
+    bool isVector() {
         return Elems.isScalable();
     }
 };
@@ -141,7 +141,7 @@ struct ProvenanceComponent {
         return ProvenancePointer(BasePointer, NumProvenanceValues, Elems);
     } 
 
-    bool isScalableVector() {
+    bool isVector() {
         return Elems.isScalable();
     }
 };
