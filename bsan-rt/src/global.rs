@@ -36,6 +36,7 @@ pub struct GlobalCtx {
     hooks: BsanHooks,
     next_alloc_id: AtomicUsize,
     next_thread_id: AtomicUsize,
+    next_borrow_tag: AtomicUsize,
     shadow_heap: ShadowHeap<Provenance>,
     pub sizes: Sizes,
 }
@@ -48,6 +49,7 @@ impl GlobalCtx {
             hooks,
             next_alloc_id: AtomicUsize::new(AllocId::min().get()),
             next_thread_id: AtomicUsize::new(0),
+            next_borrow_tag: AtomicUsize::new(0),
             shadow_heap: ShadowHeap::new(&hooks),
             sizes: Sizes::default(),
         }
@@ -69,11 +71,19 @@ impl GlobalCtx {
         unsafe { (self.hooks.exit)() }
     }
 
+    #[inline]
+    pub fn new_borrow_tag(&self) -> BorTag {
+        let tag = self.next_borrow_tag.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        BorTag::new(tag)
+    }
+
+    #[inline]
     pub fn new_thread_id(&self) -> ThreadId {
         let id = self.next_thread_id.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         ThreadId::new(id)
     }
 
+    #[inline]
     pub fn new_alloc_id(&self) -> AllocId {
         let id = self.next_alloc_id.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         AllocId::new(id)
