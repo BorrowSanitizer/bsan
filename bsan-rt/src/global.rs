@@ -50,7 +50,7 @@ impl GlobalCtx {
             next_alloc_id: AtomicUsize::new(AllocId::min().get()),
             next_thread_id: AtomicUsize::new(0),
             next_borrow_tag: AtomicUsize::new(0),
-            shadow_heap: ShadowHeap::new(&hooks),
+            shadow_heap: ShadowHeap::new(&hooks, &raw const __BSAN_NULL_PROVENANCE),
             sizes: Sizes::default(),
         }
     }
