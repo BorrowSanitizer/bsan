@@ -444,6 +444,7 @@ unsafe extern "C" fn __bsan_alloc(
     alloc_info
 }
 
+#[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_new_alloc_id() -> AllocId {
     let global_ctx = unsafe { global_ctx() };
     global_ctx.new_alloc_id()
