@@ -244,7 +244,7 @@ impl Buildable for BsanRt {
         env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.build("bsan-rt", args))?;
         let artifact = env.assert_artifact(self.artifact());
         let llvm_objcopy = env.target_binary("llvm-objcopy");
-        cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_*").arg(&artifact).quiet().run()?;
+        cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_* -G __BSAN_*").arg(&artifact).quiet().run()?;
         Ok(Some(path!(env.artifact_dir() / artifact)))
     }
 
