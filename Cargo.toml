@@ -1,5 +1,5 @@
 [workspace]
-members = ["bsan-driver", "bsan-rt", "bsan-script", "bsan-shared", "cargo-bsan"]
+members = ["bsan-driver", "bsan-rt", "bsan-script", "bsan-shared", "cargo-bsan", "example"]
 default-members = ["bsan-driver", "bsan-script", "cargo-bsan"]
 resolver = "3"
 
