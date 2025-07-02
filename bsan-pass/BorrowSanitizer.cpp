@@ -8,6 +8,10 @@
 
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/StackSafetyAnalysis.h"
+#include "llvm/Analysis/MemorySSA.h"
+#include "llvm/Analysis/ValueTracking.h"
 
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/DataLayout.h"
@@ -16,6 +20,8 @@
 
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/PostOrderIterator.h"
+#include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/Statistic.h"
 
 #include "llvm/Analysis/MemoryBuiltins.h"
 
@@ -25,6 +31,9 @@
 
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
@@ -35,6 +44,16 @@ static cl::opt<bool>
     ClWithComdat("bsan-with-comdat",
                  cl::desc("Place BSan constructors in comdat sections"),
                  cl::Hidden, cl::init(true));
+
+static cl::opt<bool>
+    ClUseStackSafety("bsan-use-stack-safety", cl::Hidden, cl::init(true),
+                     cl::Hidden, cl::desc("Use Stack Safety analysis results"),
+                     cl::Optional);
+
+STATISTIC(NumAllocaEliminated, "Number of times that instrumentation is eliminated for an alloca.");
+STATISTIC(NumReadsEliminated, "Number of times that instrumentation is eliminated for an read.");
+STATISTIC(NumWritesEliminated, "Number of times that instrumentation is eliminated for a write.");
+
 
 namespace {
 struct BorrowSanitizer {
@@ -72,7 +91,8 @@ struct BorrowSanitizer {
 
     }
     bool instrumentModule(Module &);
-    bool instrumentFunction(Function &F, const TargetLibraryInfo &TLI);
+    bool instrumentFunction(Function &F, FunctionAnalysisManager &FAM,
+        const StackSafetyGlobalInfo *const SSGI);
 
     // Adds thread-local global variables for passing the provenance for
     // arguments and return values 
@@ -92,6 +112,7 @@ private:
     bool UseCtorComdat;
     LLVMContext *C;
     const DataLayout *DL;
+
     int LongSize;
     Triple TargetTriple;
     Type *Int8Ty;
@@ -151,9 +172,12 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     BorrowSanitizer &BS;
     DIBuilder DIB;
     LLVMContext *C;
-    
+
+    const StackSafetyGlobalInfo *SSGI;
     const TargetLibraryInfo *TLI;
-    
+    AliasAnalysis &AA;
+    MemorySSA &MSSA;
+
     // The first instruction in the body of the function, which is set to be
     // a call to __bsan_push_frame. 
     Instruction *FnPrologueStart;
@@ -169,8 +193,12 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     // dynamic ones, but we will adjust this behavior in the future to support optimizations
     // such as combining static stack allocations into a single, larger allocation 
     // (see AddressSanitizer).
-    SmallVector<AllocaInst *, 16> StaticAllocaVec;
-    SmallVector<AllocaInst *, 1> DynamicAllocaVec;
+    SmallVector<AllocaInst *, 16> AllocaVec;
+
+    // A temporary cache of local allocas that are always accessed safely and will never
+    // escape the current function. If these variables are never retagged, then we can skip
+    // tracking their provenance at runtime, since they will never be a source of UB.
+    SmallSet<AllocaInst *, 16> LocalSafeAllocas;
 
     // Pointers to the sections of the thread-local array (BS.ParamTLS) where the provenance
     // values for each argument are stored. Whenever we need to get the provenance for an argument,
@@ -186,10 +214,10 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     // this value, then `ProvenanceMap[std::make_pair(V, 2)]` would return the loaded provenance value.
     DenseMap<std::pair<Value *, unsigned>, LoadedProvenance> ProvenanceMap;
 
-    BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
-                            const TargetLibraryInfo &TLI)
+    BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS, const StackSafetyGlobalInfo *const SSGI,
+                            AliasAnalysis &AA, MemorySSA &MSSA, const TargetLibraryInfo &TLI)
         : F(F), BS(BS), DIB(*F.getParent(), /*AllowUnresolved*/ false), C(BS.C),
-            TLI(&TLI)
+            AA(AA), MSSA(MSSA), TLI(&TLI), SSGI(SSGI)
     {
         removeUnreachableBlocks(F);
         initPrologue();
@@ -553,6 +581,8 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         for (BasicBlock *BB : ReversePostOrderTraversal<BasicBlock *>(&F.getEntryBlock())) {
             visit(*BB);
         }
+        
+        NumAllocaEliminated += LocalSafeAllocas.size();
 
         if (Instructions.empty())
             return false;
@@ -571,23 +601,12 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         // Deinitializes the stack, adding cleanup blocks before every instruction that can exit the function. This ensures
         // that our metadata is deinitialized in every situation---even when an exception is thrown. 
         deinitStack();
+
         return true;
     }
 
     void initStack() {
-        // Each of these steps do the same thing, for now.
-        processStaticAllocas();
-        processDynamicAllocas();
-    }
-
-    void processStaticAllocas() {
-        for (AllocaInst *AI : StaticAllocaVec) {
-            initializeProvenanceForStaticAllocation(AI);
-        }
-    }
-
-    void processDynamicAllocas() {
-        for (AllocaInst *AI : DynamicAllocaVec) {
+        for (AllocaInst *AI : AllocaVec) {
             initializeProvenanceForStaticAllocation(AI);
         }
     }
@@ -595,7 +614,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     void deinitStack() {
         EscapeEnumerator EE(F, "bsan_cleanup", true);
         while (IRBuilder<> *AtExit = EE.Next()) {
-            for (AllocaInst *AI : StaticAllocaVec) {
+            for (AllocaInst *AI : AllocaVec) {
                 processDeallocation(*AtExit, AI);
             }
             InstrumentationIRBuilder::ensureDebugInfo(*AtExit, F);
@@ -632,9 +651,6 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 
 
     // We only instrument allocations that have a non-zero size.
-    // In future, this function will do *much* more work to identify
-    // allocations that will always be safely accessed and do not have an 
-    // effect on aliasing (e.g. they are never retagged).
     bool shouldInstrumentAlloca(AllocaInst &AI) {
         bool ShouldInstrument =
             (AI.getAllocatedType()->isSized() &&
@@ -642,14 +658,19 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         return ShouldInstrument;
     }
 
-
+    // We can ignore accesses through pointers that alias with
+    // the allocas that we skip instrumenting.
+    bool ignoreAccess(Instruction *Inst, Value *Ptr) {
+        AllocaInst *AI = findAllocaForValue(Ptr);
+        return AI && LocalSafeAllocas.contains(AI);
+    }
+    
     // Deallocates a pointer.
     void processDeallocation(IRBuilder<> &IRB, Value *Val) {
         ScalarProvenance Prov = assertSingleProvenance(Val);
-        IRB.CreateCall(BS.BsanFuncDealloc, {Val, BS.Zero, BS.Zero, Prov.Info});
+        IRB.CreateCall(BS.BsanFuncDealloc, {Val, Prov.ID, Prov.Tag, Prov.Info});
     }
     
-
     using InstVisitor<BorrowSanitizerVisitor>::visit;
 
     // We use this visitor function when reordering instructions in reverse postorder;
@@ -661,21 +682,31 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         if (I.getOpcode() == Instruction::Alloca) {
             AllocaInst &AI = static_cast<AllocaInst &>(I);
             if (shouldInstrumentAlloca(AI)) {
-                if (AI.isStaticAlloca())
-                    StaticAllocaVec.push_back(&AI);
-                else
-                    DynamicAllocaVec.push_back(&AI);
+                if(SSGI && SSGI->isSafe(AI) && !isEscapeSource(&AI)) {
+                    LocalSafeAllocas.insert(&AI);
+                }else{
+                    AllocaVec.push_back(&AI);
+                }
             }
-        } else {
-            Instructions.push_back(&I);
+            return;
+        }else if (CallBase::classof(&I)) {
+            CallBase *CB = dyn_cast<CallBase>(&I);
+            if(CB->getIntrinsicID() == Intrinsic::retag) {
+                assert(CB->arg_size() > 0 && "Missing arguments to retag.");
+                Value *PtrToRetag = CB->getArgOperand(0);
+                for(auto AI : LocalSafeAllocas) {
+                    if(AA.alias(AI, PtrToRetag) != AliasResult::NoAlias) {
+                        AllocaVec.push_back(AI);
+                    }
+                }
+            }
         }
+        Instructions.push_back(&I);
     }
 
     void visitCallBase(CallBase &CB) {
         LibFunc TLIFn;
         Function *Callee = CB.getCalledFunction();
-
-
         // If we're calling a heap allocation or deallocation function,
         // then we can skip handling argument provenance and defer to our
         // run-time calls.
@@ -777,15 +808,32 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         }
     }
 
+    // Inserts a check to validate a read access.
+    void insertReadCheck(IRBuilder<> &IRB, Instruction *Inst, Value *Ptr, Value *Size) {
+        if(!ignoreAccess(Inst, Ptr)) {
+            ScalarProvenance Prov = assertSingleProvenance(Ptr);
+            IRB.CreateCall(BS.BsanFuncRead, {Prov.ID, Prov.Tag, Prov.Info, Ptr, Size});
+        }else{
+            NumReadsEliminated += 1;
+        }
+    }
+
+    // Inserts a check to validate a write access.
+    void insertWriteCheck(IRBuilder<> &IRB, Instruction *Inst, Value *Ptr, Value *Size) {
+        if(!ignoreAccess(Inst, Ptr)) {
+            ScalarProvenance Prov = assertSingleProvenance(Ptr);
+            IRB.CreateCall(BS.BsanFuncWrite, {Prov.ID, Prov.Tag, Prov.Info, Ptr, Size});
+        }else{
+            NumWritesEliminated += 1;
+        }
+    }          
+
     void visitLoadInst(LoadInst &LI) {
         IRBuilder<> IRB(&LI);
-
         Value *Ptr = LI.getPointerOperand();
-
-        // Check that this read is not UB
-        ScalarProvenance Prov = assertSingleProvenance(LI.getPointerOperand());
+        
         Value *Size = IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeAllocSize(LI.getType()));
-        IRB.CreateCall(BS.BsanFuncRead, {Prov.ID, Prov.Tag, Prov.Info, Ptr, Size});
+        insertReadCheck(IRB, &LI, Ptr, Size);    
 
         // Load provenance for the value from shadow memory.
         SmallVector<ProvenanceComponent> *Components = getProvenanceComponents(IRB, LI.getType());
@@ -804,11 +852,9 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         Ptr = SI.getPointerOperand();
         Val = SI.getValueOperand();
 
-        // Check that this write is not UB
-        ScalarProvenance Prov = assertSingleProvenance(Ptr);
         Value *Size = IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeAllocSize(Val->getType()));
-        IRB.CreateCall(BS.BsanFuncWrite, {Prov.ID, Prov.Tag, Prov.Info, Ptr, Size});
-        
+        insertReadCheck(IRB, &SI, Ptr, Size);          
+
         // Store provenance for the value into shadow memory.
         SmallVector<ProvenanceComponent> *Components = getProvenanceComponents(IRB, Val->getType());
         Value *Base = SI.getPointerOperand();
@@ -1055,14 +1101,19 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 } // end anonymous namespace
 
 PreservedAnalyses BorrowSanitizerPass::run(Module &M, ModuleAnalysisManager &MAM) {
+
     BorrowSanitizer ModuleSanitizer(M);
+
     bool Modified = false;
 
     auto &FAM = MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
 
+    const StackSafetyGlobalInfo *const SSGI =
+        ClUseStackSafety ? &MAM.getResult<StackSafetyGlobalAnalysis>(M) : nullptr;
+
     for (Function &F : M) {
-        const TargetLibraryInfo &TLI = FAM.getResult<TargetLibraryAnalysis>(F);
-        Modified |= ModuleSanitizer.instrumentFunction(F, TLI);
+
+        Modified |= ModuleSanitizer.instrumentFunction(F, FAM, SSGI);
     }
     if (!Modified)
         return PreservedAnalyses::all();
@@ -1287,7 +1338,7 @@ void BorrowSanitizer::createUserspaceApi(Module &M, const TargetLibraryInfo &TLI
                             ArrayType::get(ProvenanceTy, kTLSSize));
 }
 
-bool BorrowSanitizer::instrumentFunction(Function &F, const TargetLibraryInfo &TLI) {
+bool BorrowSanitizer::instrumentFunction(Function &F, FunctionAnalysisManager &FAM, const StackSafetyGlobalInfo *const SSGI) {
     if (F.empty())
         return false;
     if (F.getLinkage() == GlobalValue::AvailableExternallyLinkage)
@@ -1299,9 +1350,13 @@ bool BorrowSanitizer::instrumentFunction(Function &F, const TargetLibraryInfo &T
     if (F.hasFnAttribute(Attribute::DisableSanitizerInstrumentation))
         return false;
 
+    AliasAnalysis &AA = FAM.getResult<AAManager>(F);
+    MemorySSA &MSSA = FAM.getResult<MemorySSAAnalysis>(F).getMSSA();
+    const TargetLibraryInfo &TLI = FAM.getResult<TargetLibraryAnalysis>(F);
+
     initializeCallbacks(*F.getParent(), TLI);
 
-    BorrowSanitizerVisitor Visitor(F, *this, TLI);
+    BorrowSanitizerVisitor Visitor(F, *this, SSGI, AA, MSSA, TLI);
     return Visitor.runOnFunction();
 }
 
