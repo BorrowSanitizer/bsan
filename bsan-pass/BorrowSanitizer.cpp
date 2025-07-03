@@ -618,8 +618,9 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         }
     }
 
-    // Allocates object metadata for a stack allocation.
+    // Allocates object metadata for a static stack allocation.
     void processStaticAlloca(AllocaInst *AI) {
+        assert(AI->isStaticAlloca() && "Expected a static alloca.");
         AI->moveBefore(FnPrologueStart->getIterator());
         IRBuilder<> IRB(FnPrologueStart);
         TypeSize TS = BS.getAllocaSizeInBytes(*AI);
@@ -627,7 +628,9 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         processAllocation(IRB, AI, Size);
     }
 
+    // Allocates object metadata for a dynamic stack allocation.
     void processDynamicAlloca(AllocaInst *AI) {
+        assert(!AI->isStaticAlloca() && "Expected a dynamic alloca.");
         IRBuilder<> IRB(AI);
         TypeSize TS = BS.getAllocaSizeInBytes(*AI);
         Value *Size = IRB.CreateTypeSize(BS.IntptrTy, TS);
