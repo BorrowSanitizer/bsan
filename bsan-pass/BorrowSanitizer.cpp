@@ -87,7 +87,6 @@ struct BorrowSanitizer {
         
         // Null provenance does not permit any access. All components are set to zero.
         NullScalarProvenance = ScalarProvenance(Zero, Zero, InvalidPtr);
-        NullVectorProvenance = VectorProvenance(InvalidPtr, InvalidPtr, InvalidPtr, Zero);
 
     }
     bool instrumentModule(Module &);
@@ -156,15 +155,14 @@ private:
 
     ScalarProvenance WildcardProvenance;
     ScalarProvenance NullScalarProvenance;
-    VectorProvenance NullVectorProvenance;
 
     // Thread-local storage for paramters
     // and return values. 
     Value *ParamTLS = nullptr;
     Value *RetvalTLS = nullptr;
 
-    Value *Zero = nullptr;
-    Value *One = nullptr;
+    Constant *Zero = nullptr;
+    Constant *One = nullptr;
 };
 
 // This class implements function-level instrumentation.
@@ -268,7 +266,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 
     // Will fail with an error if anything other than a vector provenance value is present.
     // If no provenance has been assigned yet, then the null provenance value is returned.
-    VectorProvenance assertVectorProvenanceAtIndex(Value *V, unsigned Idx) {
+    VectorProvenance assertVectorProvenanceAtIndex(IRBuilder<> &IRB, Value *V, ElementCount E, unsigned Idx) {
         std::optional<LoadedProvenance> OptProv = getProvenanceAtIndex(V, Idx);
         if(OptProv.has_value()) { 
             LoadedProvenance Prov = OptProv.value();
@@ -278,19 +276,19 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
                 report_fatal_error("Expected scalable vector provenance, but found scalar provenance!");
             }  
         }else{
-            return BS.NullVectorProvenance;
+            return nullVectorProvenance(IRB, E);
         }
     }
 
-    VectorProvenance assertVectorProvenance(Value *V) {
-        return assertVectorProvenanceAtIndex(V, 0);
+    VectorProvenance assertVectorProvenance(IRBuilder<> &IRB, Value *V, ElementCount E) {
+        return assertVectorProvenanceAtIndex(IRB, V, E, 0);
     }
 
     // Asserts that there is either a provenance value at the given index, or that no provenance
     // values have been loaded for the given value, in which case we return the null provenance value.
     // Used whenever we need a provenance value but do not care whether it's a vector or scalar. Checks
     // for consistency against a given provenance component.
-    LoadedProvenance assertProvenanceAtIndex(Value *V, ProvenanceComponent &Comp, unsigned Idx) {
+    LoadedProvenance assertProvenanceAtIndex(IRBuilder<> &IRB, Value *V, ProvenanceComponent &Comp, unsigned Idx) {
         std::optional<LoadedProvenance> OptProv = getProvenanceAtIndex(V, Idx);
         if(OptProv.has_value()) {
             LoadedProvenance Prov = OptProv.value();
@@ -300,7 +298,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
             return Prov;
         }else{
             if(Comp.isVector()) {
-                return BS.NullVectorProvenance;
+                return nullVectorProvenance(IRB, Comp.Elems);
             }else{
                 return BS.NullScalarProvenance;
             }
@@ -421,7 +419,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     }
     
     // Computes the offset in terms of provenance components for an index into an aggregate or array value.
-    // Used for implementing `extractelement` and `insertelement`. 
+    // Used for implementing `extractvalue` and `insertvalue`. 
     std::tuple<Type *, uint64_t> offsetIntoProvenanceIndex(IRBuilder<> &IRB, Type *CurrentTy, uint64_t Idx, uint64_t PrevOffset = 0) {            
         switch (CurrentTy->getTypeID()) {
             case Type::StructTyID: {
@@ -451,11 +449,26 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     void storeProvenanceToShadow(IRBuilder<> &IRB, Value *ObjAddr, LoadedProvenance Prov) {
         if(Prov.isVector()) {
             VectorProvenance PV = Prov.getVectorProvenance().value();
-            IRB.CreateCall(BS.BsanFuncShadowStoreVector, {ObjAddr, PV.Length, PV.IDVector, PV.TagVector, PV.InfoVector});
+
+            Value *IDDest, *TagDest, *InfoDest;
+            std::tie(IDDest, TagDest, InfoDest) = allocateVectorProvenances(IRB, PV.Elems);
+
+            IRB.CreateStore(PV.IDVector, IDDest);
+            IRB.CreateStore(PV.TagVector, TagDest);
+            IRB.CreateStore(PV.InfoVector, InfoDest);
+
+            IRB.CreateCall(BS.BsanFuncShadowStoreVector, {
+                ObjAddr, 
+                PV.Length, 
+                PV.IDVector, 
+                PV.TagVector, 
+                PV.InfoVector
+            });
+
         }else{
             ScalarProvenance PS = Prov.getScalarProvenance().value();
             Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncGetShadowDest, {ObjAddr});
-            storeSingleProvenanceValue(IRB, PS, ShadowPointer);
+            storeScalarProvenanceValue(IRB, PS, ShadowPointer);
         }
     }
 
@@ -463,17 +476,18 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     // will be a provenance value.
     Value *storeProvenance(IRBuilder<> &IRB, LoadedProvenance Prov, Value *Dest) {
         if(Prov.isVector()) {
-            VectorProvenance PV = Prov.getVectorProvenance().value();
-            // To store a vector provenance value into the array, we need to join each of its components into
-            // an array of provenance values. To do this, we call a special helper function in our runtime library.
-            // This conversion means that storing and loading vectors of provenance values will likely be much more
-            // expensive than scalar provenance values. 
-            IRB.CreateCall(BS.BsanFuncJoinProv, {Dest, PV.Length, PV.IDVector, PV.TagVector, PV.InfoVector});
-            Value *Offset = IRB.CreateMul(BS.ProvenanceSize, PV.Length);
-            return offsetPointer(IRB, Dest, Offset);
+            VectorProvenance VP = Prov.getVectorProvenance().value();
+            Value *IDDest, *TagDest, *InfoDest, *Next;
+            std::tie(IDDest, TagDest, InfoDest, Next) = getVectorProvenanceElements(IRB, Dest, VP.Elems);
+
+            IRB.CreateStore(VP.IDVector, IDDest);
+            IRB.CreateStore(VP.TagVector, TagDest);
+            IRB.CreateStore(VP.InfoVector, InfoDest);
+
+            return Next;
         }else{
             ScalarProvenance PS = Prov.getScalarProvenance().value();
-            return storeSingleProvenanceValue(IRB, PS, Dest);
+            return storeScalarProvenanceValue(IRB, PS, Dest);
         }
     }
 
@@ -487,57 +501,72 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
             Value *IDVector, *TagVector, *InfoVector;
             std::tie(IDVector, TagVector, InfoVector) = allocateVectorProvenances(IRB, Comp.Elems);
 
-            // When we load a vector from memory , we do the reverse of storing it; we split each of the provenance
-            // values into their components, storing them into each of the component vectors.
+            // When we load a vector from shadow memory, we split each of the provenance
+            // values into their components, storing them into each of the component vector allocas.
+            // We need to use intermediate allocas so that our runtime helper function can handle
+            // vectors of any size.
             IRB.CreateCall(BS.BsanFuncShadowLoadVector, {ObjAddr, Comp.NumProvenanceValues, IDVector, TagVector, InfoVector});
-            return LoadedProvenance(VectorProvenance(IDVector, TagVector, InfoVector, Comp.NumProvenanceValues));
+            return loadVectorProvenanceValue(IRB, IDVector, TagVector, InfoVector, Comp.NumProvenanceValues, Comp.Elems);
         }else{
             Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncGetShadowSrc, {ObjAddr});
-            return loadSingleProvenanceValue(IRB, ShadowPointer);
+            return loadScalarProvenanceValue(IRB, ShadowPointer);
         }
     }
 
-    // Stores a provenance value into an array, where we expect that each element of the array
-    // will be a provenance value.
+    // Loads a provenance value from main memory
     LoadedProvenance loadProvenance(IRBuilder<> &IRB, ProvenancePointer Prov) {
         if(Prov.isVector()) {
-            // We're dealing with a scalable vector of pointers.
-            // First, we create vectors to store each of the three components 
-            // of provenance values. We can't create an array of provenance values 
-            // because the vector might be scalable, and arrays need to have a static size.
-            Value *IDVector, *TagVector, *InfoVector;
-            std::tie(IDVector, TagVector, InfoVector) = allocateVectorProvenances(IRB, Prov.Elems);
-            // When we load a vector from memory , we do the reverse of storing it; we split each of the provenance
-            // values into their components, storing them into each of the component vectors.
-            IRB.CreateCall(BS.BsanFuncSplitProv, {Prov.Base, Prov.Length, IDVector, TagVector, InfoVector});
-            return LoadedProvenance(VectorProvenance(IDVector, TagVector, InfoVector, Prov.Length));
+            Value *ID, *Tag, *Info, *Next;
+            std::tie(ID, Tag, Info, Next) = getVectorProvenanceElements(IRB, Prov.Base, Prov.Elems);
+
+            return loadVectorProvenanceValue(IRB, ID, Tag, Info, Prov.Length, Prov.Elems);
         }else{
-            return loadSingleProvenanceValue(IRB, Prov.Base);
+            return loadScalarProvenanceValue(IRB, Prov.Base);
         }
+    }
+
+    // Loads a vector of provenance values from either shadow or main memory.
+    LoadedProvenance loadVectorProvenanceValue(IRBuilder<> &IRB, Value *IDPtr, Value *TagPtr, Value *InfoPtr, Value *Length, ElementCount Elems) {
+        Value *IDVector = IRB.CreateLoad(VectorType::get(BS.IntptrTy, Elems), IDPtr);
+        Value *TagVector = IRB.CreateLoad(VectorType::get(BS.IntptrTy, Elems), TagPtr);
+        Value *InfoVector = IRB.CreateLoad(VectorType::get(BS.PtrTy, Elems), InfoPtr);
+        return LoadedProvenance(VectorProvenance(IDVector, TagVector, InfoVector, Length, Elems));
     }
 
     // Loads a single provenance value from either shadow or main memory.
-    LoadedProvenance loadSingleProvenanceValue(IRBuilder<> &IRB, Value *Src) {
+    LoadedProvenance loadScalarProvenanceValue(IRBuilder<> &IRB, Value *Src) {
         Value *IDPtr, *TagPtr, *InfoPtr;
-        std::tie(IDPtr, TagPtr, InfoPtr) = getProvenanceElements(IRB, Src);
+        std::tie(IDPtr, TagPtr, InfoPtr) = getScalarProvenanceElements(IRB, Src);
         Value *ID = IRB.CreateLoad(BS.IntptrTy, IDPtr);
         Value *Tag = IRB.CreateLoad(BS.IntptrTy, TagPtr);
         Value *Info = IRB.CreateLoad(BS.PtrTy, InfoPtr);
         return LoadedProvenance(ScalarProvenance(ID, Tag, Info));
     }
 
-    // Stores a single provenance value from either shadow or main memory.
-    Value *storeSingleProvenanceValue(IRBuilder<> &IRB, ScalarProvenance P, Value *Dest) {
+    // Stores a single provenance value to either shadow or main memory.
+    Value *storeScalarProvenanceValue(IRBuilder<> &IRB, ScalarProvenance P, Value *Dest) {
         Value *IDPtr, *TagPtr, *InfoPtr;
-        std::tie(IDPtr, TagPtr, InfoPtr) = getProvenanceElements(IRB, Dest);
+        std::tie(IDPtr, TagPtr, InfoPtr) = getScalarProvenanceElements(IRB, Dest);
         IRB.CreateStore(P.ID, IDPtr);
         IRB.CreateStore(P.Tag, TagPtr);
         IRB.CreateStore(P.Info, InfoPtr);
         return offsetPointer(IRB, Dest, BS.ProvenanceSize);
     }
 
+    std::tuple<Value *, Value *, Value *, Value*> getVectorProvenanceElements(IRBuilder<> &IRB, Value *ProvArray, ElementCount Elems) {
+        Value *IDVecSize = IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeAllocSize(VectorType::get(BS.IntptrTy, Elems)));
+        Value *TagVecSize = IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeAllocSize(VectorType::get(BS.IntptrTy, Elems)));
+        Value *InfoVecSize = IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeAllocSize(VectorType::get(BS.PtrTy, Elems)));
+        
+        Value *IDVec = ProvArray;
+        Value *TagVec = offsetPointer(IRB, IDVec, IDVecSize);
+        Value *InfoVec = offsetPointer(IRB, TagVec, TagVecSize);
+
+        return std::make_tuple(IDVec, TagVec, InfoVec, offsetPointer(IRB, InfoVec, InfoVecSize));
+    }
+    
     // Calculates GEP offsets into each component of a provenance value.
-    std::tuple<Value *, Value *, Value *> getProvenanceElements(IRBuilder<> &IRB, Value *Prov) {
+    std::tuple<Value *, Value *, Value *> getScalarProvenanceElements(IRBuilder<> &IRB, Value *Prov) {
         Value *ZeroIdx = ConstantInt::get(IRB.getInt64Ty(), 0);
         // When indexing into a struct, subsequent indices must be of type i32.
         Value *IDPtr = IRB.CreateGEP(BS.ProvenanceTy, Prov, {ZeroIdx, ConstantInt::get(IRB.getInt32Ty(), 0)});
@@ -552,6 +581,15 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         Value *TagVector = IRB.CreateAlloca(VectorType::get(BS.IntptrTy, Elems));
         Value *InfoVector = IRB.CreateAlloca(VectorType::get(BS.PtrTy, Elems));
         return std::make_tuple(IDVector, TagVector, InfoVector);
+    }
+
+    // Create null vector provenance. 
+    VectorProvenance nullVectorProvenance(IRBuilder<> &IRB, ElementCount Elems) {                
+        Value *IDVector = ConstantVector::getSplat(Elems, BS.Zero);
+        Value *TagVector = ConstantVector::getSplat(Elems, BS.Zero);
+        Value *InfoVector = ConstantVector::getSplat(Elems, ConstantPointerNull::get(BS.PtrTy));
+        Value *Length = IRB.CreateElementCount(BS.IntptrTy, Elems);
+        return VectorProvenance(IDVector, TagVector, InfoVector, Length, Elems);
     }
 
     // A helper function to offset a pointer by the given number of bytes.
@@ -636,7 +674,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         Value *Size = IRB.CreateTypeSize(BS.IntptrTy, TS);
         ScalarProvenance Prov = processAllocation(IRB, AI, Size);
         Value *ProvPtr = IRB.CreateCall(BS.BsanFuncPushElems, {BS.One});
-        storeSingleProvenanceValue(IRB, Prov, ProvPtr);
+        storeScalarProvenanceValue(IRB, Prov, ProvPtr);
     }
 
     // Allocates object metadata for a stack or heap allocation.
@@ -756,7 +794,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         for (const auto &[i, A] : llvm::enumerate(CB.args())) {
             SmallVector<ProvenanceComponent> *Components = getProvenanceComponents(Before, A->getType());
             for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
-                LoadedProvenance Prov = assertProvenanceAtIndex(A, Comp, Idx);
+                LoadedProvenance Prov = assertProvenanceAtIndex(Before, A, Comp, Idx);
                 ParamArray = storeProvenance(Before, Prov, ParamArray);
             }
         }
@@ -889,19 +927,15 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
             ShadowFootprint Footprint = Comp.Footprint;
             Value *ObjAddr = offsetPointer(IRB, Base, Footprint.ByteOffset);
+
+            LoadedProvenance Prov;
             if(Comp.isVector()) {
-                std::optional<LoadedProvenance> Prov = assertVectorProvenanceAtIndex(SI.getValueOperand(), Idx);
-                if(Prov.has_value()) {
-                    storeProvenanceToShadow(IRB, ObjAddr, Prov.value());
-                } else {
-                    // If the value is not a vector, then we need to zero-initialize the shadow memory.
-                    Value *ByteWidth = IRB.CreateMul(Comp.NumProvenanceValues, BS.ProvenanceSize);
-                    IRB.CreateCall(BS.BsanFuncShadowClear, {ObjAddr, Footprint.ByteWidth});
-                }
+                Prov = assertVectorProvenanceAtIndex(IRB, SI.getValueOperand(), Comp.Elems, Idx);
             }else{
-                LoadedProvenance Prov = assertSingleProvenanceAtIndex(SI.getValueOperand(), Idx);
-                storeProvenanceToShadow(IRB, ObjAddr, Prov);
-            }                
+                Prov = assertSingleProvenanceAtIndex(SI.getValueOperand(), Idx);
+            }
+            
+            storeProvenanceToShadow(IRB, ObjAddr, Prov);
         }
     }
 
@@ -947,7 +981,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
             }
             
                 for (auto [Idx, Comp] : llvm::enumerate(*DestComponents)) { 
-                LoadedProvenance Prov = assertProvenanceAtIndex(AggregateSrc, Comp, CurrIdx + Idx);
+                LoadedProvenance Prov = assertProvenanceAtIndex(IRB, AggregateSrc, Comp, CurrIdx + Idx);
                 setProvenanceAtIndex(&EI, Idx, Prov);
             }
         }
@@ -956,15 +990,15 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     void visitInsertValueInst(InsertValueInst &II) {
         IRBuilder<> IRB(&II);
         Value *ToInsert = II.getInsertedValueOperand();
-        Value *AggregateDest = II.getAggregateOperand();
+        Value *Aggregate = II.getAggregateOperand();
         
         SmallVector<ProvenanceComponent> *SrcComponents = getProvenanceComponents(IRB, ToInsert->getType());
-        SmallVector<ProvenanceComponent> *DestComponents = getProvenanceComponents(IRB, AggregateDest->getType()); 
+        SmallVector<ProvenanceComponent> *DestComponents = getProvenanceComponents(IRB, Aggregate->getType()); 
     
         // We don't need to do anything if the aggregate that we're inserting 
         // into doesn't have any provenance.
         if(SrcComponents->size() > 0) {
-            Type *CurrType = AggregateDest->getType();
+            Type *CurrType = Aggregate->getType();
             uint64_t CurrIdx = 0;
 
             // For each index into the aggregate, compute and add the offset for the provenance component
@@ -975,9 +1009,75 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
             }
 
             for (auto [OffsetIdx, Comp] : llvm::enumerate(*SrcComponents)) { 
-                LoadedProvenance Prov = assertProvenanceAtIndex(ToInsert, Comp, OffsetIdx);
-                setProvenanceAtIndex(AggregateDest, CurrIdx + OffsetIdx, Prov);
+                LoadedProvenance Prov = assertProvenanceAtIndex(IRB, ToInsert, Comp, OffsetIdx);
+                setProvenanceAtIndex(&II, CurrIdx + OffsetIdx, Prov);
             }
+        }
+    }
+
+    void visitExtractElementInst(ExtractElementInst &EE) {
+        IRBuilder<> IRB(&EE);
+        VectorType *SrcType = EE.getVectorOperandType();
+
+        if (SrcType->getElementType()->isPointerTy()) {
+            Value *V = EE.getVectorOperand();
+
+            VectorType *VT = dyn_cast<VectorType>(V->getType());
+            VectorProvenance VP = assertVectorProvenance(IRB, V, VT->getElementCount());
+
+            Value *Idx = EE.getIndexOperand();
+
+            Value *ID, *Tag, *Info;
+            ID = IRB.CreateExtractElement(VP.IDVector, Idx);
+            Tag = IRB.CreateExtractElement(VP.TagVector, Idx);
+            Info = IRB.CreateExtractElement(VP.InfoVector, Idx);
+
+            setProvenance(&EE, LoadedProvenance(ScalarProvenance(ID, Tag, Info)));
+        }
+    }
+
+    void visitInsertElementInst(InsertElementInst &IE) {
+        IRBuilder<> IRB(&IE);
+        VectorType *DestType = IE.getType();
+
+        if (DestType->getElementType()->isPointerTy()) {
+            Value *V = IE.getOperand(0);
+
+            VectorType *VT = dyn_cast<VectorType>(V->getType());
+            VectorProvenance VP = assertVectorProvenance(IRB, V, VT->getElementCount());
+
+            Value *S = IE.getOperand(1);
+            ScalarProvenance SP = assertSingleProvenance(S);
+
+            Value *Idx = IE.getOperand(2);
+            IRB.CreateInsertElement(VP.IDVector, SP.ID, Idx);
+            IRB.CreateInsertElement(VP.TagVector, SP.Tag, Idx);
+            IRB.CreateInsertElement(VP.InfoVector, SP.Info, Idx);
+        }
+    }
+
+    void visitShuffleVectorInst(ShuffleVectorInst &SI) {
+        IRBuilder<> IRB(&SI);
+        VectorType *SpecificTy = SI.getType();
+        if(SpecificTy->getElementType()->isPointerTy()) {
+            Value *LHS = SI.getOperand(0);
+            VectorType *LHT = dyn_cast<VectorType>(LHS->getType());
+            VectorProvenance VPL = assertVectorProvenance(IRB, LHS, LHT->getElementCount());
+
+            Value *RHS = SI.getOperand(1);
+            VectorType *RHT = dyn_cast<VectorType>(RHS->getType());
+            VectorProvenance VPR = assertVectorProvenance(IRB, RHS, RHT->getElementCount());
+
+            ArrayRef<int> Mask = SI.getShuffleMask();
+
+            Value *ShuffledIDs = IRB.CreateShuffleVector(VPL.IDVector, VPR.IDVector, Mask);
+            Value *ShuffledTags = IRB.CreateShuffleVector(VPL.TagVector, VPR.TagVector, Mask);
+            Value *ShuffledInfo = IRB.CreateShuffleVector(VPL.InfoVector, VPR.InfoVector, Mask);
+            
+            Value *Length = ConstantInt::get(BS.IntptrTy, Mask.size());
+            ElementCount DestElems = ElementCount::get(Mask.size(), false);
+
+            setProvenance(&SI, LoadedProvenance(VectorProvenance(ShuffledIDs, ShuffledTags, ShuffledInfo, Length, DestElems)));
         }
     }
 
@@ -994,42 +1094,27 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
                 // for the length. Even though the length of a scalable vector will be fixed at runtime (only
                 // the scaling factor is dynamically determined, and remains fixed), we still need to account for
                 // null provenance inputs, and the length of the null vector provenance is zero.
-                std::optional<VectorProvenance> OptProvL = assertVectorProvenanceAtIndex(SI.getTrueValue(), Idx);
-                std::optional<VectorProvenance> OptProvR = assertVectorProvenanceAtIndex(SI.getFalseValue(), Idx);
-                
-                if(OptProvL.has_value() || OptProvR.has_value()) {
-                    Value *TagL, *TagR, *InfoL, *InfoR, *IDL, *IDR, *LenL, *LenR;
-                    if (OptProvL.has_value()) {
-                        VectorProvenance ProvVec = OptProvL.value();
-                        IDL = ProvVec.IDVector;
-                        TagL = ProvVec.TagVector;
-                        InfoL = ProvVec.InfoVector;
-                        LenL = ProvVec.Length;
-                    } else{
-                        IDL = BS.Zero;
-                        TagL = BS.Zero;
-                        InfoL = ConstantPointerNull::get(BS.PtrTy);
-                        LenL = BS.Zero;
-                    }
-                    if (OptProvR.has_value()) {
-                        VectorProvenance ProvVec = OptProvR.value();
-                        IDR = ProvVec.IDVector;
-                        TagR = ProvVec.TagVector;
-                        InfoR = ProvVec.InfoVector;
-                        LenR = ProvVec.Length;
-                    } else{
-                        IDR = BS.Zero;
-                        TagR = BS.Zero;
-                        InfoR = ConstantPointerNull::get(BS.PtrTy);
-                        LenR = BS.Zero;
-                    }
+                VectorProvenance ProvL = assertVectorProvenanceAtIndex(IRB, SI.getTrueValue(), Comp.Elems, Idx);
+                VectorProvenance ProvR = assertVectorProvenanceAtIndex(IRB, SI.getFalseValue(), Comp.Elems, Idx);
+                Value *TagL, *TagR, *InfoL, *InfoR, *IDL, *IDR, *LenL, *LenR;
 
-                    Value *ID = IRB.CreateSelect(SI.getCondition(), IDL, IDR);
-                    Value *Tag = IRB.CreateSelect(SI.getCondition(), TagL, TagR);
-                    Value *Info = IRB.CreateSelect(SI.getCondition(), InfoL, InfoR);
-                    Value *Len = IRB.CreateSelect(SI.getCondition(), LenL, LenR);
-                    setProvenanceAtIndex(&SI, Idx, LoadedProvenance(VectorProvenance(ID, Tag, Info, Len)));
-                }
+                IDL = ProvL.IDVector;
+                TagL = ProvL.TagVector;
+                InfoL = ProvL.InfoVector;
+                LenL = ProvL.Length;
+
+                IDR = ProvR.IDVector;
+                TagR = ProvR.TagVector;
+                InfoR = ProvR.InfoVector;
+                LenR = ProvR.Length;
+
+                Value *ID = IRB.CreateSelect(SI.getCondition(), IDL, IDR);
+                Value *Tag = IRB.CreateSelect(SI.getCondition(), TagL, TagR);
+                Value *Info = IRB.CreateSelect(SI.getCondition(), InfoL, InfoR);
+                Value *Len = IRB.CreateSelect(SI.getCondition(), LenL, LenR);
+
+                setProvenanceAtIndex(&SI, Idx, LoadedProvenance(VectorProvenance(ID, Tag, Info, Len, Comp.Elems)));
+
             }else{
                 // For scalable provenance vectors, we just select on each of the three components.
                 ScalarProvenance ProvL = assertSingleProvenanceAtIndex(SI.getTrueValue(), Idx); 
@@ -1046,7 +1131,6 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     void visitPHINode(PHINode &PN) {
         IRBuilder<> IRB(&PN);
         SmallVector<ProvenanceComponent> *Components = getProvenanceComponents(IRB, PN.getType());
-
         // PHI nodes work similar to select instructions, but instead of two inputs, we have one for
         // each incoming basic block. Since we're visiting these instructions in reverse postorder,
         // we can guarantee that each block has been visited prior to seeing this node. Otherwise, we'd need
@@ -1066,21 +1150,13 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
                 PHINode *LenShadow = IRB.CreatePHI(BS.IntptrTy, PN.getNumIncomingValues(), "_bsphi_vec_len");
                 for (auto [V, BB] : llvm::zip(PN.incoming_values(), PN.blocks())) {
                     Value *Incoming = V;
-                    std::optional<VectorProvenance> OptProvVec = assertVectorProvenanceAtIndex(Incoming, Idx);
-                    if (OptProvVec.has_value()) {
-                        VectorProvenance ProvVec = OptProvVec.value();
-                        IDShadow->addIncoming(ProvVec.IDVector, BB);
-                        TagShadow->addIncoming(ProvVec.TagVector, BB);
-                        InfoShadow->addIncoming(ProvVec.InfoVector, BB);
-                        LenShadow->addIncoming(ProvVec.Length, BB);
-                    }else{
-                        IDShadow->addIncoming(BS.Zero, BB);
-                        TagShadow->addIncoming(BS.Zero, BB);
-                        InfoShadow->addIncoming(ConstantPointerNull::get(BS.PtrTy), BB);
-                        LenShadow->addIncoming(BS.Zero, BB);
-                    }
+                    VectorProvenance ProvVec = assertVectorProvenanceAtIndex(IRB, Incoming, Comp.Elems, Idx);
+                    IDShadow->addIncoming(ProvVec.IDVector, BB);
+                    TagShadow->addIncoming(ProvVec.TagVector, BB);
+                    InfoShadow->addIncoming(ProvVec.InfoVector, BB);
+                    LenShadow->addIncoming(ProvVec.Length, BB);
                 }
-                setProvenanceAtIndex(&PN, Idx, LoadedProvenance(VectorProvenance(IDShadow, TagShadow, InfoShadow, LenShadow)));
+                setProvenanceAtIndex(&PN, Idx, LoadedProvenance(VectorProvenance(IDShadow, TagShadow, InfoShadow, LenShadow, Comp.Elems)));
             }else{
                 PHINode *IDShadow = IRB.CreatePHI(BS.IntptrTy, PN.getNumIncomingValues(), "_bsphi_id");
                 PHINode *TagShadow = IRB.CreatePHI(BS.IntptrTy, PN.getNumIncomingValues(), "_bsphi_tag");
@@ -1103,7 +1179,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
             SmallVector<ProvenanceComponent> *Components = getProvenanceComponents(IRB, RetVal->getType());
             Value *RetvalArray = BS.RetvalTLS;
             for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
-                LoadedProvenance Prov = assertProvenanceAtIndex(RetVal, Comp, Idx);
+                LoadedProvenance Prov = assertProvenanceAtIndex(IRB, RetVal, Comp, Idx);
                 RetvalArray = storeProvenance(IRB, Prov, RetvalArray);
             }
         }
@@ -1363,7 +1439,6 @@ void BorrowSanitizer::initializeCallbacks(Module &M, const TargetLibraryInfo &TL
 
 void BorrowSanitizer::createUserspaceApi(Module &M, const TargetLibraryInfo &TLI) {
     IRBuilder<> IRB(*C);
-
     RetvalTLS =
         getOrInsertGlobal(M, kBsanRetvalTLSName,
                             ArrayType::get(ProvenanceTy, kTLSSize));

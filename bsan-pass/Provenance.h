@@ -38,10 +38,11 @@ struct VectorProvenance {
     Value *TagVector = nullptr;
     Value *InfoVector = nullptr;
     Value *Length = nullptr;
+    ElementCount Elems;
 
     VectorProvenance() {}
-    VectorProvenance(Value *ID, Value *Tag, Value *Info, Value *L) :
-        IDVector(ID), TagVector(Tag), InfoVector(Info), Length(L) {}
+    VectorProvenance(Value *ID, Value *Tag, Value *Info, Value *L, ElementCount E) :
+        IDVector(ID), TagVector(Tag), InfoVector(Info), Length(L), Elems(E) {}
 };
 
 
