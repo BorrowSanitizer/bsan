@@ -369,7 +369,7 @@ unsafe extern "C" fn __bsan_shadow_clear(dst: *mut u8, access_size: usize) {
 /// Loads the provenance of a given address from shadow memory and stores
 /// the result in the return pointer.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_get_shadow_src(addr: *mut u8) -> *const Provenance {
+unsafe extern "C" fn __bsan_shadow_src(addr: *mut u8) -> *const Provenance {
     let ctx = unsafe { global_ctx() };
     let heap = ctx.shadow_heap();
     heap.get_src(addr.addr())
@@ -377,59 +377,10 @@ unsafe extern "C" fn __bsan_get_shadow_src(addr: *mut u8) -> *const Provenance {
 
 /// Stores the given provenance value into shadow memory at the location for the given address.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_get_shadow_dest(addr: *mut u8) -> *mut Provenance {
+unsafe extern "C" fn __bsan_shadow_dest(addr: *mut u8) -> *mut Provenance {
     let ctx = unsafe { global_ctx() };
     let heap = ctx.shadow_heap();
     heap.get_dest(ctx.hooks(), addr.addr())
-}
-
-/// Copies provenance values from an array into three consecutive arrays of their components.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_join_provenance(
-    dest: *mut Provenance,
-    length: usize,
-    id_buffer: *mut usize,
-    tag_buffer: *mut usize,
-    info_buffer: *mut *mut c_void,
-) {
-    let ctx = unsafe { global_ctx() };
-    for offset in 0..length {
-        unsafe {
-            let alloc_id = AllocId(*id_buffer.add(offset));
-            let bor_tag = BorTag(*tag_buffer.add(offset));
-            let alloc_info = *info_buffer.add(offset);
-            *dest.add(offset) = Provenance { alloc_id, bor_tag, alloc_info };
-        }
-    }
-}
-
-/// Copies provenance values from an array into three consecutive arrays of their components.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_split_provenance(
-    array: *mut Provenance,
-    length: usize,
-    id_buffer: *mut usize,
-    tag_buffer: *mut usize,
-    info_buffer: *mut *mut c_void,
-) {
-    let ctx = unsafe { global_ctx() };
-    for offset in 0..length {
-        unsafe {
-            let Provenance { alloc_id, bor_tag, alloc_info } = *array.add(offset);
-            *id_buffer = alloc_id.0;
-            *tag_buffer = bor_tag.0;
-            *info_buffer = alloc_info;
-        }
-    }
-}
-
-/// Load provenance values from the shadow heap into split arrays.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_shadow_load_array(src: *mut u8, data: *mut Provenance, len: usize) {
-    let ctx = unsafe { global_ctx() };
-    let heap = ctx.shadow_heap();
-    let prov_array = ProvenanceArrayView::new(len, data);
-    heap.load_consecutive(src.addr(), len, prov_array);
 }
 
 /// Copy provenance values from split arrays into the shadow heap.
@@ -445,15 +396,6 @@ unsafe extern "C" fn __bsan_shadow_load_vector(
     let heap = ctx.shadow_heap();
     let prov_vec = ProvenanceVecView::new(len, id_buffer, tag_buffer, info_buffer);
     heap.load_consecutive(src.addr(), len, prov_vec);
-}
-
-/// Store provenance values from the shadow heap into an array.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_shadow_store_array(dst: *mut u8, data: *mut Provenance, len: usize) {
-    let ctx = unsafe { global_ctx() };
-    let heap = ctx.shadow_heap();
-    let prov_array = ProvenanceArrayView::new(len, data);
-    heap.store_consecutive(ctx.hooks(), dst.addr(), prov_array);
 }
 
 /// Load provenance values from the shadow heap into split arrays.
