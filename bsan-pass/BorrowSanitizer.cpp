@@ -193,7 +193,8 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     // dynamic ones, but we will adjust this behavior in the future to support optimizations
     // such as combining static stack allocations into a single, larger allocation 
     // (see AddressSanitizer).
-    SmallVector<AllocaInst *, 16> AllocaVec;
+    SmallVector<AllocaInst *, 16> StaticAllocaVec;
+    SmallVector<AllocaInst *, 1> DynamicAllocaVec;
 
     // A temporary cache of local allocas that are always accessed safely and will never
     // escape the current function. If these variables are never retagged, then we can skip
@@ -306,10 +307,10 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     }
 
     // Asserts that there is either a provenance value at the given index, or that no provenance
-    // values have been loaded for the given value. Does not reutrn the null provenance value, and
-    // does not check for consistency. This should never be used directly, since it does not check
-    // that the given provenance value is consistent with the caller's assumption about whether or
-    // not a scalar or vector provenance value is required.
+    // values have been loaded for the given value. Does not reutrn the null provenance value.
+    // This should never be used directly, since it does not check that the provenance value being
+    // returned is consistent with the caller's assumption about whether or not a scalar or vector
+    // provenance value is required.
     std::optional<LoadedProvenance> getProvenanceAtIndex(Value *V, unsigned Idx) {
         if (Argument *A = dyn_cast<Argument>(V)) {
             // We always need to load the provenance for arguments right at the
@@ -475,7 +476,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         }
     }
 
-    // Loads a provenance value into shadow memory, starting at the given object address.
+    // Loads a provenance value into shadow memory starting at the given object address.
     LoadedProvenance loadProvenanceFromShadow(IRBuilder<> &IRB, ProvenanceComponent &Comp, Value *ObjAddr) {
         if(Comp.isVector()) {
             // We're dealing with a scalable vector of pointers.
@@ -597,7 +598,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     }
 
     void initStack() {
-        for (AllocaInst *AI : AllocaVec) {
+        for (AllocaInst *AI : StaticAllocaVec) {
             initializeProvenanceForStaticAllocation(AI);
         }
     }
@@ -605,7 +606,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     void deinitStack() {
         EscapeEnumerator EE(F, "bsan_cleanup", true);
         while (IRBuilder<> *AtExit = EE.Next()) {
-            for (AllocaInst *AI : AllocaVec) {
+            for (AllocaInst *AI : StaticAllocaVec) {
                 processDeallocation(*AtExit, AI);
             }
             InstrumentationIRBuilder::ensureDebugInfo(*AtExit, F);
@@ -662,8 +663,15 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         IRB.CreateCall(BS.BsanFuncDealloc, {Val, Prov.ID, Prov.Tag, Prov.Info});
     }
     
-    using InstVisitor<BorrowSanitizerVisitor>::visit;
+    void registerAlloca(AllocaInst *AI) {
+        if(AI->isStaticAlloca()) {
+            StaticAllocaVec.push_back(AI);
+        } else {
+            DynamicAllocaVec.push_back(AI);
+        }
+    }
 
+    using InstVisitor<BorrowSanitizerVisitor>::visit;
     // We use this visitor function when reordering instructions in reverse postorder;
     // none of the other visitors are called until the subsequent step, after we initialize
     // the stack.
@@ -676,7 +684,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
                 if(SSGI && SSGI->isSafe(AI) && !isEscapeSource(&AI)) {
                     LocalSafeAllocas.insert(&AI);
                 }else{
-                    AllocaVec.push_back(&AI);
+                    registerAlloca(&AI);
                 }
             }
             return;
@@ -687,7 +695,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
                 Value *PtrToRetag = CB->getArgOperand(0);
                 for(auto AI : LocalSafeAllocas) {
                     if(AA.alias(AI, PtrToRetag) != AliasResult::NoAlias) {
-                        AllocaVec.push_back(AI);
+                        registerAlloca(AI);
                     }
                 }
             }
@@ -721,7 +729,6 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
                 return;
             }
         }
-
 
         // If we've made it here, then we don't have a hard-coded way to handle this
         // function. We need to pass its arguments into our thread-local array, and then
@@ -780,23 +787,40 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     }
 
     void visitIntrinsicInst(IntrinsicInst &I) {
-        switch (I.getIntrinsicID()) {
-            case Intrinsic::retag: {
-                ScalarProvenance Prov = assertSingleProvenance(I.getOperand(0));
-                CallInst *CIRetag = CallInst::Create(BS.BsanFuncRetag, {
-                        Prov.ID, 
-                        Prov.Tag, 
-                        Prov.Info, 
-                        I.getOperand(0), 
-                        I.getOperand(1), 
-                        I.getOperand(2), 
-                        I.getOperand(3)
-                });
-                ReplaceInstWithInst(&I, CIRetag);
-            } break;
-            default:
-                break;
+        if(I.getIntrinsicID() == Intrinsic::retag) {
+            ScalarProvenance Prov = assertSingleProvenance(I.getOperand(0));
+            CallInst *CIRetag = CallInst::Create(BS.BsanFuncRetag, {
+                    Prov.ID, 
+                    Prov.Tag, 
+                    Prov.Info, 
+                    I.getOperand(0), 
+                    I.getOperand(1), 
+                    I.getOperand(2), 
+                    I.getOperand(3)
+            });
+            ReplaceInstWithInst(&I, CIRetag);
         }
+    }
+
+    // Whenever we memset, we need to clear the corresponding shadow memory section
+    // This should be removed when interceptors are implemented.
+    void visitMemSetInst(MemSetInst &I) {
+        IRBuilder<> IRB(&I);
+        IRB.CreateCall(BS.BsanFuncShadowClear, {
+            I.getDest(), 
+            IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false)
+        });
+    }
+
+    // Whenever we memcpy, we need to copy the corresponding shadow memory section
+    // This should be removed when interceptors are implemented.
+    void visitMemTransferInst(MemTransferInst &I) {
+        IRBuilder<> IRB(&I);
+        IRB.CreateCall(BS.BsanFuncShadowCopy, {
+            I.getSource(), 
+            I.getDest(), 
+            IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false)
+        });
     }
 
     // Inserts a check to validate a read access.
