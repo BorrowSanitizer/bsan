@@ -13,6 +13,7 @@ const char kBsanFuncInitName[] = "__bsan_init";
 const char kBsanFuncDeinitName[] = "__bsan_deinit";
 const char kBsanFuncPushFrameName[] = "__bsan_push_frame";
 const char kBsanFuncPopFrameName[] = "__bsan_pop_frame";
+const char kBsanFuncPushElemsName[] = "__bsan_push_elems";
 const char kBsanFuncShadowCopyName[] = "__bsan_shadow_copy";
 const char kBsanFuncShadowClearName[] = "__bsan_shadow_clear";
 const char kBsanFuncGetShadowDestName[] = "__bsan_get_shadow_dest";

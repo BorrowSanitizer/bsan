@@ -132,6 +132,7 @@ private:
     FunctionCallee BsanFuncRetag;
     FunctionCallee BsanFuncPushFrame;
     FunctionCallee BsanFuncPopFrame;
+    FunctionCallee BsanFuncPushElems;
     FunctionCallee BsanFuncShadowCopy;
     FunctionCallee BsanFuncShadowClear;
     FunctionCallee BsanFuncSplitProv;
@@ -599,7 +600,10 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 
     void initStack() {
         for (AllocaInst *AI : StaticAllocaVec) {
-            initializeProvenanceForStaticAllocation(AI);
+            processStaticAlloca(AI);
+        }
+        for (AllocaInst *AI : DynamicAllocaVec) {
+            processDynamicAlloca(AI);
         }
     }
 
@@ -615,32 +619,32 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     }
 
     // Allocates object metadata for a stack allocation.
-    void initializeProvenanceForStaticAllocation(AllocaInst *AI) {
+    void processStaticAlloca(AllocaInst *AI) {
         AI->moveBefore(FnPrologueStart->getIterator());
         IRBuilder<> IRB(FnPrologueStart);
         TypeSize TS = BS.getAllocaSizeInBytes(*AI);
         Value *Size = IRB.CreateTypeSize(BS.IntptrTy, TS);
-        registerAllocation(IRB, AI, Size);
+        processAllocation(IRB, AI, Size);
     }
 
-
-    // Allocates object metadata for a heap allocation.
-    void initializeProvenanceForDynamicAllocation(IRBuilder<> &IRB, CallBase *CB,
-        std::optional<APInt> &AllocSize) {
-        if(AllocSize.has_value()) {
-            Value *Size = ConstantInt::get(BS.IntptrTy, AllocSize->getZExtValue());
-            registerAllocation(IRB, CB, Size);
-        }
+    void processDynamicAlloca(AllocaInst *AI) {
+        IRBuilder<> IRB(AI);
+        TypeSize TS = BS.getAllocaSizeInBytes(*AI);
+        Value *Size = IRB.CreateTypeSize(BS.IntptrTy, TS);
+        ScalarProvenance Prov = processAllocation(IRB, AI, Size);
+        Value *ProvPtr = IRB.CreateCall(BS.BsanFuncPushElems, {BS.One});
+        storeSingleProvenanceValue(IRB, Prov, ProvPtr);
     }
-    
+
     // Allocates object metadata for a stack or heap allocation.
-    void registerAllocation(IRBuilder<> &IRB, Value *Address, Value *Size) {
+    ScalarProvenance processAllocation(IRBuilder<> &IRB, Value *Address, Value *Size) {
         Value *ID = IRB.CreateCall(BS.BsanFuncNewAllocID, {});
         Value *Tag = IRB.CreateCall(BS.BsanFuncNewBorrowTag, {});
         Value *Info = IRB.CreateCall(BS.BsanFuncAlloc, {ID, Tag, Address, Size});
-        setProvenance(Address, ScalarProvenance(ID, Tag, Info));
+        ScalarProvenance Prov = ScalarProvenance(ID, Tag, Info);
+        setProvenance(Address, Prov);
+        return Prov;
     }
-
 
     // We only instrument allocations that have a non-zero size.
     bool shouldInstrumentAlloca(AllocaInst &AI) {
@@ -714,11 +718,17 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
             std::optional<APInt> AllocSize = getAllocSize(&CB, TLI);
             if (isAllocLikeFn(&CB, TLI)) {
                 IRBuilder<> IRB = getInsertionPointAfterCall(&CB);
-                initializeProvenanceForDynamicAllocation(IRB, &CB, AllocSize);
+                if(AllocSize.has_value()) {
+                    Value *Size = ConstantInt::get(BS.IntptrTy, AllocSize->getZExtValue());
+                    processAllocation(IRB, &CB, Size);
+                }
                 return;
             } else if(isReallocLikeFn(Callee)) {
                 IRBuilder<> IRB = getInsertionPointAfterCall(&CB);
-                initializeProvenanceForDynamicAllocation(IRB, &CB, AllocSize);
+                if(AllocSize.has_value()) {
+                    Value *Size = ConstantInt::get(BS.IntptrTy, AllocSize->getZExtValue());
+                    processAllocation(IRB, &CB, Size);
+                }
                 Value *Operand = getReallocatedOperand(&CB);
                 processDeallocation(IRB, Operand);
                 return;
@@ -1234,6 +1244,12 @@ void BorrowSanitizer::initializeCallbacks(Module &M, const TargetLibraryInfo &TL
         kBsanFuncPopFrameName,
         FunctionType::get(IRB.getVoidTy(), /*isVarArg=*/false),
         AL
+    );
+
+    BsanFuncPushElems = M.getOrInsertFunction(
+        kBsanFuncPushElemsName, AL,
+        PtrTy,
+        IntptrTy
     );
 
     BsanFuncShadowCopy = M.getOrInsertFunction(
