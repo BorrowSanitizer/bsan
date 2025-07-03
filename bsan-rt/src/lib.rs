@@ -588,6 +588,15 @@ unsafe extern "C" fn __bsan_push_frame() {
     local_ctx.protected_tags.push_frame();
 }
 
+/// Allocates shadow stack space for a number of provenance elements.
+/// Used for implementing dynamic allocas.
+#[inline(always)]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __bsan_push_elems(elems: usize) -> *mut MaybeUninit<Provenance> {
+    let local_ctx: &mut LocalCtx = unsafe { local_ctx_mut() };
+    unsafe { local_ctx.provenance.push_elems(elems).as_ptr() }
+}
+
 /// Pops a shadow stack frame, deallocating all shadow allocations created by `bsan_alloc_stack`
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_pop_frame() {
