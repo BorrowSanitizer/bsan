@@ -19,6 +19,7 @@ extern crate alloc;
 use core::cell::UnsafeCell;
 use core::ffi::c_void;
 use core::fmt::Debug;
+use core::mem::MaybeUninit;
 use core::num::NonZero;
 #[cfg(not(test))]
 use core::panic::PanicInfo;
@@ -478,7 +479,7 @@ unsafe extern "C" fn __bsan_shadow_clear(dst: *mut u8, access_size: usize) {
 /// Loads the provenance of a given address from shadow memory and stores
 /// the result in the return pointer.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_get_shadow_src(addr: *mut u8) -> *const Provenance {
+unsafe extern "C" fn __bsan_shadow_src(addr: *mut u8) -> *const Provenance {
     let ctx = unsafe { global_ctx() };
     let heap = ctx.shadow_heap();
     heap.get_src(addr.addr())
@@ -486,7 +487,7 @@ unsafe extern "C" fn __bsan_get_shadow_src(addr: *mut u8) -> *const Provenance {
 
 /// Stores the given provenance value into shadow memory at the location for the given address.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_get_shadow_dest(addr: *mut u8) -> *mut Provenance {
+unsafe extern "C" fn __bsan_shadow_dest(addr: *mut u8) -> *mut Provenance {
     let ctx = unsafe { global_ctx() };
     let heap = ctx.shadow_heap();
     heap.get_dest(ctx.hooks(), addr.addr())
@@ -557,15 +558,6 @@ unsafe extern "C" fn __bsan_shadow_load_vector(
     heap.load_consecutive(src.addr(), len, prov_vec);
 }
 
-/// Store provenance values from the shadow heap into an array.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_shadow_store_array(dst: *mut u8, data: *mut Provenance, len: usize) {
-    let ctx = unsafe { global_ctx() };
-    let heap = ctx.shadow_heap();
-    let prov_array = ProvenanceArrayView::new(len, data);
-    heap.store_consecutive(ctx.hooks(), dst.addr(), prov_array);
-}
-
 /// Load provenance values from the shadow heap into split arrays.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_shadow_store_vector(
@@ -590,11 +582,10 @@ unsafe extern "C" fn __bsan_push_frame() {
 
 /// Allocates shadow stack space for a number of provenance elements.
 /// Used for implementing dynamic allocas.
-#[inline(always)]
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_push_elems(elems: usize) -> *mut MaybeUninit<Provenance> {
     let local_ctx: &mut LocalCtx = unsafe { local_ctx_mut() };
-    unsafe { local_ctx.provenance.push_elems(elems).as_ptr() }
+    local_ctx.provenance.push_elems(elems).as_ptr()
 }
 
 /// Pops a shadow stack frame, deallocating all shadow allocations created by `bsan_alloc_stack`
