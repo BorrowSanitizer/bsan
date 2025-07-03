@@ -134,8 +134,6 @@ private:
     FunctionCallee BsanFuncPushElems;
     FunctionCallee BsanFuncShadowCopy;
     FunctionCallee BsanFuncShadowClear;
-    FunctionCallee BsanFuncSplitProv;
-    FunctionCallee BsanFuncJoinProv;
     FunctionCallee BsanFuncGetShadowSrc;
     FunctionCallee BsanFuncGetShadowDest;
 
@@ -148,9 +146,7 @@ private:
     FunctionCallee BsanFuncNewBorrowTag;
     FunctionCallee BsanFuncNewAllocID;
 
-    FunctionCallee BsanFuncShadowLoadArray;
     FunctionCallee BsanFuncShadowLoadVector;
-    FunctionCallee BsanFuncShadowStoreArray;
     FunctionCallee BsanFuncShadowStoreVector;
 
     ScalarProvenance WildcardProvenance;
@@ -1343,18 +1339,6 @@ void BorrowSanitizer::initializeCallbacks(Module &M, const TargetLibraryInfo &TL
         PtrTy, IntptrTy
     );
 
-    BsanFuncJoinProv =  M.getOrInsertFunction(
-        kBsanFuncJoinProvName, AL,
-        IRB.getVoidTy(), 
-        PtrTy, IntptrTy, PtrTy, PtrTy, PtrTy
-    );
-
-    BsanFuncSplitProv =  M.getOrInsertFunction(
-        kBsanFuncSplitProvName, AL,
-        IRB.getVoidTy(), 
-        PtrTy, IntptrTy, PtrTy, PtrTy, PtrTy
-    );
-
     BsanFuncGetShadowDest = M.getOrInsertFunction(
         kBsanFuncGetShadowDestName, AL,
         PtrTy, 
@@ -1408,22 +1392,10 @@ void BorrowSanitizer::initializeCallbacks(Module &M, const TargetLibraryInfo &TL
         IntptrTy, IntptrTy, PtrTy, PtrTy, IntptrTy
     );
 
-    BsanFuncShadowLoadArray = M.getOrInsertFunction(
-        kBsanFuncShadowLoadArrayName, AL,
-        IRB.getVoidTy(), 
-        PtrTy, PtrTy, IntptrTy
-    );
-
     BsanFuncShadowLoadVector = M.getOrInsertFunction(
         kBsanFuncShadowLoadVectorName, AL,
         IRB.getVoidTy(),
         PtrTy, IntptrTy, PtrTy, PtrTy, PtrTy
-    );
-
-    BsanFuncShadowStoreArray = M.getOrInsertFunction(
-        kBsanFuncShadowStoreArrayName, AL,
-        IRB.getVoidTy(), 
-        PtrTy, PtrTy, IntptrTy
     );
 
     BsanFuncShadowStoreVector = M.getOrInsertFunction(
