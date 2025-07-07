@@ -125,9 +125,6 @@ impl<'a> BorrowTracker<'a> {
                 reason: Some("Tag exists in Tree indicating an erroneus retag".to_string()),
             }));
         }
-
-        if let Some(kind) = retag_info.protector_kind {}
-
         // TODO: Pass this in
         let mut perms_map = RangeMap::new_in(
             Size::from_bytes(unsafe { (*self.alloc_info).size }),
@@ -229,7 +226,6 @@ impl<'a> BorrowTracker<'a> {
         // The default value of `AllocInfo` is zero-initialized,
         // automatically making all future accesses UB.
         unsafe { drop(ptr::replace(self.alloc_info, AllocInfo::default())) }
-
         unsafe { self.ctx.deallocate_lock_location(self.alloc_info) };
         Ok(())
     }
