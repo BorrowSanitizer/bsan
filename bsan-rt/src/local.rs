@@ -70,7 +70,7 @@ pub unsafe fn local_ctx<'a>() -> &'a LocalCtx {
 #[inline]
 pub unsafe fn local_ctx_mut<'a>() -> &'a mut LocalCtx {
     let ctx = LOCAL_CTX.get();
-    unsafe { &mut *mem::transmute::<*mut MaybeUninit<LocalCtx>, *mut LocalCtx>(ctx) }
+    unsafe { &mut *ctx.cast::<local::LocalCtx>() }
 }
 
 impl Drop for LocalCtx {

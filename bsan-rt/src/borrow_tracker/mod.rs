@@ -10,6 +10,7 @@ use parking_lot::{Mutex, MutexGuard};
 use spin::Once;
 use tree::{AllocRange, Tree};
 
+use crate::alloc::string::ToString;
 use crate::borrow_tracker::errors::{BsanTreeError, BtOp, BtResult, TreeError};
 use crate::borrow_tracker::tree::{ChildParams, LocationState};
 use crate::diagnostics::AccessCause;
@@ -39,8 +40,8 @@ pub struct BorrowTracker<'a> {
 }
 
 impl<'a> BorrowTracker<'a> {
-    // # SAFETY
-    // Takes in provenance pointer that is checked via debug_asserts
+    /// # Safety
+    /// Takes in provenance pointer that is checked via debug_asserts
     pub unsafe fn new(
         prov: *const Provenance,
         ctx: &'a GlobalCtx,
@@ -76,7 +77,7 @@ impl<'a> BorrowTracker<'a> {
 
         // Check for out of bounds accessess
         let lower_bound = unsafe { (*alloc_info_ptr).base_addr() as usize };
-        let upper_bound = unsafe { lower_bound as usize + (*alloc_info_ptr).size };
+        let upper_bound = unsafe { lower_bound + (*alloc_info_ptr).size };
         // TODO: Checkout lib functions to compare pointers instead of using usize
         if (object_address as usize) < lower_bound || object_address as usize >= upper_bound {
             // TODO: Add proper error handling and bailing
@@ -110,8 +111,10 @@ impl<'a> BorrowTracker<'a> {
 
     pub fn retag(&self, retag_info: &RetagInfo) -> BtResult<()> {
         // Tree is assumed to be  initialized
+        let lock = self.tree_lock.lock();
+        let tree = lock.get().unwrap();
 
-        #[cfg(debug)]
+        #[cfg(debug_assertions)]
         if tree.is_allocation_of(self.prov.bor_tag) {
             use crate::borrow_tracker::errors::BorrowTrackerError;
 
@@ -119,7 +122,7 @@ impl<'a> BorrowTracker<'a> {
                 op: errors::BtOpType::Retag,
                 // TODO: Replace with actual span/retag
                 span: Some(Span::new()),
-                reason: Some(format!("Tag exists in Tree indicating an erroneus retag")),
+                reason: Some("Tag exists in Tree indicating an erroneus retag".to_string()),
             }));
         }
 
@@ -148,10 +151,11 @@ impl<'a> BorrowTracker<'a> {
 
                 println!("{:?}", range_in_alloc);
 
-                self.access(AccessKind::Read, range_in_alloc)?
+                self.access(AccessKind::Read, range_in_alloc)?;
             }
         }
 
+        #[allow(clippy::diverging_sub_expression)]
         let child_params: ChildParams = ChildParams {
             base_offset,
             parent_tag: self.prov.bor_tag,
@@ -162,10 +166,7 @@ impl<'a> BorrowTracker<'a> {
             span: Span::new(),
         };
 
-        let lock = self.tree_lock.lock();
-        let tree = lock.get().unwrap();
-
-        tree.new_child(child_params)?;
+        tree.new_child(child_params);
 
         Ok(())
     }
@@ -203,9 +204,7 @@ impl<'a> BorrowTracker<'a> {
                 span: Some(Span::new()),
                 reason: Some(
                     format!(
-                        "Allocation ID in pointer metadata does not match the one in the lock address.\nLock address ID: {:?}\nPointer metadata ID: {:?}",
-                        lock_addr_id,
-                        metadata_id
+                        "Allocation ID in pointer metadata does not match the one in the lock address.\nLock address ID: {lock_addr_id:?}\nPointer metadata ID: {metadata_id:?}",
                     )),
             }));
         }

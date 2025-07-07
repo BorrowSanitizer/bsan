@@ -284,5 +284,5 @@ pub unsafe fn deinit_global_ctx() {
 #[inline]
 pub unsafe fn global_ctx<'a>() -> &'a GlobalCtx {
     let ctx = GLOBAL_CTX.get();
-    unsafe { &*mem::transmute::<*mut MaybeUninit<GlobalCtx>, *mut GlobalCtx>(ctx) }
+    unsafe { &*ctx.cast::<global::GlobalCtx>() }
 }

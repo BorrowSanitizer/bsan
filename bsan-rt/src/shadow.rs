@@ -61,7 +61,7 @@ static MAP_SHADOW: i32 = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
 
 /// Converts an address into a pair of indices into the first and second
 /// levels of the shadow page table.
-#[inline(always)]
+#[inline]
 pub fn table_indices(address: usize) -> (usize, usize) {
     let as_num_ptrs = address.shr(PTR_BYTES);
 
@@ -211,7 +211,7 @@ mod tests {
         // Use an address that will split into non-zero indices for both L1 and L2
         let addr = 0x1234_5678_1234_5678;
         unsafe {
-            heap.store_prov(&DEFAULT_HOOKS, &test_prov, addr);
+            heap.store_prov(&DEFAULT_HOOKS, &raw const test_prov, addr);
             let loaded_prov = heap.load_prov(addr);
             assert_eq!(loaded_prov.value, test_prov.value);
         }
@@ -219,14 +219,15 @@ mod tests {
 
     #[test]
     fn smoke() {
-        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS);
-        // Create test data
         const NUM_OPERATIONS: usize = 10;
+        const BASE_ADDR: usize = 0x7FFF_FFFF_AA00;
+
+        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS);
+
         let test_values: Vec<TestProv> =
             (0..NUM_OPERATIONS).map(|i| TestProv { value: (i % 255) as u128 }).collect();
 
         // Use a properly aligned base address
-        const BASE_ADDR: usize = 0x7FFF_FFFF_AA00;
         assert_eq!(BASE_ADDR % 8, 0);
         unsafe {
             for (i, test_value) in test_values.iter().enumerate().take(NUM_OPERATIONS) {

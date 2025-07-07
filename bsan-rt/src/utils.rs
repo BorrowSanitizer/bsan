@@ -57,18 +57,18 @@ pub fn get_stack_size() -> Option<NonZero<usize>> {
 /// # Safety
 /// The pointer must be offset from the beginning of its allocation
 /// by at least `mem::size_of::<B>()` bytes.
-#[inline(always)]
+#[inline]
 pub unsafe fn align_down<A, B>(ptr: NonNull<A>) -> NonNull<B> {
     debug_assert!(ptr.as_ptr().is_aligned());
     unsafe {
-        let ptr = mem::transmute::<*mut A, *mut u8>(ptr.as_ptr());
+        let ptr = ptr.cast::<u8>();
 
         // round down to nearest aligned address
         let addr = ptr.expose_provenance();
-        let addr = (addr & !(mem::align_of::<B>() - 1));
-        let ptr = ptr::with_exposed_provenance_mut(addr);
+        let addr = (addr.get() & !(mem::align_of::<B>() - 1));
+        let ptr: *mut u8 = ptr::with_exposed_provenance_mut(addr);
 
-        let ptr = mem::transmute::<*mut u8, *mut B>(ptr);
+        let ptr = ptr.cast::<B>();
         let ptr = ptr.sub(1);
 
         debug_assert!(ptr.is_aligned());
@@ -79,31 +79,30 @@ pub unsafe fn align_down<A, B>(ptr: NonNull<A>) -> NonNull<B> {
 /// # Safety
 /// If the parameter is rounded up to the nearest multiple of `mem::align_of::<B>()` and
 /// then offset by `mem::size_of::<B>()`, it must still be within the allocation.
-#[inline(always)]
+#[inline]
 pub unsafe fn align_up<A, B>(ptr: NonNull<A>) -> NonNull<B> {
     debug_assert!(ptr.as_ptr().is_aligned());
     unsafe {
-        let ptr = mem::transmute::<*mut A, *mut u8>(ptr.as_ptr());
+        let ptr = ptr.cast::<u8>();
 
         // round up to nearest aligned address
         let addr = ptr.expose_provenance();
         let align = mem::align_of::<B>();
-        let addr = (addr + align - 1) & !(align - 1);
-        let ptr = ptr::with_exposed_provenance_mut(addr);
-
-        let ptr = mem::transmute::<*mut u8, *mut B>(ptr);
+        let addr = (addr.get() + align - 1) & !(align - 1);
+        let ptr: *mut u8 = ptr::with_exposed_provenance_mut(addr);
+        let ptr = ptr.cast::<B>();
 
         debug_assert!(ptr.is_aligned());
         NonNull::<B>::new_unchecked(ptr)
     }
 }
 
-#[inline(always)]
+#[inline]
 pub unsafe fn mmap<T>(mmap: MMap, size_bytes: NonZero<usize>, prot: i32, flags: i32) -> NonNull<T> {
     let size_bytes = size_bytes.get();
     unsafe {
         let ptr = (mmap)(ptr::null_mut(), size_bytes, prot, flags, -1, 0);
-        let ptr = mem::transmute::<*mut c_void, *mut T>(ptr);
+        let ptr = ptr.cast::<T>();
         if ptr.is_null() || ptr.addr() as isize == -1 {
             panic!("Failed to allocate page of size {size_bytes:?}.");
         } else {
@@ -112,12 +111,12 @@ pub unsafe fn mmap<T>(mmap: MMap, size_bytes: NonZero<usize>, prot: i32, flags: 
     }
 }
 
-#[inline(always)]
+#[inline]
 pub unsafe fn munmap<T>(munmap: MUnmap, ptr: NonNull<T>, size_bytes: NonZero<usize>) {
     let size_bytes = size_bytes.get();
     unsafe {
         let ptr = ptr.as_ptr();
-        let ptr = mem::transmute::<*mut T, *mut c_void>(ptr);
+        let ptr = ptr.cast::<c_void>();
         (munmap)(ptr, size_bytes);
     }
 }

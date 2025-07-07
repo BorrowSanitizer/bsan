@@ -9,8 +9,8 @@ use core::alloc::Allocator;
 use core::fmt::{self, Write};
 use core::ops::Range;
 
-use bsan_shared::diagnostics::*;
-use bsan_shared::{Size, *};
+use bsan_shared::diagnostics::TransitionError;
+use bsan_shared::{AccessKind, PermTransition, Permission, ProtectorKind, Size};
 
 use crate::borrow_tracker::errors::TreeResult;
 use crate::borrow_tracker::tree::{AllocRange, LocationState, Tree};
@@ -469,7 +469,7 @@ impl DisplayFmt {
 
     /// Print the tag with the format `<XYZ>` if the tag is unnamed,
     /// and `<XYZ=name>` if the tag is named.
-    fn print_tag(&self, tag: BorTag, name: &Option<String>) -> String {
+    fn print_tag(&self, tag: BorTag, name: Option<&String>) -> String {
         let printable_tag = tag.get();
         if let Some(name) = name {
             format!("<{printable_tag}={name}>")
@@ -480,12 +480,10 @@ impl DisplayFmt {
 
     /// Print extra text if the tag has a protector.
     fn print_protector(&self, protector: Option<&ProtectorKind>) -> &'static str {
-        protector
-            .map(|p| match *p {
-                ProtectorKind::WeakProtector => " Weakly protected",
-                ProtectorKind::StrongProtector => " Strongly protected",
-                ProtectorKind::NoProtector => " Not protected",
-            })
-            .unwrap_or("")
+        protector.map_or("", |p| match *p {
+            ProtectorKind::WeakProtector => " Weakly protected",
+            ProtectorKind::StrongProtector => " Strongly protected",
+            ProtectorKind::NoProtector => " Not protected",
+        })
     }
 }

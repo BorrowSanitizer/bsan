@@ -77,11 +77,11 @@ impl<T> core::fmt::Debug for Block<T> {
 impl<T> Drop for Block<T> {
     fn drop(&mut self) {
         // SAFETY: our munmap pointer will be valid by construction of the GlobalCtx.
-        // We can safely transmute it to c_void since that's what it was originally when
+        // We can safely cast it to c_void since that's what it was originally when
         // it was allocated by mmap
         let success = unsafe {
-            let ptr = mem::transmute::<*mut T, *mut libc::c_void>(self.base.as_ptr());
-            (self.munmap)(ptr, self.num_elements.get())
+            let ptr = self.base.cast::<libc::c_void>();
+            (self.munmap)(ptr.as_ptr(), self.num_elements.get())
         };
         if success != 0 {
             panic!("Failed to unmap block!");
@@ -193,7 +193,7 @@ mod test {
 
     unsafe impl Linkable<Link> for Link {
         fn next(&mut self) -> *mut *mut Link {
-            unsafe { core::mem::transmute(self.link.get()) }
+            unsafe { self.link.get().cast::<*mut block::test::Link>() }
         }
     }
 

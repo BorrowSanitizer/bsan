@@ -146,7 +146,7 @@ where
             panic!(
                 "This key is already assigned to a different index; either use `get_or_insert` instead if you care about this data, or first call `remove` to undo the preexisting assignment."
             );
-        };
+        }
         UniIndex { idx }
     }
 
@@ -215,7 +215,7 @@ where
     /// Assign a value to the index. Permanently overwrites any previous value.
     pub fn insert(&mut self, idx: UniIndex, val: V) {
         self.extend_to_length(idx.idx as usize + 1);
-        self.data[idx.idx as usize] = Some(val)
+        self.data[idx.idx as usize] = Some(val);
     }
 
     /// Get the value at this index, if it exists.
@@ -239,7 +239,7 @@ where
 
         // TODO: Evaluate this
         unsafe {
-            core::ptr::swap(&mut res, &mut self.data[idx.idx as usize]);
+            core::ptr::swap(&raw mut res, &raw mut self.data[idx.idx as usize]);
         }
 
         res

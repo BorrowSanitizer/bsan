@@ -1,3 +1,5 @@
+#![warn(clippy::transmute_ptr_to_ptr)]
+#![warn(clippy::borrow_as_ptr)]
 #![cfg_attr(not(test), no_std)]
 #![feature(sync_unsafe_cell)]
 #![feature(strict_overflow_ops)]
@@ -5,6 +7,7 @@
 #![feature(allocator_api)]
 #![feature(alloc_layout_extra)]
 #![feature(format_args_nl)]
+#![feature(nonnull_provenance)]
 #![allow(unused)]
 
 #[macro_use]
@@ -225,7 +228,7 @@ impl AllocInfo {
 
     fn get_raw(prov: *const Provenance) -> *mut Self {
         // Casts the raw void ptr into an AllocInfo raw ptr and reborrows as a `AllocInfo` reference
-        unsafe { (((*prov).alloc_info) as *mut AllocInfo) }
+        unsafe { ((*prov).alloc_info) }
     }
 }
 
@@ -431,11 +434,11 @@ extern "C" fn __bsan_dealloc(prov: *mut Provenance, object_addr: *const c_void) 
     let mut bt = unsafe { BorrowTracker::new(prov, ctx, object_addr).unwrap() };
 
     match bt.dealloc(object_addr) {
-        Ok(_) => {}
+        Ok(()) => {}
         Err(e) => {
             // TODO: Handle errors here
         }
-    };
+    }
 }
 
 /// Marks the borrow tag for `prov` as "exposed," allowing it to be resolved to
@@ -462,7 +465,7 @@ mod test {
 
     fn create_metadata(object_addr: *const c_void, size: usize) -> Provenance {
         let mut prov = MaybeUninit::<Provenance>::uninit();
-        let prov_ptr = (&mut prov) as *mut _;
+        let prov_ptr = (&raw mut prov);
         unsafe {
             __bsan_alloc(prov_ptr, object_addr, size);
             prov.assume_init()
@@ -491,7 +494,7 @@ mod test {
         unsafe {
             let some_object_addr = unsafe { libc::malloc(m_size) };
             let mut prov = create_metadata(some_object_addr, m_size);
-            __bsan_dealloc(&mut prov as *mut _, some_object_addr);
+            __bsan_dealloc(&raw mut prov, some_object_addr);
             let alloc_metadata = &*prov.alloc_info;
             assert_eq!(alloc_metadata.alloc_id.get(), AllocId::invalid().get());
             assert_eq!(alloc_metadata.alloc_id.get(), 0);

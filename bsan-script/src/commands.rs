@@ -172,7 +172,7 @@ macro_rules! impl_component {
         struct $struct_name;
 
         impl Buildable for $struct_name {
-            #[inline(always)]
+            #[inline]
             fn artifact(&self) -> &'static str {
                 $artifact_name
             }

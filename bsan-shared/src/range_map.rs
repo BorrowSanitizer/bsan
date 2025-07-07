@@ -32,7 +32,7 @@ impl<T> RangeMap<T, Global> {
     // Globally allocated range map
     /// Creates a new `RangeMap` for the given size, and with the given initial value used for
     /// the entire range.
-    #[inline(always)]
+    #[inline]
     pub fn new(size: Size, init: T) -> RangeMap<T, Global> {
         let size = size.bytes();
         let v = if size > 0 {
@@ -50,7 +50,7 @@ where
 {
     /// Creates a new `RangeMap` for the given size, and with the given initial value used for
     /// the entire range with a custom allocator.
-    #[inline(always)]
+    #[inline]
     pub fn new_in(size: Size, init: T, alloc: A) -> RangeMap<T, A> {
         let size = size.bytes();
         let v = if size > 0 {

@@ -4,7 +4,7 @@ use libc::MAP_GROWSDOWN;
 
 use crate::block::{Block, BlockAllocator};
 use crate::hooks::{BsanHooks, BSAN_MAP_FLAGS, BSAN_PROT_FLAGS};
-use crate::*;
+use crate::{ptr, utils, Debug, GlobalCtx, NonNull};
 
 /// The type of the counter tracking the number of elements for each frame.
 type C = u32;
@@ -31,11 +31,7 @@ impl<T> Stack<T> {
         // Safety:
         // We know that T is sized, and we assume that it's smaller than
         // the maximum stack size for a process.
-        let frame_top = unsafe {
-            let ptr = elems.end().sub(mem::size_of::<T>());
-            let ptr = mem::transmute::<*mut u8, *mut MaybeUninit<T>>(ptr.as_ptr());
-            NonNull::new_unchecked(ptr)
-        };
+        let frame_top = unsafe { elems.end().sub(mem::size_of::<T>()).cast::<MaybeUninit<T>>() };
 
         Self { elems, frame_top, prev_frame_len_slot: ptr::null_mut(), curr_frame_len: 0 }
     }

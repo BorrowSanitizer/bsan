@@ -44,7 +44,7 @@ unsafe impl Allocator for BsanAllocHooks {
                     if ptr.is_null() {
                         return Err(AllocError);
                     }
-                    let ptr = NonNull::new_unchecked(ptr as *mut u8);
+                    let ptr = NonNull::new_unchecked(ptr.cast::<u8>());
                     Ok(NonNull::slice_from_raw_parts(ptr, size))
                 }
             }
@@ -53,8 +53,8 @@ unsafe impl Allocator for BsanAllocHooks {
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, _layout: Layout) {
         unsafe {
-            let ptr = mem::transmute::<*mut u8, *mut libc::c_void>(ptr.as_ptr());
-            (self.free)(ptr);
+            let ptr = ptr.cast::<libc::c_void>();
+            (self.free)(ptr.as_ptr());
         }
     }
 }

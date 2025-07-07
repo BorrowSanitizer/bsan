@@ -8,10 +8,13 @@ use core::alloc::Allocator;
 use core::fmt::{self, Display};
 
 use bsan_shared::diagnostics::*;
-use bsan_shared::{Permission, Size, *};
+use bsan_shared::{
+    AccessKind, AccessRelatedness, IdempotentForeignAccess, PermTransition, Permission, RangeMap,
+    Size,
+};
 use hashbrown::HashSet;
 
-use super::unimap::*;
+use super::unimap::{UniEntry, UniIndex, UniKeyMap, UniValMap};
 use super::*;
 use crate::borrow_tracker::errors::{
     BsanTreeError, SoftError, TransitionError, TreeError, TreeResult, TreeTransitionResult,
@@ -29,13 +32,13 @@ pub struct AllocRange {
     pub size: Size,
 }
 
-#[inline(always)]
+#[inline]
 pub fn alloc_range(start: Size, size: Size) -> AllocRange {
     AllocRange { start, size }
 }
 
 impl AllocRange {
-    #[inline(always)]
+    #[inline]
     pub fn end(self) -> Size {
         self.start + self.size // This does overflow checking.
     }
@@ -486,7 +489,7 @@ where
                     match handle_children {
                         ContinueTraversal::Recurse => {
                             let node = this.nodes.get(idx).unwrap();
-                            for &child in node.children.iter() {
+                            for &child in &node.children {
                                 self.stack.push((child, rel_pos, RecursionState::BeforeChildren));
                             }
                         }
@@ -700,7 +703,7 @@ where
     /// For all non-accessed locations in the RangeMap (those that haven't had an
     /// implicit read), their SIFA must be weaker than or as weak as the SIFA of
     /// `default_perm`.
-    pub(super) fn new_child(&mut self, params: ChildParams) -> TreeResult<()> {
+    pub(super) fn new_child(&mut self, params: ChildParams) {
         use core::ops::Range;
 
         let ChildParams {
@@ -757,8 +760,6 @@ where
         // for the new permission statically, and use that.
         // See the comment in `tb_reborrow` for why it is correct to use the SIFA of `default_uninit_perm`.
         self.update_last_accessed_after_retag(parent_idx, default_strongest_idempotent);
-
-        Ok(())
     }
 
     /// Restores the SIFA "children are stronger" invariant after a retag.
@@ -858,7 +859,7 @@ where
                         })))
                     },
                     allocator,
-                )?
+                )?;
         }
 
         Ok(())
@@ -975,7 +976,7 @@ where
                         |args| node_app(perms_range.clone(), access_kind, access_cause, args),
                         |args| err_handler(perms_range.clone(), access_cause, args),
                         allocator,
-                    )?
+                    )?;
             }
         } else {
             // This is a special access through the entire allocation.
@@ -1056,10 +1057,8 @@ where
         for (_, data) in self.rperms.iter_all() {
             let parent_perm =
                 data.get(idx).map(|x| x.permission).unwrap_or_else(|| node.default_initial_perm);
-            let child_perm = data
-                .get(child_idx)
-                .map(|x| x.permission)
-                .unwrap_or_else(|| child.default_initial_perm);
+            let child_perm =
+                data.get(idx).map_or_else(|| node.default_initial_perm, |x| x.permission);
             if !parent_perm.can_be_replaced_by_child(child_perm) {
                 return None;
             }
@@ -1177,7 +1176,7 @@ impl VisitProvenance for Tree {
     fn visit_provenance(&self, visit: &mut VisitWith<'_>) {
         // To ensure that the root never gets removed, we visit it
         // (the `root` node of `Tree` is not an `Option<_>`)
-        visit(None, Some(self.nodes.get(self.root).unwrap().tag))
+        visit(None, Some(self.nodes.get(self.root).unwrap().tag));
     }
 }
 
