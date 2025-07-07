@@ -3,7 +3,6 @@ use core::mem::{self, MaybeUninit};
 use core::num::{NonZero, NonZeroUsize};
 use core::ptr::{self, NonNull};
 
-use cfg_if::cfg_if;
 use libc::{rlimit, RLIMIT_STACK, _SC_PAGESIZE};
 
 use crate::hooks::{MMap, MUnmap};

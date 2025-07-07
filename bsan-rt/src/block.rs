@@ -1,9 +1,12 @@
 use core::cell::UnsafeCell;
-use core::hint;
 use core::mem::MaybeUninit;
 use core::num::NonZeroUsize;
+use core::ops::Mul;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use core::{hint, slice};
+
+use spin::mutex::SpinMutex;
 
 use crate::hooks::{BsanHooks, MUnmap, BSAN_MAP_FLAGS, BSAN_PROT_FLAGS};
 use crate::*;
@@ -81,7 +84,7 @@ impl<T> Drop for Block<T> {
         // it was allocated by mmap
         let success = unsafe {
             let ptr = self.base.cast::<libc::c_void>();
-            (self.munmap)(ptr.as_ptr(), self.num_elements.get())
+            (self.munmap)(ptr.as_ptr(), self.num_elements.get().mul(mem::size_of::<T>()))
         };
         if success != 0 {
             panic!("Failed to unmap block!");
@@ -91,56 +94,47 @@ impl<T> Drop for Block<T> {
 
 /// A fixed-capacity, semi-lock-free, thread-safe bump-allocator.
 #[derive(Debug)]
-pub struct BlockAllocator<T: Linkable<T>> {
+pub struct BlockAllocator<T: Linkable<T> + Default> {
     /// The next valid element, which will be uninitialized.
     cursor: AtomicPtr<MaybeUninit<T>>,
     /// A list of freed elements, which can be anywhere in the block.
     /// This needs to be interior mutable since both alloc and dealloc
     /// need to modify the free list through &self
-    free_list: UnsafeCell<*mut T>,
-    /// A mutex for the free list
-    free_lock: AtomicBool,
+    free_list: SpinMutex<*mut T>,
     /// The block of memory where instances are allocated from.
     block: Block<T>,
 }
 
 // SAFETY: Whenever we mutate the allocator, we either lock on `free_lock`
 // or we're executing an atomic operation.
-unsafe impl<T: Linkable<T>> Send for BlockAllocator<T> {}
-unsafe impl<T: Linkable<T>> Sync for BlockAllocator<T> {}
+unsafe impl<T: Linkable<T> + Default> Send for BlockAllocator<T> {}
+unsafe impl<T: Linkable<T> + Default> Sync for BlockAllocator<T> {}
 
-impl<T: Linkable<T>> BlockAllocator<T> {
+impl<T: Linkable<T> + Default> BlockAllocator<T> {
     /// Initializes a BlockAllocator for the given block.
     pub fn new(block: Block<T>) -> Self {
         BlockAllocator {
             // we begin at the high-end of the block and decrement downward
             cursor: AtomicPtr::new(block.last().as_ptr() as *mut MaybeUninit<T>),
-            free_list: UnsafeCell::new(core::ptr::null::<T>() as *mut T),
-            free_lock: AtomicBool::new(false),
+            free_list: SpinMutex::new(core::ptr::null::<T>() as *mut T),
             block,
         }
     }
 
-    /// Allocates a new instance from the block.
-    /// If a prior allocation has been freed, it will be reused instead of
-    /// incrementing the internal cursor.
-    pub fn alloc(&self) -> Option<NonNull<MaybeUninit<T>>> {
-        if !self.free_lock.swap(true, Ordering::Acquire) {
-            let curr = unsafe { *self.free_list.get() };
-            let curr = if !curr.is_null() {
-                unsafe {
-                    let next = (*curr).next();
-                    *self.free_list.get() = *next;
-                    Some(NonNull::new_unchecked(curr as *mut MaybeUninit<T>))
-                }
-            } else {
-                None
-            };
-            self.free_lock.store(false, Ordering::Release);
-            if curr.is_some() {
-                return curr;
+    pub fn alloc_with(&self, elem: T) -> Option<NonNull<T>> {
+        if let Some(mut free_list) = self.free_list.try_lock()
+            && !free_list.is_null()
+        {
+            unsafe {
+                **free_list = elem;
+
+                let next = (**free_list).next();
+                let curr: *mut T = *free_list;
+                *free_list = *next;
+
+                return Some(NonNull::new_unchecked(curr));
             }
-        };
+        }
         self.cursor
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |val| {
                 if val.is_null() {
@@ -154,8 +148,18 @@ impl<T: Linkable<T>> BlockAllocator<T> {
                     unsafe { Some(val.sub(1)) }
                 }
             })
-            .map(NonNull::new)
-            .ok()?
+            .map(|slot| unsafe {
+                (*slot).write(elem);
+                NonNull::new_unchecked(slot.cast::<T>())
+            })
+            .ok()
+    }
+
+    /// Allocates a new instance from the block.
+    /// If a prior allocation has been freeds, it will be reused instead of
+    /// incrementing the internal cursor.
+    pub fn alloc(&self) -> Option<NonNull<T>> {
+        self.alloc_with(T::default())
     }
 
     /// Deallocates a pointer that has been allocated from the block.
@@ -163,18 +167,13 @@ impl<T: Linkable<T>> BlockAllocator<T> {
     /// since "freed" allocations are added to a list and reused for subsequent
     /// calls to alloc. The allocation does not need to be initialized; you can pass
     /// the result of `BlockAllocator::alloc` directly to this function.
-    pub unsafe fn dealloc(&self, ptr: NonNull<MaybeUninit<T>>) {
-        while self.free_lock.swap(true, Ordering::Acquire) {
-            hint::spin_loop();
-        }
-        let curr = self.free_list.get();
+    pub unsafe fn dealloc(&self, ptr: NonNull<T>) {
+        let mut free_list = self.free_list.lock();
         unsafe {
-            let ptr = (*ptr.as_ptr()).as_mut_ptr();
-            let ptr_next = (*ptr).next();
-            *ptr_next = *curr;
-            *self.free_list.get() = ptr;
+            let ptr_next = (*ptr.as_ptr()).next();
+            *ptr_next = *free_list;
+            *free_list = ptr.as_ptr();
         }
-        self.free_lock.store(false, Ordering::Release);
     }
 }
 
@@ -187,6 +186,7 @@ mod test {
     use crate::hooks::DEFAULT_HOOKS;
     use crate::*;
 
+    #[derive(Default)]
     struct Link {
         link: UnsafeCell<*mut u8>,
     }
@@ -225,8 +225,8 @@ mod test {
                     for _ in 0..10 {
                         if let Some(alloc) = page.alloc() {
                             unsafe {
-                                (*alloc.as_ptr())
-                                    .write(Link { link: UnsafeCell::new(core::ptr::null_mut()) });
+                                (*alloc.as_ptr()) =
+                                    Link { link: UnsafeCell::new(core::ptr::null_mut()) };
                             }
                             allocs.push(alloc);
                         }
@@ -241,7 +241,6 @@ mod test {
         for thread in threads {
             thread.join().unwrap();
         }
-
         unsafe {
             deinit_global_ctx();
         }

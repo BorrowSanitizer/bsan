@@ -1,6 +1,8 @@
+#![cfg_attr(not(test), no_std)]
+#![allow(unused)]
+#![allow(internal_features)]
 #![warn(clippy::transmute_ptr_to_ptr)]
 #![warn(clippy::borrow_as_ptr)]
-#![cfg_attr(not(test), no_std)]
 #![feature(sync_unsafe_cell)]
 #![feature(strict_overflow_ops)]
 #![feature(thread_local)]
@@ -8,10 +10,12 @@
 #![feature(alloc_layout_extra)]
 #![feature(format_args_nl)]
 #![feature(nonnull_provenance)]
-#![allow(unused)]
+#![feature(core_intrinsics)]
 
 #[macro_use]
 extern crate alloc;
+use alloc::alloc::Global;
+use alloc::sync::Arc;
 use core::alloc::{AllocError, Allocator, GlobalAlloc, Layout};
 use core::cell::UnsafeCell;
 use core::ffi::{c_char, c_ulonglong, c_void};
@@ -25,47 +29,46 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, Ordering};
 use core::{fmt, mem, ptr};
 
-mod global;
-use alloc::alloc::Global;
-use alloc::sync::Arc;
-
-use borrow_tracker::tree::Tree;
-use borrow_tracker::*;
 use bsan_shared::{RetagInfo, Size};
-pub use global::*;
-use spin::Once;
-
-mod local;
 use libc::{off_t, LOCK_EX};
 use libc_print::std_name::*;
+use spin::{Mutex, Once};
+
+mod global;
+pub use global::*;
+
+mod local;
 pub use local::*;
 
-mod block;
 pub mod borrow_tracker;
+use borrow_tracker::tree::Tree;
+use borrow_tracker::*;
+
+mod block;
 mod diagnostics;
 mod shadow;
+
 mod span;
+use span::Span;
 
 mod hooks;
 mod stack;
 mod utils;
+
+use crate::block::Linkable;
+use crate::borrow_tracker::tree::AllocRange;
+use crate::hooks::BsanAllocHooks;
 
 macro_rules! println {
     ($($arg:tt)*) => {
         libc_print::std_name::println!($($arg)*);
     };
 }
-use parking_lot::Mutex;
 pub(crate) use println;
-use span::Span;
-
-use crate::block::Linkable;
-use crate::borrow_tracker::tree::AllocRange;
-use crate::hooks::BsanAllocHooks;
 
 /// Unique identifier for an allocation
 #[repr(transparent)]
-#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Default, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AllocId(usize);
 
 impl AllocId {
@@ -193,19 +196,25 @@ impl core::fmt::Debug for FreeListAddrUnion {
     }
 }
 
+impl Default for FreeListAddrUnion {
+    fn default() -> Self {
+        Self { base_addr: core::ptr::null() }
+    }
+}
+
 /// Every allocation is associated with a "lock" object, which is an instance of `AllocInfo`.
 /// Provenance is the "key" to this lock. To validate a memory access, we compare the allocation ID
 /// of a pointer's provenance with the value stored in its corresponding `AllocInfo` object. If the values
 /// do not match, then the access is invalid. If they do match, then we proceed to validate the access against
 /// the tree for the allocation.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 #[repr(C)]
 pub struct AllocInfo {
     pub alloc_id: AllocId,
     pub base_addr: FreeListAddrUnion,
     pub size: usize,
     pub align: usize,
-    pub tree_lock: Mutex<Once<Tree<BsanAllocHooks>>>,
+    pub tree_lock: Mutex<Option<Tree<BsanAllocHooks>>>,
 }
 
 // TODO: Discuss whether the initialization and deallocation of the tree should happen
@@ -391,23 +400,25 @@ extern "C" fn __bsan_alloc(
     let prov = unsafe { (*prov).as_mut_ptr() };
 
     // Initialize `AllocInfo`
-    let alloc_info = unsafe { ctx.allocate_lock_location().as_mut() };
-
-    let info = AllocInfo {
-        alloc_id,
-        base_addr: FreeListAddrUnion { base_addr: object_addr },
-        size: alloc_size,
-        align: 0,
-        tree_lock: Mutex::new(Once::new()),
+    let alloc_info = unsafe {
+        ctx.allocate_lock_location(AllocInfo {
+            alloc_id,
+            base_addr: FreeListAddrUnion { base_addr: object_addr },
+            size: alloc_size,
+            align: 0,
+            tree_lock: Mutex::new(None),
+        })
+        .as_mut()
     };
-
-    let alloc_info = unsafe { alloc_info.write(info) as *mut AllocInfo };
 
     // Initialize the tree once
     unsafe {
-        (*alloc_info).tree_lock.lock().call_once(|| {
-            Tree::new_in(bor_tag, Size::from_bytes(alloc_size), Span::new(), ctx.allocator())
-        });
+        alloc_info.tree_lock.lock().insert(Tree::new_in(
+            bor_tag,
+            Size::from_bytes(alloc_size),
+            Span::new(),
+            ctx.allocator(),
+        ));
     }
 
     unsafe {
@@ -432,7 +443,6 @@ extern "C" fn __bsan_dealloc(prov: *mut Provenance, object_addr: *const c_void) 
     // Assuming root tag has been initialized in the tree
     let ctx = unsafe { global_ctx() };
     let mut bt = unsafe { BorrowTracker::new(prov, ctx, object_addr).unwrap() };
-
     match bt.dealloc(object_addr) {
         Ok(()) => {}
         Err(e) => {
@@ -457,10 +467,16 @@ mod test {
 
     use super::*;
 
-    fn init_bsan_with_test_hooks() {
-        unsafe {
-            __bsan_init();
-        }
+    fn with_init(unit_test: fn()) {
+        unsafe { __bsan_init() };
+        unit_test();
+        unsafe { __bsan_deinit() };
+    }
+
+    fn with_heap_object(unit_test: fn(obj: *mut c_void, size: usize)) {
+        let obj = unsafe { libc::malloc(64) };
+        unit_test(obj, 64);
+        unsafe { libc::free(obj) };
     }
 
     fn create_metadata(object_addr: *const c_void, size: usize) -> Provenance {
@@ -474,31 +490,33 @@ mod test {
 
     #[test]
     fn bsan_alloc_increasing_alloc_id() {
-        init_bsan_with_test_hooks();
-        let m_size = 20;
-        let some_object_addr = unsafe { libc::malloc(m_size) };
-        unsafe {
-            // log::debug!("before bsan_alloc");
-            let prov1 = create_metadata(some_object_addr, m_size);
-            // log::debug!("directly after bsan_alloc");
-            assert_eq!(prov1.alloc_id.get(), 3);
-            assert_eq!(AllocId::min().get(), 3);
-            let prov2 = create_metadata(some_object_addr, m_size);
-            assert_eq!(prov2.alloc_id.get(), 4);
-        }
+        with_init(|| {
+            with_heap_object(|obj1, size1| unsafe {
+                let mut prov1 = create_metadata(obj1, size1);
+                assert_eq!(prov1.alloc_id.get(), 3);
+                assert_eq!(AllocId::min().get(), 3);
+
+                with_heap_object(|obj2, size2| {
+                    let mut prov2 = create_metadata(obj2, size2);
+                    assert_eq!(prov2.alloc_id.get(), 4);
+                    __bsan_dealloc(&raw mut prov2, obj2);
+                });
+
+                __bsan_dealloc(&raw mut prov1, obj1);
+            });
+        });
     }
 
     fn bsan_alloc_and_dealloc() {
-        init_bsan_with_test_hooks();
-        let m_size = 20;
-        unsafe {
-            let some_object_addr = unsafe { libc::malloc(m_size) };
-            let mut prov = create_metadata(some_object_addr, m_size);
-            __bsan_dealloc(&raw mut prov, some_object_addr);
-            let alloc_metadata = &*prov.alloc_info;
-            assert_eq!(alloc_metadata.alloc_id.get(), AllocId::invalid().get());
-            assert_eq!(alloc_metadata.alloc_id.get(), 0);
-        }
+        with_init(|| {
+            with_heap_object(|obj, size| unsafe {
+                let mut prov = create_metadata(obj, size);
+                __bsan_dealloc(&raw mut prov, obj);
+                let alloc_metadata = &*prov.alloc_info;
+                assert_eq!(alloc_metadata.alloc_id.get(), AllocId::invalid().get());
+                assert_eq!(alloc_metadata.alloc_id.get(), 0);
+            });
+        })
     }
 
     // Below tests should panic due to unwrap call in end points
@@ -534,32 +552,25 @@ mod test {
 
     #[test]
     fn bsan_read() {
-        init_bsan_with_test_hooks();
-        let m_size = 20;
-        let some_object_addr = unsafe { libc::malloc(m_size) };
-
-        unsafe {
-            let mut prov = create_metadata(some_object_addr, m_size);
-
-            __bsan_read(&raw mut prov, some_object_addr, m_size as u64);
-
-            __bsan_dealloc(&raw mut prov, some_object_addr);
-        }
+        with_init(|| {
+            with_heap_object(|obj: *mut c_void, size: usize| unsafe {
+                let mut prov = create_metadata(obj, size);
+                __bsan_read(&raw mut prov, obj, size as u64);
+                __bsan_dealloc(&raw mut prov, obj);
+            });
+        });
     }
 
     #[test]
     fn bsan_write() {
-        init_bsan_with_test_hooks();
-        let m_size = 20;
-        let some_object_addr = unsafe { libc::malloc(m_size) };
-
-        unsafe {
-            let mut prov = create_metadata(some_object_addr, m_size);
-
-            __bsan_write(&raw mut prov, some_object_addr, m_size as u64);
-
-            __bsan_dealloc(&raw mut prov, some_object_addr);
-        }
+        unsafe { __bsan_init() };
+        with_init(|| {
+            with_heap_object(|obj, size| unsafe {
+                let mut prov = create_metadata(obj, size);
+                __bsan_write(&raw mut prov, obj, size as u64);
+                __bsan_dealloc(&raw mut prov, obj);
+            });
+        });
     }
 
     // TODO: Implement this test
@@ -567,9 +578,8 @@ mod test {
     // fn bsan_aliasing_violation() {}
 }
 
-// TODO: Figure out why this is giving an error
-// #[cfg(not(test))]
-// #[panic_handler]
-// fn panic(info: &PanicInfo<'_>) -> ! {
-//     loop {}
-// }
+#[cfg(not(test))]
+#[panic_handler]
+fn panic(info: &PanicInfo<'_>) -> ! {
+    core::intrinsics::abort()
+}

@@ -82,12 +82,11 @@ impl GlobalCtx {
         &self.hooks
     }
 
-    pub(crate) unsafe fn allocate_lock_location(&self) -> NonNull<MaybeUninit<AllocInfo>> {
-        match self.alloc_metadata_map.alloc() {
+    pub(crate) unsafe fn allocate_lock_location(&self, info: AllocInfo) -> NonNull<AllocInfo> {
+        match self.alloc_metadata_map.alloc_with(info) {
             Some(a) => a,
             None => {
                 // TODO: Discuss logging
-                //log::error!("Failed to allocate lock location");
                 panic!("Failed to allocate lock location");
             }
         }
@@ -96,8 +95,7 @@ impl GlobalCtx {
     pub(crate) unsafe fn deallocate_lock_location(&self, ptr: *mut AllocInfo) {
         unsafe {
             // TODO: Validate correctness
-            self.alloc_metadata_map
-                .dealloc(NonNull::new_unchecked(ptr as *mut MaybeUninit<AllocInfo>))
+            self.alloc_metadata_map.dealloc(NonNull::new_unchecked(ptr))
         };
     }
 

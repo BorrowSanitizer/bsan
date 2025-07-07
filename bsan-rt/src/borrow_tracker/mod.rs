@@ -1,13 +1,13 @@
 use core::alloc::Allocator;
 use core::cell::LazyCell;
 use core::ffi::c_void;
-use core::mem;
+use core::mem::replace;
+use core::{mem, ptr};
 
 use bsan_shared::{
     AccessKind, AccessRelatedness, Permission, ProtectorKind, RangeMap, RetagInfo, Size,
 };
-use parking_lot::{Mutex, MutexGuard};
-use spin::Once;
+use spin::{Mutex, Once};
 use tree::{AllocRange, Tree};
 
 use crate::alloc::string::ToString;
@@ -36,7 +36,7 @@ pub struct BorrowTracker<'a> {
     // Data races are not undefined behavior on our end, but may be undefined
     // if the compiler optimizes an immutable borrow
     alloc_info: *mut AllocInfo,
-    tree_lock: &'a Mutex<Once<Tree<BsanAllocHooks>>>,
+    tree_lock: &'a Mutex<Option<Tree<BsanAllocHooks>>>,
 }
 
 impl<'a> BorrowTracker<'a> {
@@ -111,8 +111,8 @@ impl<'a> BorrowTracker<'a> {
 
     pub fn retag(&self, retag_info: &RetagInfo) -> BtResult<()> {
         // Tree is assumed to be  initialized
-        let lock = self.tree_lock.lock();
-        let tree = lock.get().unwrap();
+        let mut lock = self.tree_lock.lock();
+        let tree = unsafe { lock.as_mut().unwrap_unchecked() };
 
         #[cfg(debug_assertions)]
         if tree.is_allocation_of(self.prov.bor_tag) {
@@ -174,7 +174,7 @@ impl<'a> BorrowTracker<'a> {
     pub fn access(&self, access_kind: AccessKind, alloc_range: AllocRange) -> BtResult<()> {
         // Tree is initialized
         let mut lock = self.tree_lock.lock();
-        let mut tree = lock.get_mut().unwrap();
+        let tree = unsafe { lock.as_mut().unwrap_unchecked() };
         // Perform the access (update the Tree Borrows FSM)
         // Uses a dummy span
         tree.perform_access(
@@ -196,8 +196,6 @@ impl<'a> BorrowTracker<'a> {
         let lock_addr_id = self.prov.alloc_id.get();
         let metadata_id = unsafe { (*self.alloc_info).alloc_id.get() };
 
-        //println!("Prov alloc id: {:?}, alloc info alloc id: {:?}", lock_addr_id, metadata_id);
-
         if lock_addr_id != metadata_id {
             return Err(errors::BorrowTrackerError::UseAfterFree(BtOp {
                 op: errors::BtOpType::Dealloc,
@@ -210,7 +208,7 @@ impl<'a> BorrowTracker<'a> {
         }
 
         let mut lock = self.tree_lock.lock();
-        let mut tree = lock.get_mut().unwrap();
+        let tree = unsafe { lock.as_mut().unwrap_unchecked() };
 
         tree.dealloc(
             self.prov.bor_tag,
@@ -226,17 +224,10 @@ impl<'a> BorrowTracker<'a> {
             self.allocator,
         )?;
 
-        unsafe {
-            (*self.alloc_info).alloc_id = AllocId::invalid();
-            (*self.alloc_info).base_addr = FreeListAddrUnion { base_addr: core::ptr::null() };
-            (*self.alloc_info).size = 0;
-            (*self.alloc_info).align = 1;
-        }
+        // The default value of `AllocInfo` is zero-initialized,
+        // automatically making all future accesses UB.
+        unsafe { drop(ptr::replace(self.alloc_info, AllocInfo::default())) }
 
-        // SAFETY: Exclusive access to *mut raw pointer is ensured by the above
-        // tree lock
-        unsafe { *self.tree_lock.data_ptr() = Once::new() }
-        // Deallocate `AllocInfo`
         unsafe { self.ctx.deallocate_lock_location(self.alloc_info) };
         Ok(())
     }
