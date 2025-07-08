@@ -141,18 +141,18 @@ impl<'a> BorrowTracker<'a> {
         let base_offset = unsafe { (*self.alloc_info).base_offset(self.object_address) };
 
         for (perm_range, perm) in perms_map.iter_mut_all() {
-            if perm.is_accessed() {
-                if let Some(kind) = retag_info.access_kind {
-                    // Some reborrows incur a read access to the parent.
-                    // Adjust range to be relative to allocation start
-                    let range_in_alloc = unsafe {
-                        AllocRange {
-                            start: Size::from_bytes(perm_range.start) + base_offset,
-                            size: Size::from_bytes(perm_range.end - perm_range.start),
-                        }
-                    };
-                    self.access(kind, range_in_alloc)?;
-                }
+            if perm.is_accessed()
+                && let Some(kind) = retag_info.access_kind
+            {
+                // Some reborrows incur a read access to the parent.
+                // Adjust range to be relative to allocation start
+                let range_in_alloc = unsafe {
+                    AllocRange {
+                        start: Size::from_bytes(perm_range.start) + base_offset,
+                        size: Size::from_bytes(perm_range.end - perm_range.start),
+                    }
+                };
+                self.access(kind, range_in_alloc)?;
             }
         }
 

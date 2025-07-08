@@ -29,7 +29,7 @@ impl LocalCtx {
 
     #[inline]
     pub fn add_protected_tag(&mut self, alloc_id: AllocId, tag: BorTag) {
-        self.protected_tags.push((alloc_id, tag));
+        //self.protected_tags.push((alloc_id, tag));
     }
 }
 

@@ -52,7 +52,7 @@ impl GlobalCtx {
     /// This function will also initialize our shadow heap
     fn new(hooks: BsanHooks) -> Self {
         let sizes = Sizes::default();
-        let block = Block::new(&hooks, sizes.page_of::<AllocInfo>());
+        let block = Block::new(&hooks, unsafe { NonZero::new_unchecked(1024) });
         Self {
             hooks,
             next_alloc_id: AtomicUsize::new(AllocId::min().get()),

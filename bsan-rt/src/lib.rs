@@ -482,6 +482,7 @@ mod test {
 
     fn with_init(unit_test: fn()) {
         unsafe { __bsan_init() };
+
         unit_test();
         unsafe { __bsan_deinit() };
     }
