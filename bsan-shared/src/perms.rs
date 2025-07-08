@@ -1,7 +1,7 @@
 // This file was ported from Miri
 #![allow(unreachable_patterns)]
 use core::cmp::Ordering;
-use core::fmt;
+use core::{fmt, mem};
 
 use super::helpers::{AccessKind, AccessRelatedness};
 
@@ -10,20 +10,27 @@ pub struct RetagInfo {
     pub size: usize,
     pub perm_kind: Permission,
     pub protector_kind: Option<ProtectorKind>,
+    pub access_kind: Option<AccessKind>,
 }
 
 impl RetagInfo {
     #[inline]
-    pub fn new(size: usize, perm_kind: Permission, protector_kind: Option<ProtectorKind>) -> Self {
-        Self { size, perm_kind, protector_kind }
+    pub fn new(
+        size: usize,
+        perm_kind: Permission,
+        protector_kind: Option<ProtectorKind>,
+        access_kind: Option<AccessKind>,
+    ) -> Self {
+        Self { size, perm_kind, protector_kind, access_kind }
     }
 
     /// # Safety
     /// Both perm_kind and protector_kind must be valid enum variants.
-    pub unsafe fn from_raw(size: usize, perm_kind: u16, protector_kind: u8) -> Self {
+    pub unsafe fn from_raw(size: usize, perm_kind: u16, protector_kind: u8, access_kind: u8) -> Self {
         let perm_kind = unsafe { Permission::from_raw(perm_kind) };
-        let protector_kind = unsafe { ProtectorKind::from_raw(protector_kind) };
-        Self::new(size, perm_kind, protector_kind)
+        let protector_kind = ProtectorKind::from_raw(protector_kind);
+        let access_kind = AccessKind::from_raw(access_kind);
+        Self::new(size, perm_kind, protector_kind, access_kind)
     }
 }
 
@@ -48,12 +55,17 @@ pub enum ProtectorKind {
 }
 
 impl ProtectorKind {
-    unsafe fn from_raw(protector_kind: u8) -> Option<Self> {
-        if protector_kind == 0 {
-            None
-        } else {
-            Some(unsafe { core::mem::transmute::<u8, ProtectorKind>(protector_kind) })
+    pub fn from_raw(protector_kind: u8) -> Option<Self> {
+        match protector_kind {
+            0 => None,
+            1 => Some(ProtectorKind::WeakProtector),
+            2 => Some(ProtectorKind::StrongProtector),
+            _ => None,
         }
+    }
+
+    pub fn into_raw(val: Option<ProtectorKind>) -> u8 {
+        val.map(|v| v as u8).unwrap_or(0)
     }
 }
 
@@ -294,6 +306,9 @@ pub struct Permission {
 }
 
 impl Permission {
+    pub  fn into_raw(self) -> u16 {
+        unsafe { mem::transmute::<PermissionPriv, u16>(self.inner) }
+    }
     unsafe fn from_raw(raw: u16) -> Self {
         Self { inner: unsafe { core::mem::transmute::<u16, PermissionPriv>(raw) } }
     }
