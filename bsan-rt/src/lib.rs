@@ -287,7 +287,7 @@ unsafe extern "C" fn __bsan_deinit() {
 extern "C" fn __bsan_retag(
     prov: *mut Provenance,
     size: usize,
-    perm_kind: u8,
+    perm_kind: u16,
     protector_kind: u8,
     object_addr: *const c_void,
 ) {
