@@ -8,14 +8,14 @@ use crate::*;
 pub struct LocalCtx {
     pub thread_id: ThreadId,
     pub provenance: Stack<Provenance>,
-    pub protected_tags: Stack<BorTag>,
+    pub protected_tags: Stack<(AllocId, BorTag)>,
 }
 
 impl LocalCtx {
     pub fn new(ctx: &GlobalCtx) -> Self {
         let thread_id = ctx.new_thread_id();
         let provenance = Stack::<Provenance>::new(ctx);
-        let protected_tags = Stack::<BorTag>::new(ctx);
+        let protected_tags = Stack::<(AllocId, BorTag)>::new(ctx);
         Self { thread_id, provenance, protected_tags }
     }
 
@@ -28,8 +28,8 @@ impl LocalCtx {
     }
 
     #[inline]
-    pub fn add_protected_tag(&mut self, tag: BorTag) {
-        self.protected_tags.push(tag);
+    pub fn add_protected_tag(&mut self, alloc_id: AllocId, tag: BorTag) {
+        self.protected_tags.push((alloc_id, tag));
     }
 }
 

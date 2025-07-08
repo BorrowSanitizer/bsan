@@ -120,6 +120,21 @@ impl GlobalCtx {
         let id = self.next_bor_tag.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         BorTag(id)
     }
+
+    pub fn add_protected_tag(&self, bor_tag: BorTag, protector_kind: ProtectorKind) {
+        let mut tag_map = self.protected_tags.lock();
+        tag_map.insert(bor_tag, protector_kind);
+    }
+
+    pub fn remove_protected_tag(&self, bor_tag: BorTag) {
+        let mut tag_map = self.protected_tags.lock();
+        tag_map.remove(&bor_tag);
+    }
+
+    pub fn get_protector_kind(&self, bor_tag: BorTag) -> Option<ProtectorKind> {
+        let mut tag_map = self.protected_tags.lock();
+        tag_map.get(&bor_tag).copied()
+    }
 }
 
 impl Drop for GlobalCtx {

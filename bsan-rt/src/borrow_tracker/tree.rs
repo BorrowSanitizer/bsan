@@ -682,7 +682,7 @@ pub(super) struct ChildParams {
     pub base_offset: Size,
     pub parent_tag: BorTag,
     pub new_tag: BorTag,
-    pub initial_perms: RangeMap<LocationState, BsanAllocHooks>,
+    pub perms_map: RangeMap<LocationState, BsanAllocHooks>,
     pub default_perm: Permission,
     pub protected: bool,
     pub span: Span,
@@ -694,7 +694,7 @@ where
 {
     /// Insert a new tag in the tree.
     ///
-    /// `initial_perms` defines the initial permissions for the part of memory
+    /// `perms_map` defines the initial permissions for the part of memory
     /// that is already considered "initialized" immediately. The ranges in this
     /// map are relative to `base_offset`.
     /// `default_perm` defines the initial permission for the rest of the allocation.
@@ -709,7 +709,7 @@ where
             new_tag,
             base_offset,
             parent_tag,
-            initial_perms,
+            perms_map,
             default_perm,
             protected,
             span,
@@ -737,9 +737,7 @@ where
         // Register new_tag as a child of parent_tag
         self.nodes.get_mut(parent_idx).unwrap().children.push(idx);
 
-        for (Range { start, end }, &perm) in
-            initial_perms.iter(Size::from_bytes(0), initial_perms.size())
-        {
+        for (Range { start, end }, &perm) in perms_map.iter(Size::from_bytes(0), perms_map.size()) {
             assert!(perm.is_initial());
             for (_perms_range, perms) in self
                 .rperms
@@ -832,16 +830,13 @@ where
                         let NodeAppArgs { node, perm, .. } = args;
                         let perm =
                             perm.get().copied().unwrap_or_else(|| node.default_location_state());
-                        // TODO: Refactor when global context has protected tags
-                        // if global.borrow().protected_tags.get(&node.tag)
-                        //     == Some(&ProtectorKind::StrongProtector)
-                        // {
-                        //     Err(TransitionError::ProtectedDealloc)
-                        // } else {
-                        //     Ok(())
-                        // }
-                        //
-                        Ok(())
+                        if global.get_protector_kind(node.tag)
+                            == Some(ProtectorKind::StrongProtector)
+                        {
+                            Err(TransitionError::ProtectedDealloc)
+                        } else {
+                            Ok(())
+                        }
                     },
                     |args: ErrHandlerArgs<'_>| -> TreeError {
                         let ErrHandlerArgs { error_kind, conflicting_info, accessed_info } = args;
@@ -922,10 +917,8 @@ where
             // `traverse_this_parents_children_other`.
             old_state.record_new_access(access_kind, rel_pos);
 
-            // TODO: Implement protected tag lookup through global context
-            //let protected = global.borrow().protected_tags.contains_key(&node.tag);
-            // TODO: Pipe protection status into perform access
-            let transition = old_state.perform_access(access_kind, rel_pos, false)?;
+            let protected = global.get_protector_kind(tag).is_some();
+            let transition = old_state.perform_access(access_kind, rel_pos, protected)?;
             // Record the event as part of the history
             if !transition.is_noop() {
                 node.debug_info.history.push(Event {
