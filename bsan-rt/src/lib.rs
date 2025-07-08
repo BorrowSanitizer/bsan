@@ -285,13 +285,14 @@ unsafe extern "C" fn __bsan_deinit() {
 // TODO: Retag is often called more than __bsan_alloc, should look into where we should init the tree
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_retag(
+    object_addr: *const c_void,
     prov: *mut Provenance,
     size: usize,
     perm_kind: u16,
     protector_kind: u8,
-    object_addr: *const c_void,
+    access_kind: u8,
 ) {
-    let retag_info = unsafe { RetagInfo::from_raw(size, perm_kind, protector_kind) };
+    let retag_info = unsafe { RetagInfo::from_raw(size, perm_kind, protector_kind, access_kind) };
 
     // Get the global context (used for the allocator for now)
     let ctx = unsafe { global_ctx() };
