@@ -1,4 +1,4 @@
-// This file was ported from Miri, and then modified by our team.
+// This file was ported from Miri and then modified by our team.
 #![allow(unused_lifetimes)]
 #![allow(clippy::extra_unused_lifetimes)]
 
