@@ -1,3 +1,5 @@
+// The components in this library were originally 
+// part of Miri, and were not implemented by our team.
 use core::alloc::Allocator;
 use core::cell::LazyCell;
 use core::ffi::c_void;

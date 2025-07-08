@@ -1,3 +1,4 @@
+// This file was ported from Miri, and then modified by our team.
 #![allow(unused_lifetimes)]
 #![allow(clippy::extra_unused_lifetimes)]
 
@@ -24,7 +25,6 @@ use crate::hooks::BsanAllocHooks;
 use crate::span::*;
 use crate::{bsan_error, global_ctx, AllocId, BorTag, GlobalCtx, GLOBAL_CTX};
 
-// Ported from https://doc.rust-lang.org/stable/nightly-rustc/src/rustc_middle/mir/interpret/allocation.rs.html#336-384
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct AllocRange {
