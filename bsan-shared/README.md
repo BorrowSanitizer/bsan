@@ -1,4 +1,2 @@
 # Shared Components
-This library contains components which are shared between the run-time and the front-end instrumentation pass within our fork of the Rust compiler. This includes the permission structure and FSA for Tree Borrows. 
-
-These components were originally implemented by [contributors to Miri](https://github.com/rust-lang/miri/commits/master/src/borrow_tracker). We have made modifications to support our use-case. 
+This library contains components which are shared between the run-time and the front-end instrumentation pass within our fork of the Rust compiler. This includes the permission structure and FSA for Tree Borrows. These components were originally implemented by [contributors to Miri](https://github.com/rust-lang/miri/commits/master/src/borrow_tracker) and [the Rust compiler](https://github.com/rust-lang/rust/commits/master/compiler/rustc_abi/src/lib.rs). We have made modifications to support our use-case. 

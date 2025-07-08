@@ -25,7 +25,6 @@ use crate::hooks::BsanAllocHooks;
 use crate::span::*;
 use crate::{bsan_error, global_ctx, AllocId, BorTag, GlobalCtx, GLOBAL_CTX};
 
-
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct AllocRange {
     pub start: Size,
