@@ -1,4 +1,4 @@
-
+// This file was ported from Miri
 use super::helpers::{AccessKind, AccessRelatedness};
 /// To speed up tree traversals, we want to skip traversing subtrees when we know the traversal will have no effect.
 /// This is often the case for foreign accesses, since usually foreign accesses happen several times in a row, but also

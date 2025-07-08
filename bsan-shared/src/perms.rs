@@ -1,4 +1,4 @@
-//! This file was ported from Miri
+// This file was ported from Miri
 #![allow(unreachable_patterns)]
 use core::cmp::Ordering;
 use core::fmt;

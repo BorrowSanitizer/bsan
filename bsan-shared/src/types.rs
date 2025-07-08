@@ -1,6 +1,5 @@
-use core::{fmt, ops};
-
 // Ported from rustc_abi
+use core::{fmt, ops};
 
 /// Unique identifier for `Size` (used in Tree Borrows implementation)
 #[repr(transparent)]
