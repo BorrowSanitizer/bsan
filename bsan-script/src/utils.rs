@@ -38,7 +38,7 @@ pub fn prompt_user(prompt: &str) -> Result<Option<PromptResult>> {
         return Ok(Some(PromptResult::Yes));
     } else {
         let mut input = String::new();
-        print!("{prompt} ");
+        print!("{prompt}  [Y/n]: ");
         io::stdout().flush()?;
         input.clear();
         io::stdin().read_line(&mut input)?;
@@ -141,13 +141,13 @@ pub fn install_git_hooks(root_dir: &PathBuf) -> Result<()> {
         };
     };
 
-    if prompt_user("Would you like to install git hooks? [Y/n]")?.unwrap() == PromptResult::No {
+    if prompt_user("Would you like to install git hooks?")?.unwrap() == PromptResult::No {
         return Ok(());
     }
 
     for hook in GitHook::iter() {
         let hook_name = hook.value();
-        if prompt_user(&format!("Would you like to install {} hook? [Y/n]", &hook_name))?.unwrap()
+        if prompt_user(&format!("Would you like to install {} hook?", &hook_name))?.unwrap()
             == PromptResult::No
         {
             continue;
