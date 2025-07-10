@@ -1,9 +1,6 @@
 use core::mem::{self, MaybeUninit};
 
-use libc::MAP_GROWSDOWN;
-
-use crate::block::{Block, BlockAllocator};
-use crate::hooks::{BsanHooks, BSAN_MAP_FLAGS, BSAN_PROT_FLAGS};
+use crate::block::Block;
 use crate::{ptr, utils, Debug, GlobalCtx, NonNull};
 
 /// The type of the counter tracking the number of elements for each frame.
@@ -82,10 +79,8 @@ impl<T> Stack<T> {
 
     #[inline]
     pub fn push_frame_with(&mut self, elems: usize) -> NonNull<MaybeUninit<T>> {
-        unsafe {
-            self.push_frame();
-            self.push_elems(elems)
-        }
+        self.push_frame();
+        self.push_elems(elems)
     }
 
     /// # Safety
@@ -186,10 +181,8 @@ mod test {
         let n_elem: u32 = 2;
 
         for i in 0..n_frames {
-            unsafe {
-                prov.push_frame_with(n_elem as usize);
-                tag.push_frame_with(n_elem as usize);
-            }
+            prov.push_frame_with(n_elem as usize);
+            tag.push_frame_with(n_elem as usize);
             assert!(prov.curr_frame_len == n_elem);
             assert!(tag.curr_frame_len == n_elem);
 
@@ -200,7 +193,7 @@ mod test {
                 }
             }
         }
-        for i in 0..n_frames {
+        for _ in 0..n_frames {
             unsafe { prov.pop_frame() }
         }
     }

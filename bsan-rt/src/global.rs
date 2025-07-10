@@ -1,25 +1,18 @@
-#![feature(allocator_api)]
-#![feature(unsafe_cell_access)]
-use alloc::collections::VecDeque;
 use alloc::vec::Vec;
-use core::cell::{SyncUnsafeCell, UnsafeCell};
-use core::ffi::CStr;
-use core::fmt::{self, write, Write};
-use core::mem::{self, zeroed, MaybeUninit};
-use core::num::{self, NonZeroUsize};
+use core::cell::SyncUnsafeCell;
+use core::mem::MaybeUninit;
+use core::num::NonZeroUsize;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
+use core::sync::atomic::AtomicUsize;
 
 use block::*;
 use bsan_shared::ProtectorKind;
-use hashbrown::{DefaultHashBuilder, HashMap};
-use libc_print::std_name::*;
+use hashbrown::HashMap;
 use rustc_hash::FxBuildHasher;
 
 use crate::hooks::{BsanAllocHooks, BsanHooks};
 use crate::shadow::ShadowHeap;
-use crate::stack::Stack;
 use crate::utils::Sizes;
 use crate::*;
 
@@ -40,6 +33,7 @@ pub struct GlobalCtx {
     next_alloc_id: AtomicUsize,
     next_thread_id: AtomicUsize,
     next_bor_tag: AtomicUsize,
+    #[allow(unused)]
     root_ptr_tags: Mutex<BHashMap<AllocId, BorTag>>,
     protected_tags: Mutex<BHashMap<BorTag, ProtectorKind>>,
     alloc_metadata_map: BlockAllocator<AllocInfo>,
@@ -61,7 +55,7 @@ impl GlobalCtx {
             root_ptr_tags: Mutex::new(BHashMap::new_in(hooks.alloc)),
             protected_tags: Mutex::new(BHashMap::new_in(hooks.alloc)),
             alloc_metadata_map: BlockAllocator::new(block),
-            shadow_heap: ShadowHeap::new(&hooks),
+            shadow_heap: ShadowHeap::new(&hooks, &raw const __BSAN_NULL_PROVENANCE),
             sizes,
         }
     }
@@ -85,10 +79,7 @@ impl GlobalCtx {
     }
 
     pub(crate) unsafe fn deallocate_lock_location(&self, ptr: *mut AllocInfo) {
-        unsafe {
-            // TODO: Validate correctness
-            self.alloc_metadata_map.dealloc(NonNull::new_unchecked(ptr))
-        };
+        unsafe { self.alloc_metadata_map.dealloc(NonNull::new_unchecked(ptr)) };
     }
 
     pub fn new_block<T>(&self, num_elements: NonZeroUsize) -> Block<T> {
@@ -99,6 +90,7 @@ impl GlobalCtx {
         self.hooks.alloc
     }
 
+    #[allow(unused)]
     fn exit(&self) -> ! {
         unsafe { (self.hooks.exit)() }
     }
@@ -116,7 +108,7 @@ impl GlobalCtx {
     // TODO: Discuss BorTag implementation
     // Gitter499: I think it makes sense to keep track of the borrow tags at a global level
     // Though I could see moving this responsibility completely to the tree
-    pub fn new_bor_tag(&self) -> BorTag {
+    pub fn new_borrow_tag(&self) -> BorTag {
         let id = self.next_bor_tag.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         BorTag(id)
     }
@@ -132,7 +124,7 @@ impl GlobalCtx {
     }
 
     pub fn get_protector_kind(&self, bor_tag: BorTag) -> Option<ProtectorKind> {
-        let mut tag_map = self.protected_tags.lock();
+        let tag_map = self.protected_tags.lock();
         tag_map.get(&bor_tag).copied()
     }
 }
@@ -169,8 +161,9 @@ impl<T> DerefMut for BVec<T> {
 }
 
 impl<T> BVec<T> {
+    #[allow(unused)]
     fn new(ctx: &GlobalCtx) -> Self {
-        unsafe { Self(Vec::new_in(ctx.allocator())) }
+        Self(Vec::new_in(ctx.allocator()))
     }
 }
 
@@ -188,10 +181,6 @@ impl core::fmt::Write for BVec<u8> {
         }
     }
 }
-
-/// The seed for the random state of the hash function for `BHashMap`.
-/// Equal to the decimal encoding of the ascii for "BSAN".
-static BSAN_HASH_SEED: usize = 1112752462;
 
 /// A thin wrapper around `HashMap` that uses `GlobalCtx` as its allocator
 #[derive(Debug, Clone)]
@@ -212,7 +201,7 @@ impl<K, V> DerefMut for BHashMap<K, V> {
 
 impl<K, V> BHashMap<K, V> {
     fn new_in(hooks: BsanAllocHooks) -> Self {
-        unsafe { Self(HashMap::with_hasher_in(FxBuildHasher, hooks)) }
+        Self(HashMap::with_hasher_in(FxBuildHasher, hooks))
     }
 }
 
@@ -227,10 +216,10 @@ mod global_alloc {
     struct DummyAllocator;
 
     unsafe impl GlobalAlloc for DummyAllocator {
-        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        unsafe fn alloc(&self, _layout: Layout) -> *mut u8 {
             panic!()
         }
-        unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
+        unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
             panic!()
         }
     }
@@ -264,7 +253,7 @@ pub unsafe fn init_global_ctx<'a>(hooks: BsanHooks) -> &'a GlobalCtx {
 /// on the assumption that this function has not been called yet.
 #[inline]
 pub unsafe fn deinit_global_ctx() {
-    let ctx = unsafe { ptr::replace(GLOBAL_CTX.get(), MaybeUninit::uninit()).assume_init() };
+    unsafe { ptr::replace(GLOBAL_CTX.get(), MaybeUninit::uninit()).assume_init() };
 }
 
 /// # Safety

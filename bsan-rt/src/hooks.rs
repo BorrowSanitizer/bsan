@@ -1,8 +1,6 @@
 use alloc::alloc::{AllocError, Allocator, Layout};
 use core::ffi::c_void;
-use core::mem;
-use core::num::{NonZero, NonZeroUsize};
-use core::ptr::{self, NonNull};
+use core::ptr::NonNull;
 
 use libc::off_t;
 

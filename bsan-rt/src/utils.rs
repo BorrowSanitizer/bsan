@@ -1,13 +1,12 @@
 use core::ffi::c_void;
 use core::mem::{self, MaybeUninit};
-use core::num::{NonZero, NonZeroUsize};
+use core::num::NonZero;
 use core::ops::Div;
 use core::ptr::{self, NonNull};
 
-use libc::{rlimit, RLIMIT_STACK, _SC_PAGESIZE};
+use libc::{rlimit, _SC_PAGESIZE};
 
 use crate::hooks::{MMap, MUnmap};
-use crate::{BorTag, Provenance};
 
 #[derive(Debug)]
 pub struct Sizes {
@@ -51,7 +50,7 @@ pub fn get_page_size() -> Option<NonZero<usize>> {
 pub fn get_stack_size() -> Option<NonZero<usize>> {
     let mut limits = MaybeUninit::<rlimit>::uninit();
     #[cfg(not(miri))]
-    let exit_code = unsafe { libc::getrlimit(RLIMIT_STACK, limits.as_mut_ptr()) };
+    let exit_code = unsafe { libc::getrlimit(libc::RLIMIT_STACK, limits.as_mut_ptr()) };
 
     #[cfg(miri)]
     let exit_code = unsafe {
@@ -81,7 +80,7 @@ pub unsafe fn align_down<A, B>(ptr: NonNull<A>) -> NonNull<B> {
 
         // round down to nearest aligned address
         let addr = ptr.expose_provenance();
-        let addr = (addr.get() & !(mem::align_of::<B>() - 1));
+        let addr = addr.get() & !(mem::align_of::<B>() - 1);
         let ptr: *mut u8 = ptr::with_exposed_provenance_mut(addr);
 
         let ptr = ptr.cast::<B>();

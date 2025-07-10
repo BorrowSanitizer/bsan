@@ -1,4 +1,4 @@
-#![allow(unused_lifetimes)]
+#![allow(unused)]
 // Ported from Miri's `diagnostics.rs`
 // Won't be used exactly as it is used in Miri or at all
 // but nice to port in case there are any similar behaviors / as a starting point
@@ -6,17 +6,16 @@ use alloc::alloc::Global;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::alloc::Allocator;
-use core::fmt::{self, Write};
+use core::fmt;
 use core::ops::Range;
 
 use bsan_shared::diagnostics::TransitionError;
-use bsan_shared::{AccessKind, PermTransition, Permission, ProtectorKind, Size};
+use bsan_shared::{AccessKind, PermTransition, Permission, ProtectorKind};
 
-use crate::borrow_tracker::errors::TreeResult;
 use crate::borrow_tracker::tree::{AllocRange, LocationState, Tree};
-use crate::borrow_tracker::unimap::UniIndex;
+use crate::errors::BsanResult;
 use crate::span::*;
-use crate::{println, AllocId, BorTag, GlobalCtx};
+use crate::{println, AllocId, BorTag};
 
 /// Cause of an access: either a real access or one
 /// inserted by Tree Borrows due to a reborrow or a deallocation.
@@ -125,6 +124,7 @@ where
     // Format events from `new_history` into those recorded by `self`.
     //
     // NOTE: also converts `Span` to `SpanData`.
+    #[allow(unused)]
     fn extend(
         &mut self,
         new_history: History<A>,
@@ -144,7 +144,7 @@ where
             transition,
             is_foreign,
             access_cause,
-            access_range,
+            access_range: _,
             span,
             transition_range: _,
         } in &events
@@ -256,7 +256,7 @@ where
         tag: BorTag,
         nth_parent: u8,
         name: &str,
-    ) -> TreeResult<()> {
+    ) -> BsanResult<()> {
         let tag = self.nth_parent(tag, nth_parent).unwrap();
         let idx = self.tag_mapping.get(&tag).unwrap();
         if let Some(node) = self.nodes.get_mut(idx) {
@@ -273,6 +273,7 @@ where
     }
 }
 
+#[allow(unused)]
 impl<A> History<A>
 where
     A: Allocator,
@@ -284,7 +285,7 @@ where
 
     /// Reconstruct the history relevant to `error_offset` by filtering
     /// only events whose range contains the offset we are interested in.
-    fn extract_relevant(&self, error_offset: u64, error_kind: TransitionError, alloc: A) -> Self {
+    fn extract_relevant(&self, error_offset: u64, _error_kind: TransitionError, alloc: A) -> Self {
         let filtered_events =
             self.events.iter().filter(|e| e.transition_range.contains(&error_offset)).cloned();
         // removed some of Miri's additional information as it is not neccessary to bsan

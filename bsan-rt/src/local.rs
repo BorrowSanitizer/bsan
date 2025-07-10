@@ -1,6 +1,5 @@
-use core::mem::{self, MaybeUninit};
+use core::mem::MaybeUninit;
 
-use crate::block::{Block, BlockAllocator};
 use crate::stack::Stack;
 use crate::*;
 
@@ -31,10 +30,8 @@ impl LocalCtx {
 
     #[inline]
     pub fn push_frame(&mut self, elems: usize) -> NonNull<MaybeUninit<Provenance>> {
-        unsafe {
-            self.protected_tags.push_frame();
-            self.provenance.push_frame_with(elems)
-        }
+        self.protected_tags.push_frame();
+        self.provenance.push_frame_with(elems)
     }
 
     #[inline]
@@ -68,14 +65,13 @@ pub unsafe fn init_local_ctx(ctx: &GlobalCtx) -> &LocalCtx {
 /// on the assumption that the current thread remains initialized.
 #[inline]
 pub unsafe fn deinit_local_ctx() {
-    let ctx = unsafe { ptr::replace(LOCAL_CTX.get(), MaybeUninit::uninit()).assume_init() };
+    unsafe { ptr::replace(LOCAL_CTX.get(), MaybeUninit::uninit()).assume_init() };
 }
 
 /// # Safety
 /// The user needs to ensure that the context is initialized.
 #[inline]
 pub unsafe fn local_ctx<'a>() -> &'a LocalCtx {
-    let ctx = LOCAL_CTX.get();
     unsafe { &*local_ctx_mut() }
 }
 

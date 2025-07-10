@@ -1,10 +1,7 @@
-use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
-use core::num::NonZeroUsize;
 use core::ops::Mul;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
-use core::{hint, slice};
+use core::sync::atomic::{AtomicPtr, Ordering};
 
 use spin::mutex::SpinMutex;
 
@@ -158,6 +155,7 @@ impl<T: Linkable<T> + Default> BlockAllocator<T> {
     /// Allocates a new instance from the block.
     /// If a prior allocation has been freeds, it will be reused instead of
     /// incrementing the internal cursor.
+    #[cfg(test)]
     pub fn alloc(&self) -> Option<NonNull<T>> {
         self.alloc_with(T::default())
     }
@@ -184,7 +182,6 @@ mod test {
 
     use super::*;
     use crate::hooks::DEFAULT_HOOKS;
-    use crate::*;
 
     #[derive(Default)]
     struct Link {
@@ -193,7 +190,7 @@ mod test {
 
     unsafe impl Linkable<Link> for Link {
         fn next(&mut self) -> *mut *mut Link {
-            unsafe { self.link.get().cast::<*mut block::test::Link>() }
+            self.link.get().cast::<*mut block::test::Link>()
         }
     }
 
