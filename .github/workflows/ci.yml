@@ -20,11 +20,19 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
     runs-on: '${{ matrix.config.os }}'
+    container:
+      image: ghcr.io/borrowsanitizer/bsan:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.github_token }}
     name: '${{ matrix.config.target }}'
     steps:
     - uses: actions/checkout@v4
-    - name: Install dependencies
+    - name: Setup dependencies
       run: |
-        rustup default nightly
+        ln -s /root/.rustup/ $HOME/.rustup
     - name: CI
       run: ./xb ci
+       
+        
+
