@@ -21,6 +21,8 @@ jobs:
             os: ubuntu-latest
     runs-on: '${{ matrix.config.os }}'
     name: '${{ matrix.config.target }}'
+    container:
+      image: ghcr.io/borrowsanitizer/bsan:latest
     steps:
     - uses: actions/checkout@v4
     - name: Install dependencies
