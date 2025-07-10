@@ -8,7 +8,7 @@ use tree::{AllocRange, Tree};
 
 use crate::borrow_tracker::tree::{ChildParams, LocationState};
 use crate::diagnostics::AccessCause;
-use crate::errors::{BsanResult, ErrorInfo, UBInfo};
+use crate::errors::{BtResult, ErrorInfo, UBInfo};
 use crate::hooks::BsanAllocHooks;
 use crate::span::Span;
 use crate::{throw_ub, AllocId, AllocInfo, GlobalCtx, LocalCtx, Provenance};
@@ -37,9 +37,9 @@ impl BorrowTracker {
         prov: Provenance,
         start: *mut c_void,
         access_size: Option<usize>,
-    ) -> BsanResult<Option<Self>> {
+    ) -> BtResult<Option<Self>> {
         if prov.alloc_id == AllocId::invalid() {
-            throw_ub!(UBInfo::InvalidProvenance)
+            throw_ub!(UBInfo::InvalidProvenance(Span::new()))
         } else if prov.alloc_id == AllocId::wildcard() {
             Ok(None)
         } else {
@@ -51,7 +51,7 @@ impl BorrowTracker {
             let root_alloc_id = unsafe { (*prov.alloc_info).alloc_id };
 
             if prov.alloc_id != root_alloc_id {
-                throw_ub!(UBInfo::UseAfterFree(prov.alloc_id))
+                throw_ub!(UBInfo::UseAfterFree(Span::new(), prov.alloc_id))
             }
 
             let (alloc_size, root_base_addr) =
@@ -60,7 +60,7 @@ impl BorrowTracker {
             let access_size = access_size.unwrap_or(alloc_size);
             let offset = start.addr().wrapping_sub(root_base_addr.addr());
             if start.addr() < root_base_addr.addr() || (offset + access_size > alloc_size) {
-                throw_ub!(UBInfo::AccessOutOfBounds(prov.alloc_id, start, access_size))
+                throw_ub!(UBInfo::AccessOutOfBounds(Span::new(), prov, start, access_size))
             }
 
             let start = Size::from_bytes(offset);
@@ -76,7 +76,7 @@ impl BorrowTracker {
         global_ctx: &GlobalCtx,
         local_ctx: &mut LocalCtx,
         retag_info: RetagInfo,
-    ) -> BsanResult<()> {
+    ) -> BtResult<()> {
         // Tree is assumed to be initialized
         let mut lock = self.lock();
         let tree = unsafe { lock.as_mut().unwrap_unchecked() };
@@ -151,7 +151,7 @@ impl BorrowTracker {
         Ok(())
     }
 
-    pub fn access(&self, global_ctx: &GlobalCtx, access_kind: AccessKind) -> BsanResult<()> {
+    pub fn access(&self, global_ctx: &GlobalCtx, access_kind: AccessKind) -> BtResult<()> {
         // Tree is initialized
         let mut lock = self.lock();
         let tree = unsafe { lock.as_mut().unwrap_unchecked() };
@@ -169,7 +169,7 @@ impl BorrowTracker {
         )
     }
 
-    pub fn dealloc(&mut self, global_ctx: &GlobalCtx) -> BsanResult<()> {
+    pub fn dealloc(&mut self, global_ctx: &GlobalCtx) -> BtResult<()> {
         let mut lock = self.lock();
         let tree = unsafe { lock.as_mut().unwrap_unchecked() };
 

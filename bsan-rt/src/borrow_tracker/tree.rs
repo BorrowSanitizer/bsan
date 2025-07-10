@@ -416,7 +416,7 @@ where
         this: &mut TreeVisitor<'_, A>,
         accessed_node: UniIndex,
         visit_children: ChildrenVisitMode,
-    ) -> BsanResult<()> {
+    ) -> BtResult<()> {
         // We want to visit the accessed node's children first.
         // However, we will below walk up our parents and push their children (our cousins)
         // onto the stack. To ensure correct iteration order, this method thus finishes
@@ -464,7 +464,7 @@ where
         Ok(())
     }
 
-    fn finish_foreign_accesses(&mut self, this: &mut TreeVisitor<'_, A>) -> BsanResult<()> {
+    fn finish_foreign_accesses(&mut self, this: &mut TreeVisitor<'_, A>) -> BtResult<()> {
         while let Some((idx, rel_pos, step)) = self.stack.last_mut() {
             let idx = *idx;
             let rel_pos = *rel_pos;
@@ -572,7 +572,7 @@ where
         f_propagate: impl Fn(NodeAppArgs<'_>) -> Result<(), TransitionError>,
         err_builder: impl Fn(ErrHandlerArgs<'_>) -> ErrorInfo,
         allocator: A,
-    ) -> BsanResult<()> {
+    ) -> BtResult<()> {
         let start_idx = self.tag_mapping.get(&start).unwrap();
         let mut stack =
             TreeVisitorStack::new(start_idx, f_continue, f_propagate, err_builder, allocator);
@@ -599,7 +599,7 @@ where
         f_propagate: impl Fn(NodeAppArgs<'_>) -> TreeTransitionResult<()>,
         err_builder: impl Fn(ErrHandlerArgs<'_>) -> ErrorInfo,
         allocator: A,
-    ) -> BsanResult<()> {
+    ) -> BtResult<()> {
         let start_idx = self.tag_mapping.get(&start).unwrap();
         let mut stack =
             TreeVisitorStack::new(start_idx, f_continue, f_propagate, err_builder, allocator);
@@ -802,7 +802,7 @@ where
         alloc_id: AllocId, // diagnostics
         span: Span,        // diagnostics
         allocator: A,
-    ) -> BsanResult<()> {
+    ) -> BtResult<()> {
         self.perform_access(
             tag,
             Some((access_range, AccessKind::Write, AccessCause::Dealloc)),
@@ -876,7 +876,7 @@ where
         alloc_id: AllocId, // diagnostics
         span: Span,        // diagnostics
         allocator: A,
-    ) -> BsanResult<()> {
+    ) -> BtResult<()> {
         use core::ops::Range;
         // Performs the per-node work:
         // - insert the permission if it does not exist

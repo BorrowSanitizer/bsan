@@ -2,15 +2,15 @@
 use alloc::boxed::Box;
 use alloc::string::String;
 use core::ffi::c_void;
-use core::fmt::{self, Display};
 
 use bsan_shared::Permission;
+use thiserror_no_std::Error;
 
 use crate::diagnostics::{AccessCause, NodeDebugInfo};
 use crate::span::Span;
-use crate::AllocId;
+use crate::{AllocId, Provenance};
 
-pub type BsanResult<T> = core::result::Result<T, ErrorInfo>;
+pub type BtResult<T> = core::result::Result<T, ErrorInfo>;
 pub type TreeTransitionResult<T> = core::result::Result<T, TransitionError>;
 
 pub enum ErrorInfo {
@@ -18,17 +18,12 @@ pub enum ErrorInfo {
     UndefinedBehavior(UBInfo),
 }
 
+#[derive(Error)]
 pub enum UBInfo {
-    InvalidProvenance,
-    AccessOutOfBounds(AllocId, *mut c_void, usize),
-    UseAfterFree(AllocId),
+    InvalidProvenance(Span),
+    AccessOutOfBounds(Span, Provenance, *mut c_void, usize),
+    UseAfterFree(Span, AllocId),
     AliasingViolation(Box<TreeError>),
-}
-
-impl Display for ErrorInfo {
-    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!()
-    }
 }
 
 #[macro_export]
@@ -65,15 +60,15 @@ pub enum TransitionError {
 
 #[allow(unused)]
 #[derive(Debug)]
-pub struct BtOp {
-    pub op: Operation,
+pub struct BtOperation {
+    pub op: OperationType,
     pub span: Option<Span>,
     pub reason: Option<String>,
 }
 
 #[allow(unused)]
 #[derive(Debug)]
-pub enum Operation {
+pub enum OperationType {
     Alloc,
     Read,
     Write,
