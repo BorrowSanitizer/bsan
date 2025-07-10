@@ -11,7 +11,7 @@ use crate::diagnostics::AccessCause;
 use crate::errors::{BtResult, ErrorInfo, UBInfo};
 use crate::hooks::BsanAllocHooks;
 use crate::span::Span;
-use crate::{throw_ub, AllocId, AllocInfo, GlobalCtx, LocalCtx, Provenance};
+use crate::{throw_ub, AllocId, AllocInfo, BorTag, GlobalCtx, LocalCtx, Provenance};
 
 pub mod tree;
 pub mod unimap;
@@ -76,7 +76,7 @@ impl BorrowTracker {
         global_ctx: &GlobalCtx,
         local_ctx: &mut LocalCtx,
         retag_info: RetagInfo,
-    ) -> BtResult<()> {
+    ) -> BtResult<BorTag> {
         // Tree is assumed to be initialized
         let mut lock = self.lock();
         let tree = unsafe { lock.as_mut().unwrap_unchecked() };
@@ -148,7 +148,7 @@ impl BorrowTracker {
         };
 
         tree.new_child(child_params);
-        Ok(())
+        Ok(new_tag)
     }
 
     pub fn access(&self, global_ctx: &GlobalCtx, access_kind: AccessKind) -> BtResult<()> {

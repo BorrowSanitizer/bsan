@@ -13,16 +13,21 @@ use crate::{AllocId, Provenance};
 pub type BtResult<T> = core::result::Result<T, ErrorInfo>;
 pub type TreeTransitionResult<T> = core::result::Result<T, TransitionError>;
 
+#[derive(Error, Debug)]
 pub enum ErrorInfo {
     Internal(String),
     UndefinedBehavior(UBInfo),
 }
 
-#[derive(Error)]
+#[derive(Error, Debug)]
 pub enum UBInfo {
+    #[error("Invalid provenance.")]
     InvalidProvenance(Span),
+    #[error("Access out-of-bounds.")]
     AccessOutOfBounds(Span, Provenance, *mut c_void, usize),
+    #[error("Use-after-free.")]
     UseAfterFree(Span, AllocId),
+    #[error("Aliasing violation.")]
     AliasingViolation(Box<TreeError>),
 }
 

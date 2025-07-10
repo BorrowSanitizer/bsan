@@ -1,5 +1,5 @@
 [workspace]
-members = ["bsan-driver", "bsan-rt", "bsan-script", "bsan-shared", "cargo-bsan"]
+members = [ "bsan-debug","bsan-driver", "bsan-rt", "bsan-script", "bsan-shared", "cargo-bsan"]
 default-members = ["bsan-driver", "bsan-script", "cargo-bsan"]
 exclude = [".toolchain"]
 resolver = "3"
@@ -11,7 +11,7 @@ edition = "2024"
 
 [dev-dependencies]
 colored = "2"
-ui_test = "0.26.5"
+ui_test = "0.29.1"
 rustc_version = "0.4"
 regex = "1.11.1"
 tempfile = "3"
