@@ -13,6 +13,7 @@
 #![feature(core_intrinsics)]
 #![feature(yeet_expr)]
 #![feature(unsafe_cell_access)]
+#![feature(stmt_expr_attributes)]
 
 #[macro_use]
 extern crate alloc;
@@ -28,6 +29,7 @@ use core::ptr::NonNull;
 use core::{fmt, mem, ptr};
 
 use bsan_shared::{AccessKind, RetagInfo, Size};
+use errors::BtOperation;
 use libc_print::std_name::*;
 use spin::Mutex;
 
@@ -61,11 +63,25 @@ macro_rules! println {
         libc_print::std_name::println!($($arg)*);
     };
 }
+
 pub(crate) use println;
+
+macro_rules! handle_err {
+    ($err:expr, $gtx:expr) => {{
+        #[cfg(test)]
+        {
+            panic!("Error in test mode: {:?}", $err);
+        }
+        #[cfg(not(test))]
+        {
+            $gtx.handle_error($err);
+        }
+    }};
+}
 
 /// Unique identifier for an allocation
 #[repr(transparent)]
-#[derive(Default, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AllocId(usize);
 
 impl AllocId {
@@ -92,6 +108,15 @@ impl AllocId {
 
     pub const fn min() -> Self {
         AllocId(3)
+    }
+}
+
+impl Default for AllocId {
+    /// By Default, `AllocId` is invalid
+    // This might change in the future, updated to reflect
+    // the behavior in `BorrowTracker::dealloc`
+    fn default() -> Self {
+        Self::invalid()
     }
 }
 
@@ -274,7 +299,7 @@ pub struct AllocInfo {
     pub base_addr: FreeListAddrUnion,
     pub size: usize,
     pub align: usize,
-    pub tree_lock: Mutex<Option<tree::Tree<BsanAllocHooks>>>,
+    pub tree_lock: Mutex<Option<tree::Tree<hooks::BsanAllocHooks>>>,
 }
 
 unsafe impl Linkable<AllocInfo> for AllocInfo {
@@ -329,7 +354,7 @@ unsafe extern "C" fn __bsan_retag(
         unsafe { RetagInfo::from_raw(access_size, perm_kind, protector_kind, access_kind) };
     BorrowTracker::new(prov, object_addr, Some(access_size))
         .and_then(|opt| opt.map(|bt| bt.retag(global_ctx, local_ctx, retag_info)).transpose())
-        .unwrap_or_else(|err| global_ctx.handle_error(err))
+        .unwrap_or_else(|err| handle_err!(err, global_ctx))
         .unwrap_or(bor_tag)
 }
 
@@ -345,13 +370,10 @@ unsafe extern "C" fn __bsan_read(
     // Assuming root tag has been initialized in the tree
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-    let bt = BorrowTracker::new(prov, ptr, Some(access_size));
-    /*
-    let _ = bt
-        .iter()
-        .flatten()
-        .try_for_each(|bt| bt.access(global_ctx, AccessKind::Read))
-        .unwrap_or_else(|err| global_ctx.handle_error(err)); */
+
+    BorrowTracker::new(prov, ptr, Some(access_size))
+        .and_then(|bt| bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Read)))
+        .unwrap_or_else(|err| handle_err!(err, global_ctx));
 }
 
 /// Records a write access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -365,13 +387,9 @@ unsafe extern "C" fn __bsan_write(
 ) {
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-    let bt = BorrowTracker::new(prov, ptr, Some(access_size));
-    /*
-    let _ = bt
-        .iter()
-        .flatten()
-        .try_for_each(|bt| bt.access(global_ctx, AccessKind::Write))
-        .unwrap_or_else(|err| global_ctx.handle_error(err)); */
+    let bt = BorrowTracker::new(prov, ptr, Some(access_size))
+        .and_then(|bt| bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Write)))
+        .unwrap_or_else(|err| handle_err!(err, global_ctx));
 }
 
 /// Deregisters a heap allocation
@@ -384,13 +402,9 @@ extern "C" fn __bsan_dealloc(
 ) {
     let global_ctx = unsafe { global_ctx() };
     let prov: Provenance = Provenance { alloc_id, bor_tag, alloc_info };
-    let mut bt = BorrowTracker::new(prov, ptr, None);
-    /*
-    let _ = bt
-        .iter_mut()
-        .flatten()
-        .try_for_each(|bt| bt.dealloc(global_ctx))
-        .unwrap_or_else(|err| global_ctx.handle_error(err));*/
+    BorrowTracker::new(prov, ptr, None)
+        .and_then(|mut bt| bt.iter_mut().try_for_each(|t| t.dealloc(global_ctx)))
+        .unwrap_or_else(|err| handle_err!(err, global_ctx));
 }
 
 // Registers a heap allocation of size `size`, storing its provenance in the return pointer.
@@ -657,36 +671,34 @@ mod test {
         })
     }
 
-    // Below tests should panic due to unwrap call in end points
-    // Should display correct error messages in stdout
-    // #[test]
-    // #[should_panic]
-    // fn bsan_dealloc_detect_double_free() {
-    //     init_bsan_with_test_hooks();
-    //     let m_size = 20;
-    //     let some_object_addr = unsafe { libc::malloc(m_size) };
-    //     unsafe {
-    //         let mut prov = create_metadata(some_object_addr, m_size);
+    #[test]
+    #[should_panic]
+    fn bsan_dealloc_detect_double_free() {
+        with_init(|| {
+            with_heap_object(|obj, size| {
+                unsafe {
+                    let mut prov = create_metadata(obj, size);
+                    //__bsan_retag(&raw mut prov, 20, 0, 0, some_object_addr);
+                    destroy_metadata(obj, prov);
+                    println!("Calling second destroy");
+                    destroy_metadata(obj, prov);
+                }
+            })
+        });
+    }
 
-    //         //__bsan_retag(&raw mut prov, 20, 0, 0, some_object_addr);
-    //         __bsan_dealloc(&raw mut prov, some_object_addr);
-    //         __bsan_dealloc(&mut prov as *mut _, some_object_addr);
-    //     }
-    // }
-
-    // #[test]
-    // #[should_panic]
-    // fn bsan_dealloc_detect_invalid_free() {
-    //     init_bsan_with_test_hooks();
-    //     let m_size = 20;
-    //     let some_object_addr = unsafe { libc::malloc(m_size) };
-    //     unsafe {
-    //         let mut prov = create_metadata(some_object_addr, m_size);
-    //         let mut modified_prov = prov;
-    //         modified_prov.alloc_id = AllocId::new(99);
-    //         __bsan_dealloc(&mut modified_prov as *mut _, some_object_addr);
-    //     }
-    // }
+    #[test]
+    #[should_panic]
+    fn bsan_dealloc_detect_invalid_free() {
+        with_init(|| {
+            with_heap_object(|obj, size| unsafe {
+                let mut prov = create_metadata(obj, size);
+                let mut modified_prov = prov;
+                modified_prov.alloc_id = AllocId::new(99);
+                destroy_metadata(obj, modified_prov);
+            });
+        })
+    }
 
     #[test]
     fn bsan_read() {

@@ -1,4 +1,5 @@
 // Components in this library were ported from Miri and then modified by our team.
+#![feature(yeet_expr)]
 use core::ffi::c_void;
 use core::ptr;
 
@@ -30,7 +31,6 @@ impl BorrowTracker {
     fn lock(&self) -> MutexGuard<'_, Option<Tree<BsanAllocHooks>>> {
         unsafe { (*self.prov.alloc_info).tree_lock.lock() }
     }
-
     /// # Safety
     /// Takes in provenance pointer that is checked via debug_asserts
     pub fn new(
@@ -173,6 +173,17 @@ impl BorrowTracker {
         let mut lock = self.lock();
         let tree = unsafe { lock.as_mut().unwrap_unchecked() };
 
+        let prov_id = self.prov.alloc_id;
+        let alloc_id = unsafe { (*self.prov.alloc_info).alloc_id };
+
+        if prov_id != alloc_id {
+            // TODO: Replace with actual span
+            return Err(ErrorInfo::UndefinedBehavior(UBInfo::UseAfterFree(
+                Span::new(),
+                self.prov.alloc_id,
+            )));
+        }
+
         tree.dealloc(
             self.prov.bor_tag,
             self.range,
@@ -185,6 +196,7 @@ impl BorrowTracker {
 
         unsafe { drop(ptr::replace(self.prov.alloc_info, AllocInfo::default())) }
         unsafe { global_ctx.deallocate_lock_location(self.prov.alloc_info) };
+
         Ok(())
     }
 }
