@@ -387,7 +387,7 @@ unsafe extern "C" fn __bsan_write(
 ) {
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-    let bt = BorrowTracker::new(prov, ptr, Some(access_size))
+    BorrowTracker::new(prov, ptr, Some(access_size))
         .and_then(|bt| bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Write)))
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
 }
@@ -550,6 +550,8 @@ unsafe extern "C" fn __bsan_pop_frame() {
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_expose_tag(alloc_id: AllocId, bor_tag: BorTag, alloc_info: *mut AllocInfo) {}
 
+// Code is more readable with explicit return
+#[allow(clippy::needless_return)]
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_debug_assert_null(
     alloc_id: AllocId,
@@ -558,9 +560,8 @@ extern "C" fn __bsan_debug_assert_null(
 ) {
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-    if prov == Provenance::null() {
-        return;
-    } else {
+
+    if prov != Provenance::null() {
         crate::eprintln!("Expected null provenance, got {prov:?}");
         global_ctx.exit(1);
     }
@@ -574,9 +575,8 @@ extern "C" fn __bsan_debug_assert_wildcard(
 ) {
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-    if prov == Provenance::wildcard() {
-        return;
-    } else {
+
+    if prov != Provenance::wildcard() {
         crate::eprintln!("Expected wildcard provenance, got {prov:?}");
         global_ctx.exit(1);
     }
@@ -601,9 +601,8 @@ extern "C" fn __bsan_debug_assert_invalid(
 ) {
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-    if prov == Provenance::null() || prov == Provenance::wildcard() {
-        return;
-    } else {
+
+    if !(prov == Provenance::null() || prov == Provenance::wildcard()) {
         global_ctx.exit(1);
     }
 }
