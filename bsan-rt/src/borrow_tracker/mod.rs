@@ -173,17 +173,6 @@ impl BorrowTracker {
         let mut lock = self.lock();
         let tree = unsafe { lock.as_mut().unwrap_unchecked() };
 
-        let prov_id = self.prov.alloc_id;
-        let alloc_id = unsafe { (*self.prov.alloc_info).alloc_id };
-
-        if prov_id != alloc_id {
-            // TODO: Replace with actual span
-            return Err(ErrorInfo::UndefinedBehavior(UBInfo::UseAfterFree(
-                Span::new(),
-                self.prov.alloc_id,
-            )));
-        }
-
         tree.dealloc(
             self.prov.bor_tag,
             self.range,
