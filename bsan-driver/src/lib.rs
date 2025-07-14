@@ -1,6 +1,12 @@
 #![feature(rustc_private)]
 
 extern crate rustc_driver;
+extern crate rustc_interface;
+extern crate rustc_middle;
+extern crate rustc_session;
+
+pub mod callbacks;
+pub use callbacks::BSanCallBacks;
 
 use std::env;
 pub const BSAN_BUG_REPORT_URL: &str = "https://github.com/BorrowSanitizer/rust/issues/new";
@@ -11,11 +17,8 @@ pub const BSAN_DEFAULT_ARGS: &[&str] = &[
     "-Zmir-opt-level=0",
     "-Cpasses=bsan",
     "-Zmir-emit-retag",
-    "-Zllvm-emit-retag",
+    "-Zmir-retag-fields=all"
 ];
-
-pub struct BSanCallBacks {}
-impl rustc_driver::Callbacks for BSanCallBacks {}
 
 /// Execute a compiler with the given CLI arguments and callbacks.
 pub fn run_compiler(mut args: Vec<String>, target_crate: bool, callbacks: &mut BSanCallBacks) -> ! {
