@@ -598,6 +598,11 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 
     // A helper function to offset a pointer by the given number of bytes.
     Value *offsetPointer(IRBuilder<> &IRB, Value *Pointer, Value *Offset) {
+        if (ConstantInt *CI = dyn_cast<ConstantInt>(Offset)) {
+            if(CI->isZero()) {
+                return Pointer;
+            }
+        }
         Value *Base = IRB.CreatePointerCast(Pointer, BS.IntptrTy);
         Base = IRB.CreateAdd(Base, Offset);
         return IRB.CreateIntToPtr(Base, BS.PtrTy);
