@@ -131,6 +131,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "bsan-debug"
+version = "0.1.0"
+
+[[package]]
 name = "bsan-driver"
 version = "0.1.0"
 dependencies = [
@@ -1298,9 +1302,9 @@ dependencies = [
 
 [[package]]
 name = "ui_test"
-version = "0.26.5"
+version = "0.29.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32ee4c40e5a5f9fa6864ff976473e5d6a6e9884b6ce68b40690d9f87e1994c83"
+checksum = "1211b1111c752c73b33073d2958072be08825fd97c9ab4d83444da361a06634b"
 dependencies = [
  "annotate-snippets",
  "anyhow",

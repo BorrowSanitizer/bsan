@@ -11,6 +11,7 @@ use bsan_shared::ProtectorKind;
 use hashbrown::HashMap;
 use rustc_hash::FxBuildHasher;
 
+use crate::errors::ErrorInfo;
 use crate::hooks::{BsanAllocHooks, BsanHooks};
 use crate::shadow::ShadowHeap;
 use crate::utils::Sizes;
@@ -90,9 +91,8 @@ impl GlobalCtx {
         self.hooks.alloc
     }
 
-    #[allow(unused)]
-    fn exit(&self) -> ! {
-        unsafe { (self.hooks.exit)() }
+    pub fn exit(&self, code: i32) -> ! {
+        unsafe { (self.hooks.exit)(code) }
     }
 
     pub fn new_thread_id(&self) -> ThreadId {
@@ -126,6 +126,11 @@ impl GlobalCtx {
     pub fn get_protector_kind(&self, bor_tag: BorTag) -> Option<ProtectorKind> {
         let tag_map = self.protected_tags.lock();
         tag_map.get(&bor_tag).copied()
+    }
+
+    pub fn handle_error(&self, info: ErrorInfo) -> ! {
+        crate::eprintln!("An error occurred: {info:?}\n\nExiting...");
+        self.exit(1)
     }
 }
 
@@ -207,8 +212,8 @@ impl<K, V> BHashMap<K, V> {
 
 /// We need to declare a global allocator to be able to use `alloc` in a `#[no_std]`
 /// crate. Anything other than the `GlobalCtx` object will clash with the interceptors,
-/// so we provide a placeholder that panics when it is used.
-#[cfg(not(test))]
+/// For now, this allocator will defer to libc malloc and free, but in the future, we can
+/// set its endpoints to immediately panic with an error message to help with debugging.
 mod global_alloc {
     use core::alloc::{GlobalAlloc, Layout};
 
@@ -216,11 +221,11 @@ mod global_alloc {
     struct DummyAllocator;
 
     unsafe impl GlobalAlloc for DummyAllocator {
-        unsafe fn alloc(&self, _layout: Layout) -> *mut u8 {
-            panic!()
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            unsafe { libc::malloc(layout.size()).cast::<u8>() }
         }
-        unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
-            panic!()
+        unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
+            unsafe { libc::free(ptr.cast::<libc::c_void>()) }
         }
     }
 

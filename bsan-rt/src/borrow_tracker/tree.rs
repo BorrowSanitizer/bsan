@@ -642,7 +642,7 @@ where
                     parent: None,
                     // Miri uses SmallVec here
                     // ATTENTION: Using `Global` allocator
-                    children: Vec::new_in(Global),
+                    children: Vec::new(),
                     default_initial_perm: root_default_perm,
                     // The root may never be skipped, all accesses will be local.
                     default_initial_idempotent_foreign_access: IdempotentForeignAccess::None,
@@ -730,6 +730,9 @@ where
         self.nodes.get_mut(parent_idx).unwrap().children.push(idx);
 
         for (Range { start, end }, &perm) in perms_map.iter(Size::from_bytes(0), perms_map.size()) {
+            if !perm.is_initial() {
+                crate::println!("{}", perm);
+            }
             assert!(perm.is_initial());
             for (_perms_range, perms) in self
                 .rperms

@@ -14,7 +14,7 @@ pub type MMap = unsafe extern "C" fn(*mut c_void, usize, i32, i32, i32, off_t) -
 pub type MUnmap = unsafe extern "C" fn(*mut c_void, usize) -> i32;
 pub type Malloc = unsafe extern "C" fn(usize) -> *mut c_void;
 pub type Free = unsafe extern "C" fn(*mut c_void);
-pub type Exit = unsafe extern "C" fn() -> !;
+pub type Exit = unsafe extern "C" fn(i32) -> !;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -57,8 +57,8 @@ unsafe impl Allocator for BsanAllocHooks {
     }
 }
 
-unsafe extern "C" fn default_exit() -> ! {
-    unsafe { libc::exit(0) }
+unsafe extern "C" fn default_exit(code: i32) -> ! {
+    unsafe { libc::exit(code) }
 }
 
 pub static DEFAULT_HOOKS: BsanHooks = BsanHooks {

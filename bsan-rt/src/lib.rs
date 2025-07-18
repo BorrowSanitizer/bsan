@@ -1,4 +1,5 @@
 #![cfg_attr(not(test), no_std)]
+#![allow(unused)]
 #![allow(internal_features)]
 #![warn(clippy::transmute_ptr_to_ptr)]
 #![warn(clippy::borrow_as_ptr)]
@@ -12,6 +13,7 @@
 #![feature(core_intrinsics)]
 #![feature(yeet_expr)]
 #![feature(unsafe_cell_access)]
+#![feature(stmt_expr_attributes)]
 
 #[macro_use]
 extern crate alloc;
@@ -27,6 +29,7 @@ use core::ptr::NonNull;
 use core::{fmt, mem, ptr};
 
 use bsan_shared::{AccessKind, RetagInfo, Size};
+use errors::BtOperation;
 use libc_print::std_name::*;
 use spin::Mutex;
 
@@ -60,11 +63,25 @@ macro_rules! println {
         libc_print::std_name::println!($($arg)*);
     };
 }
+
 pub(crate) use println;
+
+macro_rules! handle_err {
+    ($err:expr, $gtx:expr) => {{
+        #[cfg(test)]
+        {
+            panic!("Error in test mode: {:?}", $err);
+        }
+        #[cfg(not(test))]
+        {
+            $gtx.handle_error($err);
+        }
+    }};
+}
 
 /// Unique identifier for an allocation
 #[repr(transparent)]
-#[derive(Default, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AllocId(usize);
 
 impl AllocId {
@@ -76,12 +93,12 @@ impl AllocId {
     }
     /// An invalid allocation
     pub const fn invalid() -> Self {
-        AllocId(0)
+        AllocId(1)
     }
 
     /// Represents any valid allocation
     pub const fn wildcard() -> Self {
-        AllocId(1)
+        AllocId(0)
     }
 
     /// A global or stack allocation, which cannot be manually freed
@@ -91,6 +108,15 @@ impl AllocId {
 
     pub const fn min() -> Self {
         AllocId(3)
+    }
+}
+
+impl Default for AllocId {
+    /// By Default, `AllocId` is invalid
+    // This might change in the future, updated to reflect
+    // the behavior in `BorrowTracker::dealloc`
+    fn default() -> Self {
+        Self::invalid()
     }
 }
 
@@ -165,7 +191,7 @@ impl Provenance {
     const fn null() -> Self {
         Provenance {
             alloc_id: AllocId::invalid(),
-            bor_tag: BorTag::new(0),
+            bor_tag: BorTag::new(1),
             alloc_info: core::ptr::null_mut(),
         }
     }
@@ -198,42 +224,6 @@ impl fmt::Debug for FreeListAddrUnion {
 impl Default for FreeListAddrUnion {
     fn default() -> Self {
         Self { base_addr: core::ptr::null_mut() }
-    }
-}
-
-#[derive(Debug)]
-struct ProvenanceArrayView {
-    len: usize,
-    curr: usize,
-    data: *mut Provenance,
-}
-
-impl ProvenanceArrayView {
-    fn new(len: usize, data: *mut Provenance) -> Self {
-        Self { len, curr: 0, data }
-    }
-}
-
-impl Extend<Provenance> for ProvenanceArrayView {
-    fn extend<T: IntoIterator<Item = Provenance>>(&mut self, iter: T) {
-        for elem in iter {
-            if self.curr < self.len {
-                unsafe { *self.data.add(self.curr) = elem }
-                self.curr += 1;
-            }
-        }
-    }
-}
-
-impl Iterator for ProvenanceArrayView {
-    type Item = Provenance;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.curr == self.len {
-            None
-        } else {
-            unsafe { Some(*self.data.add(self.curr)) }
-        }
     }
 }
 
@@ -309,7 +299,7 @@ pub struct AllocInfo {
     pub base_addr: FreeListAddrUnion,
     pub size: usize,
     pub align: usize,
-    pub tree_lock: Mutex<Option<tree::Tree<BsanAllocHooks>>>,
+    pub tree_lock: Mutex<Option<tree::Tree<hooks::BsanAllocHooks>>>,
 }
 
 unsafe impl Linkable<AllocInfo> for AllocInfo {
@@ -356,14 +346,16 @@ unsafe extern "C" fn __bsan_retag(
     perm_kind: u16,
     protector_kind: u8,
     access_kind: u8,
-) {
+) -> BorTag {
     let global_ctx = unsafe { global_ctx() };
     let local_ctx = unsafe { local_ctx_mut() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     let retag_info =
         unsafe { RetagInfo::from_raw(access_size, perm_kind, protector_kind, access_kind) };
-    let bt = BorrowTracker::new(prov, object_addr, Some(access_size));
-    let _ = bt.iter().flatten().try_for_each(|bt| bt.retag(global_ctx, local_ctx, retag_info));
+    BorrowTracker::new(prov, object_addr, Some(access_size))
+        .and_then(|opt| opt.map(|bt| bt.retag(global_ctx, local_ctx, retag_info)).transpose())
+        .unwrap_or_else(|err| handle_err!(err, global_ctx))
+        .unwrap_or(bor_tag)
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -378,8 +370,10 @@ unsafe extern "C" fn __bsan_read(
     // Assuming root tag has been initialized in the tree
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-    let bt = BorrowTracker::new(prov, ptr, Some(access_size));
-    let _ = bt.iter().flatten().try_for_each(|bt| bt.access(global_ctx, AccessKind::Read));
+
+    BorrowTracker::new(prov, ptr, Some(access_size))
+        .and_then(|bt| bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Read)))
+        .unwrap_or_else(|err| handle_err!(err, global_ctx));
 }
 
 /// Records a write access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -393,8 +387,9 @@ unsafe extern "C" fn __bsan_write(
 ) {
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-    let bt = BorrowTracker::new(prov, ptr, Some(access_size));
-    let _ = bt.iter().flatten().try_for_each(|bt| bt.access(global_ctx, AccessKind::Write));
+    BorrowTracker::new(prov, ptr, Some(access_size))
+        .and_then(|bt| bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Write)))
+        .unwrap_or_else(|err| handle_err!(err, global_ctx));
 }
 
 /// Deregisters a heap allocation
@@ -407,8 +402,9 @@ extern "C" fn __bsan_dealloc(
 ) {
     let global_ctx = unsafe { global_ctx() };
     let prov: Provenance = Provenance { alloc_id, bor_tag, alloc_info };
-    let mut bt = BorrowTracker::new(prov, ptr, None);
-    let _ = bt.iter_mut().flatten().try_for_each(|bt| bt.dealloc(global_ctx));
+    BorrowTracker::new(prov, ptr, None)
+        .and_then(|mut bt| bt.iter_mut().try_for_each(|t| t.dealloc(global_ctx)))
+        .unwrap_or_else(|err| handle_err!(err, global_ctx));
 }
 
 // Registers a heap allocation of size `size`, storing its provenance in the return pointer.
@@ -493,55 +489,6 @@ unsafe extern "C" fn __bsan_shadow_dest(addr: *mut u8) -> *mut Provenance {
     heap.get_dest(ctx.hooks(), addr.addr())
 }
 
-/// Copies provenance values from an array into three consecutive arrays of their components.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_join_provenance(
-    dest: *mut Provenance,
-    length: usize,
-    id_buffer: *mut usize,
-    tag_buffer: *mut usize,
-    info_buffer: *mut *mut c_void,
-) {
-    let info_buffer = info_buffer.cast::<*mut AllocInfo>();
-    for offset in 0..length {
-        unsafe {
-            let alloc_id = AllocId(*id_buffer.add(offset));
-            let bor_tag = BorTag(*tag_buffer.add(offset));
-            let alloc_info = *info_buffer.add(offset);
-            *dest.add(offset) = Provenance { alloc_id, bor_tag, alloc_info };
-        }
-    }
-}
-
-/// Copies provenance values from an array into three consecutive arrays of their components.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_split_provenance(
-    array: *mut Provenance,
-    length: usize,
-    id_buffer: *mut AllocId,
-    tag_buffer: *mut BorTag,
-    info_buffer: *mut *mut c_void,
-) {
-    let info_buffer = info_buffer.cast::<*mut AllocInfo>();
-    for offset in 0..length {
-        unsafe {
-            let Provenance { alloc_id, bor_tag, alloc_info } = *array.add(offset);
-            *id_buffer = alloc_id;
-            *tag_buffer = bor_tag;
-            *info_buffer = alloc_info;
-        }
-    }
-}
-
-/// Load provenance values from the shadow heap into split arrays.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_shadow_load_array(src: *mut u8, data: *mut Provenance, len: usize) {
-    let ctx = unsafe { global_ctx() };
-    let heap = ctx.shadow_heap();
-    let prov_array = ProvenanceArrayView::new(len, data);
-    heap.load_consecutive(src.addr(), len, prov_array);
-}
-
 /// Copy provenance values from split arrays into the shadow heap.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_shadow_load_vector(
@@ -601,7 +548,70 @@ unsafe extern "C" fn __bsan_pop_frame() {
 /// validate accesses through "wildcard" pointers.
 #[allow(unused)]
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_expose_tag(alloc_id: usize, bor_tag: usize, alloc_info: *mut c_void) {}
+extern "C" fn __bsan_expose_tag(alloc_id: AllocId, bor_tag: BorTag, alloc_info: *mut AllocInfo) {}
+
+// Code is more readable with explicit return
+#[allow(clippy::needless_return)]
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_debug_assert_null(
+    alloc_id: AllocId,
+    bor_tag: BorTag,
+    alloc_info: *mut AllocInfo,
+) {
+    let global_ctx = unsafe { global_ctx() };
+    let prov = Provenance { alloc_id, bor_tag, alloc_info };
+
+    if prov != Provenance::null() {
+        crate::eprintln!("Expected null provenance, got {prov:?}");
+        global_ctx.exit(1);
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_debug_assert_wildcard(
+    alloc_id: AllocId,
+    bor_tag: BorTag,
+    alloc_info: *mut AllocInfo,
+) {
+    let global_ctx = unsafe { global_ctx() };
+    let prov = Provenance { alloc_id, bor_tag, alloc_info };
+
+    if prov != Provenance::wildcard() {
+        crate::eprintln!("Expected wildcard provenance, got {prov:?}");
+        global_ctx.exit(1);
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_debug_assert_valid(
+    alloc_id: AllocId,
+    bor_tag: BorTag,
+    alloc_info: *mut AllocInfo,
+) {
+    let prov = Provenance { alloc_id, bor_tag, alloc_info };
+    assert_ne!(prov, Provenance::null());
+    assert_ne!(prov, Provenance::wildcard());
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_debug_assert_invalid(
+    alloc_id: AllocId,
+    bor_tag: BorTag,
+    alloc_info: *mut AllocInfo,
+) {
+    let global_ctx = unsafe { global_ctx() };
+    let prov = Provenance { alloc_id, bor_tag, alloc_info };
+
+    if !(prov == Provenance::null() || prov == Provenance::wildcard()) {
+        global_ctx.exit(1);
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_debug_print(alloc_id: AllocId, bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+    let prov = Provenance { alloc_id, bor_tag, alloc_info };
+    crate::println!("{prov:?}");
+}
 
 #[cfg(test)]
 mod test {
@@ -660,36 +670,34 @@ mod test {
         })
     }
 
-    // Below tests should panic due to unwrap call in end points
-    // Should display correct error messages in stdout
-    // #[test]
-    // #[should_panic]
-    // fn bsan_dealloc_detect_double_free() {
-    //     init_bsan_with_test_hooks();
-    //     let m_size = 20;
-    //     let some_object_addr = unsafe { libc::malloc(m_size) };
-    //     unsafe {
-    //         let mut prov = create_metadata(some_object_addr, m_size);
+    #[test]
+    #[should_panic]
+    fn bsan_dealloc_detect_double_free() {
+        with_init(|| {
+            with_heap_object(|obj, size| {
+                unsafe {
+                    let mut prov = create_metadata(obj, size);
+                    //__bsan_retag(&raw mut prov, 20, 0, 0, some_object_addr);
+                    destroy_metadata(obj, prov);
+                    println!("Calling second destroy");
+                    destroy_metadata(obj, prov);
+                }
+            })
+        });
+    }
 
-    //         //__bsan_retag(&raw mut prov, 20, 0, 0, some_object_addr);
-    //         __bsan_dealloc(&raw mut prov, some_object_addr);
-    //         __bsan_dealloc(&mut prov as *mut _, some_object_addr);
-    //     }
-    // }
-
-    // #[test]
-    // #[should_panic]
-    // fn bsan_dealloc_detect_invalid_free() {
-    //     init_bsan_with_test_hooks();
-    //     let m_size = 20;
-    //     let some_object_addr = unsafe { libc::malloc(m_size) };
-    //     unsafe {
-    //         let mut prov = create_metadata(some_object_addr, m_size);
-    //         let mut modified_prov = prov;
-    //         modified_prov.alloc_id = AllocId::new(99);
-    //         __bsan_dealloc(&mut modified_prov as *mut _, some_object_addr);
-    //     }
-    // }
+    #[test]
+    #[should_panic]
+    fn bsan_dealloc_detect_invalid_free() {
+        with_init(|| {
+            with_heap_object(|obj, size| unsafe {
+                let mut prov = create_metadata(obj, size);
+                let mut modified_prov = prov;
+                modified_prov.alloc_id = AllocId::new(99);
+                destroy_metadata(obj, modified_prov);
+            });
+        })
+    }
 
     #[test]
     fn bsan_read() {
@@ -721,6 +729,8 @@ mod test {
 
 #[cfg(not(test))]
 #[panic_handler]
-fn panic(_info: &PanicInfo<'_>) -> ! {
+fn panic(info: &PanicInfo<'_>) -> ! {
+    crate::eprintln!("The BorrowSanitizer runtime panicked!");
+    crate::eprintln!("{info}");
     core::intrinsics::abort()
 }
