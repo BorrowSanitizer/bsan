@@ -8,7 +8,6 @@
 #![feature(allocator_api)]
 #![feature(alloc_layout_extra)]
 #![feature(format_args_nl)]
-#![feature(nonnull_provenance)]
 #![feature(core_intrinsics)]
 #![feature(yeet_expr)]
 #![feature(unsafe_cell_access)]
@@ -350,18 +349,15 @@ unsafe extern "C" fn __bsan_deinit() {
 unsafe extern "C" fn __bsan_retag(
     object_addr: *mut c_void,
     access_size: usize,
+    perm: u64,
     alloc_id: AllocId,
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
-    perm_kind: u16,
-    protector_kind: u8,
-    access_kind: u8,
 ) {
     let global_ctx = unsafe { global_ctx() };
     let local_ctx = unsafe { local_ctx_mut() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-    let retag_info =
-        unsafe { RetagInfo::from_raw(access_size, perm_kind, protector_kind, access_kind) };
+    let retag_info = unsafe { RetagInfo::from_raw(access_size, perm) };
     let bt = BorrowTracker::new(prov, object_addr, Some(access_size));
     let _ = bt.iter().flatten().try_for_each(|bt| bt.retag(global_ctx, local_ctx, retag_info));
 }

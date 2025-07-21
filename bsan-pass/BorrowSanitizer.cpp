@@ -93,6 +93,7 @@ namespace
             LongSize = M.getDataLayout().getPointerSizeInBits();
             TargetTriple = Triple(M.getTargetTriple());
             Int8Ty = Type::getInt8Ty(*C);
+            Int64Ty = Type::getInt64Ty(*C);
             PtrTy = PointerType::getUnqual(*C);
             IntptrTy = Type::getIntNTy(*C, LongSize);
             ProvenanceTy = StructType::get(IntptrTy, IntptrTy, PtrTy);
@@ -122,6 +123,7 @@ namespace
         int LongSize;
         Triple TargetTriple;
         Type *Int8Ty;
+        Type *Int64Ty;
         PointerType *PtrTy;
         Type *IntptrTy;
         StructType *ProvenanceTy;
@@ -423,8 +425,8 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
     IRBuilder<> IRB(*C);
 
     BsanFuncRetag = M.getOrInsertFunction(kBsanFuncRetagName, IRB.getVoidTy(),
-                                          PtrTy, IntptrTy, Int8Ty, Int8Ty);
-
+                                          PtrTy, IntptrTy, Int64Ty, IntptrTy, IntptrTy, PtrTy);
+                                          
     BsanFuncPushFrame = M.getOrInsertFunction(
         kBsanFuncPushFrameName, FunctionType::get(PtrTy, IntptrTy, /*isVarArg=*/false));
 

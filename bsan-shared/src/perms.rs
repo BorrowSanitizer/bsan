@@ -14,28 +14,35 @@ pub struct RetagInfo {
 }
 
 impl RetagInfo {
-    #[inline]
-    pub fn new(
-        size: usize,
-        perm_kind: Permission,
-        protector_kind: Option<ProtectorKind>,
-        access_kind: Option<AccessKind>,
-    ) -> Self {
-        Self { size, perm_kind, protector_kind, access_kind }
-    }
-
     /// # Safety
-    /// Both perm_kind and protector_kind must be valid enum variants.
-    pub unsafe fn from_raw(
-        size: usize,
-        perm_kind: u16,
-        protector_kind: u8,
-        access_kind: u8,
-    ) -> Self {
-        let perm_kind = unsafe { Permission::from_raw(perm_kind) };
-        let protector_kind = ProtectorKind::from_raw(protector_kind);
-        let access_kind = AccessKind::from_raw(access_kind);
-        Self::new(size, perm_kind, protector_kind, access_kind)
+    /// The first 32 bits of `perm` must contain the `Permission`,
+    /// the `ProtectorKind`, and the `AccessKind, in that order.`
+    #[inline]
+    #[allow(clippy::needless_late_init)]
+    pub unsafe fn from_raw(size: usize, perm: u64) -> Self {
+        let perm_kind: u16;
+        let protector_kind: u8;
+        let access_kind: u8;
+
+        cfg_select! {
+            target_endian = "little" => {
+                perm_kind = (perm & 0xFF) as u16;
+                protector_kind = ((perm >> 16) & 0xF) as u8;
+                access_kind = ((perm >> 24) & 0xF) as u8;
+            }
+            target_endian = "big" => {
+                perm_kind = (perm & 0xFF) as u32;
+                protector_kind = (perm << 16) & 0xF as u8;
+                access_kind = (perm << 24 ) & 0xF as u8;
+            }
+        }
+
+        unsafe {
+            let perm_kind = Permission::from_raw(perm_kind);
+            let protector_kind = ProtectorKind::from_raw(protector_kind);
+            let access_kind = AccessKind::from_raw(access_kind);
+            Self { size, perm_kind, protector_kind, access_kind }
+        }
     }
 }
 

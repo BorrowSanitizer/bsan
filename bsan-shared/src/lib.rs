@@ -1,4 +1,5 @@
 #![cfg_attr(not(test), no_std)]
+#![feature(cfg_select)]
 #![allow(dead_code)]
 #![feature(allocator_api)]
 
