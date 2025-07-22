@@ -887,12 +887,10 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
             CallInst *CIRetag = CallInst::Create(BS.BsanFuncRetag, {
                 I.getOperand(0),
                 I.getOperand(1),
+                I.getOperand(2), 
                 Prov.ID, 
                 Prov.Tag, 
                 Prov.Info, 
-                I.getOperand(2), 
-                I.getOperand(3),
-                I.getOperand(4),
             });
             ReplaceInstWithInst(&I, CIRetag);
         }
@@ -1355,7 +1353,7 @@ void BorrowSanitizer::initializeCallbacks(Module &M, const TargetLibraryInfo &TL
     BsanFuncRetag = M.getOrInsertFunction(
         kBsanFuncRetagName, AL,
         IntptrTy,
-        PtrTy, IntptrTy, IntptrTy, IntptrTy, PtrTy, Int16Ty, Int8Ty, Int8Ty
+        PtrTy, IntptrTy, Int64Ty, IntptrTy, IntptrTy, PtrTy
     );
 
     BsanFuncPushFrame = M.getOrInsertFunction(
