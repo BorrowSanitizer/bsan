@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use xshell::{cmd, Cmd, Shell};
 
 use crate::commands::Buildable;
-use crate::utils::{active_toolchain, show_error};
+use crate::utils::{active_libdir, active_sysroot, active_toolchain, show_error};
 use crate::{setup, utils, TOOLCHAIN_NAME};
 
 #[allow(dead_code)]
@@ -32,8 +32,9 @@ pub struct BsanEnv {
     cargo_extra_flags: Vec<String>,
     /// Controls whether binaries are built in debug or release mode
     mode: Mode,
-    /// Whether build output should be silenced.
-    quiet: bool,
+    /// Additional CLI options
+    pub quiet: bool,
+    pub skip: bool,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Default)]
@@ -106,28 +107,34 @@ impl BsanConfig {
 }
 
 impl BsanEnv {
-    pub fn new(quiet: bool) -> Result<Self> {
+    pub fn new(quiet: bool, skip: bool, toolchain_dir: Option<String>) -> Result<Self> {
         let sh = Shell::new()?;
         let root_dir = utils::root_dir()?;
         let host = utils::version_meta(&sh, &active_toolchain()?)?;
 
-        let deps_dir = path!(root_dir / ".toolchain");
+        let deps_dir = if let Some(toolchain_dir) = toolchain_dir {
+            path!(toolchain_dir)
+        } else {
+            let sysroot = active_sysroot()?;
+            if let Some(parent) = sysroot.parent() {
+                path!(parent / "bsan")
+            } else {
+                show_error!("Please specify an installation directory for our toolchain using `xb --toolchain-dir=[dir]`.")
+            }
+        };
         fs::create_dir_all(&deps_dir)?;
 
         let config_path = path!(root_dir / "config.toml");
         let mut config = BsanConfig::from_file(&config_path)?;
-        let meta = setup::setup(&sh, &host, &mut config, &deps_dir)?;
+        let meta = setup::setup(&sh, &host, &mut config, &deps_dir, skip)?;
         config.save(&config_path)?;
 
         let build_dir = path!(root_dir / "target");
         // Hard-code the target dir, since we rely on all binaries ending up in the same spot.
         sh.set_var("CARGO_TARGET_DIR", &build_dir);
 
-        let sysroot = cmd!(sh, "rustc --print sysroot").output()?.stdout;
-        let sysroot = PathBuf::from(String::from_utf8(sysroot)?.trim_end());
-
-        let target_libdir = cmd!(sh, "rustc --print target-libdir").output()?;
-        let target_libdir = String::from_utf8(target_libdir.stdout)?;
+        let sysroot = active_sysroot()?;
+        let target_libdir = active_libdir()?;
 
         let mut target_bindir = path!(target_libdir);
         assert!(target_bindir.pop());
@@ -178,6 +185,7 @@ impl BsanEnv {
             cargo_extra_flags,
             mode: Mode::Debug,
             quiet,
+            skip,
         })
     }
 

@@ -2,10 +2,8 @@
 	"name": "BorrowSanitizer",
 	"build": {
 		"dockerfile": "Dockerfile",
-		"args": {
-			"TAG": "sha-b55ccbf"
-		},
-		"target": "image-dev"
+		"target": "image-dev",
+		"context": ".."
 	},
 	"remoteEnv": {
 		"PATH": "${containerEnv:PATH}:${containerWorkspaceFolder}"

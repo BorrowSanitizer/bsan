@@ -47,7 +47,7 @@ jobs:
           run: |
             platform=${{ matrix.config.platform }}
             platform=${platform//\//-} 
-            tag=$(jq -r '.build.args.TAG' .devcontainer/devcontainer.json)
+            tag=sha-$(grep -oP 'sha\s*=\s*"\K[0-9a-f]{7}' config.toml)
             echo "platform=$platform" >> "$GITHUB_OUTPUT"
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
 

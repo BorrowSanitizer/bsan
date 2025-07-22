@@ -7,7 +7,9 @@ use rustc_version::VersionMeta;
 use xshell::{cmd, Shell};
 
 use crate::env::BsanConfig;
-use crate::utils::{self, active_toolchain, prompt_user, show_error, version_meta, PromptResult};
+use crate::utils::{
+    self, active_toolchain, prompt_user_unless, show_error, version_meta, PromptResult,
+};
 use crate::TOOLCHAIN_NAME;
 
 static FIRST_INSTALL: &str =
@@ -20,6 +22,7 @@ pub fn setup(
     host: &VersionMeta,
     config: &mut BsanConfig,
     toolchain_dir: &Path,
+    skip_prompt: bool,
 ) -> Result<VersionMeta> {
     // If we have the `bsan` toolchain installed, then we've either already
     // run the setup script, or we're in our Docker container, which has all of
@@ -55,10 +58,10 @@ pub fn setup(
 
     // If we've passed these checks, then let's do the expensive step of
     // downloading and installing our custom toolchain.
-    if let Some(PromptResult::Yes) = prompt_user(prompt_text)? {
+    if let Some(PromptResult::Yes) = prompt_user_unless(skip_prompt, prompt_text)? {
         toolchain(sh, host, config, toolchain_dir)
     } else {
-        std::process::exit(0);
+        std::process::exit(0)
     }
 }
 
@@ -68,6 +71,8 @@ fn toolchain(
     config: &mut BsanConfig,
     toolchain_dir: &Path,
 ) -> Result<VersionMeta> {
+    cmd!(sh, "rustup toolchain uninstall {TOOLCHAIN_NAME}").quiet().run()?;
+
     let target = &host.host;
     let version = &config.version;
     let archive_postfix: String = version.to_string();
@@ -107,9 +112,6 @@ fn toolchain(
     download_unpack_install("rustc-dev", true)?;
     download_unpack_install("rust-dev", true)?;
     download_unpack_install("rust-src", false)?;
-
-    cmd!(sh, "rustup toolchain uninstall {TOOLCHAIN_NAME}").quiet().run()?;
-    cmd!(sh, "rustup toolchain link {TOOLCHAIN_NAME} {toolchain_dir}").quiet().run()?;
 
     let meta = version_meta(sh, TOOLCHAIN_NAME)?;
     config.sha =

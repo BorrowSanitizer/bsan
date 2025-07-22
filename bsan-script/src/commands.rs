@@ -12,8 +12,8 @@ use crate::utils::install_git_hooks;
 use crate::Command;
 
 impl Command {
-    pub fn exec(self, quiet: bool) -> Result<()> {
-        let mut env = BsanEnv::new(quiet)?;
+    pub fn exec(self, quiet: bool, skip: bool, toolchain_dir: Option<String>) -> Result<()> {
+        let mut env = BsanEnv::new(quiet, skip, toolchain_dir)?;
         let env = &mut env;
         match self {
             Command::Setup => Self::setup(env),
@@ -52,7 +52,12 @@ impl Command {
     }
 
     fn setup(env: &mut BsanEnv) -> Result<()> {
-        install_git_hooks(&env.root_dir)?;
+        // We assume that users who are skipping prompts will not want to
+        // install git hooks. This also lets us avoid setting hooks by default
+        // when building our Docker image.
+        if !env.skip {
+            install_git_hooks(&env.root_dir)?;
+        }
 
         Ok(())
     }

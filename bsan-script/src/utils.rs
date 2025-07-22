@@ -32,6 +32,13 @@ pub enum PromptResult {
     No,  // n/N/no
 }
 
+pub fn prompt_user_unless(skip: bool, prompt: &str) -> Result<Option<PromptResult>> {
+    if skip {
+        Ok(Some(PromptResult::Yes))
+    } else {
+        prompt_user(prompt)
+    }
+}
 /// Prompt a user for a answer, looping until they enter an accepted input or nothing
 pub fn prompt_user(prompt: &str) -> Result<Option<PromptResult>> {
     if is_running_on_ci() {
@@ -67,6 +74,22 @@ pub fn active_toolchain() -> Result<String> {
     Ok(stdout.split_whitespace().next().context("Could not obtain active Rust toolchain")?.into())
 }
 
+/// Gets the sysroot of the active toolchain
+pub fn active_sysroot() -> Result<PathBuf> {
+    let sh = Shell::new()?;
+    sh.change_dir(root_dir()?);
+    let stdout = cmd!(sh, "rustc --print sysroot").read()?;
+    Ok(PathBuf::from(stdout))
+}
+
+/// Gets the libdir of the active toolchain
+pub fn active_libdir() -> Result<PathBuf> {
+    let sh = Shell::new()?;
+    sh.change_dir(root_dir()?);
+    let stdout = cmd!(sh, "rustc --print target-libdir").read()?;
+    Ok(PathBuf::from(stdout))
+}
+
 pub fn version_meta(sh: &Shell, toolchain: &str) -> Result<VersionMeta> {
     let target_output = cmd!(sh, "rustc +{toolchain} --version --verbose").quiet().read()?;
     rustc_version::version_meta_for(&target_output).map_err(|e| anyhow!("{e}"))
@@ -85,7 +108,6 @@ pub fn install_git_hooks(root_dir: &PathBuf) -> Result<()> {
         PreCommit,
         PrePush,
     }
-
     impl GitHook {
         fn value(&self) -> String {
             match *self {

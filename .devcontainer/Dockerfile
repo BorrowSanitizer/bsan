@@ -1,5 +1,4 @@
-ARG TAG=latest
-FROM ghcr.io/borrowsanitizer/rust:$TAG AS image-dev
+FROM ubuntu:latest AS base
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -15,13 +14,21 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 RUN update-alternatives --install /usr/bin/cc cc /usr/bin/clang 100 \
     && update-alternatives --install /usr/bin/c++ c++ /usr/bin/clang++ 100
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain nightly -y
+ENV PATH="/root/.cargo/bin:${PATH}"
 
-FROM image-dev AS build-release
+FROM base AS build-image-dev
 COPY . . 
+RUN ./xb --skip setup
+
+FROM base as image-dev
+COPY --from=build-image-dev /root/.rustup/toolchains/bsan /root/.rustup/toolchains/bsan
+COPY --from=build-image-dev /root/.cargo/ /root/.cargo
+
+FROM image-dev AS build-image-release
 RUN ./xb install
 
-FROM image-dev AS image-release
-COPY --from=build-release /root/.rustup/toolchains/bsan /root/.rustup/toolchains/bsan
-COPY --from=build-release /root/.cargo/ /root/.cargo
-
+FROM base AS image-release
+COPY --from=build-image-release /root/.rustup/toolchains/bsan /root/.rustup/toolchains/bsan
+COPY --from=build-image-release /root/.cargo/ /root/.cargo
 RUN rustup default bsan && rustc -vV

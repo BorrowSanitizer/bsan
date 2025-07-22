@@ -117,16 +117,22 @@ pub enum Command {
 #[command(after_help = "Environment variables:
   CARGO_EXTRA_FLAGS: Pass extra flags to all cargo invocations")]
 pub struct Cli {
-    /// Silence build
+    /// Silence build output
     #[arg(short, long)]
     quiet: bool,
+    /// Skips prompts, defaulting to "yes" in most cases.
+    #[arg(short, long)]
+    skip: bool,
+    /// Installs the toolchain into the given directory
+    #[arg(long)]
+    toolchain_dir: Option<String>,
     #[command(subcommand)]
     pub command: Command,
 }
 
 fn main() -> Result<()> {
     let args = std::env::args();
-    let args = Cli::parse_from(args);
-    args.command.exec(args.quiet)?;
+    let cli = Cli::parse_from(args);
+    cli.command.exec(cli.quiet, cli.skip, cli.toolchain_dir)?;
     Ok(())
 }
