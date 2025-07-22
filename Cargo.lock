@@ -134,6 +134,7 @@ dependencies = [
 name = "bsan-driver"
 version = "0.1.0"
 dependencies = [
+ "bsan-shared",
  "env_logger",
  "log",
  "rustc_version",

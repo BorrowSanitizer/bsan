@@ -8,18 +8,37 @@ use super::helpers::{AccessKind, AccessRelatedness};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RetagInfo {
     pub size: usize,
+    pub perm: PermissionInfo,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PermissionInfo {
     pub perm_kind: Permission,
     pub protector_kind: Option<ProtectorKind>,
     pub access_kind: Option<AccessKind>,
 }
 
-impl RetagInfo {
+impl PermissionInfo {
+    pub fn into_raw(self) -> u64 {
+        let perm_kind: u16 = Permission::into_raw(self.perm_kind);
+        let protector_kind: u8 = ProtectorKind::into_raw(self.protector_kind);
+        let access_kind: u8 = AccessKind::into_raw(self.access_kind);
+        cfg_select! {
+            target_endian = "little" => {
+                perm_kind as u64 & ((protector_kind as u64) << 16) & ((access_kind as u64) << 24)
+            }
+            target_endian = "big" => {
+                perm_kind as u64 & ((protector_kind as u64) >> 16) & ((access_kind as u64) >> 24)
+            }
+        }
+    }
+
     /// # Safety
     /// The first 32 bits of `perm` must contain the `Permission`,
     /// the `ProtectorKind`, and the `AccessKind, in that order.`
     #[inline]
     #[allow(clippy::needless_late_init)]
-    pub unsafe fn from_raw(size: usize, perm: u64) -> Self {
+    unsafe fn from_raw(perm: u64) -> Self {
         let perm_kind: u16;
         let protector_kind: u8;
         let access_kind: u8;
@@ -41,8 +60,18 @@ impl RetagInfo {
             let perm_kind = Permission::from_raw(perm_kind);
             let protector_kind = ProtectorKind::from_raw(protector_kind);
             let access_kind = AccessKind::from_raw(access_kind);
-            Self { size, perm_kind, protector_kind, access_kind }
+            Self { perm_kind, protector_kind, access_kind }
         }
+    }
+}
+
+impl RetagInfo {
+    /// # Safety
+    /// The first 32 bits of `perm` must contain the `Permission`,
+    /// the `ProtectorKind`, and the `AccessKind, in that order.`
+    pub unsafe fn from_raw(size: usize, perm: u64) -> Self {
+        let perm = unsafe { PermissionInfo::from_raw(perm) };
+        Self { size, perm }
     }
 }
 
@@ -736,6 +765,36 @@ impl Permission {
         match self.inner {
             ReservedFrz { conflicted } => conflicted == expected_conflicted,
             _ => false,
+        }
+    }
+}
+
+mod test {
+
+    #[cfg(test)]
+    fn perm_into_raw_roundtrip() {
+        use crate::{AccessKind, Permission, PermissionInfo, ProtectorKind};
+        let initial_perms = [
+            Permission::new_reserved_frz(),
+            Permission::new_reserved_im(),
+            Permission::new_cell(),
+            Permission::new_frozen(),
+        ];
+
+        let access_kinds = [Some(AccessKind::Read), Some(AccessKind::Write), None];
+        let protector_kinds =
+            [Some(ProtectorKind::StrongProtector), Some(ProtectorKind::WeakProtector), None];
+
+        for perm_kind in initial_perms {
+            for access_kind in access_kinds {
+                for protector_kind in protector_kinds {
+                    let perm = PermissionInfo { perm_kind, protector_kind, access_kind };
+                    assert_eq!(
+                        unsafe { PermissionInfo::from_raw(PermissionInfo::into_raw(perm)) },
+                        perm
+                    );
+                }
+            }
         }
     }
 }

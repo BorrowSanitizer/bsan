@@ -8,7 +8,7 @@ cargo_metadata = "0.21"
 directories = "6.0.0"
 env_logger = "0.11.8"
 log = "0.4.27"
-rustc-build-sysroot = "0.5.8"
+rustc-build-sysroot = "0.5.9"
 rustc_version = "0.4"
 path_macro = "1.0.0"
 

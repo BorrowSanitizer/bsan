@@ -1,6 +1,7 @@
+use bsan_shared::{AccessKind, Permission, PermissionInfo, ProtectorKind};
 use rustc_interface::Config;
-use rustc_middle::mir::RetagParams;
-use rustc_middle::ty::{Ty, TyCtxt, TypingEnv};
+use rustc_middle::mir::{RetagKind, RetagParams};
+use rustc_middle::ty::{self, Mutability, Ty, TyCtxt, TypingEnv};
 use rustc_middle::util::Providers;
 use rustc_session::Session;
 
@@ -16,8 +17,42 @@ fn override_queries(_sess: &Session, providers: &mut Providers) {
 }
 
 fn retag_perm<'tcx>(
-    _tcx: TyCtxt<'tcx>,
-    _key: (TypingEnv<'tcx>, Ty<'tcx>, RetagParams),
+    tcx: TyCtxt<'tcx>,
+    key: (TypingEnv<'tcx>, Ty<'tcx>, RetagParams),
 ) -> Option<u64> {
-    Some(0)
+    let (env, ty, params) = key;
+    let ty_is_freeze = ty.is_freeze(tcx, env);
+    let ty_is_unpin = ty.is_unpin(tcx, env);
+    let is_protected = params.kind == RetagKind::FnEntry;
+
+    let info = if let ty::Ref(_, _, mutability) = ty.kind() {
+        let (perm_kind, access_kind) = match mutability {
+            Mutability::Not if ty_is_unpin => (
+                Permission::new_reserved(ty_is_freeze && !params.in_unsafe_cell, is_protected),
+                Some(AccessKind::Read),
+            ),
+            Mutability::Mut if ty_is_freeze => {
+                if params.in_unsafe_cell {
+                    (Permission::new_cell(), None)
+                } else {
+                    (Permission::new_frozen(), Some(AccessKind::Read))
+                }
+            }
+            // Raw pointers never enter this function so they are not handled.
+            // However raw pointers are not the only pointers that take the parent
+            // tag, this also happens for `!Unpin` `&mut`s and interior mutable
+            // `&`s, which are excluded above.
+            _ => return None,
+        };
+
+        let protector_kind = is_protected.then_some(ProtectorKind::StrongProtector);
+        PermissionInfo { perm_kind, protector_kind, access_kind }
+    } else {
+        assert!(params.is_unique);
+        let protector_kind = is_protected.then_some(ProtectorKind::WeakProtector);
+        let perm_kind =
+            Permission::new_reserved(ty_is_freeze && !params.in_unsafe_cell, is_protected);
+        PermissionInfo { perm_kind, protector_kind, access_kind: None }
+    };
+    Some(PermissionInfo::into_raw(info))
 }

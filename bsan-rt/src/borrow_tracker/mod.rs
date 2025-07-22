@@ -89,7 +89,7 @@ impl BorrowTracker {
         let parent_tag = self.prov.bor_tag;
         let new_tag = global_ctx.new_borrow_tag();
 
-        if let Some(protect) = retag_info.protector_kind {
+        if let Some(protect) = retag_info.perm.protector_kind {
             // We register the protection in two different places.
             // This makes creating a protector slower, but checking whether a tag
             // is protected faster.
@@ -107,7 +107,7 @@ impl BorrowTracker {
         );
 
         let base_offset = self.range.start;
-        if let Some(access_kind) = retag_info.access_kind {
+        if let Some(access_kind) = retag_info.perm.access_kind {
             for (perm_range, perm) in perms_map.iter_mut_all() {
                 if perm.is_accessed() {
                     // Some reborrows incur a read access to the parent.
@@ -133,8 +133,8 @@ impl BorrowTracker {
             }
         }
 
-        let protected = retag_info.protector_kind.is_some();
-        let default_perm = retag_info.perm_kind;
+        let protected = retag_info.perm.protector_kind.is_some();
+        let default_perm = retag_info.perm.perm_kind;
 
         let child_params = ChildParams {
             base_offset,

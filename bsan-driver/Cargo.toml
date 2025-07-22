@@ -7,6 +7,7 @@ edition = "2024"
 env_logger = "0.11.8"
 log = "0.4.27"
 rustc_version = "0.4.1"
+bsan-shared = { path = "../bsan-shared" }
 
 [lib]
 test = true     # we have unit tests
