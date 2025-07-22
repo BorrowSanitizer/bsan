@@ -42,7 +42,11 @@ pub enum Command {
     },
     /// Instrument a Rust program with BorrowSanitizer.
     /// Emits both LLVM IR (*.ll) and MIR
-    Inst { file: String },
+    Inst {
+        file: String,
+        #[arg(trailing_var_arg = true, allow_hyphen_values(true))]
+        args: Vec<String>,
+    },
     /// Instrument an LLVM bitcode file using the BorrowSanitizer pass
     Opt {
         /// Flags that are passed through to `opt`.

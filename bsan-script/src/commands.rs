@@ -48,7 +48,7 @@ impl Command {
                 c.miri(env, &args)?;
                 Ok(())
             }),
-            Command::Inst { file } => Self::inst(env, file),
+            Command::Inst { file, args } => Self::inst(env, file, &args),
         }
     }
 
@@ -116,16 +116,20 @@ impl Command {
         Ok(())
     }
 
-    fn inst(env: &mut BsanEnv, file: String) -> Result<()> {
+    fn inst(env: &mut BsanEnv, file: String, args: &[String]) -> Result<()> {
         let llvm_plugin = env.build_artifact(BsanPass, &[])?;
         let runtime = env.build_artifact(BsanRt, &[])?;
         let runtime_dir = runtime.parent().expect("Missing parent directory for runtime.");
         let driver = env.build_artifact(BsanDriver, &[])?;
-        cmd!(env.sh, "{driver} --emit=llvm-ir,mir {file}")
+
+        cmd!(env.sh, "{driver} {file}")
             .env("BSAN_BE_RUSTC", "target")
             .env("BSAN_RT_DIR", runtime_dir)
-            .env("BSAN_PLUGIN", llvm_plugin)
+            .env("BSAN_PLUGIN", &llvm_plugin)
+            .args(args)
+            .quiet()
             .run()?;
+
         Ok(())
     }
 }
