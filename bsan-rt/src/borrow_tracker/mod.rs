@@ -81,13 +81,13 @@ impl BorrowTracker {
         let mut lock = self.lock();
         let tree = unsafe { lock.as_mut().unwrap_unchecked() };
 
-        #[cfg(debug_assertions)]
-        if tree.is_allocation_of(self.prov.bor_tag) {
-            crate::throw_internal_err!("This tag already exists in the tree!");
-        }
-
         let parent_tag = self.prov.bor_tag;
         let new_tag = global_ctx.new_borrow_tag();
+
+        #[cfg(debug_assertions)]
+        if tree.is_allocation_of(new_tag) {
+            crate::throw_internal_err!("This tag already exists in the tree!");
+        }
 
         if let Some(protect) = retag_info.perm.protector_kind {
             // We register the protection in two different places.
