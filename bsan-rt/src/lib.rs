@@ -27,6 +27,7 @@ use core::panic::PanicInfo;
 use core::ptr::NonNull;
 use core::{fmt, mem, ptr};
 
+use backtrace::Backtrace;
 use bsan_shared::{AccessKind, RetagInfo, Size};
 use errors::BtOperation;
 use libc_print::std_name::*;
@@ -412,7 +413,6 @@ unsafe extern "C" fn __bsan_alloc(
     bor_tag: BorTag,
 ) -> NonNull<AllocInfo> {
     let ctx = unsafe { global_ctx() };
-
     // Initialize `AllocInfo`
     let mut alloc_info = unsafe {
         ctx.allocate_lock_location(AllocInfo {
@@ -721,12 +721,4 @@ mod test {
     // TODO: Implement this test
     // #[test]
     // fn bsan_aliasing_violation() {}
-}
-
-#[cfg(not(test))]
-#[panic_handler]
-fn panic(info: &PanicInfo<'_>) -> ! {
-    crate::eprintln!("The BorrowSanitizer runtime panicked!");
-    crate::eprintln!("{info}");
-    core::intrinsics::abort()
 }

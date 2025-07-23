@@ -59,7 +59,6 @@ impl Command {
         if !env.skip {
             install_git_hooks(&env.root_dir)?;
         }
-
         Ok(())
     }
 

@@ -674,7 +674,7 @@ pub(super) struct ChildParams {
     pub base_offset: Size,
     pub parent_tag: BorTag,
     pub new_tag: BorTag,
-    pub perms_map: RangeMap<LocationState, BsanAllocHooks>,
+    pub initial_perms: RangeMap<LocationState, BsanAllocHooks>,
     pub default_perm: Permission,
     pub protected: bool,
     pub span: Span,
@@ -701,7 +701,7 @@ where
             new_tag,
             base_offset,
             parent_tag,
-            perms_map,
+            initial_perms,
             default_perm,
             protected,
             span,
@@ -729,10 +729,9 @@ where
         // Register new_tag as a child of parent_tag
         self.nodes.get_mut(parent_idx).unwrap().children.push(idx);
 
-        for (Range { start, end }, &perm) in perms_map.iter(Size::from_bytes(0), perms_map.size()) {
-            if !perm.is_initial() {
-                crate::println!("{}", perm);
-            }
+        for (Range { start, end }, &perm) in
+            initial_perms.iter(Size::from_bytes(0), initial_perms.size())
+        {
             assert!(perm.is_initial());
             for (_perms_range, perms) in self
                 .rperms
