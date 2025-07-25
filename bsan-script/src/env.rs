@@ -122,7 +122,6 @@ impl BsanEnv {
                 show_error!("Please specify an installation directory for our toolchain using `xb --toolchain-dir=[dir]`.")
             }
         };
-        fs::create_dir_all(&deps_dir)?;
 
         let config_path = path!(root_dir / "config.toml");
         let mut config = BsanConfig::from_file(&config_path)?;

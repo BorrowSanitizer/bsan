@@ -59,6 +59,7 @@ pub fn setup(
     // If we've passed these checks, then let's do the expensive step of
     // downloading and installing our custom toolchain.
     if let Some(PromptResult::Yes) = prompt_user_unless(skip_prompt, prompt_text)? {
+        fs::create_dir_all(toolchain_dir)?;
         toolchain(sh, host, config, toolchain_dir)
     } else {
         std::process::exit(0)
