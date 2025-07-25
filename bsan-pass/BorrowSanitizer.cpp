@@ -50,6 +50,11 @@ static cl::opt<bool>
                      cl::Hidden, cl::desc("Use Stack Safety analysis results"),
                      cl::Optional);
 
+static cl::opt<bool>
+    ClTrustExtern("bsan-trust-extern", cl::Hidden, cl::init(false),
+                     cl::Hidden, cl::desc("Trust external functions to be instrumented."),
+                     cl::Optional);
+
 STATISTIC(NumAllocaEliminated, "Number of times that instrumentation is eliminated for an alloca.");
 STATISTIC(NumReadsEliminated, "Number of times that instrumentation is eliminated for an read.");
 STATISTIC(NumWritesEliminated, "Number of times that instrumentation is eliminated for a write.");
@@ -58,7 +63,7 @@ STATISTIC(NumWritesEliminated, "Number of times that instrumentation is eliminat
 namespace {
 struct BorrowSanitizer {
 
-    BorrowSanitizer(Module &M) : UseCtorComdat(ClWithComdat) {
+    BorrowSanitizer(Module &M) : UseCtorComdat(ClWithComdat), TrustExtern(ClTrustExtern) {
         C = &(M.getContext());
         DL = &M.getDataLayout();
         TargetTriple = Triple(M.getTargetTriple());
@@ -110,6 +115,7 @@ private:
     Instruction *CreateBsanModuleDtor(Module &M);
 
     bool UseCtorComdat;
+    bool TrustExtern;
     LLVMContext *C;
     const DataLayout *DL;
 
@@ -835,7 +841,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 
         bool isExternFunction = !Callee || (Callee && Callee->isDeclaration());
 
-        if(isExternFunction) {
+        if(isExternFunction && !BS.TrustExtern) {
             Before.CreateMemSet(
                 BS.ParamTLS, 
                 ConstantInt::get(BS.Int8Ty, 0), 
@@ -880,15 +886,15 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
             Value *ReturnArray = BS.RetvalTLS;
             Value *RetvalByteWidth = BS.Zero;    
             for (const auto &[Idx, Comp] : llvm::enumerate(*ReturnComponents)) {   
-                if (isExternFunction) {            
+                if (isExternFunction && !BS.TrustExtern) {  
+                    setProvenanceAtIndex(&CB, Idx, BS.WildcardProvenance);
+                }else{
                     ProvenancePointer Ptr = Comp.getPointerToProvenance(After, ReturnArray);
                     setProvenanceAtIndex(&CB, Idx, loadProvenance(After, Ptr));
 
                     Value *ByteWidth = Before.CreateMul(Comp.NumProvenanceValues, BS.ProvenanceSize);
                     RetvalByteWidth = Before.CreateAdd(RetvalByteWidth, ByteWidth);
                     ReturnArray = offsetPointer(After, ReturnArray, ByteWidth);
-                }else{
-                    setProvenanceAtIndex(&CB, Idx, BS.WildcardProvenance);
                 }
             }
         }

@@ -13,7 +13,6 @@ use std::path::PathBuf;
 pub use callbacks::BSanCallBacks;
 
 pub const BSAN_BUG_REPORT_URL: &str = "https://github.com/BorrowSanitizer/bsan/issues/new";
-
 pub const BSAN_DEFAULT_ARGS: &[&str] =
     &["--cfg=bsan", "-Copt-level=0", "-Zmir-opt-level=0", "-Cpasses=bsan", "-Zmir-emit-retag=full"];
 
