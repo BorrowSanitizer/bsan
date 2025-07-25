@@ -3,7 +3,7 @@ use core::mem::MaybeUninit;
 use crate::stack::Stack;
 use crate::*;
 
-static TLS_SIZE: usize = 100;
+pub static TLS_SIZE: usize = 100;
 
 #[thread_local]
 #[unsafe(no_mangle)]
@@ -12,6 +12,14 @@ pub static mut __BSAN_RETVAL_TLS: [Provenance; TLS_SIZE] = [Provenance::null(); 
 #[thread_local]
 #[unsafe(no_mangle)]
 pub static mut __BSAN_PARAM_TLS: [Provenance; TLS_SIZE] = [Provenance::null(); TLS_SIZE];
+
+#[thread_local]
+#[unsafe(no_mangle)]
+pub static mut __BSAN_CALLED_FROM_EXTERN: bool = false;
+
+#[thread_local]
+#[unsafe(no_mangle)]
+pub static mut __BSAN_RETURNING_TO_EXTERN: bool = false;
 
 #[derive(Debug)]
 pub struct LocalCtx {

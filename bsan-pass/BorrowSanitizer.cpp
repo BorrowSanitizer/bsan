@@ -232,6 +232,8 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     void initPrologue() {
         IRBuilder<> IRB(&F.getEntryBlock(), F.getEntryBlock().getFirstNonPHIIt());
         Value *Array = BS.ParamTLS;
+
+        Value *TotalNumProvenanceValues = ConstantInt::get(BS.IntptrTy, 0);
         
         for (auto &Arg : F.args()) {
             SmallVector<ProvenanceComponent> *Components = getProvenanceComponents(IRB, Arg.getType());
@@ -240,10 +242,11 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
                 ArgumentProvenance[&Arg].push_back(Ptr);
                 Value *Offset = IRB.CreateMul(C.NumProvenanceValues, BS.ProvenanceSize);
                 Array = offsetPointer(IRB, Array, Offset);
+                TotalNumProvenanceValues = IRB.CreateAdd(TotalNumProvenanceValues, C.NumProvenanceValues);
             }
         }
 
-        FnPrologueStart = IRB.CreateCall(BS.BsanFuncPushFrame, {});
+        FnPrologueStart = IRB.CreateCall(BS.BsanFuncPushFrame, {TotalNumProvenanceValues});
         FnPrologueEnd = IRB.CreateIntrinsic(Intrinsic::donothing, {}, {});
     }
 
@@ -829,19 +832,36 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         // function. We need to pass its arguments into our thread-local array, and then
         // read the provenance for the return value.
         InstrumentationIRBuilder Before(&CB); 
-    
-        // Store the provenance for each argument into the thread-local storage for parameters.
-        // Because the process for computing provenance components is deterministic, we can guarantee
-        // that the callee will expect a provenance value everywhere it's been stored here, unless we're
-        // dealing with a situation where function bindings are incorrect, which is undefined behavior.
-        Value *ParamArray = BS.ParamTLS;
-        for (const auto &[i, A] : llvm::enumerate(CB.args())) {
-            SmallVector<ProvenanceComponent> *Components = getProvenanceComponents(Before, A->getType());
-            for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
-                LoadedProvenance Prov = assertProvenanceAtIndex(Before, A, Comp, Idx);
-                ParamArray = storeProvenance(Before, Prov, ParamArray);
+
+        bool isExternFunction = !Callee || (Callee && Callee->isDeclaration());
+
+        if(isExternFunction) {
+            Before.CreateMemSet(
+                BS.ParamTLS, 
+                ConstantInt::get(BS.Int8Ty, 0), 
+                ConstantInt::get(BS.IntptrTy, kTLSSize * kProvenanceSize), 
+                BS.ProvenanceAlign
+            );
+        }else{
+            // Store the provenance for each argument into the thread-local storage for parameters.
+            // Because the process for computing provenance components is deterministic, we can guarantee
+            // that the callee will expect a provenance value everywhere it's been stored here, unless we're
+            // dealing with a situation where function bindings are incorrect, which is undefined behavior.
+            Value *ParamArray = BS.ParamTLS;
+            for (const auto &[i, A] : llvm::enumerate(CB.args())) {
+                SmallVector<ProvenanceComponent> *Components = getProvenanceComponents(Before, A->getType());
+                for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
+                    LoadedProvenance Prov = assertProvenanceAtIndex(Before, A, Comp, Idx);
+                    ParamArray = storeProvenance(Before, Prov, ParamArray);
+                }
             }
         }
+    
+
+        // We need to do some extra work here to compute where to insert our instructions,
+        // since some function calls occur within terminators.
+        IRBuilder<> After = getInsertionPointAfterCall(&CB);
+        
 
         // Unsized return types do not have provenance, so we can skip handling the return array.
         if (CB.getType()->isSized()) {
@@ -852,31 +872,24 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
             
 
             SmallVector<ProvenanceComponent> *ReturnComponents = getProvenanceComponents(Before, CB.getType());
-            
-            // We need to do some extra work here to compute where to insert our instructions,
-            // since some function calls occur within terminators.
-            IRBuilder<> After = getInsertionPointAfterCall(&CB);
-
+        
             // Load each provenance component for the return type from the thread-local return value array.
             // Also, compute the byte-width of the provenance components that we expect to be here. If the function
             // that we are calling is uninstrumented, then we need ensure that the return array is populated with
             // default values. 
             Value *ReturnArray = BS.RetvalTLS;
             Value *RetvalByteWidth = BS.Zero;    
-            for (const auto &[Idx, Comp] : llvm::enumerate(*ReturnComponents)) {               
-                ProvenancePointer Ptr = Comp.getPointerToProvenance(After, ReturnArray);
-                setProvenanceAtIndex(&CB, Idx, loadProvenance(After, Ptr));
+            for (const auto &[Idx, Comp] : llvm::enumerate(*ReturnComponents)) {   
+                if (isExternFunction) {            
+                    ProvenancePointer Ptr = Comp.getPointerToProvenance(After, ReturnArray);
+                    setProvenanceAtIndex(&CB, Idx, loadProvenance(After, Ptr));
 
-                Value *ByteWidth = Before.CreateMul(Comp.NumProvenanceValues, BS.ProvenanceSize);
-                RetvalByteWidth = Before.CreateAdd(RetvalByteWidth, ByteWidth);
-                ReturnArray = offsetPointer(After, ReturnArray, ByteWidth);
-            }
-
-            Function *Func = CB.getCalledFunction();
-            if (!Func || (Func && Func->isDeclaration())) { 
-                // If a function is external, then there's no way to tell if we've instrumented it.
-                // To ensure that our provenance values are valid, we need to zero-initialize the return array
-                Before.CreateMemSet(BS.RetvalTLS, ConstantInt::get(BS.Int8Ty, 0), RetvalByteWidth, Align(1));
+                    Value *ByteWidth = Before.CreateMul(Comp.NumProvenanceValues, BS.ProvenanceSize);
+                    RetvalByteWidth = Before.CreateAdd(RetvalByteWidth, ByteWidth);
+                    ReturnArray = offsetPointer(After, ReturnArray, ByteWidth);
+                }else{
+                    setProvenanceAtIndex(&CB, Idx, BS.WildcardProvenance);
+                }
             }
         }
     }
@@ -1357,9 +1370,9 @@ void BorrowSanitizer::initializeCallbacks(Module &M, const TargetLibraryInfo &TL
     );
 
     BsanFuncPushFrame = M.getOrInsertFunction(
-        kBsanFuncPushFrameName,
-        FunctionType::get(IRB.getVoidTy(), /*isVarArg=*/false),
-        AL
+        kBsanFuncPushFrameName, AL,
+        IRB.getVoidTy(),
+        IntptrTy
     );
 
     BsanFuncPopFrame = M.getOrInsertFunction(
@@ -1493,6 +1506,7 @@ void BorrowSanitizer::initializeCallbacks(Module &M, const TargetLibraryInfo &TL
 
 void BorrowSanitizer::createUserspaceApi(Module &M, const TargetLibraryInfo &TLI) {
     IRBuilder<> IRB(*C);
+
     RetvalTLS =
         getOrInsertGlobal(M, kBsanRetvalTLSName,
                             ArrayType::get(ProvenanceTy, kTLSSize));

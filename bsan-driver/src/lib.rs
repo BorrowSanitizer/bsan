@@ -63,11 +63,9 @@ impl Config {
         if target_crate {
             let mut additional_args =
                 BSAN_DEFAULT_ARGS.iter().map(ToString::to_string).collect::<Vec<_>>();
-
             additional_args.push(format!("-Zllvm-plugins={}", plugin_path.display()));
             additional_args.push(format!("-L{}", runtime_dir.display()));
             additional_args.push("-lstatic=bsan_rt".to_string());
-
             args.splice(1..1, additional_args);
         }
         Ok(Self { args, callbacks: BSanCallBacks {} })

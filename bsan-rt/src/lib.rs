@@ -517,7 +517,7 @@ unsafe extern "C" fn __bsan_shadow_store_vector(
 
 /// Pushes a shadow stack frame
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_push_frame() {
+unsafe extern "C" fn __bsan_push_frame(args: usize) {
     let local_ctx = unsafe { local_ctx_mut() };
     local_ctx.protected_tags.push_frame();
 }
@@ -555,7 +555,6 @@ extern "C" fn __bsan_debug_assert_null(
 ) {
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-
     if prov != Provenance::null() {
         crate::eprintln!("Expected null provenance, got {prov:?}");
         global_ctx.exit(1);
@@ -570,7 +569,6 @@ extern "C" fn __bsan_debug_assert_wildcard(
 ) {
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-
     if prov != Provenance::wildcard() {
         crate::eprintln!("Expected wildcard provenance, got {prov:?}");
         global_ctx.exit(1);
