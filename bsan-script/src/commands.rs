@@ -116,16 +116,22 @@ impl Command {
     }
 
     fn inst(env: &mut BsanEnv, file: String, args: &[String]) -> Result<()> {
-        let llvm_plugin = env.build_artifact(BsanPass, &[])?;
+        let plugin = env.build_artifact(BsanPass, &[])?;
         let runtime = env.build_artifact(BsanRt, &[])?;
-        let runtime_dir = runtime.parent().expect("Missing parent directory for runtime.");
         let driver = env.build_artifact(BsanDriver, &[])?;
+        let cargo_bsan = env.build_artifact(CargoBsan, &[])?;
+
+        env.sh.set_var("BSAN_PLUGIN", plugin);
+        env.sh.set_var("BSAN_DRIVER", &driver);
+        env.sh.set_var("BSAN_RT_DIR", runtime.parent().unwrap());
+        env.sh.set_var("BSAN_SYSROOT", path!(&env.build_dir / "sysroot"));
+
+        cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
 
         cmd!(env.sh, "{driver} {file}")
             .env("BSAN_BE_RUSTC", "target")
-            .env("BSAN_RT_DIR", runtime_dir)
-            .env("BSAN_PLUGIN", &llvm_plugin)
             .args(args)
+            .arg("--sysroot=/workspaces/bsan/target/sysroot")
             .quiet()
             .run()?;
 
@@ -290,9 +296,11 @@ impl Buildable for BsanRt {
     }
 
     fn miri(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.with_flags("MIRIFLAGS", &["-Zmiri-permissive-provenance"], |env| {
-            env.miri("bsan-rt", args)
-        })
+        env.with_flags(
+            "MIRIFLAGS",
+            &["-Zmiri-permissive-provenance", "-Zmiri-disable-alignment-check"],
+            |env| env.miri("bsan-rt", args),
+        )
     }
 }
 

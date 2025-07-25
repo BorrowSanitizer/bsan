@@ -51,7 +51,7 @@ static cl::opt<bool>
                      cl::Optional);
 
 static cl::opt<bool>
-    ClTrustExtern("bsan-trust-extern", cl::Hidden, cl::init(false),
+    ClTrustExtern("bsan-trust-extern", cl::Hidden, cl::init(true),
                      cl::Hidden, cl::desc("Trust external functions to be instrumented."),
                      cl::Optional);
 
@@ -89,10 +89,10 @@ struct BorrowSanitizer {
         // For the moment, we only assign pointers this provenance value when they
         // are cast from integers (inttoptr), so we do not need a VectorProvenance
         // counterpart.
-        WildcardProvenance = ScalarProvenance(One, Zero, InvalidPtr);
+        WildcardProvenance = ScalarProvenance(Zero, Zero, InvalidPtr);
         
         // Null provenance does not permit any access. All components are set to zero.
-        NullScalarProvenance = ScalarProvenance(Zero, Zero, InvalidPtr);
+        NullScalarProvenance = ScalarProvenance(One, Zero, InvalidPtr);
 
     }
     bool instrumentModule(Module &);
@@ -269,7 +269,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
                 report_fatal_error("Expected scalar provenance, but found vector provenance!");
             }  
         }else{
-            return BS.NullScalarProvenance;
+            return BS.WildcardProvenance;
         }
     }
 
@@ -289,7 +289,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
                 report_fatal_error("Expected scalable vector provenance, but found scalar provenance!");
             }  
         }else{
-            return nullVectorProvenance(IRB, E);
+            return wildcardVectorProvenance(IRB, E);
         }
     }
 
@@ -311,9 +311,9 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
             return Prov;
         }else{
             if(Comp.isVector()) {
-                return nullVectorProvenance(IRB, Comp.Elems);
+                return wildcardVectorProvenance(IRB, Comp.Elems);
             }else{
-                return BS.NullScalarProvenance;
+                return BS.WildcardProvenance;
             }
         }
     }
@@ -597,7 +597,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     }
 
     // Create null vector provenance. 
-    VectorProvenance nullVectorProvenance(IRBuilder<> &IRB, ElementCount Elems) {                
+    VectorProvenance wildcardVectorProvenance(IRBuilder<> &IRB, ElementCount Elems) {                
         Value *IDVector = ConstantVector::getSplat(Elems, BS.Zero);
         Value *TagVector = ConstantVector::getSplat(Elems, BS.Zero);
         Value *InfoVector = ConstantVector::getSplat(Elems, ConstantPointerNull::get(BS.PtrTy));

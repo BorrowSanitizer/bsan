@@ -2,6 +2,7 @@
 use core::fmt::Display;
 
 /// Indicates which kind of access is being performed.
+#[repr(u8)]
 #[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]
 pub enum AccessKind {
     Read = 1,

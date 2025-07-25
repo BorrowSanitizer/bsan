@@ -91,7 +91,7 @@ impl<T> Drop for Block<T> {
 
 /// A fixed-capacity, semi-lock-free, thread-safe bump-allocator.
 #[derive(Debug)]
-pub struct BlockAllocator<T: Linkable<T> + Default> {
+pub struct BlockAllocator<T: Linkable<T>> {
     /// The next valid element, which will be uninitialized.
     cursor: AtomicPtr<MaybeUninit<T>>,
     /// A list of freed elements, which can be anywhere in the block.
@@ -104,10 +104,10 @@ pub struct BlockAllocator<T: Linkable<T> + Default> {
 
 // SAFETY: Whenever we mutate the allocator, we either lock on `free_lock`
 // or we're executing an atomic operation.
-unsafe impl<T: Linkable<T> + Default> Send for BlockAllocator<T> {}
-unsafe impl<T: Linkable<T> + Default> Sync for BlockAllocator<T> {}
+unsafe impl<T: Linkable<T>> Send for BlockAllocator<T> {}
+unsafe impl<T: Linkable<T>> Sync for BlockAllocator<T> {}
 
-impl<T: Linkable<T> + Default> BlockAllocator<T> {
+impl<T: Linkable<T>> BlockAllocator<T> {
     /// Initializes a BlockAllocator for the given block.
     pub fn new(block: Block<T>) -> Self {
         BlockAllocator {
@@ -123,11 +123,11 @@ impl<T: Linkable<T> + Default> BlockAllocator<T> {
             && !free_list.is_null()
         {
             unsafe {
-                **free_list = elem;
-
                 let next = (**free_list).next();
                 let curr: *mut T = *free_list;
                 *free_list = *next;
+
+                mem::forget(ptr::replace(curr, elem));
 
                 return Some(NonNull::new_unchecked(curr));
             }
@@ -150,14 +150,6 @@ impl<T: Linkable<T> + Default> BlockAllocator<T> {
                 NonNull::new_unchecked(slot.cast::<T>())
             })
             .ok()
-    }
-
-    /// Allocates a new instance from the block.
-    /// If a prior allocation has been freeds, it will be reused instead of
-    /// incrementing the internal cursor.
-    #[cfg(test)]
-    pub fn alloc(&self) -> Option<NonNull<T>> {
-        self.alloc_with(T::default())
     }
 
     /// Deallocates a pointer that has been allocated from the block.
@@ -207,7 +199,8 @@ mod test {
             // Create 10 threads, which will each allocate and deallocate from the page
             threads.push(thread::spawn(move || {
                 // Allocate 10 elements per thread.
-                let mut allocs: Vec<_> = (0..10).map(|_| page.alloc().unwrap()).collect();
+                let mut allocs: Vec<_> =
+                    (0..10).map(|_| page.alloc_with(Link::default()).unwrap()).collect();
                 if id % 2 == 0 {
                     // Even-numbered threads will immediately free the elements, adding them to the
                     // free list for odd-numbered threads to pick up.
@@ -220,14 +213,14 @@ mod test {
                     // Odd-numbered threads will continue to allocate elements,
                     // hopefully picking the allocations freed by even-numbered threads.
                     for _ in 0..10 {
-                        if let Some(alloc) = page.alloc() {
+                        if let Some(alloc) = page.alloc_with(Link::default()) {
                             unsafe {
                                 (*alloc.as_ptr()) =
                                     Link { link: UnsafeCell::new(core::ptr::null_mut()) };
                             }
                             allocs.push(alloc);
                         }
-                        allocs.push(page.alloc().unwrap());
+                        allocs.push(page.alloc_with(Link::default()).unwrap());
                     }
                     allocs.drain(..).for_each(|alloc| unsafe {
                         page.dealloc(alloc);

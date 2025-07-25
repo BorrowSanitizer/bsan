@@ -1,5 +1,4 @@
 // Components in this library were ported from Miri and then modified by our team.
-#![feature(yeet_expr)]
 use core::ffi::c_void;
 use core::ptr;
 
@@ -26,10 +25,6 @@ pub struct BorrowTracker {
 }
 
 impl BorrowTracker {
-    fn allocation_size(&self) -> Size {
-        Size::from_bytes(unsafe { (*self.prov.alloc_info).size })
-    }
-
     fn lock(&self) -> MutexGuard<'_, Option<Tree<BsanAllocHooks>>> {
         unsafe { (*self.prov.alloc_info).tree_lock.lock() }
     }
@@ -188,7 +183,7 @@ impl BorrowTracker {
     }
 
     pub fn dealloc(&mut self, global_ctx: &GlobalCtx) -> BtResult<()> {
-        /*let mut lock = self.lock();
+        let mut lock = self.lock();
 
         let tree = unsafe { lock.as_mut().unwrap_unchecked() };
 
@@ -202,8 +197,8 @@ impl BorrowTracker {
             global_ctx.allocator(),
         )?;
 
-        unsafe { drop(ptr::replace(self.prov.alloc_info, AllocInfo::default())) }
-        unsafe { global_ctx.deallocate_lock_location(self.prov.alloc_info) };*/
+        unsafe { drop(ptr::replace(self.prov.alloc_info, AllocInfo::invalid())) }
+        unsafe { global_ctx.deallocate_lock_location(self.prov.alloc_info) };
         Ok(())
     }
 }
