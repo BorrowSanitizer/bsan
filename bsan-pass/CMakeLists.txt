@@ -15,6 +15,7 @@ set(BSAN_SOURCES
 
 set(BSAN_HEADERS
   BorrowSanitizer.h
+  Provenance.h
 )
 
 add_library(bsan_plugin SHARED ${BSAN_SOURCES} ${BSAN_HEADERS})

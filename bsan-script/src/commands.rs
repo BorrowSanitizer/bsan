@@ -48,6 +48,7 @@ impl Command {
                 c.miri(env, &args)?;
                 Ok(())
             }),
+            Command::Inst { file, args } => Self::inst(env, file, &args),
         }
     }
 
@@ -58,7 +59,6 @@ impl Command {
         if !env.skip {
             install_git_hooks(&env.root_dir)?;
         }
-
         Ok(())
     }
 
@@ -111,8 +111,30 @@ impl Command {
         let pass = env.build_artifact(BsanPass, args)?;
         let pass = pass.to_str().unwrap();
         let opt = env.target_binary("opt");
-        let _ =
-            cmd!(env.sh, "{opt} --load-pass-plugin={pass} -passes=bsan {args...}").quiet().run();
+        cmd!(env.sh, "{opt} --load-pass-plugin={pass} -passes=bsan {args...}").quiet().run()?;
+        Ok(())
+    }
+
+    fn inst(env: &mut BsanEnv, file: String, args: &[String]) -> Result<()> {
+        let plugin = env.build_artifact(BsanPass, &[])?;
+        let runtime = env.build_artifact(BsanRt, &[])?;
+        let driver = env.build_artifact(BsanDriver, &[])?;
+        let cargo_bsan = env.build_artifact(CargoBsan, &[])?;
+
+        env.sh.set_var("BSAN_PLUGIN", plugin);
+        env.sh.set_var("BSAN_DRIVER", &driver);
+        env.sh.set_var("BSAN_RT_DIR", runtime.parent().unwrap());
+        env.sh.set_var("BSAN_SYSROOT", path!(&env.build_dir / "sysroot"));
+
+        cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
+
+        cmd!(env.sh, "{driver} {file}")
+            .env("BSAN_BE_RUSTC", "target")
+            .args(args)
+            .arg("--sysroot=/workspaces/bsan/target/sysroot")
+            .quiet()
+            .run()?;
+
         Ok(())
     }
 }
@@ -274,9 +296,11 @@ impl Buildable for BsanRt {
     }
 
     fn miri(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.with_flags("MIRIFLAGS", &["-Zmiri-permissive-provenance"], |env| {
-            env.miri("bsan-rt", args)
-        })
+        env.with_flags(
+            "MIRIFLAGS",
+            &["-Zmiri-permissive-provenance", "-Zmiri-disable-alignment-check"],
+            |env| env.miri("bsan-rt", args),
+        )
     }
 }
 
