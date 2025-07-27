@@ -531,7 +531,6 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         if(Prov.isVector()) {
             Value *ID, *Tag, *Info, *Next;
             std::tie(ID, Tag, Info, Next) = getVectorProvenanceElements(IRB, Prov.Base, Prov.Elems);
-
             return loadVectorProvenanceValue(IRB, ID, Tag, Info, Prov.Length, Prov.Elems);
         }else{
             return loadScalarProvenanceValue(IRB, Prov.Base);
@@ -797,43 +796,54 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         CB.eraseFromParent();
     }
 
-    void visitCallBase(CallBase &CB) {
-        LibFunc TLIFn;
-        Function *Callee = CB.getCalledFunction();
-        // If we're calling a heap allocation or deallocation function,
-        // then we can skip handling argument provenance and defer to our
-        // run-time calls.
-        LibFunc LF;
-        if(Callee) {
-            if(TLI->getLibFunc(*Callee, TLIFn) && TLI->has(TLIFn)) {
-                std::optional<APInt> AllocSize = getAllocSize(&CB, TLI);
-                if (isAllocLikeFn(&CB, TLI)) {
-                    IRBuilder<> IRB = getInsertionPointAfterCall(&CB);
-                    if(AllocSize.has_value()) {
-                        Value *Size = ConstantInt::get(BS.IntptrTy, AllocSize->getZExtValue());
-                        processAllocation(IRB, &CB, Size);
-                    }
-                    return;
-                } else if(isReallocLikeFn(Callee)) {
-                    IRBuilder<> IRB = getInsertionPointAfterCall(&CB);
-                    if(AllocSize.has_value()) {
-                        Value *Size = ConstantInt::get(BS.IntptrTy, AllocSize->getZExtValue());
-                        processAllocation(IRB, &CB, Size);
-                    }
-                    Value *Operand = getReallocatedOperand(&CB);
-                    processDeallocation(IRB, Operand);
-                    return;
-                } else if (isLibFreeFunction(Callee, TLIFn)) {
-                    Value* Operand = getFreedOperand(&CB, TLI);
-                    IRBuilder<> IRB = getInsertionPointAfterCall(&CB);
-                    processDeallocation(IRB, Operand);
-                    return;
-                }
-            } else if (Callee->getName().starts_with(kBsanDebugPrefix)) {
-                return handleDebugFunction(CB, Callee);
+    Value *resolveAllocSize(IRBuilder<> &IRB, CallBase &CB) {
+        Value *AllocSize;
+        // The function `getAllocSize` will only return a value if the allocation function
+        // is being called with a constant integer. If not, then we need to resolve the allocation
+        // size manually based on the semantics of `allocsize`.
+        std::optional<APInt> OptAllocSize = getAllocSize(&CB, TLI);
+        if(OptAllocSize.has_value()) {
+            AllocSize = ConstantInt::get(BS.IntptrTy, OptAllocSize.value().getZExtValue());
+        }else{
+            Attribute Attr = CB.getFnAttr(Attribute::AllocSize);
+            if (Attr == Attribute()) {
+                report_fatal_error("Unable to resolve `allocsize` attribute for function with `allockind(\"alloc\")`");
+            }
+            std::pair<unsigned, std::optional<unsigned>> Args = Attr.getAllocSizeArgs();
+            AllocSize = CB.getArgOperand(Args.first);
+            if(Args.second.has_value()) {
+                AllocSize = IRB.CreateMul(AllocSize, CB.getArgOperand(Args.second.value()));
             }
         }
+        return AllocSize;
+    }
 
+    void visitCallBase(CallBase &CB) {
+        Function *Callee = CB.getCalledFunction();
+
+        if (isAllocLikeFn(&CB, TLI)) {
+            IRBuilder<> IRB = getInsertionPointAfterCall(&CB);
+            Value *Size = resolveAllocSize(IRB, CB);
+            processAllocation(IRB, &CB, Size);
+            return;
+        } else if (Callee) {
+            if(isReallocLikeFn(Callee)) {
+                IRBuilder<> IRB = getInsertionPointAfterCall(&CB);
+                Value *Size = resolveAllocSize(IRB, CB);
+                processAllocation(IRB, &CB, Size);
+                Value *ReallocOperand = getReallocatedOperand(&CB);
+                processDeallocation(IRB, ReallocOperand);
+                return;
+            } else if(Value *FreedOperand = getFreedOperand(&CB, TLI)) {
+                IRBuilder<> IRB = getInsertionPointAfterCall(&CB);
+                processDeallocation(IRB, FreedOperand);
+                return;
+            } else if(Callee->getName().starts_with(kBsanDebugPrefix)) {
+                return handleDebugFunction(CB, Callee);
+            } else if(Callee->getName().starts_with(kBsanPrefix)) {
+                return;
+            }
+        }
         // If we've made it here, then we don't have a hard-coded way to handle this
         // function. We need to pass its arguments into our thread-local array, and then
         // read the provenance for the return value.
@@ -841,44 +851,40 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 
         bool isExternFunction = !Callee || (Callee && Callee->isDeclaration());
 
-        if(isExternFunction && !BS.TrustExtern) {
-            Before.CreateMemSet(
-                BS.ParamTLS, 
-                ConstantInt::get(BS.Int8Ty, 0), 
-                ConstantInt::get(BS.IntptrTy, kTLSSize * kProvenanceSize), 
-                BS.ProvenanceAlign
-            );
-        }else{
-            // Store the provenance for each argument into the thread-local storage for parameters.
-            // Because the process for computing provenance components is deterministic, we can guarantee
-            // that the callee will expect a provenance value everywhere it's been stored here, unless we're
-            // dealing with a situation where function bindings are incorrect, which is undefined behavior.
-            Value *ParamArray = BS.ParamTLS;
-            for (const auto &[i, A] : llvm::enumerate(CB.args())) {
-                SmallVector<ProvenanceComponent> *Components = getProvenanceComponents(Before, A->getType());
-                for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
-                    LoadedProvenance Prov = assertProvenanceAtIndex(Before, A, Comp, Idx);
-                    ParamArray = storeProvenance(Before, Prov, ParamArray);
-                }
+        // Store the provenance for each argument into the thread-local storage for parameters.
+        // Because the process for computing provenance components is deterministic, we can guarantee
+        // that the callee will expect a provenance value everywhere it's been stored here, unless we're
+        // dealing with a situation where function bindings are incorrect, which is undefined behavior.
+        Value *ParamArray = BS.ParamTLS;
+        for (const auto &[i, A] : llvm::enumerate(CB.args())) {
+            SmallVector<ProvenanceComponent> *Components = getProvenanceComponents(Before, A->getType());
+            for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
+                LoadedProvenance Prov = assertProvenanceAtIndex(Before, A, Comp, Idx);
+                ParamArray = storeProvenance(Before, Prov, ParamArray);
             }
         }
-    
+
 
         // We need to do some extra work here to compute where to insert our instructions,
         // since some function calls occur within terminators.
         IRBuilder<> After = getInsertionPointAfterCall(&CB);
-        
-
+    
         // Unsized return types do not have provenance, so we can skip handling the return array.
         if (CB.getType()->isSized()) {
             // Don't emit the epilogue for musttail call returns.
             // We can assume that the return value is processed later up the callstack.
             if (isa<CallInst>(CB) && cast<CallInst>(CB).isMustTailCall())
                 return;
-            
 
             SmallVector<ProvenanceComponent> *ReturnComponents = getProvenanceComponents(Before, CB.getType());
-        
+            if (isExternFunction) {  
+                Before.CreateMemSet(
+                    BS.RetvalTLS, 
+                    ConstantInt::get(BS.Int8Ty, 0), 
+                    ConstantInt::get(BS.IntptrTy, kTLSSize * kProvenanceSize), 
+                    BS.ProvenanceAlign
+                );
+            }
             // Load each provenance component for the return type from the thread-local return value array.
             // Also, compute the byte-width of the provenance components that we expect to be here. If the function
             // that we are calling is uninstrumented, then we need ensure that the return array is populated with
@@ -886,16 +892,12 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
             Value *ReturnArray = BS.RetvalTLS;
             Value *RetvalByteWidth = BS.Zero;    
             for (const auto &[Idx, Comp] : llvm::enumerate(*ReturnComponents)) {   
-                if (isExternFunction && !BS.TrustExtern) {  
-                    setProvenanceAtIndex(&CB, Idx, BS.WildcardProvenance);
-                }else{
-                    ProvenancePointer Ptr = Comp.getPointerToProvenance(After, ReturnArray);
-                    setProvenanceAtIndex(&CB, Idx, loadProvenance(After, Ptr));
+                ProvenancePointer Ptr = Comp.getPointerToProvenance(After, ReturnArray);
+                setProvenanceAtIndex(&CB, Idx, loadProvenance(After, Ptr));
 
-                    Value *ByteWidth = Before.CreateMul(Comp.NumProvenanceValues, BS.ProvenanceSize);
-                    RetvalByteWidth = Before.CreateAdd(RetvalByteWidth, ByteWidth);
-                    ReturnArray = offsetPointer(After, ReturnArray, ByteWidth);
-                }
+                Value *ByteWidth = Before.CreateMul(Comp.NumProvenanceValues, BS.ProvenanceSize);
+                RetvalByteWidth = Before.CreateAdd(RetvalByteWidth, ByteWidth);
+                ReturnArray = offsetPointer(After, ReturnArray, ByteWidth);
             }
         }
     }
@@ -1278,8 +1280,8 @@ PreservedAnalyses BorrowSanitizerPass::run(Module &M, ModuleAnalysisManager &MAM
         ClUseStackSafety ? &MAM.getResult<StackSafetyGlobalAnalysis>(M) : nullptr;
 
     for (Function &F : M) {
-
         Modified |= ModuleSanitizer.instrumentFunction(F, FAM, SSGI);
+
     }
     if (!Modified)
         return PreservedAnalyses::all();
