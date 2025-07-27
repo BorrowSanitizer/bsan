@@ -59,6 +59,8 @@ STATISTIC(NumAllocaEliminated, "Number of times that instrumentation is eliminat
 STATISTIC(NumReadsEliminated, "Number of times that instrumentation is eliminated for an read.");
 STATISTIC(NumWritesEliminated, "Number of times that instrumentation is eliminated for a write.");
 
+uint64_t AllocCounter = 0;
+uint64_t RetagCounter = 0;
 
 namespace {
 struct BorrowSanitizer {
@@ -500,7 +502,8 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
             return Next;
         }else{
             ScalarProvenance PS = Prov.getScalarProvenance().value();
-            return storeScalarProvenanceValue(IRB, PS, Dest);
+            storeScalarProvenanceValue(IRB, PS, Dest);
+            return offsetPointer(IRB, Dest, BS.ProvenanceSize);
         }
     }
 
@@ -556,13 +559,12 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     }
 
     // Stores a single provenance value to either shadow or main memory.
-    Value *storeScalarProvenanceValue(IRBuilder<> &IRB, ScalarProvenance P, Value *Dest) {
+    void storeScalarProvenanceValue(IRBuilder<> &IRB, ScalarProvenance P, Value *Dest) {
         Value *IDPtr, *TagPtr, *InfoPtr;
         std::tie(IDPtr, TagPtr, InfoPtr) = getScalarProvenanceElements(IRB, Dest);
         IRB.CreateStore(P.ID, IDPtr);
         IRB.CreateStore(P.Tag, TagPtr);
         IRB.CreateStore(P.Info, InfoPtr);
-        return offsetPointer(IRB, Dest, BS.ProvenanceSize);
     }
 
     std::tuple<Value *, Value *, Value *, Value*> getVectorProvenanceElements(IRBuilder<> &IRB, Value *ProvArray, ElementCount Elems) {
@@ -698,7 +700,8 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     ScalarProvenance processAllocation(IRBuilder<> &IRB, Value *Address, Value *Size) {
         Value *ID = IRB.CreateCall(BS.BsanFuncNewAllocID, {});
         Value *Tag = IRB.CreateCall(BS.BsanFuncNewBorrowTag, {});
-        Value *Info = IRB.CreateCall(BS.BsanFuncAlloc, {Address, Size, ID, Tag});
+        Value *Info = IRB.CreateCall(BS.BsanFuncAlloc, {Address, Size, ID, Tag, ConstantInt::get(BS.IntptrTy, AllocCounter)});
+        AllocCounter += 1;
         ScalarProvenance Prov = ScalarProvenance(ID, Tag, Info);
         setProvenance(Address, Prov);
         return Prov;
@@ -912,8 +915,10 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
                 Prov.ID, 
                 Prov.Tag, 
                 Prov.Info, 
+                ConstantInt::get(BS.IntptrTy, RetagCounter)
             });
             ReplaceInstWithInst(&I, CIRetag);
+            RetagCounter += 1;
         }
     }
 
@@ -1281,7 +1286,12 @@ PreservedAnalyses BorrowSanitizerPass::run(Module &M, ModuleAnalysisManager &MAM
 
     for (Function &F : M) {
         Modified |= ModuleSanitizer.instrumentFunction(F, FAM, SSGI);
-
+        if (F.getName().contains("new_uninit_in")) {
+            llvm::outs() << "\n";
+            F.print(llvm::outs());
+            llvm::outs() << "\n";
+        }
+        RetagCounter = 0;
     }
     if (!Modified)
         return PreservedAnalyses::all();
@@ -1374,7 +1384,7 @@ void BorrowSanitizer::initializeCallbacks(Module &M, const TargetLibraryInfo &TL
     BsanFuncRetag = M.getOrInsertFunction(
         kBsanFuncRetagName, AL,
         IntptrTy,
-        PtrTy, IntptrTy, Int64Ty, IntptrTy, IntptrTy, PtrTy
+        PtrTy, IntptrTy, Int64Ty, IntptrTy, IntptrTy, PtrTy, IntptrTy
     );
 
     BsanFuncPushFrame = M.getOrInsertFunction(
@@ -1434,7 +1444,7 @@ void BorrowSanitizer::initializeCallbacks(Module &M, const TargetLibraryInfo &TL
     BsanFuncAlloc = M.getOrInsertFunction(
         kBsanFuncAllocName, AL,
         PtrTy,
-        PtrTy, IntptrTy, IntptrTy, IntptrTy  
+        PtrTy, IntptrTy, IntptrTy, IntptrTy, IntptrTy
     );
 
     BsanFuncDealloc = M.getOrInsertFunction(
