@@ -119,7 +119,7 @@ impl<T: Linkable<T>> BlockAllocator<T> {
     }
 
     pub fn alloc_with(&self, elem: T) -> Option<NonNull<T>> {
-        if let Some(mut free_list) = self.free_list.try_lock()
+        /*if let Some(mut free_list) = self.free_list.try_lock()
             && !free_list.is_null()
         {
             unsafe {
@@ -131,7 +131,7 @@ impl<T: Linkable<T>> BlockAllocator<T> {
 
                 return Some(NonNull::new_unchecked(curr));
             }
-        }
+        }*/
         self.cursor
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |val| {
                 if val.is_null() {

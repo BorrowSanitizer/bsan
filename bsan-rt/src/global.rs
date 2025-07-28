@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use backtrace::Backtrace;
 use core::cell::SyncUnsafeCell;
 use core::mem::MaybeUninit;
 use core::num::NonZeroUsize;
@@ -130,6 +131,7 @@ impl GlobalCtx {
 
     pub fn handle_error(&self, info: ErrorInfo) -> ! {
         crate::eprintln!("An error occurred: {info:?}\n\nExiting...");
+        crate::eprintln!("{:?}", Backtrace::new());
         self.exit(1)
     }
 }

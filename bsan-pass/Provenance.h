@@ -53,7 +53,7 @@ struct VectorProvenance {
 struct LoadedProvenance {
     ProvenanceKind Kind;
     LoadedProvenance() : Kind(Scalar) {}
-    LoadedProvenance(ScalarProvenance P) : Kind(Scalar), SingleProv(P) {}
+    LoadedProvenance(ScalarProvenance P) : Kind(Scalar), ScalarProv(P) {}
     LoadedProvenance(VectorProvenance V) : Kind(Vector), VectorProv(V) {}
 
     bool isVector() {
@@ -66,7 +66,7 @@ struct LoadedProvenance {
 
     std::optional<ScalarProvenance> getScalarProvenance() {
         if(isScalar()) {
-            return SingleProv;
+            return ScalarProv;
         }else{
             return std::nullopt;
         }
@@ -83,7 +83,7 @@ struct LoadedProvenance {
     private:
     union {
         VectorProvenance VectorProv;
-        ScalarProvenance SingleProv;
+        ScalarProvenance ScalarProv;
     };
 };
 

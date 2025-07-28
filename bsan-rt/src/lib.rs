@@ -1,5 +1,6 @@
 #![cfg_attr(not(test), no_std)]
 #![allow(internal_features)]
+#![allow(unused)]
 #![warn(clippy::transmute_ptr_to_ptr)]
 #![warn(clippy::borrow_as_ptr)]
 #![feature(sync_unsafe_cell)]
@@ -26,6 +27,7 @@ use core::panic::PanicInfo;
 use core::ptr::NonNull;
 use core::{fmt, mem, ptr};
 
+use backtrace::Backtrace;
 use bsan_shared::{AccessKind, RetagInfo, Size};
 use libc_print::std_name::*;
 use spin::Mutex;
@@ -342,15 +344,18 @@ unsafe extern "C-unwind" fn __bsan_retag(
     alloc_id: AllocId,
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
+    id: usize,
 ) -> BorTag {
     let global_ctx = unsafe { global_ctx() };
     let local_ctx = unsafe { local_ctx_mut() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     let retag_info = unsafe { RetagInfo::from_raw(access_size, perm) };
+    /*
     BorrowTracker::new(prov, object_addr, Some(access_size))
         .and_then(|opt| opt.map(|bt| bt.retag(global_ctx, local_ctx, retag_info)).transpose())
         .unwrap_or_else(|err| handle_err!(err, global_ctx))
-        .unwrap_or(bor_tag)
+        .unwrap_or(bor_tag)*/
+    BorTag(0)
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -409,6 +414,7 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     size: usize,
     alloc_id: AllocId,
     bor_tag: BorTag,
+    id: usize,
 ) -> NonNull<AllocInfo> {
     let ctx = unsafe { global_ctx() };
     // Initialize `AllocInfo`
@@ -421,8 +427,6 @@ unsafe extern "C-unwind" fn __bsan_alloc(
             tree_lock: Mutex::new(None),
         })
     };
-
-    // Initialize the tree once
     unsafe {
         let mut tree = alloc_info.as_mut().tree_lock.lock();
         let _ = tree.insert(Tree::new_in(
@@ -625,7 +629,8 @@ mod test {
         unsafe {
             let alloc_id = __bsan_new_alloc_id();
             let bor_tag = __bsan_new_tag();
-            let alloc_info = __bsan_alloc(base_addr.cast::<u8>(), size, alloc_id, bor_tag).as_ptr();
+            let alloc_info =
+                __bsan_alloc(base_addr.cast::<u8>(), size, alloc_id, bor_tag, 0).as_ptr();
             Provenance { alloc_id, bor_tag, alloc_info }
         }
     }
@@ -669,9 +674,7 @@ mod test {
         with_init(|| {
             with_heap_object(|obj, size| {
                 let prov = create_metadata(obj, size);
-                //__bsan_retag(&raw mut prov, 20, 0, 0, some_object_addr);
                 destroy_metadata(obj, prov);
-                println!("Calling second destroy");
                 destroy_metadata(obj, prov);
             })
         });
@@ -713,11 +716,11 @@ mod test {
         });
     }
 }
-
+/*
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
     crate::eprintln!("The BorrowSanitizer runtime panicked!");
     crate::eprintln!("{info}");
     core::intrinsics::abort()
-}
+}*/

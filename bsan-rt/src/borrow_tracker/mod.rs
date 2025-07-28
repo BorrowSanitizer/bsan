@@ -74,7 +74,7 @@ impl BorrowTracker {
         retag_info: RetagInfo,
     ) -> BtResult<BorTag> {
         let new_tag = global_ctx.new_borrow_tag();
-
+        /* 
         let is_protected = retag_info.perm.protector_kind.is_some();
         let requires_access = retag_info.perm.access_kind.is_some();
 
@@ -160,11 +160,12 @@ impl BorrowTracker {
         };
 
         tree.new_child(child_params);
-
+*/
         Ok(new_tag)
     }
 
     pub fn access(&self, global_ctx: &GlobalCtx, access_kind: AccessKind) -> BtResult<()> {
+        /* 
         // Tree is initialized
         let mut lock = self.lock();
         let tree = unsafe { lock.as_mut().unwrap_unchecked() };
@@ -179,10 +180,12 @@ impl BorrowTracker {
             Span::new(),
             // Passing in allocator explicitly to stay consistent with API
             global_ctx.allocator(),
-        )
+        )*/
+        Ok(())
     }
 
     pub fn dealloc(&mut self, global_ctx: &GlobalCtx) -> BtResult<()> {
+        /* 
         let mut lock = self.lock();
 
         let tree = unsafe { lock.as_mut().unwrap_unchecked() };
@@ -195,7 +198,7 @@ impl BorrowTracker {
             // TODO: Replace with actual span
             Span::new(),
             global_ctx.allocator(),
-        )?;
+        )?;*/
 
         unsafe { drop(ptr::replace(self.prov.alloc_info, AllocInfo::invalid())) }
         unsafe { global_ctx.deallocate_lock_location(self.prov.alloc_info) };

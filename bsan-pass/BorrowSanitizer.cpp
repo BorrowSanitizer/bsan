@@ -823,24 +823,31 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 
     void visitCallBase(CallBase &CB) {
         Function *Callee = CB.getCalledFunction();
-
-        if (isAllocLikeFn(&CB, TLI)) {
-            IRBuilder<> IRB = getInsertionPointAfterCall(&CB);
-            Value *Size = resolveAllocSize(IRB, CB);
-            processAllocation(IRB, &CB, Size);
-            return;
-        } else if (Callee) {
-            if(isReallocLikeFn(Callee)) {
-                IRBuilder<> IRB = getInsertionPointAfterCall(&CB);
-                Value *Size = resolveAllocSize(IRB, CB);
-                processAllocation(IRB, &CB, Size);
-                Value *ReallocOperand = getReallocatedOperand(&CB);
-                processDeallocation(IRB, ReallocOperand);
-                return;
-            } else if(Value *FreedOperand = getFreedOperand(&CB, TLI)) {
-                IRBuilder<> IRB = getInsertionPointAfterCall(&CB);
-                processDeallocation(IRB, FreedOperand);
-                return;
+        LibFunc TLIFn;
+        // If we're calling a heap allocation or deallocation function,
+        // then we can skip handling argument provenance and defer to our
+        // run-time calls.
+        if(Callee) {
+            if(TLI->getLibFunc(*Callee, TLIFn) && TLI->has(TLIFn)) {
+                std::optional<APInt> AllocSize = getAllocSize(&CB, TLI);
+                if (isAllocLikeFn(&CB, TLI)) {
+                    IRBuilder<> IRB = getInsertionPointAfterCall(&CB);
+                    Value *Size = resolveAllocSize(IRB, CB);
+                    processAllocation(IRB, &CB, Size);
+                    return;
+                } else if(isReallocLikeFn(Callee)) {
+                    IRBuilder<> IRB = getInsertionPointAfterCall(&CB);
+                    Value *Size = resolveAllocSize(IRB, CB);
+                    processAllocation(IRB, &CB, Size);
+                    Value *Operand = getReallocatedOperand(&CB);
+                    processDeallocation(IRB, Operand);
+                    return;
+                } else if (isLibFreeFunction(Callee, TLIFn)) {
+                    Value* Operand = getFreedOperand(&CB, TLI);
+                    IRBuilder<> IRB = getInsertionPointAfterCall(&CB);
+                    processDeallocation(IRB, Operand);
+                    return;
+                }
             } else if(Callee->getName().starts_with(kBsanDebugPrefix)) {
                 return handleDebugFunction(CB, Callee);
             } else if(Callee->getName().starts_with(kBsanPrefix)) {
@@ -880,14 +887,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
                 return;
 
             SmallVector<ProvenanceComponent> *ReturnComponents = getProvenanceComponents(Before, CB.getType());
-            if (isExternFunction) {  
-                Before.CreateMemSet(
-                    BS.RetvalTLS, 
-                    ConstantInt::get(BS.Int8Ty, 0), 
-                    ConstantInt::get(BS.IntptrTy, kTLSSize * kProvenanceSize), 
-                    BS.ProvenanceAlign
-                );
-            }
+
             // Load each provenance component for the return type from the thread-local return value array.
             // Also, compute the byte-width of the provenance components that we expect to be here. If the function
             // that we are calling is uninstrumented, then we need ensure that the return array is populated with
@@ -901,6 +901,14 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
                 Value *ByteWidth = Before.CreateMul(Comp.NumProvenanceValues, BS.ProvenanceSize);
                 RetvalByteWidth = Before.CreateAdd(RetvalByteWidth, ByteWidth);
                 ReturnArray = offsetPointer(After, ReturnArray, ByteWidth);
+            }
+            if (isExternFunction) {  
+                Before.CreateMemSet(
+                    BS.RetvalTLS, 
+                    ConstantInt::get(BS.Int8Ty, 0), 
+                    RetvalByteWidth, 
+                    BS.ProvenanceAlign
+                );
             }
         }
     }
@@ -1286,12 +1294,6 @@ PreservedAnalyses BorrowSanitizerPass::run(Module &M, ModuleAnalysisManager &MAM
 
     for (Function &F : M) {
         Modified |= ModuleSanitizer.instrumentFunction(F, FAM, SSGI);
-        if (F.getName().contains("new_uninit_in")) {
-            llvm::outs() << "\n";
-            F.print(llvm::outs());
-            llvm::outs() << "\n";
-        }
-        RetagCounter = 0;
     }
     if (!Modified)
         return PreservedAnalyses::all();
