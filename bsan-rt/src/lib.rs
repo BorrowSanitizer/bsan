@@ -27,7 +27,6 @@ use core::panic::PanicInfo;
 use core::ptr::NonNull;
 use core::{fmt, mem, ptr};
 
-use backtrace::Backtrace;
 use bsan_shared::{AccessKind, RetagInfo, Size};
 use libc_print::std_name::*;
 use spin::Mutex;
