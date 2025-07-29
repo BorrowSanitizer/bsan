@@ -25,10 +25,10 @@ impl PermissionInfo {
         let access_kind: u8 = AccessKind::into_raw(self.access_kind);
         cfg_select! {
             target_endian = "little" => {
-                perm_kind as u64 & ((protector_kind as u64) << 16) & ((access_kind as u64) << 24)
+                perm_kind as u64 | ((protector_kind as u64) << 16) | ((access_kind as u64) << 24)
             }
             target_endian = "big" => {
-                perm_kind as u64 & ((protector_kind as u64) >> 16) & ((access_kind as u64) >> 24)
+                perm_kind as u64 | ((protector_kind as u64) >> 16) | ((access_kind as u64) >> 24)
             }
         }
     }
@@ -38,7 +38,7 @@ impl PermissionInfo {
     /// the `ProtectorKind`, and the `AccessKind, in that order.`
     #[inline]
     #[allow(clippy::needless_late_init)]
-    unsafe fn from_raw(perm: u64) -> Self {
+    pub unsafe fn from_raw(perm: u64) -> Self {
         let perm_kind: u16;
         let protector_kind: u8;
         let access_kind: u8;
