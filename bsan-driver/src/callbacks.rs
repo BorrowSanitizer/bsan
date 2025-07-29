@@ -20,7 +20,7 @@ fn retag_perm<'tcx>(
     _tcx: TyCtxt<'tcx>,
     _key: (TypingEnv<'tcx>, Ty<'tcx>, Ty<'tcx>, RetagParams),
 ) -> Option<u64> {
-    /* 
+    /*
     let (env, pointer_ty, pointee_ty, params) = key;
     let ty_is_freeze = pointee_ty.is_freeze(tcx, env);
     let ty_is_unpin = pointee_ty.is_unpin(tcx, env);

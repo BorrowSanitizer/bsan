@@ -41,7 +41,7 @@ impl Config {
                     _ => panic!("invalid `BSAN_BE_RUSTC` value: {crate_kind:?}"),
                 };
                 (raw_args, is_target)
-            } else {
+            } else if env::var("RUSTC_WRAPPER").is_ok() {
                 // Otherwise, we're being invoked through RUSTC_WRAPPER. This means that our first
                 // argument is the path to *this* binary, so we skip it. This is where we can parse
                 // any BorrowSanitizer-specific arguments and use them to change our instrumentation
@@ -57,6 +57,8 @@ impl Config {
                     }
                 }
                 (rustc_args, true)
+            } else {
+                (raw_args, true)
             }
         };
         if target_crate {

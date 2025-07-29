@@ -98,7 +98,7 @@ fn run_tests(
     path: &str,
     meta: &VersionMeta,
     with_dependencies: bool,
-    tmpdir: &Path,
+    _tmpdir: &Path,
 ) -> Result<()> {
     // Handle command-line arguments.
     let mut args = ui_test::Args::test()?;
@@ -114,10 +114,9 @@ fn run_tests(
         assert!(!args.bless, "cannot use RUSTC_BLESS and MIRI_SKIP_UI_CHECKS at the same time");
         config.output_conflict_handling = ignore_output_conflict;
     }
-    // Let the tests know where to store temp files (they might run for a different target, which can make this hard to find).
-    config.program.envs.push(("BSAN_TEMP".into(), Some(tmpdir.to_owned().into())));
     // If a test ICEs, we want to see a backtrace.
     config.program.envs.push(("RUST_BACKTRACE".into(), Some("1".into())));
+    config.program.envs.push(("BSAN_BE_RUSTC".into(), Some("target".into())));
 
     // Add some flags we always want.
     config.program.args.insert(
