@@ -47,7 +47,7 @@ impl GlobalCtx {
     /// This function will also initialize our shadow heap
     fn new(hooks: BsanHooks) -> Self {
         let sizes = Sizes::default();
-        let block = Block::new(&hooks, unsafe { NonZero::new_unchecked(1024) });
+        let block = Block::new(&hooks, unsafe { NonZero::new_unchecked(5012) });
 
         Self {
             hooks,

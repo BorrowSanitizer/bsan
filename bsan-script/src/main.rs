@@ -1,9 +1,12 @@
 // Our build script combines many preexisting components from Miri's build script
 // and the Rust compiler's bootstrap script.
 #![feature(io_error_more)]
+
 use anyhow::Result;
 use clap::{command, Parser};
 use commands::Component;
+
+use crate::utils::BenchTool;
 //mod commands;
 mod commands;
 mod env;
@@ -109,6 +112,21 @@ pub enum Command {
         /// Flags that are passed through to `cargo install`.
         #[arg(allow_hyphen_values(true), last(true))]
         args: Vec<String>,
+    },
+    /// Runs differential benchmarking with Miri, ASAN, native on test programs
+    Bench {
+        /// Number of runs to benchmark on
+        #[arg(default_value_t = 15)]
+        runs: i32,
+        /// Number of warmup runs before executing each individual benchmark,
+        #[arg(default_value_t = 5)]
+        warmups: i32,
+        /// Tools to run differential benchmarks on
+        #[arg(value_enum, default_values_t = vec![BenchTool::MIRI, BenchTool::NATIVE])]
+        tools: Vec<BenchTool>,
+        /// Flags for Miri config
+        #[arg(allow_hyphen_values(true), last(true))]
+        miri_flags: Vec<String>,
     },
     Miri {
         /// Components to test.

@@ -4,12 +4,20 @@ use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
+use clap::ValueEnum;
 use path_macro::path;
 use rustc_version::VersionMeta;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use xshell::{cmd, Cmd, Shell};
 use xz2::bufread::XzDecoder;
+
+#[derive(Debug, PartialEq, Eq, Clone, ValueEnum, EnumIter)]
+pub enum BenchTool {
+    NATIVE,
+    MIRI,
+    ASAN,
+}
 
 pub fn show_error_(msg: &impl std::fmt::Display) -> ! {
     eprintln!("fatal error: {msg}");

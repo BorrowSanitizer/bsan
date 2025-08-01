@@ -2,13 +2,14 @@ use std::fs;
 use std::ops::Deref;
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
+use chrono::Local;
 use clap::ValueEnum;
 use path_macro::path;
 use xshell::cmd;
 
 use crate::env::{BsanEnv, Mode};
-use crate::utils::install_git_hooks;
+use crate::utils::{install_git_hooks, BenchTool};
 use crate::Command;
 
 impl Command {
@@ -48,6 +49,9 @@ impl Command {
                 c.miri(env, &args)?;
                 Ok(())
             }),
+            Command::Bench { runs, warmups, miri_flags, tools } => {
+                Self::bench(env, runs, warmups, tools, miri_flags)
+            }
             Command::Inst { file, args } => Self::inst(env, file, &args),
         }
     }
@@ -112,6 +116,138 @@ impl Command {
         let pass = pass.to_str().unwrap();
         let opt = env.target_binary("opt");
         cmd!(env.sh, "{opt} --load-pass-plugin={pass} -passes=bsan {args...}").quiet().run()?;
+        Ok(())
+    }
+
+    fn bench(
+        env: &mut BsanEnv,
+        runs: i32,
+        warmups: i32,
+        tools: Vec<BenchTool>,
+        // Unfortunately cannot move this to be a part of BenchTool because
+        // of limitations with Clap's ValueEnum
+        miri_flags: Vec<String>,
+    ) -> Result<()> {
+        println!("Benchmarking...");
+
+        // Ensure hyperfine is installed
+        cmd!(env.sh, "cargo install hyperfine --locked")
+            .quiet()
+            .run()
+            .context("Failed to install hyperfine")?;
+
+        let bench_path = path!(env.root_dir / "tests" / "benches");
+
+        if !env.sh.path_exists(&bench_path) {
+            return Err(anyhow!("Corrupted work tree! benches submodule missing!"));
+        }
+
+        // Pull the latest benches changes
+        env.sh.change_dir(&bench_path);
+        // TODO: Uncomment this when the benches repo is public, for now it's easier to do it manually
+        // cmd!(env.sh, "git pull").quiet().run().context("Failed to pull benches repo!")?;
+
+        let target_dir = path!(&bench_path / "programs" / "src" / "bin");
+        // While probably not the best unique global ID, it is *extremely* unlikely that two benches are triggered at the same
+        // exact time (famous last words)
+        let time = Local::now().format("%Y-%m-%d_%H-%M-%S");
+        env.sh
+            .create_dir(path!(&bench_path / "results" / format!("results_{}", &time)))
+            .context("Failed to create results directory!")?;
+
+        if tools.contains(&BenchTool::MIRI) {
+            // Most baseline version of Miri with eveything except TB aliasing disabled
+            let default_miri_flags: Vec<String> = vec![
+                "-Zmiri-tree-borrows",
+                "-Zmiri-ignore-leaks",
+                "-Zmiri-disable-alignment-check",
+                "-Zmiri-disable-data-race-detector",
+                "-Zmiri-disable-validation",
+                "-Zmiri-disable-weak-memory-emulation",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+            let flags = if miri_flags.is_empty() { default_miri_flags } else { miri_flags };
+
+            env.sh.set_var("MIRIFLAGS", &flags.join(" "));
+
+            cmd!(env.sh, "cargo +nightly miri setup")
+                .quiet()
+                .run()
+                .context("Failed to setup Miri")?;
+        }
+
+        for file_path in env
+            .sh
+            .read_dir(target_dir)
+            .context("Corrupt benches submodule! Failed to read over target programs")?
+        {
+            let file = file_path.file_name().unwrap();
+            let program_name = file.to_str().unwrap().strip_suffix(".rs").unwrap();
+
+            println!(
+                r#"
+                
+                    ==============================
+                    Benchmarking: {program_name}
+
+                    Run Spec:
+                        Differentially testing against: {tools:#?}
+                        Runs: {runs}
+                        Warmup per experiment: {warmups}
+                    ==============================
+                "#
+            );
+            // Instrument program with BSAN
+            Self::inst(env, file_path.to_str().unwrap().to_string(), Default::default())
+                .with_context(|| {
+                    format!("Failed to instrument {program_name} at {file_path:#?}")
+                })?;
+
+            if tools.contains(&BenchTool::NATIVE) {
+                // Build base program with cargo
+                cmd!(env.sh, "cargo build -p programs")
+                    .arg("--bin")
+                    .arg(program_name)
+                    .quiet()
+                    .run()
+                    .context("Failed to build uninstrumented program with cargo")?;
+            }
+
+            if tools.contains(&BenchTool::ASAN) {
+                env.sh.set_var("RUSTFLAGS", "-Zsanitizer-address");
+
+                // TODO: Disable more flags, pass these in the RunSpec
+                env.sh.set_var(
+                    "ASAN_OPTIONS",
+                    vec!["detect_leaks=false", "detect_deadlocks=false", "halt_on_error=false"]
+                        .join(":"),
+                );
+
+                cmd!(env.sh, "cargo build -Zbuild-std -p programs")
+                    .quiet()
+                    .arg("--bin")
+                    .arg(format!("asan-{program_name}"))
+                    .run()
+                    .context("Failed to build ASAN program")?;
+            }
+
+            // Run hyperfine with no default shell and ignorning non-zero exit codes by default
+            // TODO: Add these to the runspec
+            cmd!(env.sh, "hyperfine -i -N")
+                .arg("--warmup")
+                .arg(warmups.to_string())
+                .arg("--runs")
+                .arg(runs.to_string())
+                .arg("--export-json")
+                .arg(format!("./results_{time}/{program_name}-results.json"))
+                .args(vec![])
+                .run()
+                .context("Failed to run benchmark with hyperfine")?;
+        }
+
         Ok(())
     }
 
