@@ -28,7 +28,7 @@ jobs:
         rustup default nightly
     - name: CI
       run: ./xb ci
-      name: Install dependencies
+    - name: Install dependencies
       run : |
           rustup default nightly
     - name: benchmark
