@@ -1,5 +1,4 @@
 use alloc::vec::Vec;
-use backtrace::Backtrace;
 use core::cell::SyncUnsafeCell;
 use core::mem::MaybeUninit;
 use core::num::NonZeroUsize;
@@ -7,6 +6,7 @@ use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::sync::atomic::AtomicUsize;
 
+use backtrace::Backtrace;
 use block::*;
 use bsan_shared::ProtectorKind;
 use hashbrown::{DefaultHashBuilder, HashMap};

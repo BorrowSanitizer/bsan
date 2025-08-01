@@ -75,98 +75,98 @@ impl BorrowTracker {
         retag_info: RetagInfo,
     ) -> BtResult<BorTag> {
         let new_tag = global_ctx.new_borrow_tag();
-        /* 
-        let is_protected = retag_info.perm.protector_kind.is_some();
-        let requires_access = retag_info.perm.access_kind.is_some();
+        /*
+                let is_protected = retag_info.perm.protector_kind.is_some();
+                let requires_access = retag_info.perm.access_kind.is_some();
 
-        // Tree is assumed to be initialized
-        let mut lock = self.lock();
-        let tree = unsafe { lock.as_mut().unwrap_unchecked() };
-        let parent_tag = self.prov.bor_tag;
+                // Tree is assumed to be initialized
+                let mut lock = self.lock();
+                let tree = unsafe { lock.as_mut().unwrap_unchecked() };
+                let parent_tag = self.prov.bor_tag;
 
-        #[cfg(debug_assertions)]
-        if tree.is_allocation_of(new_tag) {
-            crate::throw_internal_err!("This tag already exists in the tree!");
-        }
-
-        if let Some(protect) = retag_info.perm.protector_kind {
-            // We register the protection in two different places.
-            // This makes creating a protector slower, but checking whether a tag
-            // is protected faster.
-            local_ctx.add_protected_tag(self.prov.alloc_id, new_tag);
-            global_ctx.add_protected_tag(new_tag, protect);
-        }
-
-        if retag_info.size == 0 {
-            return Ok(new_tag);
-        }
-
-        let mut initial_perms = RangeMap::new_in(
-            Size::from_bytes(retag_info.size),
-            LocationState::new_accessed(Permission::new_disabled(), IdempotentForeignAccess::None),
-            global_ctx.allocator(),
-        );
-
-        let sifa = retag_info.perm.perm_kind.strongest_idempotent_foreign_access(is_protected);
-        let new_loc = if requires_access {
-            LocationState::new_accessed(retag_info.perm.perm_kind, sifa)
-        } else {
-            LocationState::new_non_accessed(retag_info.perm.perm_kind, sifa)
-        };
-
-        for (_loc_range, loc) in initial_perms.iter_mut_all() {
-            *loc = new_loc;
-        }
-
-        let base_offset = self.range.start;
-        if let Some(access_kind) = retag_info.perm.access_kind {
-            for (perm_range, perm) in initial_perms.iter_mut_all() {
-                if perm.is_accessed() {
-                    // Some reborrows incur a read access to the parent.
-                    // Adjust range to be relative to allocation start
-                    let range_in_alloc = AllocRange {
-                        start: Size::from_bytes(perm_range.start) + base_offset,
-                        size: Size::from_bytes(perm_range.end - perm_range.start),
-                    };
-
-                    // Perform the access (update the Tree Borrows FSM)
-                    tree.perform_access(
-                        self.prov.bor_tag,
-                        // TODO: Validate the Range
-                        Some((range_in_alloc, access_kind, AccessCause::Reborrow)),
-                        global_ctx,
-                        self.prov.alloc_id,
-                        // TODO: Replace with actual span
-                        Span::new(),
-                        // Passing in allocator explicitly to stay consistent with API
-                        global_ctx.allocator(),
-                    )?;
+                #[cfg(debug_assertions)]
+                if tree.is_allocation_of(new_tag) {
+                    crate::throw_internal_err!("This tag already exists in the tree!");
                 }
-            }
-        }
 
-        let protected = retag_info.perm.protector_kind.is_some();
-        let default_perm = retag_info.perm.perm_kind;
+                if let Some(protect) = retag_info.perm.protector_kind {
+                    // We register the protection in two different places.
+                    // This makes creating a protector slower, but checking whether a tag
+                    // is protected faster.
+                    local_ctx.add_protected_tag(self.prov.alloc_id, new_tag);
+                    global_ctx.add_protected_tag(new_tag, protect);
+                }
 
-        // base offset should be the offset, from zero, where the retag is taking place within the allocation.
-        let child_params = ChildParams {
-            base_offset,
-            parent_tag,
-            new_tag,
-            initial_perms,
-            default_perm,
-            protected,
-            // TODO: Replace with actual span
-            span: Span::new(),
-        };
+                if retag_info.size == 0 {
+                    return Ok(new_tag);
+                }
 
-        tree.new_child(child_params);
-*/
+                let mut initial_perms = RangeMap::new_in(
+                    Size::from_bytes(retag_info.size),
+                    LocationState::new_accessed(Permission::new_disabled(), IdempotentForeignAccess::None),
+                    global_ctx.allocator(),
+                );
+
+                let sifa = retag_info.perm.perm_kind.strongest_idempotent_foreign_access(is_protected);
+                let new_loc = if requires_access {
+                    LocationState::new_accessed(retag_info.perm.perm_kind, sifa)
+                } else {
+                    LocationState::new_non_accessed(retag_info.perm.perm_kind, sifa)
+                };
+
+                for (_loc_range, loc) in initial_perms.iter_mut_all() {
+                    *loc = new_loc;
+                }
+
+                let base_offset = self.range.start;
+                if let Some(access_kind) = retag_info.perm.access_kind {
+                    for (perm_range, perm) in initial_perms.iter_mut_all() {
+                        if perm.is_accessed() {
+                            // Some reborrows incur a read access to the parent.
+                            // Adjust range to be relative to allocation start
+                            let range_in_alloc = AllocRange {
+                                start: Size::from_bytes(perm_range.start) + base_offset,
+                                size: Size::from_bytes(perm_range.end - perm_range.start),
+                            };
+
+                            // Perform the access (update the Tree Borrows FSM)
+                            tree.perform_access(
+                                self.prov.bor_tag,
+                                // TODO: Validate the Range
+                                Some((range_in_alloc, access_kind, AccessCause::Reborrow)),
+                                global_ctx,
+                                self.prov.alloc_id,
+                                // TODO: Replace with actual span
+                                Span::new(),
+                                // Passing in allocator explicitly to stay consistent with API
+                                global_ctx.allocator(),
+                            )?;
+                        }
+                    }
+                }
+
+                let protected = retag_info.perm.protector_kind.is_some();
+                let default_perm = retag_info.perm.perm_kind;
+
+                // base offset should be the offset, from zero, where the retag is taking place within the allocation.
+                let child_params = ChildParams {
+                    base_offset,
+                    parent_tag,
+                    new_tag,
+                    initial_perms,
+                    default_perm,
+                    protected,
+                    // TODO: Replace with actual span
+                    span: Span::new(),
+                };
+
+                tree.new_child(child_params);
+        */
         Ok(new_tag)
     }
 
     pub fn access(&self, global_ctx: &GlobalCtx, access_kind: AccessKind) -> BtResult<()> {
-        /* 
+        /*
         // Tree is initialized
         let mut lock = self.lock();
         let tree = unsafe { lock.as_mut().unwrap_unchecked() };
@@ -186,7 +186,7 @@ impl BorrowTracker {
     }
 
     pub fn dealloc(&mut self, global_ctx: &GlobalCtx) -> BtResult<()> {
-        /* 
+        /*
         let mut lock = self.lock();
 
         let tree = unsafe { lock.as_mut().unwrap_unchecked() };
