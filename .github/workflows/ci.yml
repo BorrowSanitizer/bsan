@@ -28,19 +28,7 @@ jobs:
         rustup default nightly
     - name: CI
       run: ./xb ci
-    
- build:
-    strategy:
-      fail-fast: false
-      matrix:
-        config:
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-24.04-arm
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-    runs-on: '${{ matrix.config.os }}'
-    name: 'bench'
-    steps:
+      
     - uses: actions/checkout@v4
     - name: Install dependencies
       run: |
