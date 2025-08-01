@@ -12,7 +12,7 @@ use strum_macros::EnumIter;
 use xshell::{cmd, Cmd, Shell};
 use xz2::bufread::XzDecoder;
 
-#[derive(Debug, PartialEq, Eq, Clone, ValueEnum, EnumIter)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, ValueEnum, EnumIter)]
 pub enum BenchTool {
     NATIVE,
     MIRI,

@@ -155,29 +155,20 @@ impl Command {
             .create_dir(path!(&bench_path / "results" / format!("results_{}", &time)))
             .context("Failed to create results directory!")?;
 
-        if tools.contains(&BenchTool::MIRI) {
-            // Most baseline version of Miri with eveything except TB aliasing disabled
-            let default_miri_flags: Vec<String> = vec![
-                "-Zmiri-tree-borrows",
-                "-Zmiri-ignore-leaks",
-                "-Zmiri-disable-alignment-check",
-                "-Zmiri-disable-data-race-detector",
-                "-Zmiri-disable-validation",
-                "-Zmiri-disable-weak-memory-emulation",
-            ]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        // Most baseline version of Miri with eveything except TB aliasing disabled
+        let default_miri_flags: Vec<String> = vec![
+            "-Zmiri-tree-borrows",
+            "-Zmiri-ignore-leaks",
+            "-Zmiri-disable-alignment-check",
+            "-Zmiri-disable-data-race-detector",
+            "-Zmiri-disable-validation",
+            "-Zmiri-disable-weak-memory-emulation",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
 
-            let flags = if miri_flags.is_empty() { default_miri_flags } else { miri_flags };
-
-            env.sh.set_var("MIRIFLAGS", &flags.join(" "));
-
-            cmd!(env.sh, "cargo +nightly miri setup")
-                .quiet()
-                .run()
-                .context("Failed to setup Miri")?;
-        }
+        let flags = if miri_flags.is_empty() { default_miri_flags } else { miri_flags };
 
         for file_path in env
             .sh
@@ -200,11 +191,25 @@ impl Command {
                     ==============================
                 "#
             );
+
             // Instrument program with BSAN
             Self::inst(env, file_path.to_str().unwrap().to_string(), Default::default())
                 .with_context(|| {
                     format!("Failed to instrument {program_name} at {file_path:#?}")
                 })?;
+
+            let mut commands: Vec<String> = Vec::new();
+
+            if tools.contains(&BenchTool::MIRI) {
+                env.sh.set_var("MIRIFLAGS", &flags.join(" "));
+
+                cmd!(env.sh, "cargo +nightly miri setup")
+                    .quiet()
+                    .run()
+                    .context("Failed to setup Miri")?;
+
+                commands.push(format!("cargo +nightly miri run -p programs --bin {program_name}"));
+            }
 
             if tools.contains(&BenchTool::NATIVE) {
                 // Build base program with cargo
@@ -214,6 +219,8 @@ impl Command {
                     .quiet()
                     .run()
                     .context("Failed to build uninstrumented program with cargo")?;
+
+                commands.push(format!(" ../../target/debug/{program_name}"));
             }
 
             if tools.contains(&BenchTool::ASAN) {
@@ -232,7 +239,12 @@ impl Command {
                     .arg(format!("asan-{program_name}"))
                     .run()
                     .context("Failed to build ASAN program")?;
+
+                commands.push(format!(" ../../target/debug/asan-{program_name}"));
             }
+
+            // Push BSAN command
+            commands.push(format!(" ./{program_name}"));
 
             // Run hyperfine with no default shell and ignorning non-zero exit codes by default
             // TODO: Add these to the runspec
@@ -242,8 +254,10 @@ impl Command {
                 .arg("--runs")
                 .arg(runs.to_string())
                 .arg("--export-json")
-                .arg(format!("./results_{time}/{program_name}-results.json"))
-                .args(vec![])
+                .arg(format!("./results/results_{time}/{program_name}-results.json"))
+                // .arg("--cleanup")
+                // .arg(format!("rm ./{program_name}"))
+                .args(commands)
                 .run()
                 .context("Failed to run benchmark with hyperfine")?;
         }
