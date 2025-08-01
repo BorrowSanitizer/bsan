@@ -8,8 +8,7 @@ fn main() {
     }
 
     // Reset vector to 0
-    v.resize(0,0);
-
+    v.resize(0, 0);
 
     // Read vector
     let vx = &v;

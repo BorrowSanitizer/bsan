@@ -29,10 +29,6 @@ jobs:
     - name: CI
       run: ./xb ci
       
-    - uses: actions/checkout@v4
-    - name: Install dependencies
-      run: |
-        rustup default nightly
     - name: benchmark
       run: ./xb bench
     - uses: actions/upload-artifact@v4
