@@ -7,30 +7,50 @@ use bsan_shared::Permission;
 use thiserror_no_std::Error;
 
 use crate::diagnostics::{AccessCause, NodeDebugInfo};
+use crate::memory::{self, AllocError};
 use crate::span::Span;
 use crate::{AllocId, Provenance};
 
-pub type BtResult<T> = core::result::Result<T, ErrorInfo>;
+pub type BorsanResult<T> = Result<T, ErrorInfo>;
 pub type TreeTransitionResult<T> = core::result::Result<T, TransitionError>;
 
+#[derive(Debug)]
+pub enum InternalError {
+    Alloc(memory::AllocError),
+}
+
+impl From<AllocError> for ErrorInfo {
+    fn from(err: AllocError) -> ErrorInfo {
+        ErrorInfo::Internal(InternalError::Alloc(err))
+    }
+}
+
+#[derive(Debug)]
 pub enum ErrorInfo {
-    Internal(String),
+    Internal(InternalError),
     UndefinedBehavior(UBInfo),
 }
 
-#[derive(Error)]
+#[derive(Error, Debug)]
 pub enum UBInfo {
+    #[error("Invalid provenance.")]
     InvalidProvenance(Span),
+    #[error("Access out-of-bounds.")]
     AccessOutOfBounds(Span, Provenance, *mut c_void, usize),
+    #[error("Use-after-free.")]
     UseAfterFree(Span, AllocId),
+    #[error("Freeing global allocation.")]
+    GlobalFree(Span, AllocId),
+    #[error("Aliasing violation.")]
     AliasingViolation(Box<TreeError>),
 }
 
-#[macro_export]
-macro_rules! throw_internal_err {
-    ($($arg:tt)*) => {
-        do yeet ErrorInfo::Internal(format!($($arg)*))
-    };
+pub type UBResult<T> = Result<T, UBInfo>;
+
+impl From<UBInfo> for ErrorInfo {
+    fn from(err: UBInfo) -> ErrorInfo {
+        ErrorInfo::UndefinedBehavior(err)
+    }
 }
 
 #[macro_export]

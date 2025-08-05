@@ -4,15 +4,16 @@ use core::ops::{BitAnd, Shr};
 use core::ptr::NonNull;
 use core::{mem, ptr};
 
-use crate::hooks::{BsanAllocHooks, BsanHooks, MUnmap, BSAN_MAP_FLAGS, BSAN_PROT_FLAGS};
-use crate::utils;
+use super::hooks::{BsanAllocHooks, BsanHooks, MUnmap, BSAN_MAP_FLAGS, BSAN_PROT_FLAGS};
+use super::{mmap, munmap};
+use crate::memory::AllocResult;
 
 /// Different targets have a different number
 /// of significant bits in their pointer representation.
 /// On 32-bit platforms, all 32-bits are addressable. Most
 /// 64-bit platforms only use 48-bits. Following the LLVM Project,
 /// we hard-code these values based on the underlying architecture.
-/// Most, if not all 64 bit architectures use 48-bits. However, the
+/// Most if not all 64 bit architectures use 48-bits. However, the
 /// Armv8-A spec allows addressing 52 or 56 bits as well. No processors
 /// implement this yet, though, so we can use target_pointer_width.
 #[cfg(target_pointer_width = "64")]
@@ -50,6 +51,9 @@ pub struct TableIndex {
     l1_index: usize,
     l2_index: usize,
 }
+
+type L2Array<T> = [T; L2_LEN];
+type L1Array<T> = [*mut L2Array<T>; L1_LEN];
 
 impl TableIndex {
     fn new(address: usize) -> Self {
@@ -100,7 +104,7 @@ impl TableIndex {
 #[derive(Debug)]
 pub struct ShadowHeap<T> {
     // First level table containing pointers to second level tables
-    table: NonNull<[*mut [T; L2_LEN]; L1_LEN]>,
+    table: NonNull<L1Array<T>>,
     default: *const T,
     munmap: MUnmap,
     l2_blocks: Vec<usize, BsanAllocHooks>,
@@ -109,24 +113,24 @@ pub struct ShadowHeap<T> {
 unsafe impl<T> Sync for ShadowHeap<T> {}
 
 impl<T: Sized + Default + Copy> ShadowHeap<T> {
-    pub fn new(hooks: &BsanHooks, default: *const T) -> Self {
+    pub fn new(hooks: &BsanHooks, default: *const T) -> AllocResult<Self> {
         unsafe {
-            let table: NonNull<[*mut [T; L2_LEN]; L1_LEN]> = {
-                let size_bytes =
-                    NonZero::new_unchecked(mem::size_of::<[*mut [T; L2_LEN]; L1_LEN]>());
-                utils::mmap(hooks.mmap_ptr, size_bytes, BSAN_PROT_FLAGS, BSAN_MAP_FLAGS)
+            let table = {
+                let size_bytes = NonZero::new_unchecked(mem::size_of::<L1Array<T>>());
+                mmap::<L1Array<T>>(hooks.mmap_ptr, size_bytes, BSAN_PROT_FLAGS, BSAN_MAP_FLAGS)?
+                    .cast()
             };
-            Self {
+            Ok(Self {
                 table,
                 default,
                 munmap: hooks.munmap_ptr,
                 l2_blocks: Vec::<usize, BsanAllocHooks>::new_in(hooks.alloc),
-            }
+            })
         }
     }
 
     #[inline]
-    fn get_l2(&self, idx: TableIndex) -> Option<NonNull<[T; L2_LEN]>> {
+    fn get_l2(&self, idx: TableIndex) -> Option<NonNull<L2Array<T>>> {
         unsafe {
             let l2_page = (*self.table.as_ptr())[idx.l1_index];
             if l2_page.is_null() {
@@ -137,16 +141,22 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
         }
     }
 
-    fn ensure_l2(&self, hooks: &BsanHooks, idx: TableIndex) -> NonNull<[T; L2_LEN]> {
+    fn ensure_l2(&self, hooks: &BsanHooks, idx: TableIndex) -> AllocResult<NonNull<L2Array<T>>> {
         unsafe {
-            let l2_table_ptr: *mut *mut [T; L2_LEN] = &raw mut (*self.table.as_ptr())[idx.l1_index];
+            let l2_table_ptr: *mut *mut L2Array<T> = &raw mut (*self.table.as_ptr())[idx.l1_index];
             if (*l2_table_ptr).is_null() {
                 let size_bytes = NonZero::new_unchecked(mem::size_of::<T>() * L2_LEN);
-                let l2_page: NonNull<[T; L2_LEN]> =
-                    utils::mmap(hooks.mmap_ptr, size_bytes, BSAN_PROT_FLAGS, BSAN_MAP_FLAGS);
+                let l2_page: NonNull<L2Array<T>> = mmap::<L2Array<T>>(
+                    hooks.mmap_ptr,
+                    size_bytes,
+                    BSAN_PROT_FLAGS,
+                    BSAN_MAP_FLAGS,
+                )?
+                .cast();
+
                 *l2_table_ptr = l2_page.as_ptr();
             }
-            NonNull::new_unchecked(*l2_table_ptr)
+            Ok(NonNull::new_unchecked(*l2_table_ptr))
         }
     }
 
@@ -182,15 +192,21 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
         }
     }
 
-    pub fn store_consecutive(&self, hooks: &BsanHooks, dst: usize, it: impl Iterator<Item = T>) {
+    pub fn store_consecutive(
+        &self,
+        hooks: &BsanHooks,
+        dst: usize,
+        it: impl Iterator<Item = T>,
+    ) -> AllocResult<()> {
         let table_idx = TableIndex::new(dst);
         for (prov_idx, prov) in it.enumerate() {
             let idx = table_idx.add(prov_idx);
-            let l2_dest = self.ensure_l2(hooks, idx);
+            let l2_dest = self.ensure_l2(hooks, idx)?;
             unsafe {
                 (*l2_dest.as_ptr())[idx.l2_index] = prov;
             }
         }
+        Ok(())
     }
 
     pub fn load_consecutive(&self, src: usize, len: usize, mut dest: impl Extend<T>) {
@@ -207,9 +223,15 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
     }
 
     /// Copy provenance values within a given range from the source to the destination.
-    pub fn memcpy(&self, hooks: &BsanHooks, src: usize, dst: usize, num_bytes: usize) {
+    pub fn memcpy(
+        &self,
+        hooks: &BsanHooks,
+        src: usize,
+        dst: usize,
+        num_bytes: usize,
+    ) -> AllocResult<()> {
         if num_bytes < PTR_BYTES {
-            return;
+            return Ok(());
         }
         // We do not want to write partial provenance values, so we round the
         // starting index (L2) up to the nearest provenance value
@@ -228,7 +250,7 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
                 // We want always want to ensure that the destination contains provenance values
                 // for the entire range, starting from the source.
                 let l2_table_src: Option<NonNull<[T; L2_LEN]>> = self.get_l2(src_index);
-                let l2_table_dst: NonNull<[T; L2_LEN]> = self.ensure_l2(hooks, dst_index);
+                let l2_table_dst: NonNull<[T; L2_LEN]> = self.ensure_l2(hooks, dst_index)?;
 
                 let num_src = src_index.num_remaining_in_page();
                 let num_dst = dst_index.num_remaining_in_page();
@@ -259,6 +281,7 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
                 words_remaining -= num_can_write;
             }
         }
+        Ok(())
     }
 
     pub fn get_src(&self, addr: usize) -> *const T {
@@ -270,11 +293,11 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
         }
     }
 
-    pub fn get_dest(&self, hooks: &BsanHooks, addr: usize) -> *mut T {
+    pub fn get_dest(&self, hooks: &BsanHooks, addr: usize) -> AllocResult<*mut T> {
         let idx = TableIndex::new(addr);
         unsafe {
-            let l2_page = self.ensure_l2(hooks, idx);
-            &raw mut (*l2_page.as_ptr())[idx.l2_index]
+            let l2_page = self.ensure_l2(hooks, idx)?;
+            Ok(&raw mut (*l2_page.as_ptr())[idx.l2_index])
         }
     }
 }
@@ -288,20 +311,22 @@ impl<T> Drop for ShadowHeap<T> {
                 if !l2_table.is_null() {
                     let l2_table_size = NonZero::new_unchecked(mem::size_of::<T>() * L2_LEN);
                     let l2_table = NonNull::new_unchecked(l2_table);
-                    utils::munmap(self.munmap, l2_table, l2_table_size);
+                    munmap(self.munmap, l2_table, l2_table_size).expect("failed to unmap block");
                 }
             }
             // Free L1 table
             let size_bytes = NonZero::new_unchecked(mem::size_of::<[*mut [T; L2_LEN]; L1_LEN]>());
-            utils::munmap::<[*mut [T; L2_LEN]; L1_LEN]>(self.munmap, self.table, size_bytes);
+            munmap::<[*mut [T; L2_LEN]; L1_LEN]>(self.munmap, self.table, size_bytes)
+                .expect("failed to unmap block");
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::hooks::DEFAULT_HOOKS;
-    use crate::shadow::*;
+    use super::*;
+    use crate::memory::hooks::DEFAULT_HOOKS;
+    use crate::memory::AllocResult;
 
     #[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
     struct TestProv {
@@ -326,32 +351,38 @@ mod tests {
 
     #[test]
     fn test_shadow_heap_creation() {
-        ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV);
+        ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV)
+            .expect("failed to unmap block");
     }
 
     #[test]
-    fn test_load_null_prov() {
-        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV);
+    fn test_load_null_prov() -> AllocResult<()> {
+        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV)?;
         let prov = unsafe { *heap.get_src(18) };
         assert_eq!(prov, DEFAULT_TEST_PROV);
+        Ok(())
     }
 
     #[test]
-    fn test_store_and_load_prov() {
-        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV);
+    fn test_store_and_load_prov() -> AllocResult<()> {
+        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV)?;
         let test_prov = TestProv { value: 42 };
         // Use an address that will split into non-zero indices for both L1 and L2
         let addr = 0x1234_5678_1234_5678;
         unsafe {
-            *heap.get_dest(&DEFAULT_HOOKS, addr) = test_prov;
+            let dest = heap.get_dest(&DEFAULT_HOOKS, addr)?;
+            *dest = test_prov;
+        }
+        unsafe {
             let loaded_prov = *heap.get_src(addr);
             assert_eq!(loaded_prov.value, test_prov.value);
         }
+        Ok(())
     }
 
     #[test]
-    fn clear() {
-        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV);
+    fn clear() -> AllocResult<()> {
+        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV)?;
         let src_address: usize = 0;
         let prov = TestProv { value: 81 };
 
@@ -360,7 +391,8 @@ mod tests {
         for offset in 0..max {
             let offset_bytes = offset * PTR_BYTES;
             unsafe {
-                *heap.get_dest(&DEFAULT_HOOKS, src_address + offset_bytes) = prov;
+                let dest = heap.get_dest(&DEFAULT_HOOKS, src_address + offset_bytes)?;
+                *dest = prov;
             }
         }
 
@@ -370,11 +402,12 @@ mod tests {
             let compare_prov = unsafe { *heap.get_src(src_address + offset_bytes) };
             assert_eq!(compare_prov, TestProv::default())
         }
+        Ok(())
     }
 
     #[test]
-    fn memcpy() {
-        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV);
+    fn memcpy() -> AllocResult<()> {
+        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV)?;
 
         let max = 40;
         let halfmax = max / 2;
@@ -389,12 +422,12 @@ mod tests {
         for offset in 0..three_quarter_max {
             let offset_bytes = offset * PTR_BYTES;
             unsafe {
-                *heap.get_dest(&DEFAULT_HOOKS, src_address + offset_bytes) = prov;
+                *heap.get_dest(&DEFAULT_HOOKS, src_address + offset_bytes)? = prov;
             }
             let compare_prov = unsafe { *heap.get_src(src_address + offset_bytes) };
             assert_eq!(prov, compare_prov)
         }
-        heap.memcpy(&DEFAULT_HOOKS, src_address, dst_address, max * PTR_BYTES);
+        heap.memcpy(&DEFAULT_HOOKS, src_address, dst_address, max * PTR_BYTES).unwrap();
 
         for offset in 0..three_quarter_max {
             let offset_bytes = offset * PTR_BYTES;
@@ -407,11 +440,12 @@ mod tests {
             let compare_prov = unsafe { *heap.get_src(dst_address + offset_bytes) };
             assert_eq!(compare_prov, TestProv::default())
         }
+        Ok(())
     }
 
     #[test]
-    fn smoke() {
-        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV);
+    fn smoke() -> AllocResult<()> {
+        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV)?;
         // Create test data
         const NUM_OPERATIONS: usize = 10;
         const BASE_ADDR: usize = 0x7FFF_FFFF_AA00;
@@ -424,7 +458,7 @@ mod tests {
         unsafe {
             for (i, test_value) in test_values.iter().enumerate().take(NUM_OPERATIONS) {
                 let addr = BASE_ADDR + (i * 8);
-                *heap.get_dest(&DEFAULT_HOOKS, addr) = *test_value;
+                *heap.get_dest(&DEFAULT_HOOKS, addr)? = *test_value;
                 let prov = *heap.get_src(addr);
                 assert_eq!(prov.value, test_value.value);
             }
@@ -433,8 +467,9 @@ mod tests {
                 let addr = BASE_ADDR + (i * 8);
                 let prov = *heap.get_src(addr);
                 assert_eq!(prov.value, test_value.value);
-                *heap.get_dest(&DEFAULT_HOOKS, addr) = *test_value;
+                *heap.get_dest(&DEFAULT_HOOKS, addr)? = *test_value;
             }
         }
+        Ok(())
     }
 }

@@ -1,19 +1,17 @@
 use alloc::vec::Vec;
 use core::cell::SyncUnsafeCell;
 use core::mem::MaybeUninit;
-use core::num::NonZeroUsize;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::sync::atomic::AtomicUsize;
 
-use block::*;
 use bsan_shared::ProtectorKind;
 use hashbrown::HashMap;
 use rustc_hash::FxBuildHasher;
 
-use crate::hooks::{BsanAllocHooks, BsanHooks};
-use crate::shadow::ShadowHeap;
-use crate::utils::Sizes;
+use crate::errors::ErrorInfo;
+use crate::memory::hooks::{BsanAllocHooks, BsanHooks};
+use crate::memory::{AllocError, Heap, ShadowHeap};
 use crate::*;
 
 /// Every action that requires a heap allocation must be performed through a globally
@@ -36,28 +34,24 @@ pub struct GlobalCtx {
     #[allow(unused)]
     root_ptr_tags: Mutex<BHashMap<AllocId, BorTag>>,
     protected_tags: Mutex<BHashMap<BorTag, ProtectorKind>>,
-    alloc_metadata_map: BlockAllocator<AllocInfo>,
+    alloc_metadata_map: Heap<AllocInfo>,
     shadow_heap: ShadowHeap<Provenance>,
-    pub sizes: Sizes,
 }
 
 impl GlobalCtx {
     /// Creates a new instance of `GlobalCtx` using the given `BsanHooks`.
     /// This function will also initialize our shadow heap
-    fn new(hooks: BsanHooks) -> Self {
-        let sizes = Sizes::default();
-        let block = Block::new(&hooks, unsafe { NonZero::new_unchecked(1024) });
-        Self {
+    fn new(hooks: BsanHooks) -> Result<Self, AllocError> {
+        Ok(Self {
             hooks,
             next_alloc_id: AtomicUsize::new(AllocId::min().get()),
             next_thread_id: AtomicUsize::new(0),
             next_bor_tag: AtomicUsize::new(0),
             root_ptr_tags: Mutex::new(BHashMap::new_in(hooks.alloc)),
             protected_tags: Mutex::new(BHashMap::new_in(hooks.alloc)),
-            alloc_metadata_map: BlockAllocator::new(block),
-            shadow_heap: ShadowHeap::new(&hooks, &raw const __BSAN_NULL_PROVENANCE),
-            sizes,
-        }
+            alloc_metadata_map: Heap::new(&hooks)?,
+            shadow_heap: ShadowHeap::new(&hooks, &raw const __BSAN_NULL_PROVENANCE)?,
+        })
     }
 
     pub fn shadow_heap(&self) -> &ShadowHeap<Provenance> {
@@ -68,22 +62,15 @@ impl GlobalCtx {
         &self.hooks
     }
 
-    pub(crate) unsafe fn allocate_lock_location(&self, info: AllocInfo) -> NonNull<AllocInfo> {
-        match self.alloc_metadata_map.alloc_with(info) {
-            Some(a) => a,
-            None => {
-                // TODO: Discuss logging
-                panic!("Failed to allocate lock location");
-            }
-        }
+    pub(crate) unsafe fn allocate_lock_location(
+        &self,
+        info: AllocInfo,
+    ) -> BorsanResult<NonNull<AllocInfo>> {
+        Ok(self.alloc_metadata_map.alloc(info)?)
     }
 
     pub(crate) unsafe fn deallocate_lock_location(&self, ptr: *mut AllocInfo) {
         unsafe { self.alloc_metadata_map.dealloc(NonNull::new_unchecked(ptr)) };
-    }
-
-    pub fn new_block<T>(&self, num_elements: NonZeroUsize) -> Block<T> {
-        Block::new(self.hooks(), num_elements)
     }
 
     pub fn allocator(&self) -> BsanAllocHooks {
@@ -91,8 +78,8 @@ impl GlobalCtx {
     }
 
     #[allow(unused)]
-    fn exit(&self) -> ! {
-        unsafe { (self.hooks.exit)() }
+    fn exit(&self, code: i32) -> ! {
+        unsafe { (self.hooks.exit)(code) }
     }
 
     pub fn new_thread_id(&self) -> ThreadId {
@@ -126,6 +113,11 @@ impl GlobalCtx {
     pub fn get_protector_kind(&self, bor_tag: BorTag) -> Option<ProtectorKind> {
         let tag_map = self.protected_tags.lock();
         tag_map.get(&bor_tag).copied()
+    }
+
+    pub fn handle_error(&self, info: ErrorInfo) -> ! {
+        crate::eprintln!("An error occurred: {info:?}\n\nExiting...");
+        self.exit(1)
     }
 }
 
@@ -241,7 +233,8 @@ pub static GLOBAL_CTX: SyncUnsafeCell<MaybeUninit<GlobalCtx>> =
 #[inline]
 pub unsafe fn init_global_ctx<'a>(hooks: BsanHooks) -> &'a GlobalCtx {
     unsafe {
-        (*GLOBAL_CTX.get()).write(GlobalCtx::new(hooks));
+        (*GLOBAL_CTX.get())
+            .write(GlobalCtx::new(hooks).expect("failed to allocate global context"));
         global_ctx()
     }
 }

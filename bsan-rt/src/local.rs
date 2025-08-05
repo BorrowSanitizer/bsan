@@ -1,7 +1,11 @@
 use core::mem::MaybeUninit;
 
-use crate::stack::Stack;
+use crate::errors::BorsanResult;
+use crate::memory::Stack;
 use crate::*;
+
+#[thread_local]
+pub static LOCAL_CTX: UnsafeCell<MaybeUninit<LocalCtx>> = UnsafeCell::new(MaybeUninit::uninit());
 
 static TLS_SIZE: usize = 100;
 
@@ -16,43 +20,39 @@ pub static mut __BSAN_PARAM_TLS: [Provenance; TLS_SIZE] = [Provenance::null(); T
 #[derive(Debug)]
 pub struct LocalCtx {
     pub thread_id: ThreadId,
-    pub provenance: Stack<Provenance>,
-    pub protected_tags: Stack<(AllocId, BorTag)>,
+    pub stack: Stack<NonNull<AllocInfo>>,
 }
 
 impl LocalCtx {
-    pub fn new(ctx: &GlobalCtx) -> Self {
+    pub fn new(ctx: &GlobalCtx) -> BorsanResult<Self> {
         let thread_id = ctx.new_thread_id();
-        let provenance = Stack::<Provenance>::new(ctx);
-        let protected_tags = Stack::<(AllocId, BorTag)>::new(ctx);
-        Self { thread_id, provenance, protected_tags }
+        let stack = Stack::<NonNull<AllocInfo>>::new(ctx)?;
+        Ok(Self { thread_id, stack })
     }
 
     #[inline]
-    pub fn push_frame(&mut self, elems: usize) -> NonNull<MaybeUninit<Provenance>> {
-        self.protected_tags.push_frame();
-        self.provenance.push_frame_with(elems)
+    pub fn push_frame(&mut self) -> BorsanResult<()> {
+        Ok(self.stack.push_frame()?)
     }
 
+    /// # Safety
+    /// A frame must have been pushed
     #[inline]
-    pub fn add_protected_tag(&mut self, alloc_id: AllocId, tag: BorTag) {
-        self.protected_tags.push((alloc_id, tag));
+    pub unsafe fn pop_frame(&mut self) {
+        unsafe { self.stack.pop_frame() }
     }
 }
-
-#[thread_local]
-pub static LOCAL_CTX: UnsafeCell<MaybeUninit<LocalCtx>> = UnsafeCell::new(MaybeUninit::uninit());
 
 /// Initializes the local context object.
 ///
 /// # Safety
-///
 /// This function should only be called once, when a thread is initialized.
 #[inline]
-pub unsafe fn init_local_ctx(ctx: &GlobalCtx) -> &LocalCtx {
+pub unsafe fn init_local_ctx(ctx: &GlobalCtx) -> BorsanResult<&LocalCtx> {
+    let local_ctx = LocalCtx::new(ctx)?;
     unsafe {
-        (*LOCAL_CTX.get()).write(LocalCtx::new(ctx));
-        local_ctx_mut()
+        (*LOCAL_CTX.get()).write(local_ctx);
+        Ok(local_ctx_mut())
     }
 }
 

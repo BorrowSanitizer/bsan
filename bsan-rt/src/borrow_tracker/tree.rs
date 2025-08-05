@@ -17,8 +17,8 @@ use hashbrown::HashSet;
 use super::unimap::{UniEntry, UniIndex, UniKeyMap, UniValMap};
 use super::*;
 use crate::diagnostics::{AccessCause, Event, NodeDebugInfo};
-use crate::errors::{TransitionError, TreeError, TreeTransitionResult};
-use crate::hooks::BsanAllocHooks;
+use crate::errors::{TransitionError, TreeError, TreeTransitionResult, UBResult};
+use crate::memory::hooks::BsanAllocHooks;
 use crate::span::*;
 use crate::{AllocId, BorTag, GlobalCtx};
 
@@ -379,7 +379,7 @@ impl<NodeContinue, NodeApp, ErrHandler, A> TreeVisitorStack<NodeContinue, NodeAp
 where
     NodeContinue: Fn(&NodeAppArgs<'_>) -> ContinueTraversal,
     NodeApp: Fn(NodeAppArgs<'_>) -> Result<(), TransitionError>,
-    ErrHandler: Fn(ErrHandlerArgs<'_>) -> ErrorInfo,
+    ErrHandler: Fn(ErrHandlerArgs<'_>) -> UBInfo,
     A: Allocator,
 {
     fn should_continue_at(
@@ -398,7 +398,7 @@ where
         this: &mut TreeVisitor<'_, A>,
         idx: UniIndex,
         rel_pos: AccessRelatedness,
-    ) -> Result<(), ErrorInfo> {
+    ) -> UBResult<()> {
         let node = this.nodes.get_mut(idx).unwrap();
         (self.f_propagate)(NodeAppArgs { node, perm: this.perms.entry(idx), rel_pos }).map_err(
             |error_kind| {
@@ -416,7 +416,7 @@ where
         this: &mut TreeVisitor<'_, A>,
         accessed_node: UniIndex,
         visit_children: ChildrenVisitMode,
-    ) -> BtResult<()> {
+    ) -> UBResult<()> {
         // We want to visit the accessed node's children first.
         // However, we will below walk up our parents and push their children (our cousins)
         // onto the stack. To ensure correct iteration order, this method thus finishes
@@ -464,7 +464,7 @@ where
         Ok(())
     }
 
-    fn finish_foreign_accesses(&mut self, this: &mut TreeVisitor<'_, A>) -> BtResult<()> {
+    fn finish_foreign_accesses(&mut self, this: &mut TreeVisitor<'_, A>) -> UBResult<()> {
         while let Some((idx, rel_pos, step)) = self.stack.last_mut() {
             let idx = *idx;
             let rel_pos = *rel_pos;
@@ -570,9 +570,9 @@ where
         start: BorTag,
         f_continue: impl Fn(&NodeAppArgs<'_>) -> ContinueTraversal,
         f_propagate: impl Fn(NodeAppArgs<'_>) -> Result<(), TransitionError>,
-        err_builder: impl Fn(ErrHandlerArgs<'_>) -> ErrorInfo,
+        err_builder: impl Fn(ErrHandlerArgs<'_>) -> UBInfo,
         allocator: A,
-    ) -> BtResult<()> {
+    ) -> UBResult<()> {
         let start_idx = self.tag_mapping.get(&start).unwrap();
         let mut stack =
             TreeVisitorStack::new(start_idx, f_continue, f_propagate, err_builder, allocator);
@@ -597,9 +597,9 @@ where
         start: BorTag,
         f_continue: impl Fn(&NodeAppArgs<'_>) -> ContinueTraversal,
         f_propagate: impl Fn(NodeAppArgs<'_>) -> TreeTransitionResult<()>,
-        err_builder: impl Fn(ErrHandlerArgs<'_>) -> ErrorInfo,
+        err_builder: impl Fn(ErrHandlerArgs<'_>) -> UBInfo,
         allocator: A,
-    ) -> BtResult<()> {
+    ) -> UBResult<()> {
         let start_idx = self.tag_mapping.get(&start).unwrap();
         let mut stack =
             TreeVisitorStack::new(start_idx, f_continue, f_propagate, err_builder, allocator);
@@ -642,7 +642,7 @@ where
                     parent: None,
                     // Miri uses SmallVec here
                     // ATTENTION: Using `Global` allocator
-                    children: Vec::new_in(Global),
+                    children: Vec::new(),
                     default_initial_perm: root_default_perm,
                     // The root may never be skipped, all accesses will be local.
                     default_initial_idempotent_foreign_access: IdempotentForeignAccess::None,
@@ -674,7 +674,7 @@ pub(super) struct ChildParams {
     pub base_offset: Size,
     pub parent_tag: BorTag,
     pub new_tag: BorTag,
-    pub perms_map: RangeMap<LocationState, BsanAllocHooks>,
+    pub initial_perms: RangeMap<LocationState, BsanAllocHooks>,
     pub default_perm: Permission,
     pub protected: bool,
     pub span: Span,
@@ -701,7 +701,7 @@ where
             new_tag,
             base_offset,
             parent_tag,
-            perms_map,
+            initial_perms,
             default_perm,
             protected,
             span,
@@ -729,7 +729,9 @@ where
         // Register new_tag as a child of parent_tag
         self.nodes.get_mut(parent_idx).unwrap().children.push(idx);
 
-        for (Range { start, end }, &perm) in perms_map.iter(Size::from_bytes(0), perms_map.size()) {
+        for (Range { start, end }, &perm) in
+            initial_perms.iter(Size::from_bytes(0), initial_perms.size())
+        {
             assert!(perm.is_initial());
             for (_perms_range, perms) in self
                 .rperms
@@ -802,7 +804,7 @@ where
         alloc_id: AllocId, // diagnostics
         span: Span,        // diagnostics
         allocator: A,
-    ) -> BtResult<()> {
+    ) -> UBResult<()> {
         self.perform_access(
             tag,
             Some((access_range, AccessKind::Write, AccessCause::Dealloc)),
@@ -830,18 +832,16 @@ where
                             Ok(())
                         }
                     },
-                    |args: ErrHandlerArgs<'_>| -> ErrorInfo {
+                    |args: ErrHandlerArgs<'_>| -> UBInfo {
                         let ErrHandlerArgs { error_kind, conflicting_info, accessed_info } = args;
-                        ErrorInfo::UndefinedBehavior(UBInfo::AliasingViolation(Box::new(
-                            TreeError {
-                                conflicting_info: conflicting_info.clone(),
-                                access_cause: AccessCause::Dealloc,
-                                alloc_id,
-                                error_offset: perms_range.start,
-                                error_kind,
-                                accessed_info: accessed_info.clone(),
-                            },
-                        )))
+                        UBInfo::AliasingViolation(Box::new(TreeError {
+                            conflicting_info: conflicting_info.clone(),
+                            access_cause: AccessCause::Dealloc,
+                            alloc_id,
+                            error_offset: perms_range.start,
+                            error_kind,
+                            accessed_info: accessed_info.clone(),
+                        }))
                     },
                     allocator,
                 )?;
@@ -876,7 +876,7 @@ where
         alloc_id: AllocId, // diagnostics
         span: Span,        // diagnostics
         allocator: A,
-    ) -> BtResult<()> {
+    ) -> UBResult<()> {
         use core::ops::Range;
         // Performs the per-node work:
         // - insert the permission if it does not exist
@@ -930,16 +930,16 @@ where
         let err_handler = |perms_range: Range<u64>,
                            access_cause: AccessCause,
                            args: ErrHandlerArgs<'_>|
-         -> ErrorInfo {
+         -> UBInfo {
             let ErrHandlerArgs { error_kind, conflicting_info, accessed_info } = args;
-            ErrorInfo::UndefinedBehavior(UBInfo::AliasingViolation(Box::new(TreeError {
+            UBInfo::AliasingViolation(Box::new(TreeError {
                 conflicting_info: conflicting_info.clone(),
                 access_cause,
                 alloc_id,
                 error_offset: perms_range.start,
                 error_kind,
                 accessed_info: accessed_info.clone(),
-            })))
+            }))
         };
 
         if let Some((access_range, access_kind, access_cause)) = access_range_and_kind {

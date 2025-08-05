@@ -18,12 +18,10 @@ extern crate alloc;
 use core::cell::UnsafeCell;
 use core::ffi::c_void;
 use core::fmt::Debug;
-use core::mem::MaybeUninit;
-use core::num::NonZero;
 #[cfg(not(test))]
 use core::panic::PanicInfo;
 use core::ptr::NonNull;
-use core::{fmt, mem, ptr};
+use core::{fmt, ptr};
 
 use bsan_shared::{AccessKind, RetagInfo, Size};
 use libc_print::std_name::*;
@@ -38,21 +36,19 @@ pub use local::*;
 pub mod borrow_tracker;
 use borrow_tracker::*;
 
-mod block;
 mod diagnostics;
-mod shadow;
 
 mod span;
 use span::Span;
 
-mod errors;
-mod hooks;
-mod stack;
-mod utils;
+mod memory;
+use memory::hooks::BsanAllocHooks;
 
-use crate::block::Linkable;
+mod errors;
+
 use crate::borrow_tracker::tree::Tree;
-use crate::hooks::BsanAllocHooks;
+use crate::errors::BorsanResult;
+use crate::memory::{hooks, Bumpable};
 
 macro_rules! println {
     ($($arg:tt)*) => {
@@ -183,9 +179,9 @@ impl Provenance {
 /// A sumtype that represents the base address of `AllocInfo` and used as a pointer to
 /// the next free list `AllocInfo` object
 pub union FreeListAddrUnion {
-    free_list_next: *mut AllocInfo,
+    free_list_next: Option<NonNull<AllocInfo>>,
     // Must be a raw pointer for union field access safety
-    base_addr: *mut u8,
+    base_addr: *mut c_void,
 }
 
 impl fmt::Debug for FreeListAddrUnion {
@@ -311,8 +307,8 @@ pub struct AllocInfo {
     pub tree_lock: Mutex<Option<tree::Tree<BsanAllocHooks>>>,
 }
 
-unsafe impl Linkable<AllocInfo> for AllocInfo {
-    fn next(&mut self) -> *mut *mut AllocInfo {
+unsafe impl Bumpable<AllocInfo> for AllocInfo {
+    fn next(&mut self) -> *mut Option<NonNull<AllocInfo>> {
         // we are re-using the space of base_addr to store the free list pointer
         // SAFETY: this is safe because both union fields are raw pointers
         unsafe { &raw mut self.base_addr.free_list_next }
@@ -326,7 +322,7 @@ unsafe impl Linkable<AllocInfo> for AllocInfo {
 unsafe extern "C" fn __bsan_init() {
     unsafe {
         let ctx = init_global_ctx(hooks::DEFAULT_HOOKS);
-        init_local_ctx(ctx);
+        let _ = init_local_ctx(ctx);
     }
     ui_test!("bsan_init");
 }
@@ -358,8 +354,10 @@ unsafe extern "C" fn __bsan_retag(
     let local_ctx = unsafe { local_ctx_mut() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     let retag_info = unsafe { RetagInfo::from_raw(access_size, perm) };
-    let bt = BorrowTracker::new(prov, object_addr, Some(access_size));
-    let _ = bt.iter().flatten().try_for_each(|bt| bt.retag(global_ctx, local_ctx, retag_info));
+    BorrowTracker::new(prov, object_addr, Some(access_size))
+        .and_then(|opt| opt.map(|bt| bt.retag(global_ctx, local_ctx, retag_info)).transpose())
+        .unwrap_or_else(|err| global_ctx.handle_error(err))
+        .unwrap_or(bor_tag);
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -409,36 +407,47 @@ extern "C" fn __bsan_dealloc(
 
 // Registers a heap allocation of size `size`, storing its provenance in the return pointer.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_alloc(
-    base_addr: *mut u8,
+unsafe extern "C-unwind" fn __bsan_alloc(
+    base_addr: *mut c_void,
     size: usize,
     alloc_id: AllocId,
     bor_tag: BorTag,
 ) -> NonNull<AllocInfo> {
     let ctx = unsafe { global_ctx() };
+    unsafe {
+        bsan_alloc(ctx, base_addr, size, alloc_id, bor_tag)
+            .unwrap_or_else(|info| ctx.handle_error(info))
+    }
+}
 
+#[inline]
+unsafe fn bsan_alloc(
+    global_ctx: &GlobalCtx,
+    base_addr: *mut c_void,
+    size: usize,
+    alloc_id: AllocId,
+    bor_tag: BorTag,
+) -> BorsanResult<NonNull<AllocInfo>> {
     // Initialize `AllocInfo`
     let mut alloc_info = unsafe {
-        ctx.allocate_lock_location(AllocInfo {
+        global_ctx.allocate_lock_location(AllocInfo {
             alloc_id,
             base_addr: FreeListAddrUnion { base_addr },
             size,
             align: 0,
             tree_lock: Mutex::new(None),
-        })
+        })?
     };
-
-    // Initialize the tree once
     unsafe {
         let mut tree = alloc_info.as_mut().tree_lock.lock();
         let _ = tree.insert(Tree::new_in(
             bor_tag,
             Size::from_bytes(size),
             Span::new(),
-            ctx.allocator(),
+            global_ctx.allocator(),
         ));
     }
-    alloc_info
+    Ok(alloc_info)
 }
 
 #[unsafe(no_mangle)]
@@ -460,7 +469,8 @@ unsafe extern "C" fn __bsan_new_tag() -> BorTag {
 unsafe extern "C" fn __bsan_shadow_copy(src: *mut u8, dst: *mut u8, access_size: usize) {
     let ctx = unsafe { global_ctx() };
     let heap = ctx.shadow_heap();
-    heap.memcpy(ctx.hooks(), src.addr(), dst.addr(), access_size);
+    heap.memcpy(ctx.hooks(), src.addr(), dst.addr(), access_size)
+        .unwrap_or_else(|info| ctx.handle_error(info.into()))
 }
 
 /// Clears the provenance stored in the range `[dst_addr, dst_addr + access_size)` within the
@@ -483,10 +493,15 @@ unsafe extern "C" fn __bsan_shadow_src(addr: *mut u8) -> *const Provenance {
 
 /// Stores the given provenance value into shadow memory at the location for the given address.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_shadow_dest(addr: *mut u8) -> *mut Provenance {
+unsafe extern "C-unwind" fn __bsan_shadow_dest(addr: *mut u8) -> *mut Provenance {
     let ctx = unsafe { global_ctx() };
+    bsan_shadow_dest(ctx, addr).unwrap_or_else(|info| ctx.handle_error(info))
+}
+
+#[inline]
+fn bsan_shadow_dest(ctx: &GlobalCtx, addr: *mut u8) -> BorsanResult<*mut Provenance> {
     let heap = ctx.shadow_heap();
-    heap.get_dest(ctx.hooks(), addr.addr())
+    Ok(heap.get_dest(ctx.hooks(), addr.addr())?)
 }
 
 /// Copies provenance values from an array into three consecutive arrays of their components.
@@ -564,24 +579,18 @@ unsafe extern "C" fn __bsan_shadow_store_vector(
     info_buffer: *mut *mut AllocInfo,
 ) {
     let ctx = unsafe { global_ctx() };
-    let heap = ctx.shadow_heap();
-    let prov_vec = ProvenanceVecView::new(len, id_buffer, tag_buffer, info_buffer);
-    heap.store_consecutive(ctx.hooks(), dst.addr(), prov_vec);
+    let view = ProvenanceVecView::new(len, id_buffer, tag_buffer, info_buffer);
+    ctx.shadow_heap()
+        .store_consecutive(ctx.hooks(), dst.addr(), view)
+        .unwrap_or_else(|info| ctx.handle_error(info.into()));
 }
 
 /// Pushes a shadow stack frame
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_push_frame() {
+    let ctx = unsafe { global_ctx() };
     let local_ctx = unsafe { local_ctx_mut() };
-    local_ctx.protected_tags.push_frame();
-}
-
-/// Allocates shadow stack space for a number of provenance elements.
-/// Used for implementing dynamic allocas.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_push_elems(elems: usize) -> *mut MaybeUninit<Provenance> {
-    let local_ctx: &mut LocalCtx = unsafe { local_ctx_mut() };
-    local_ctx.provenance.push_elems(elems).as_ptr()
+    local_ctx.push_frame().unwrap_or_else(|info| ctx.handle_error(info));
 }
 
 /// Pops a shadow stack frame, deallocating all shadow allocations created by `bsan_alloc_stack`
@@ -589,7 +598,7 @@ unsafe extern "C" fn __bsan_push_elems(elems: usize) -> *mut MaybeUninit<Provena
 unsafe extern "C" fn __bsan_pop_frame() {
     let local_ctx: &mut LocalCtx = unsafe { local_ctx_mut() };
     unsafe {
-        local_ctx.protected_tags.pop_frame();
+        local_ctx.pop_frame();
     }
 }
 
@@ -619,7 +628,7 @@ mod test {
         unsafe {
             let alloc_id = __bsan_new_alloc_id();
             let bor_tag = __bsan_new_tag();
-            let alloc_info = __bsan_alloc(base_addr.cast::<u8>(), size, alloc_id, bor_tag).as_ptr();
+            let alloc_info = __bsan_alloc(base_addr, size, alloc_id, bor_tag).as_ptr();
             Provenance { alloc_id, bor_tag, alloc_info }
         }
     }
