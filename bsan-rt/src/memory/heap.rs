@@ -1,5 +1,5 @@
-use core::marker::PhantomData;
-use core::mem::MaybeUninit;
+use core::mem;
+use core::num::NonZero;
 use core::ops::DerefMut;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicPtr, AtomicU8, AtomicUsize, Ordering};
@@ -8,49 +8,47 @@ use spin::mutex::SpinMutex;
 use spin::rwlock::RwLock;
 
 use super::hooks::{BsanHooks, MMap, MUnmap};
-use super::{align_down, align_up, Block};
-use crate::memory::{munmap, AllocResult, BlockSize, HasMinBlockSize, PAGE_SIZE};
+use super::{align_down, align_up, Chunk};
+use crate::memory::{
+    munmap, round_mut_ptr_up_to_unchecked, unmap_failed, AllocResult, InternalAllocKind,
+    TYPICAL_PAGE_SIZE,
+};
 
 /// # Safety
-/// To be used in a `Heap<T>`, values of type `T` need to be able
-/// to act as nodes in a linked list, meaning they need to be large
-/// enough to store a pointer to another instance of `T`
-pub unsafe trait Bumpable<T>: Sized {
+/// To be used in a `Heap<T>`, values of type `T` need to be smaller
+/// than the `HEAP_CHUNK_SIZE` minus the size of a `HeapBlockHeader<T>`,
+/// but large enough to store a pointer to another instance of `T`.
+pub unsafe trait Heapable<T>: Sized {
     fn next(&mut self) -> *mut Option<NonNull<T>>;
 }
 
+const HEAP_CHUNK_SIZE: NonZero<usize> = TYPICAL_PAGE_SIZE;
+
 #[derive(Debug)]
-pub struct Heap<T: Bumpable<T>> {
-    head: RwLock<BumpBlock<T>>,
+pub struct Heap<T: Heapable<T>> {
+    head: RwLock<HeapBlock<T>>,
     free_list: SpinMutex<Option<NonNull<T>>>,
     #[allow(unused)]
     grow_lock: AtomicU8,
-    block_size: BlockSize<Heap<T>>,
     mmap: MMap,
     munmap: MUnmap,
 }
 
-unsafe impl<T: Bumpable<T>> Send for Heap<T> {}
-unsafe impl<T: Bumpable<T>> Sync for Heap<T> {}
+unsafe impl<T: Heapable<T>> Send for Heap<T> {}
+unsafe impl<T: Heapable<T>> Sync for Heap<T> {}
 
-unsafe impl<T: Bumpable<T>> HasMinBlockSize<Heap<T>> for Heap<T> {
-    type Header = BumpBlockHeader<T>;
-    type Values = T;
-}
-
-impl<T: Bumpable<T>> Heap<T> {
+impl<T: Heapable<T>> Heap<T> {
     pub fn new(hooks: &BsanHooks) -> AllocResult<Self> {
         let mmap = hooks.mmap_ptr;
         let munmap = hooks.munmap_ptr;
 
-        let head = unsafe { BumpBlock::<T>::new(mmap, PAGE_SIZE.into())? };
+        let head = unsafe { HeapBlock::<T>::new(mmap)? };
         let head = RwLock::new(head);
 
         Ok(Self {
             head,
             free_list: SpinMutex::new(None),
             grow_lock: AtomicU8::new(0),
-            block_size: PAGE_SIZE.into(),
             mmap,
             munmap,
         })
@@ -79,8 +77,9 @@ impl<T: Bumpable<T>> Heap<T> {
             }
             if let Ok(mut bump_writer) = bump_reader.try_upgrade() {
                 let writer = bump_writer.deref_mut();
-                let replacement = unsafe { BumpBlock::new(self.mmap, self.block_size)? };
-                unsafe { &mut *replacement.header() }.next = Some(writer.header);
+                let mut replacement = unsafe { HeapBlock::new(self.mmap)? };
+                let replacement_header = unsafe { replacement.header.as_mut() };
+                replacement_header.next = Some(writer.header);
                 *writer = replacement;
             }
         }
@@ -97,56 +96,66 @@ impl<T: Bumpable<T>> Heap<T> {
         }
     }
 
-    fn parent_header(&self, ptr: NonNull<T>) -> &BumpBlockHeader<T> {
-        let header = ptr.addr().get() & !(self.block_size.get() - 1);
-        let header = header as *mut BumpBlockHeader<T>;
+    fn parent_header(&self, ptr: NonNull<T>) -> &HeapBlockHeader<T> {
+        let high_end = unsafe {
+            round_mut_ptr_up_to_unchecked(ptr.as_ptr().cast::<u8>(), HEAP_CHUNK_SIZE.get())
+        };
+        let header = unsafe { high_end.cast::<HeapBlockHeader<T>>().sub(1) };
         debug_assert!(!header.is_null() && header.is_aligned());
         unsafe { &*header }
     }
 }
 
-impl<T: Bumpable<T>> Drop for Heap<T> {
+impl<T: Heapable<T>> Drop for Heap<T> {
     fn drop(&mut self) {
         let mut curr = Some(self.head.write().header);
         while let Some(header) = curr {
             let header = unsafe { &*header.as_ptr() };
             curr = header.next;
+
             unsafe {
-                munmap::<u8>(self.munmap, header.base_address(), *self.block_size)
-                    .expect("failed to unmap page")
+                munmap(self.munmap, InternalAllocKind::Heap, header.base_address(), header.size)
+                    .unwrap_or_else(|_| unmap_failed())
             };
         }
     }
 }
 
 #[derive(Debug)]
-pub struct BumpBlock<T: Sized> {
-    header: NonNull<BumpBlockHeader<T>>,
-    data: PhantomData<T>,
+pub struct HeapBlock<T: Sized> {
+    header: NonNull<HeapBlockHeader<T>>,
 }
 
-unsafe impl<T> Send for BumpBlock<T> {}
-unsafe impl<T> Sync for BumpBlock<T> {}
+unsafe impl<T> Send for HeapBlock<T> {}
+unsafe impl<T> Sync for HeapBlock<T> {}
 
-impl<T: Bumpable<T>> BumpBlock<T> {
-    unsafe fn new(mmap_ptr: MMap, size: BlockSize<Heap<T>>) -> AllocResult<Self> {
-        let Block { mut header, limit } = Block::<Heap<T>>::new(mmap_ptr, size)?;
-        let cursor = unsafe { align_down::<_, MaybeUninit<T>>(header).sub(1) };
+impl<T: Heapable<T>> HeapBlock<T> {
+    unsafe fn new(mmap_ptr: MMap) -> AllocResult<Self> {
+        debug_assert!(
+            mem::size_of::<T>() < (HEAP_CHUNK_SIZE.get() - mem::size_of::<HeapBlockHeader<T>>())
+        );
+
+        let Chunk { base_address, size } =
+            Chunk::new(mmap_ptr, HEAP_CHUNK_SIZE, InternalAllocKind::Heap)?;
+
+        let header = unsafe {
+            let high_end = base_address.add(size.get());
+            align_down::<u8, HeapBlockHeader<T>>(high_end).sub(1)
+        };
+
+        let cursor = unsafe { align_down::<HeapBlockHeader<T>, T>(header).sub(1) };
         let cursor = AtomicPtr::new(cursor.as_ptr());
-        let limit = unsafe { align_up::<_, MaybeUninit<T>>(limit) };
+
+        let limit = unsafe { align_up::<u8, T>(base_address) };
+
         unsafe {
-            header.as_mut().write(BumpBlockHeader { cursor, limit, in_use: 0.into(), next: None });
+            header.write(HeapBlockHeader { cursor, limit, size, in_use: 0.into(), next: None });
         }
-        Ok(Self { header: header.cast(), data: PhantomData })
+        Ok(Self { header })
     }
 
-    #[inline]
-    fn header(&self) -> *mut BumpBlockHeader<T> {
-        self.header.as_ptr()
-    }
-
-    fn next(&self) -> Option<NonNull<MaybeUninit<T>>> {
-        let header = unsafe { &*self.header() };
+    fn next(&self) -> Option<NonNull<T>> {
+        let header = unsafe { self.header.as_ref() };
         header
             .cursor
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |val| {
@@ -164,14 +173,15 @@ impl<T: Bumpable<T>> BumpBlock<T> {
 }
 
 #[derive(Debug)]
-pub(crate) struct BumpBlockHeader<T> {
-    cursor: AtomicPtr<MaybeUninit<T>>,
-    limit: NonNull<MaybeUninit<T>>,
+pub(crate) struct HeapBlockHeader<T> {
+    cursor: AtomicPtr<T>,
+    limit: NonNull<T>,
     in_use: AtomicUsize,
-    next: Option<NonNull<BumpBlockHeader<T>>>,
+    size: NonZero<usize>,
+    next: Option<NonNull<HeapBlockHeader<T>>>,
 }
 
-impl<T> BumpBlockHeader<T> {
+impl<T> HeapBlockHeader<T> {
     fn increment_used(&self) {
         self.in_use.fetch_add(1, Ordering::Relaxed);
     }
@@ -199,7 +209,7 @@ mod test {
         next: usize,
     }
 
-    unsafe impl Bumpable<Link> for Link {
+    unsafe impl Heapable<Link> for Link {
         fn next(&mut self) -> *mut Option<NonNull<Link>> {
             (&raw mut self.next).cast::<Option<NonNull<Link>>>()
         }

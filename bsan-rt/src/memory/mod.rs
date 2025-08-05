@@ -1,126 +1,86 @@
-//! Several types of objects are allocated frequently. This crate includes implementations of several
+//! Several types of objects are frequently allocated by our runtime. This crate includes implementations of several
 //! custom allocators for these objects. A `Stack<T>` is a bump allocator for instances of `T`. It supports
 //! pushing and popping frames containing multiple instances. A `Heap<T>` is also a bump allocator without frames.
 //! However, unlike a `Stack`, a `Heap` supports deallocating objects at any point. Both allocators rely internally
-//! on a linked list of pages.
+//! on a linked list of page-sized "blocks" of memory.
 pub mod hooks;
 use hooks::*;
 
 mod heap;
-pub use heap::{Bumpable, Heap};
+pub use heap::{Heap, Heapable};
 
 mod stack;
 pub use stack::Stack;
 
 mod shadow;
 use core::ffi::c_void;
-use core::marker::PhantomData;
-use core::mem::{self, MaybeUninit};
+use core::mem;
 use core::num::NonZero;
-use core::ops::Deref;
 use core::ptr::{self, NonNull};
 
-use libc::_SC_PAGESIZE;
 pub use shadow::ShadowHeap;
 
 /// All of our custom allocators depend on `mmap` and `munmap`. We propagate
 /// any nonzero exit-codes from these functions to the user as errors.
 #[derive(Clone, Copy, Debug)]
 pub enum AllocError {
-    MMapFailed(i32),
-    MUnmapFailed(i32),
+    MMapFailed(InternalAllocKind, i32),
+    MUnmapFailed(InternalAllocKind, i32),
+    InvalidHeapSize(usize),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum InternalAllocKind {
+    Heap,
+    Stack,
+    ShadowHeap,
 }
 
 pub(crate) type AllocResult<T> = Result<T, AllocError>;
 
-#[derive(Debug, Copy, Clone)]
-pub struct PageSize(NonZero<usize>);
+static TYPICAL_PAGE_SIZE: NonZero<usize> = NonZero::new(0x1000).unwrap();
 
-impl Deref for PageSize {
-    type Target = NonZero<usize>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl Default for PageSize {
-    fn default() -> Self {
-        let page_size = unsafe { libc::sysconf(_SC_PAGESIZE) } as usize;
-        Self(NonZero::new(page_size).expect("Received 0 for page size."))
-    }
-}
-
-static PAGE_SIZE: PageSize = PageSize(NonZero::new(0x1000).expect("Page size should be nonzero"));
-
-#[derive(Debug)]
-pub(crate) struct BlockSize<T> {
+/// A contiguous chunk of memory
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Chunk {
+    /// A pointer to the start of the allocation
+    base_address: NonNull<u8>,
+    /// The size of the allocation
     size: NonZero<usize>,
-    data: PhantomData<*const T>,
 }
 
-impl<T> Deref for BlockSize<T> {
-    type Target = NonZero<usize>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.size
+impl Chunk {
+    pub(crate) fn new(
+        mmap_ptr: hooks::MMap,
+        size: NonZero<usize>,
+        kind: InternalAllocKind,
+    ) -> AllocResult<Chunk> {
+        let base_address =
+            unsafe { mmap(mmap_ptr, kind, size, hooks::BSAN_PROT_FLAGS, hooks::BSAN_MAP_FLAGS)? };
+        Ok(Chunk { base_address, size })
+    }
+    pub(crate) fn dispose(
+        self,
+        munmap_ptr: hooks::MUnmap,
+        kind: InternalAllocKind,
+    ) -> AllocResult<()> {
+        unsafe { munmap(munmap_ptr, kind, self.base_address, self.size)? };
+        Ok(())
     }
 }
 
-impl<T: HasMinBlockSize<T>> From<PageSize> for BlockSize<T> {
-    fn from(val: PageSize) -> BlockSize<T> {
-        unsafe { T::get_unchecked(val.0) }
-    }
+/// Credit: bumpalo
+#[cold]
+#[inline(never)]
+pub(crate) fn allocation_size_overflow<T>() -> T {
+    panic!("requested allocation size overflowed")
 }
 
-/// # Safety
-/// Each block should store values of type `Value`. Blocks can
-/// also have a header of type `Header`. A minimum, a block for a given
-/// allocator should be able to store the `Header` and at least one `Value`.
-pub(crate) unsafe trait HasMinBlockSize<T> {
-    type Header: Sized;
-    type Values: Sized;
-
-    fn valid(size: NonZero<usize>) -> bool {
-        size.get() >= (mem::size_of::<Self::Header>() + mem::size_of::<Self::Values>())
-    }
-
-    unsafe fn get_unchecked(size: NonZero<usize>) -> BlockSize<T> {
-        debug_assert!(Self::valid(size));
-        BlockSize { size, data: PhantomData }
-    }
-}
-
-impl<T> Clone for BlockSize<T> {
-    fn clone(&self) -> BlockSize<T> {
-        *self
-    }
-}
-
-impl<T> Copy for BlockSize<T> {}
-
-#[derive(Clone, Debug)]
-pub(crate) struct Block<T: HasMinBlockSize<T>> {
-    /// A pointer to the header.
-    header: NonNull<MaybeUninit<T::Header>>,
-    /// A pointer to the end of the block, aligned up so that
-    /// `cursor` will eventually be equal to `limit` when the
-    /// block is full.
-    limit: NonNull<MaybeUninit<u8>>,
-}
-
-impl<T: HasMinBlockSize<T>> Block<T> {
-    pub(crate) fn new(mmap_ptr: hooks::MMap, size: BlockSize<T>) -> AllocResult<Block<T>> {
-        let limit =
-            unsafe { mmap(mmap_ptr, *size, hooks::BSAN_PROT_FLAGS, hooks::BSAN_MAP_FLAGS)? };
-
-        let high_end = unsafe { limit.add(size.get()) };
-
-        let header: NonNull<MaybeUninit<T::Header>> =
-            unsafe { align_down::<MaybeUninit<u8>, MaybeUninit<T::Header>>(high_end).sub(1) };
-
-        Ok(Block { header, limit })
-    }
+/// Credit: bumpalo
+#[cold]
+#[inline(never)]
+pub(crate) fn unmap_failed<T>() -> T {
+    panic!("failed to unmap allocation")
 }
 
 /// Credit: bumpalo
@@ -134,9 +94,9 @@ pub(crate) const fn round_up_to(n: usize, divisor: usize) -> Option<usize> {
     }
 }
 
+/// Credit: bumpalo
 /// Like `round_up_to` but turns overflow into undefined behavior rather than
 /// returning `None`.
-/// Credit: bumpalo
 #[inline]
 pub(crate) unsafe fn round_up_to_unchecked(n: usize, divisor: usize) -> usize {
     match round_up_to(n, divisor) {
@@ -148,8 +108,8 @@ pub(crate) unsafe fn round_up_to_unchecked(n: usize, divisor: usize) -> usize {
     }
 }
 
-/// Same as `round_down_to` but preserves pointer provenance.
 /// Credit: bumpalo
+/// Same as `round_down_to` but preserves pointer provenance.
 #[inline]
 pub(crate) fn round_mut_ptr_down_to<T>(ptr: *mut T, divisor: usize) -> *mut T {
     debug_assert!(divisor > 0);
@@ -201,19 +161,19 @@ pub unsafe fn align_up<A, B>(ptr: NonNull<A>) -> NonNull<B> {
 #[inline]
 pub unsafe fn mmap<T>(
     mmap: hooks::MMap,
+    kind: InternalAllocKind,
     size_bytes: NonZero<usize>,
     prot: i32,
     flags: i32,
-) -> AllocResult<NonNull<MaybeUninit<T>>> {
+) -> AllocResult<NonNull<T>> {
     let size_bytes = size_bytes.get();
     unsafe {
         let ptr = (mmap)(ptr::null_mut(), size_bytes, prot, flags, -1, 0);
-        let ptr = ptr.cast::<MaybeUninit<T>>();
         if ptr.is_null() || ptr.addr() as isize == -1 {
             let errno = *libc::__errno_location();
-            Err(AllocError::MMapFailed(errno))
+            Err(AllocError::MMapFailed(kind, errno))
         } else {
-            Ok(NonNull::<MaybeUninit<T>>::new_unchecked(ptr))
+            Ok(NonNull::<T>::new_unchecked(ptr.cast::<T>()))
         }
     }
 }
@@ -222,6 +182,7 @@ pub unsafe fn mmap<T>(
 #[inline]
 pub unsafe fn munmap<T>(
     munmap: MUnmap,
+    kind: InternalAllocKind,
     ptr: NonNull<T>,
     size_bytes: NonZero<usize>,
 ) -> AllocResult<()> {
@@ -232,7 +193,7 @@ pub unsafe fn munmap<T>(
         let res = (munmap)(ptr, size_bytes);
         if res == -1 {
             let errno = *libc::__errno_location();
-            Err(AllocError::MUnmapFailed(errno))
+            Err(AllocError::MUnmapFailed(kind, errno))
         } else {
             Ok(())
         }

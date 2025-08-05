@@ -1,109 +1,131 @@
-use core::mem::MaybeUninit;
+use core::marker::PhantomData;
+use core::mem;
+use core::num::NonZero;
 use core::option::Iter;
 
-use super::hooks::{MMap, MUnmap};
-use super::{align_down, align_up, Block};
-use crate::memory::{munmap, AllocResult, BlockSize, HasMinBlockSize, PAGE_SIZE};
+use super::{align_down, align_up};
+use crate::memory::hooks::{MMap, MUnmap};
+use crate::memory::{
+    allocation_size_overflow, round_up_to, unmap_failed, AllocResult, Chunk, InternalAllocKind,
+    TYPICAL_PAGE_SIZE,
+};
 use crate::{ptr, Debug, GlobalCtx, NonNull};
+
+static DEFAULT_CHUNK_SIZE: NonZero<usize> = TYPICAL_PAGE_SIZE;
 
 #[derive(Debug)]
 pub struct Stack<T: Sized> {
-    /// A pointer to the last element that was allocated.
-    cursor: NonNull<MaybeUninit<T>>,
-    /// The last element that can be allocated in the current block.
-    limit: NonNull<MaybeUninit<T>>,
-    /// The size of a block
-    block_size: BlockSize<Stack<T>>,
-    /// The pointer to the previous frame, which can span blocks.
+    chunk: StackChunk<T>,
     checkpoint: *mut Checkpoint<T>,
-    /// The pointer to the previous block
-    header: NonNull<StackHeader>,
     mmap: MMap,
     munmap: MUnmap,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Checkpoint<T> {
-    limit: NonNull<MaybeUninit<T>>,
+    limit: NonNull<T>,
     prev_checkpoint: *mut Checkpoint<T>,
 }
 
 #[derive(Debug, Copy, Clone)]
 pub(crate) struct StackHeader {
-    limit: NonNull<MaybeUninit<u8>>,
+    raw_chunk: Chunk,
     prev_header: Option<NonNull<StackHeader>>,
-}
-
-unsafe impl<T> HasMinBlockSize<Stack<T>> for Stack<T> {
-    type Header = StackHeader;
-    type Values = (T, Checkpoint<T>);
 }
 
 impl<T: Sized> Stack<T> {
     pub fn new(ctx: &GlobalCtx) -> AllocResult<Self> {
         let mmap = ctx.hooks().mmap_ptr;
         let munmap = ctx.hooks().munmap_ptr;
-
-        let block_size: BlockSize<Stack<T>> = PAGE_SIZE.into();
-
-        let Block { limit, mut header } = Block::<Self>::new(mmap, block_size)?;
-
-        unsafe { header.as_mut().write(StackHeader { limit, prev_header: None }) };
-        let header = header.cast::<StackHeader>();
-
-        let cursor = unsafe { align_down::<StackHeader, MaybeUninit<T>>(header) };
-        let limit = unsafe { align_up::<MaybeUninit<u8>, MaybeUninit<T>>(limit) };
-
-        Ok(Self { block_size, cursor, limit, header, checkpoint: ptr::null_mut(), mmap, munmap })
+        let chunk = unsafe { StackChunk::<T>::new(mmap, None) }?;
+        Ok(Self { chunk, checkpoint: ptr::null_mut(), mmap, munmap })
     }
 
-    /// Allocates space to push another element onto the stack. Used for both elements and frame pointers.
-    fn next<B: Sized>(&mut self) -> AllocResult<NonNull<B>> {
-        let capacity = self.cursor.as_ptr() as usize - self.limit.as_ptr() as usize;
-        if size_of::<B>() > capacity {
-            let Block { limit, mut header } = Block::<Self>::new(self.mmap, self.block_size)?;
-
-            unsafe {
-                header.as_mut().write(StackHeader { limit, prev_header: Some(self.header) });
-            }
-            self.header = header.cast::<StackHeader>();
-
-            self.limit = unsafe { align_up::<MaybeUninit<u8>, MaybeUninit<T>>(limit) };
-            self.cursor = unsafe { align_down::<StackHeader, MaybeUninit<T>>(self.header) };
-        }
-        let next = unsafe { align_down::<MaybeUninit<T>, B>(self.cursor).sub(1) };
-        self.cursor = unsafe { align_down::<B, MaybeUninit<T>>(next) };
-        Ok(next)
-    }
-
-    /// Starts a new stack frame of elements, pushing a pointer to the start of the previous frame.
     pub fn push_frame(&mut self) -> AllocResult<()> {
-        let next_checkpoint = self.next::<Checkpoint<T>>()?;
+        let next_checkpoint = self.chunk.next::<Checkpoint<T>>(self.mmap)?;
         unsafe {
             next_checkpoint
-                .write(Checkpoint { limit: self.limit, prev_checkpoint: self.checkpoint })
+                .write(Checkpoint { limit: self.chunk.limit, prev_checkpoint: self.checkpoint })
         };
         self.checkpoint = next_checkpoint.as_ptr();
         Ok(())
     }
 
-    /// Pushes an element onto the stack.
-    pub fn push(&mut self, elem: T) -> AllocResult<()> {
-        let mut slot = self.next::<MaybeUninit<T>>()?;
-        unsafe { slot.as_mut().write(elem) };
-        Ok(())
-    }
-
     /// # Safety
-    /// A frame must have been pushed.
+    /// A frame needs to have been pushed.
     pub unsafe fn pop_frame(&mut self) {
         debug_assert!(!self.checkpoint.is_null());
         let slot = unsafe { NonNull::new_unchecked(self.checkpoint) };
-        self.cursor = unsafe { align_up::<Checkpoint<T>, MaybeUninit<T>>(slot.add(1)) };
+        self.chunk.cursor = unsafe { align_up::<Checkpoint<T>, T>(slot.add(1)) };
         self.checkpoint = unsafe { slot.as_ref().prev_checkpoint };
-        self.limit = unsafe { slot.as_ref().limit };
+        self.chunk.limit = unsafe { slot.as_ref().limit };
     }
 
+    pub fn push(&mut self, elem: T) -> AllocResult<()> {
+        let slot = self.chunk.next::<T>(self.mmap)?;
+        unsafe { slot.write(elem) };
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct StackChunk<T> {
+    header: NonNull<StackHeader>,
+    cursor: NonNull<T>,
+    limit: NonNull<T>,
+    data: PhantomData<*mut T>,
+}
+
+impl<T> StackChunk<T> {
+    const OVERHEAD: NonZero<usize> =
+        NonZero::new(mem::size_of::<StackHeader>() + mem::size_of::<Checkpoint<T>>()).unwrap();
+
+    unsafe fn new(mmap_ptr: MMap, prev_header: Option<NonNull<StackHeader>>) -> AllocResult<Self> {
+        let size = if let Some(prev_header) = prev_header {
+            unsafe { prev_header.as_ref().raw_chunk.size }
+        } else if mem::size_of::<T>() > DEFAULT_CHUNK_SIZE.get() {
+            let minimum_size = Self::OVERHEAD
+                .checked_add(mem::size_of::<T>())
+                .unwrap_or_else(allocation_size_overflow);
+
+            let next_page_multiple = round_up_to(minimum_size.get(), TYPICAL_PAGE_SIZE.get())
+                .unwrap_or_else(allocation_size_overflow);
+
+            // The result of rounding a non-zero number up to the nearest multiple of another non-zero
+            // number will also be non-zero, unless we overflow, but that will cause a panic.
+            unsafe { NonZero::new_unchecked(next_page_multiple) }
+        } else {
+            DEFAULT_CHUNK_SIZE
+        };
+
+        let raw_chunk = Chunk::new(mmap_ptr, size, InternalAllocKind::Stack)?;
+
+        let header = unsafe {
+            let high_end = raw_chunk.base_address.add(size.into());
+            align_down::<u8, StackHeader>(high_end).sub(1)
+        };
+
+        let cursor = unsafe { align_down::<StackHeader, T>(header) };
+        let limit = unsafe { align_up::<u8, T>(raw_chunk.base_address) };
+
+        unsafe {
+            header.write(StackHeader { raw_chunk, prev_header });
+        }
+
+        Ok(Self { header, cursor, limit, data: PhantomData })
+    }
+
+    fn next<B: Sized>(&mut self, mmap: MMap) -> AllocResult<NonNull<B>> {
+        let capacity = self.cursor.as_ptr() as usize - self.limit.as_ptr() as usize;
+        if size_of::<B>() > capacity {
+            *self = unsafe { StackChunk::<T>::new(mmap, Some(self.header))? };
+        }
+        let next = unsafe { align_down::<T, B>(self.cursor).sub(1) };
+        self.cursor = unsafe { align_down::<B, T>(next) };
+        Ok(next)
+    }
+
+    #[allow(unused)]
     pub fn current_frame<'a>(&'a self) -> Iter<'a, T> {
         todo!()
     }
@@ -111,12 +133,13 @@ impl<T: Sized> Stack<T> {
 
 impl<T> Drop for Stack<T> {
     fn drop(&mut self) {
-        let mut current_header = Some(unsafe { *self.header.as_ptr() });
+        let mut current_header = Some(unsafe { *self.chunk.header.as_ptr() });
         while let Some(header) = current_header {
-            unsafe {
-                munmap(self.munmap, header.limit, *self.block_size).expect("failed to unmap block")
-            }
-            current_header = header.prev_header.map(|h| unsafe { *h.as_ptr() })
+            current_header = header.prev_header.map(|prev| unsafe { prev.read() });
+            header
+                .raw_chunk
+                .dispose(self.munmap, InternalAllocKind::Stack)
+                .unwrap_or_else(|_| unmap_failed());
         }
     }
 }
@@ -152,9 +175,18 @@ mod test {
         let global_ctx = unsafe { init_global_ctx(DEFAULT_HOOKS) };
         let mut prov = Stack::<Provenance>::new(global_ctx)?;
         prov.push_frame()?;
-
         for _ in 0..1000 {
             prov.push(__BSAN_NULL_PROVENANCE)?;
+        }
+        prov.push_frame()?;
+        unsafe { prov.pop_frame() };
+        prov.push_frame()?;
+        for _ in 0..1000 {
+            prov.push(__BSAN_NULL_PROVENANCE)?;
+        }
+        unsafe {
+            prov.pop_frame();
+            prov.pop_frame();
         }
         Ok(())
     }

@@ -6,7 +6,7 @@ use core::{mem, ptr};
 
 use super::hooks::{BsanAllocHooks, BsanHooks, MUnmap, BSAN_MAP_FLAGS, BSAN_PROT_FLAGS};
 use super::{mmap, munmap};
-use crate::memory::AllocResult;
+use crate::memory::{AllocResult, InternalAllocKind};
 
 /// Different targets have a different number
 /// of significant bits in their pointer representation.
@@ -117,8 +117,14 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
         unsafe {
             let table = {
                 let size_bytes = NonZero::new_unchecked(mem::size_of::<L1Array<T>>());
-                mmap::<L1Array<T>>(hooks.mmap_ptr, size_bytes, BSAN_PROT_FLAGS, BSAN_MAP_FLAGS)?
-                    .cast()
+                mmap::<L1Array<T>>(
+                    hooks.mmap_ptr,
+                    InternalAllocKind::ShadowHeap,
+                    size_bytes,
+                    BSAN_PROT_FLAGS,
+                    BSAN_MAP_FLAGS,
+                )?
+                .cast()
             };
             Ok(Self {
                 table,
@@ -148,6 +154,7 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
                 let size_bytes = NonZero::new_unchecked(mem::size_of::<T>() * L2_LEN);
                 let l2_page: NonNull<L2Array<T>> = mmap::<L2Array<T>>(
                     hooks.mmap_ptr,
+                    InternalAllocKind::ShadowHeap,
                     size_bytes,
                     BSAN_PROT_FLAGS,
                     BSAN_MAP_FLAGS,
@@ -311,13 +318,18 @@ impl<T> Drop for ShadowHeap<T> {
                 if !l2_table.is_null() {
                     let l2_table_size = NonZero::new_unchecked(mem::size_of::<T>() * L2_LEN);
                     let l2_table = NonNull::new_unchecked(l2_table);
-                    munmap(self.munmap, l2_table, l2_table_size).expect("failed to unmap block");
+                    munmap(self.munmap, InternalAllocKind::ShadowHeap, l2_table, l2_table_size)
+                        .expect("failed to unmap block");
                 }
             }
-            // Free L1 table
-            let size_bytes = NonZero::new_unchecked(mem::size_of::<[*mut [T; L2_LEN]; L1_LEN]>());
-            munmap::<[*mut [T; L2_LEN]; L1_LEN]>(self.munmap, self.table, size_bytes)
-                .expect("failed to unmap block");
+            let size_bytes = NonZero::new_unchecked(mem::size_of::<L1Array<T>>());
+            munmap::<L1Array<T>>(
+                self.munmap,
+                InternalAllocKind::ShadowHeap,
+                self.table,
+                size_bytes,
+            )
+            .expect("failed to unmap block");
         }
     }
 }

@@ -48,7 +48,7 @@ mod errors;
 
 use crate::borrow_tracker::tree::Tree;
 use crate::errors::BorsanResult;
-use crate::memory::{hooks, Bumpable};
+use crate::memory::{hooks, Heapable};
 
 macro_rules! println {
     ($($arg:tt)*) => {
@@ -307,7 +307,9 @@ pub struct AllocInfo {
     pub tree_lock: Mutex<Option<tree::Tree<BsanAllocHooks>>>,
 }
 
-unsafe impl Bumpable<AllocInfo> for AllocInfo {
+/// # Safety
+/// Values of type `AllocInfo` can fit within the size of a heap chunk.
+unsafe impl Heapable<AllocInfo> for AllocInfo {
     fn next(&mut self) -> *mut Option<NonNull<AllocInfo>> {
         // we are re-using the space of base_addr to store the free list pointer
         // SAFETY: this is safe because both union fields are raw pointers
