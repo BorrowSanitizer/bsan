@@ -61,10 +61,10 @@ impl<T: Sized> Stack<T> {
         self.chunk.limit = unsafe { slot.as_ref().limit };
     }
 
-    pub fn push(&mut self, elem: T) -> AllocResult<()> {
+    pub fn push(&mut self, elem: T) -> AllocResult<NonNull<T>> {
         let slot = self.chunk.next::<T>(self.mmap)?;
         unsafe { slot.write(elem) };
-        Ok(())
+        Ok(slot)
     }
 }
 
@@ -124,11 +124,6 @@ impl<T> StackChunk<T> {
         self.cursor = unsafe { align_down::<B, T>(next) };
         Ok(next)
     }
-
-    #[allow(unused)]
-    pub fn current_frame<'a>(&'a self) -> Iter<'a, T> {
-        todo!()
-    }
 }
 
 impl<T> Drop for Stack<T> {
@@ -151,20 +146,28 @@ mod test {
     use crate::memory::AllocResult;
     use crate::*;
 
+    fn test_info() -> AllocInfo {
+        AllocInfo {
+            alloc_id: AllocId::invalid(),
+            base_addr: FreeListAddrUnion { base_addr: core::ptr::null_mut() },
+            size: 0,
+            tree_lock: Mutex::new(None),
+        }
+    }
+
     #[test]
     fn create_stack() {
         let global_ctx = unsafe { init_global_ctx(DEFAULT_HOOKS) };
-        let _ = Stack::<Provenance>::new(global_ctx);
-        let _ = Stack::<BorTag>::new(global_ctx);
+        let _ = Stack::<AllocInfo>::new(global_ctx);
     }
 
     #[test]
     fn push_then_pop() -> AllocResult<()> {
         let global_ctx = unsafe { init_global_ctx(DEFAULT_HOOKS) };
-        let mut prov = Stack::<Provenance>::new(global_ctx)?;
+        let mut prov = Stack::<AllocInfo>::new(global_ctx)?;
         unsafe {
             prov.push_frame()?;
-            prov.push(__BSAN_NULL_PROVENANCE)?;
+            prov.push(test_info())?;
             prov.pop_frame();
         }
         Ok(())
@@ -173,16 +176,16 @@ mod test {
     #[test]
     fn smoke() -> AllocResult<()> {
         let global_ctx = unsafe { init_global_ctx(DEFAULT_HOOKS) };
-        let mut prov = Stack::<Provenance>::new(global_ctx)?;
+        let mut prov = Stack::<AllocInfo>::new(global_ctx)?;
         prov.push_frame()?;
         for _ in 0..1000 {
-            prov.push(__BSAN_NULL_PROVENANCE)?;
+            prov.push(test_info())?;
         }
         prov.push_frame()?;
         unsafe { prov.pop_frame() };
         prov.push_frame()?;
         for _ in 0..1000 {
-            prov.push(__BSAN_NULL_PROVENANCE)?;
+            prov.push(test_info())?;
         }
         unsafe {
             prov.pop_frame();

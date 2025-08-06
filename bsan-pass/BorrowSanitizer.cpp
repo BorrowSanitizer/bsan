@@ -88,7 +88,7 @@ struct BorrowSanitizer {
         // For the moment, we only assign pointers this provenance value when they
         // are cast from integers (inttoptr), so we do not need a VectorProvenance
         // counterpart.
-        WildcardProvenance = ScalarProvenance(Zero, Zero, InvalidPtr);
+        WildcardScalarProvenance = ScalarProvenance(Zero, Zero, InvalidPtr);
         
         // Null provenance does not permit any access. All components are set to zero.
         NullScalarProvenance = ScalarProvenance(One, Zero, InvalidPtr);
@@ -124,7 +124,9 @@ private:
     Type *Int16Ty;
     Type *Int64Ty;
     PointerType *PtrTy;
+
     Type *IntptrTy;
+
 
     StructType *ProvenanceTy;
     Align ProvenanceAlign;
@@ -138,13 +140,13 @@ private:
     FunctionCallee BsanFuncRetag;
     FunctionCallee BsanFuncPushFrame;
     FunctionCallee BsanFuncPopFrame;
-    FunctionCallee BsanFuncPushElems;
     FunctionCallee BsanFuncShadowCopy;
     FunctionCallee BsanFuncShadowClear;
     FunctionCallee BsanFuncGetShadowSrc;
     FunctionCallee BsanFuncGetShadowDest;
 
     FunctionCallee BsanFuncAlloc;
+    FunctionCallee BsanFuncAllocStack;
     FunctionCallee BsanFuncDealloc;
     FunctionCallee BsanFuncExposeTag;
     FunctionCallee BsanFuncRead;
@@ -162,7 +164,7 @@ private:
     FunctionCallee BsanFuncAssertProvenanceWildcard;
     FunctionCallee BsanFuncDebugPrint;
 
-    ScalarProvenance WildcardProvenance;
+    ScalarProvenance WildcardScalarProvenance;
     ScalarProvenance NullScalarProvenance;
 
     // Thread-local storage for paramters
@@ -190,10 +192,6 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     // a call to __bsan_push_frame. 
     Instruction *FnPrologueStart;
 
-    // The last instruction within the "prologue" of the function. All paths are
-    // guaranteed to execute each instruction between the start and end of the prologue.
-    Instruction *FnPrologueEnd;
-
     // Every instruction in the function's body, arranged in reverse postorder.
     SmallVector<Instruction *, 16> Instructions;
 
@@ -203,10 +201,6 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     // (see AddressSanitizer).
     SmallVector<AllocaInst *, 16> StaticAllocaVec;
     SmallVector<AllocaInst *, 1> DynamicAllocaVec;
-
-    unsigned NumFnEntryRetags = 0;
-    unsigned CurrFnEntryRetag = 0;
-    Value *FnEntryRetagArray;
 
     // A temporary cache of local allocas that are always accessed safely and will never
     // escape the current function. If these variables are never retagged, then we can skip
@@ -256,7 +250,6 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         }
 
         FnPrologueStart = IRB.CreateCall(BS.BsanFuncPushFrame, {TotalNumProvenanceValues});
-        FnPrologueEnd = IRB.CreateIntrinsic(Intrinsic::donothing, {}, {});
     }
 
 
@@ -272,7 +265,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
                 report_fatal_error("Expected scalar provenance, but found vector provenance!");
             }  
         }else{
-            return BS.WildcardProvenance;
+            return BS.WildcardScalarProvenance;
         }
     }
 
@@ -316,7 +309,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
             if(Comp.isVector()) {
                 return wildcardVectorProvenance(IRB, Comp.Elems);
             }else{
-                return BS.WildcardProvenance;
+                return BS.WildcardScalarProvenance;
             }
         }
     }
@@ -657,15 +650,8 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     }
 
     void initStack() {
-        if(NumFnEntryRetags > 0) {
-            IRBuilder<> EntryIRB(FnPrologueStart);
-            FnEntryRetagArray = EntryIRB.CreateAlloca(ArrayType::get(BS.IntptrTy, NumFnEntryRetags));
-        }
         for (AllocaInst *AI : StaticAllocaVec) {
             processStaticAlloca(AI);
-        }
-        for (AllocaInst *AI : DynamicAllocaVec) {
-            processDynamicAlloca(AI);
         }
     }
 
@@ -675,8 +661,8 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
             for (AllocaInst *AI : StaticAllocaVec) {
                 processDeallocation(*AtExit, AI);
             }
+            AtExit->CreateCall(BS.BsanFuncPopFrame, {});
             InstrumentationIRBuilder::ensureDebugInfo(*AtExit, F);
-            AtExit->CreateCall(BS.BsanFuncPopFrame);
         }
     }
 
@@ -696,9 +682,16 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         IRBuilder<> IRB(AI);
         TypeSize TS = BS.getAllocaSizeInBytes(*AI);
         Value *Size = IRB.CreateTypeSize(BS.IntptrTy, TS);
-        ScalarProvenance Prov = processAllocation(IRB, AI, Size);
-        Value *ProvPtr = IRB.CreateCall(BS.BsanFuncPushElems, {BS.One});
-        storeScalarProvenanceValue(IRB, Prov, ProvPtr);
+        processDynStackAllocation(IRB, AI, Size);
+    }
+
+    ScalarProvenance processDynStackAllocation(IRBuilder<> &IRB, Value *Address, Value *Size) {
+        Value *ID = IRB.CreateCall(BS.BsanFuncNewAllocID, {});
+        Value *Tag = IRB.CreateCall(BS.BsanFuncNewBorrowTag, {});
+        Value *Info = IRB.CreateCall(BS.BsanFuncAllocStack, {Address, Size, ID, Tag});
+        ScalarProvenance Prov = ScalarProvenance(ID, Tag, Info);
+        setProvenance(Address, Prov);
+        return Prov;
     }
 
     // Allocates object metadata for a stack or heap allocation.
@@ -742,8 +735,8 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 
     bool isFnEntryRetag(CallBase *CB) {
         assert(CB->arg_size() == 4 && "Missing arguments to retag.");
-        Value *IsFnEntry = CB->getArgOperand(3);   
-        if (ConstantInt *CI = dyn_cast<ConstantInt>(CB->getArgOperand(3))) { 
+        Value *IsFnEntry = CB->getArgOperand(3);
+        if (ConstantInt *CI = dyn_cast<ConstantInt>(IsFnEntry)) { 
             return !CI->isZero();
         }else{
             report_fatal_error("Invalid parameters to retag.\n");
@@ -763,13 +756,6 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
                 registerAlloca(&AI);
             }
             return;
-        }else if (CallBase::classof(&I)) {
-            CallBase *CB = dyn_cast<CallBase>(&I);
-            if(CB->getIntrinsicID() == Intrinsic::retag){
-                if(isFnEntryRetag(CB)) {
-                    NumFnEntryRetags += 1;
-                }
-            }
         }
         Instructions.push_back(&I);
     }
@@ -919,29 +905,16 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         }
     }
 
-   void visitIntrinsicInst(IntrinsicInst &I) {
+    void visitIntrinsicInst(IntrinsicInst &I) {
         if(I.getIntrinsicID() == Intrinsic::retag) {
-            Value *BorTagSlot;
-            IRBuilder<> IRB(&I);
-            if(isFnEntryRetag(&I)) {
-                assert(CurrFnEntryRetag < NumFnEntryRetags);
-                if(CurrFnEntryRetag == 0) {
-                    BorTagSlot = FnEntryRetagArray;
-                }else{  
-                    Value *ZeroIdx = ConstantInt::get(IRB.getInt64Ty(), 0);
-                    BorTagSlot = IRB.CreateGEP(
-                        ArrayType::get(BS.IntptrTy, NumFnEntryRetags),
-                        FnEntryRetagArray, 
-                        {ZeroIdx, ConstantInt::get(IRB.getInt32Ty(), CurrFnEntryRetag) }
-                    );
-                    CurrFnEntryRetag += 1;
-                }
-            }else{
-                BorTagSlot = ConstantPointerNull::get(BS.PtrTy);
-            }
+            instrumentRetag(I);
+        }
+    }
 
-            ScalarProvenance Prov = assertScalarProvenance(I.getOperand(0));
-
+    void instrumentRetag(IntrinsicInst &I) {
+        IRBuilder<> IRB(&I);
+        ScalarProvenance Prov = assertScalarProvenance(I.getOperand(0));
+        if(Prov != BS.WildcardScalarProvenance) {
             CallInst *CIRetag = CallInst::Create(BS.BsanFuncRetag, {
                 I.getOperand(0),
                 I.getOperand(1),
@@ -949,12 +922,11 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
                 Prov.ID, 
                 Prov.Tag, 
                 Prov.Info, 
-                BorTagSlot
             });
-
             ReplaceInstWithInst(&I, CIRetag);
         }
     }
+
 
     // Whenever we memset, we need to clear the corresponding shadow memory section
     // This should be removed when interceptors are implemented.
@@ -1061,7 +1033,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 
     void visitIntToPtrInst(IntToPtrInst &I) {
         // Pointers converted from integers receive a wildcard provenance value.
-        setProvenance(&I, BS.WildcardProvenance);
+        setProvenance(&I, BS.WildcardScalarProvenance);
     }
 
     void visitExtractValueInst(ExtractValueInst &EI) {
@@ -1412,7 +1384,7 @@ void BorrowSanitizer::initializeCallbacks(Module &M, const TargetLibraryInfo &TL
     BsanFuncRetag = M.getOrInsertFunction(
         kBsanFuncRetagName, AL,
         IntptrTy,
-        PtrTy, IntptrTy, Int64Ty, IntptrTy, IntptrTy, PtrTy, PtrTy
+        PtrTy, IntptrTy, Int64Ty, IntptrTy, IntptrTy, PtrTy
     );
 
     BsanFuncPushFrame = M.getOrInsertFunction(
@@ -1423,14 +1395,8 @@ void BorrowSanitizer::initializeCallbacks(Module &M, const TargetLibraryInfo &TL
 
     BsanFuncPopFrame = M.getOrInsertFunction(
         kBsanFuncPopFrameName,
-        FunctionType::get(IRB.getVoidTy(), /*isVarArg=*/false),
+        FunctionType::get(IntptrTy, /*isVarArg=*/false),
         AL
-    );
-
-    BsanFuncPushElems = M.getOrInsertFunction(
-        kBsanFuncPushElemsName, AL,
-        PtrTy,
-        IntptrTy
     );
 
     BsanFuncShadowCopy = M.getOrInsertFunction(
@@ -1471,6 +1437,12 @@ void BorrowSanitizer::initializeCallbacks(Module &M, const TargetLibraryInfo &TL
 
     BsanFuncAlloc = M.getOrInsertFunction(
         kBsanFuncAllocName, AL,
+        PtrTy,
+        PtrTy, IntptrTy, IntptrTy, IntptrTy
+    );
+
+    BsanFuncAllocStack = M.getOrInsertFunction(
+        kBsanFuncAllocStackName, AL,
         PtrTy,
         PtrTy, IntptrTy, IntptrTy, IntptrTy
     );

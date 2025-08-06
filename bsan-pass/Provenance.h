@@ -30,6 +30,14 @@ struct ScalarProvenance {
     ScalarProvenance() {}
 
     ScalarProvenance(Value *I, Value *T, Value *F) : ID(I), Tag(T), Info(F) {}
+    bool operator==(const ScalarProvenance &other) const {
+        return this->ID == other.ID 
+            && this->Tag == other.Tag 
+            && this->Info == other.Info;
+    }
+    bool operator!=(const ScalarProvenance &other) const {
+        return !(*this == other);
+    }
 };
 
 // A vector of provenance values.

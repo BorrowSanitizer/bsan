@@ -57,5 +57,10 @@ fn retag_perm<'tcx>(
         }
         _ => return None,
     };
-    Some((PermissionInfo::into_raw(info), params.kind == RetagKind::FnEntry))
+
+    let as_data = PermissionInfo::into_raw(info);
+    let as_struct = unsafe { PermissionInfo::from_raw(as_data) };
+    assert!(as_struct == info);
+
+    Some((PermissionInfo::into_raw(info), info.protector_kind.is_some()))
 }
