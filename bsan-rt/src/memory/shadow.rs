@@ -4,7 +4,7 @@ use core::ops::{BitAnd, Shr};
 use core::ptr::NonNull;
 use core::{mem, ptr};
 
-use super::hooks::{BsanAllocHooks, BsanHooks, MUnmap, BSAN_MAP_FLAGS, BSAN_PROT_FLAGS};
+use super::hooks::{BsanAllocHooks, BsanHooks, MUnmap};
 use super::{mmap, munmap};
 use crate::memory::{AllocResult, InternalAllocKind};
 
@@ -117,14 +117,8 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
         unsafe {
             let table = {
                 let size_bytes = NonZero::new_unchecked(mem::size_of::<L1Array<T>>());
-                mmap::<L1Array<T>>(
-                    hooks.mmap_ptr,
-                    InternalAllocKind::ShadowHeap,
-                    size_bytes,
-                    BSAN_PROT_FLAGS,
-                    BSAN_MAP_FLAGS,
-                )?
-                .cast()
+                mmap::<L1Array<T>>(hooks.mmap_ptr, InternalAllocKind::ShadowHeap, size_bytes)?
+                    .cast()
             };
             Ok(Self {
                 table,
@@ -152,14 +146,9 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
             let l2_table_ptr: *mut *mut L2Array<T> = &raw mut (*self.table.as_ptr())[idx.l1_index];
             if (*l2_table_ptr).is_null() {
                 let size_bytes = NonZero::new_unchecked(mem::size_of::<T>() * L2_LEN);
-                let l2_page: NonNull<L2Array<T>> = mmap::<L2Array<T>>(
-                    hooks.mmap_ptr,
-                    InternalAllocKind::ShadowHeap,
-                    size_bytes,
-                    BSAN_PROT_FLAGS,
-                    BSAN_MAP_FLAGS,
-                )?
-                .cast();
+                let l2_page: NonNull<L2Array<T>> =
+                    mmap::<L2Array<T>>(hooks.mmap_ptr, InternalAllocKind::ShadowHeap, size_bytes)?
+                        .cast();
 
                 *l2_table_ptr = l2_page.as_ptr();
             }

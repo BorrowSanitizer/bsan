@@ -1,28 +1,59 @@
 use core::mem;
 use core::num::NonZero;
-use core::ops::DerefMut;
+use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicPtr, AtomicU8, AtomicUsize, Ordering};
 
+use libc::_SC_PAGESIZE;
 use spin::mutex::SpinMutex;
 use spin::rwlock::RwLock;
 
 use super::hooks::{BsanHooks, MMap, MUnmap};
-use super::{align_down, align_up, Chunk};
+use super::{align_down, align_up};
 use crate::memory::{
-    munmap, round_mut_ptr_up_to_unchecked, unmap_failed, AllocResult, InternalAllocKind,
-    TYPICAL_PAGE_SIZE,
+    mmap, munmap, round_mut_ptr_up_to_unchecked, unmap_failed, AllocError, AllocResult,
+    InternalAllocKind,
 };
 
-/// # Safety
-/// To be used in a `Heap<T>`, values of type `T` need to be smaller
-/// than the `HEAP_CHUNK_SIZE` minus the size of a `HeapBlockHeader<T>`,
-/// but large enough to store a pointer to another instance of `T`.
-pub unsafe trait Heapable<T>: Sized {
-    fn next(&mut self) -> *mut Option<NonNull<T>>;
+static PAGE_SIZE: NonZero<usize> = NonZero::new(0x1000).unwrap();
+
+#[allow(unused)]
+#[derive(Debug, Copy, Clone)]
+struct PageSize(NonZero<usize>);
+
+#[allow(unused)]
+impl PageSize {
+    fn try_new() -> AllocResult<Self> {
+        let page_size = unsafe { libc::sysconf(_SC_PAGESIZE) };
+        NonZero::try_from(page_size as usize).map(Self).map_err(|_| AllocError::InvalidPageSize)
+    }
 }
 
-const HEAP_CHUNK_SIZE: NonZero<usize> = TYPICAL_PAGE_SIZE;
+impl Deref for PageSize {
+    type Target = NonZero<usize>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+/// An object that can be allocated by a `Heap`.
+///
+/// # Safety
+/// A `Heapable` type must be `Sized` and smaller
+/// than the `PAGE_SIZE` minus the size of a `HeapBlockHeader<T>`,
+/// but large enough to store a pointer to another `Heapable` instance.
+/// This allows values to act as nodes in a free list.
+pub(crate) unsafe trait Heapable<T>: Sized {
+    fn next(&mut self) -> *mut Option<NonNull<T>>;
+
+    #[allow(unused)]
+    fn is_heapable() -> bool {
+        let sized = mem::size_of::<T>() < (PAGE_SIZE.get() - mem::size_of::<HeapBlockHeader<T>>());
+        let aligned = align_of::<T>() == align_of::<usize>();
+        sized && aligned
+    }
+}
 
 #[derive(Debug)]
 pub struct Heap<T: Heapable<T>> {
@@ -97,9 +128,8 @@ impl<T: Heapable<T>> Heap<T> {
     }
 
     fn parent_header(&self, ptr: NonNull<T>) -> &HeapBlockHeader<T> {
-        let high_end = unsafe {
-            round_mut_ptr_up_to_unchecked(ptr.as_ptr().cast::<u8>(), HEAP_CHUNK_SIZE.get())
-        };
+        let high_end =
+            unsafe { round_mut_ptr_up_to_unchecked(ptr.as_ptr().cast::<u8>(), PAGE_SIZE.get()) };
         let header = unsafe { high_end.cast::<HeapBlockHeader<T>>().sub(1) };
         debug_assert!(!header.is_null() && header.is_aligned());
         unsafe { &*header }
@@ -131,15 +161,10 @@ unsafe impl<T> Sync for HeapBlock<T> {}
 
 impl<T: Heapable<T>> HeapBlock<T> {
     unsafe fn new(mmap_ptr: MMap) -> AllocResult<Self> {
-        debug_assert!(
-            mem::size_of::<T>() < (HEAP_CHUNK_SIZE.get() - mem::size_of::<HeapBlockHeader<T>>())
-        );
-
-        let Chunk { base_address, size } =
-            Chunk::new(mmap_ptr, HEAP_CHUNK_SIZE, InternalAllocKind::Heap)?;
+        let base_address = unsafe { mmap(mmap_ptr, InternalAllocKind::Heap, PAGE_SIZE)? };
 
         let header = unsafe {
-            let high_end = base_address.add(size.get());
+            let high_end = base_address.add(PAGE_SIZE.get());
             align_down::<u8, HeapBlockHeader<T>>(high_end).sub(1)
         };
 
@@ -149,7 +174,13 @@ impl<T: Heapable<T>> HeapBlock<T> {
         let limit = unsafe { align_up::<u8, T>(base_address) };
 
         unsafe {
-            header.write(HeapBlockHeader { cursor, limit, size, in_use: 0.into(), next: None });
+            header.write(HeapBlockHeader {
+                cursor,
+                limit,
+                size: PAGE_SIZE,
+                in_use: 0.into(),
+                next: None,
+            });
         }
         Ok(Self { header })
     }
@@ -203,6 +234,7 @@ mod test {
     use super::*;
     use crate::memory::hooks::DEFAULT_HOOKS;
     use crate::memory::{AllocError, AllocResult};
+    use crate::AllocInfo;
 
     #[derive(Default)]
     struct Link {
@@ -262,5 +294,10 @@ mod test {
             let _ = thread.join().unwrap();
         }
         Ok(())
+    }
+
+    #[test]
+    fn heapable_alloc_info() {
+        assert!(AllocInfo::is_heapable())
     }
 }

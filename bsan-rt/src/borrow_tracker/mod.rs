@@ -1,6 +1,5 @@
 // Components in this library were ported from Miri and then modified by our team.
 use core::ffi::c_void;
-use core::ptr;
 
 use bsan_shared::{
     AccessKind, IdempotentForeignAccess, Permission, ProtectorKind, RangeMap, RetagInfo, Size,
@@ -10,10 +9,10 @@ use tree::{AllocRange, Tree};
 
 use crate::borrow_tracker::tree::{ChildParams, LocationState};
 use crate::diagnostics::AccessCause;
-use crate::errors::{BorsanResult, ErrorInfo, UBInfo};
+use crate::errors::{BorsanResult, UBInfo};
 use crate::memory::hooks::BsanAllocHooks;
 use crate::span::Span;
-use crate::{throw_ub, AllocId, AllocInfo, BorTag, GlobalCtx, LocalCtx, Provenance};
+use crate::{throw_ub, AllocId, BorTag, GlobalCtx, LocalCtx, Provenance};
 
 pub mod tree;
 pub mod unimap;
@@ -32,6 +31,7 @@ impl BorrowTracker {
     fn lock_mut(&mut self) -> MutexGuard<'_, Option<Tree<BsanAllocHooks>>> {
         unsafe { (*self.prov.alloc_info).tree_lock.lock() }
     }
+
     /// # Safety
     /// Takes in provenance pointer that is checked via debug_asserts
     pub fn new(
@@ -91,8 +91,8 @@ impl BorrowTracker {
             // We register the protection in two different places.
             // This makes creating a protector slower, but checking whether a tag
             // is protected faster.
-            //global_ctx.add_protected_tag(new_tag, protect);
-            local_ctx.add_protected_tag(new_tag);
+            global_ctx.add_protected_tag(new_tag, protect);
+            local_ctx.protected_tags.push(new_tag)?;
         }
 
         if retag_info.size == 0 {
@@ -187,7 +187,7 @@ impl BorrowTracker {
         let range = self.range;
 
         let mut lock = self.lock_mut();
-        let mut tree = unsafe { lock.take().unwrap() };
+        let mut tree = lock.take().unwrap();
         drop(lock);
 
         tree.dealloc(
@@ -203,7 +203,6 @@ impl BorrowTracker {
         let info = unsafe { &mut *self.prov.alloc_info };
         info.alloc_id = AllocId::invalid();
         unsafe { global_ctx.deallocate_lock_location(self.prov.alloc_info) };
-
         Ok(())
     }
 }

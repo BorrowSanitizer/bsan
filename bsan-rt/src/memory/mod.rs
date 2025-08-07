@@ -7,10 +7,12 @@ pub mod hooks;
 use hooks::*;
 
 mod heap;
-pub use heap::{Heap, Heapable};
+pub use heap::Heap;
+use heap::Heapable;
 
 mod stack;
 pub use stack::Stack;
+use stack::Stackable;
 
 mod shadow;
 use core::ffi::c_void;
@@ -20,10 +22,29 @@ use core::ptr::{self, NonNull};
 
 pub use shadow::ShadowHeap;
 
+use crate::{AllocInfo, BorTag};
+
+/// # Safety
+/// Values of type `AllocInfo` can fit within the size of a heap chunk.
+unsafe impl Heapable<AllocInfo> for AllocInfo {
+    fn next(&mut self) -> *mut Option<NonNull<AllocInfo>> {
+        // we are re-using the space of base_addr to store the free list pointer
+        // SAFETY: this is safe because both union fields are raw pointers
+        unsafe { &raw mut self.base_addr.free_list_next }
+    }
+}
+
+unsafe impl Stackable for AllocInfo {}
+
+unsafe impl Stackable for BorTag {}
+
 /// All of our custom allocators depend on `mmap` and `munmap`. We propagate
 /// any nonzero exit-codes from these functions to the user as errors.
 #[derive(Clone, Copy, Debug)]
 pub enum AllocError {
+    InvalidStackSize,
+    InvalidPageSize,
+    StackOverflow,
     MMapFailed(InternalAllocKind, i32),
     MUnmapFailed(InternalAllocKind, i32),
     InvalidHeapSize(usize),
@@ -37,44 +58,6 @@ pub enum InternalAllocKind {
 }
 
 pub(crate) type AllocResult<T> = Result<T, AllocError>;
-
-static TYPICAL_PAGE_SIZE: NonZero<usize> = NonZero::new(0x1000).unwrap();
-
-/// A contiguous chunk of memory
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Chunk {
-    /// A pointer to the start of the allocation
-    base_address: NonNull<u8>,
-    /// The size of the allocation
-    size: NonZero<usize>,
-}
-
-impl Chunk {
-    pub(crate) fn new(
-        mmap_ptr: hooks::MMap,
-        size: NonZero<usize>,
-        kind: InternalAllocKind,
-    ) -> AllocResult<Chunk> {
-        let base_address =
-            unsafe { mmap(mmap_ptr, kind, size, hooks::BSAN_PROT_FLAGS, hooks::BSAN_MAP_FLAGS)? };
-        Ok(Chunk { base_address, size })
-    }
-    pub(crate) fn dispose(
-        self,
-        munmap_ptr: hooks::MUnmap,
-        kind: InternalAllocKind,
-    ) -> AllocResult<()> {
-        unsafe { munmap(munmap_ptr, kind, self.base_address, self.size)? };
-        Ok(())
-    }
-}
-
-/// Credit: bumpalo
-#[cold]
-#[inline(never)]
-pub(crate) fn allocation_size_overflow<T>() -> T {
-    panic!("requested allocation size overflowed")
-}
 
 /// Credit: bumpalo
 #[cold]
@@ -163,13 +146,11 @@ pub unsafe fn mmap<T>(
     mmap: hooks::MMap,
     kind: InternalAllocKind,
     size_bytes: NonZero<usize>,
-    prot: i32,
-    flags: i32,
 ) -> AllocResult<NonNull<T>> {
     let size_bytes = size_bytes.get();
     unsafe {
-        let ptr = (mmap)(ptr::null_mut(), size_bytes, prot, flags, -1, 0);
-        if ptr.is_null() || ptr.addr() as isize == -1 {
+        let ptr = (mmap)(ptr::null_mut(), size_bytes, BSAN_PROT_FLAGS, BSAN_MAP_FLAGS, -1, 0);
+        if ptr.is_null() || ptr == libc::MAP_FAILED {
             let errno = *libc::__errno_location();
             Err(AllocError::MMapFailed(kind, errno))
         } else {

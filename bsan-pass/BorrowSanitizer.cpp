@@ -56,8 +56,6 @@ static cl::opt<bool>
                      cl::Optional);
 
 STATISTIC(NumAllocaEliminated, "Number of times that instrumentation is eliminated for an alloca.");
-STATISTIC(NumReadsEliminated, "Number of times that instrumentation is eliminated for an read.");
-STATISTIC(NumWritesEliminated, "Number of times that instrumentation is eliminated for a write.");
 
 namespace {
 struct BorrowSanitizer {
@@ -138,15 +136,21 @@ private:
     Function *BsanDtorFunction = nullptr;
 
     FunctionCallee BsanFuncRetag;
-    FunctionCallee BsanFuncPushFrame;
-    FunctionCallee BsanFuncPopFrame;
     FunctionCallee BsanFuncShadowCopy;
     FunctionCallee BsanFuncShadowClear;
     FunctionCallee BsanFuncGetShadowSrc;
     FunctionCallee BsanFuncGetShadowDest;
 
+    FunctionCallee BsanFuncReserveStackSlot;
+    FunctionCallee BsanFuncAllocInPlace;
+    
+    FunctionCallee BsanFuncPushAllocaFrame;
+    FunctionCallee BsanFuncPushRetagFrame;
+
+    FunctionCallee BsanFuncPopAllocaFrame;
+    FunctionCallee BsanFuncPopRetagFrame;
+
     FunctionCallee BsanFuncAlloc;
-    FunctionCallee BsanFuncAllocStack;
     FunctionCallee BsanFuncDealloc;
     FunctionCallee BsanFuncExposeTag;
     FunctionCallee BsanFuncRead;
@@ -199,6 +203,9 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     // dynamic ones, but we will adjust this behavior in the future to support optimizations
     // such as combining static stack allocations into a single, larger allocation 
     // (see AddressSanitizer).
+
+    Value *StackBase;
+    unsigned NumFnEntryRetags = 0;
     SmallVector<AllocaInst *, 16> StaticAllocaVec;
     SmallVector<AllocaInst *, 1> DynamicAllocaVec;
 
@@ -227,29 +234,6 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
             AA(AA), MSSA(MSSA), TLI(&TLI), SSGI(SSGI)
     {
         removeUnreachableBlocks(F);
-        initPrologue();
-    }
-
-    // Populates the array of argument provenance pointers and initializes the start and end of the
-    // function prologue.
-    void initPrologue() {
-        IRBuilder<> IRB(&F.getEntryBlock(), F.getEntryBlock().getFirstNonPHIIt());
-        Value *Array = BS.ParamTLS;
-
-        Value *TotalNumProvenanceValues = ConstantInt::get(BS.IntptrTy, 0);
-        
-        for (auto &Arg : F.args()) {
-            SmallVector<ProvenanceComponent> *Components = getProvenanceComponents(IRB, Arg.getType());
-            for (auto &C : *Components) {
-                ProvenancePointer Ptr = C.getPointerToProvenance(IRB, Array);
-                ArgumentProvenance[&Arg].push_back(Ptr);
-                Value *Offset = IRB.CreateMul(C.NumProvenanceValues, BS.ProvenanceSize);
-                Array = offsetPointer(IRB, Array, Offset);
-                TotalNumProvenanceValues = IRB.CreateAdd(TotalNumProvenanceValues, C.NumProvenanceValues);
-            }
-        }
-
-        FnPrologueStart = IRB.CreateCall(BS.BsanFuncPushFrame, {TotalNumProvenanceValues});
     }
 
 
@@ -636,6 +620,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         // implement the subsequent calls to deallocate metadata when we deinitialize the stack. Instead of having to compute
         // which allocations are live along each execution path, we can just assume that every allocation is live. 
         initStack();
+        
 
         // This is where most of the work occurs; we visit each instruction and insert every run-time check in a single pass.
         for (Instruction *I : Instructions) {
@@ -649,49 +634,43 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         return true;
     }
 
+    // Populates the array of argument provenance pointers and initializes the start and end of the
+    // function prologue.
     void initStack() {
-        for (AllocaInst *AI : StaticAllocaVec) {
-            processStaticAlloca(AI);
+        IRBuilder<> IRB(&F.getEntryBlock(), F.getEntryBlock().getFirstNonPHIIt());
+        Value *Array = BS.ParamTLS;
+
+        Value *TotalNumProvenanceValues = ConstantInt::get(BS.IntptrTy, 0);
+        
+        for (auto &Arg : F.args()) {
+            SmallVector<ProvenanceComponent> *Components = getProvenanceComponents(IRB, Arg.getType());
+            for (auto &C : *Components) {
+                ProvenancePointer Ptr = C.getPointerToProvenance(IRB, Array);
+                ArgumentProvenance[&Arg].push_back(Ptr);
+                Value *Offset = IRB.CreateMul(C.NumProvenanceValues, BS.ProvenanceSize);
+                Array = offsetPointer(IRB, Array, Offset);
+                TotalNumProvenanceValues = IRB.CreateAdd(TotalNumProvenanceValues, C.NumProvenanceValues);
+            }
+        }
+
+        if(StaticAllocaVec.size() > 0 || DynamicAllocaVec.size() > 0)
+            IRB.CreateCall(BS.BsanFuncPushAllocaFrame, {});
+        if(NumFnEntryRetags > 0) {
+            FnPrologueStart = IRB.CreateCall(BS.BsanFuncPushRetagFrame, {});
+        }else{
+            FnPrologueStart = IRB.CreateIntrinsic(Intrinsic::donothing, {}, {});
         }
     }
 
     void deinitStack() {
         EscapeEnumerator EE(F, "bsan_cleanup", true);
         while (IRBuilder<> *AtExit = EE.Next()) {
-            for (AllocaInst *AI : StaticAllocaVec) {
-                processDeallocation(*AtExit, AI);
-            }
-            AtExit->CreateCall(BS.BsanFuncPopFrame, {});
+            if(NumFnEntryRetags > 0)
+                AtExit->CreateCall(BS.BsanFuncPopRetagFrame, {});
+            if(StaticAllocaVec.size() || DynamicAllocaVec.size())
+                AtExit->CreateCall(BS.BsanFuncPopAllocaFrame, {});
             InstrumentationIRBuilder::ensureDebugInfo(*AtExit, F);
         }
-    }
-
-    // Allocates object metadata for a static stack allocation.
-    void processStaticAlloca(AllocaInst *AI) {
-        assert(AI->isStaticAlloca() && "Expected a static alloca.");
-        AI->moveBefore(FnPrologueStart->getIterator());
-        IRBuilder<> IRB(FnPrologueStart);
-        TypeSize TS = BS.getAllocaSizeInBytes(*AI);
-        Value *Size = IRB.CreateTypeSize(BS.IntptrTy, TS);
-        processAllocation(IRB, AI, Size);
-    }
-
-    // Allocates object metadata for a dynamic stack allocation.
-    void processDynamicAlloca(AllocaInst *AI) {
-        assert(!AI->isStaticAlloca() && "Expected a dynamic alloca.");
-        IRBuilder<> IRB(AI);
-        TypeSize TS = BS.getAllocaSizeInBytes(*AI);
-        Value *Size = IRB.CreateTypeSize(BS.IntptrTy, TS);
-        processDynStackAllocation(IRB, AI, Size);
-    }
-
-    ScalarProvenance processDynStackAllocation(IRBuilder<> &IRB, Value *Address, Value *Size) {
-        Value *ID = IRB.CreateCall(BS.BsanFuncNewAllocID, {});
-        Value *Tag = IRB.CreateCall(BS.BsanFuncNewBorrowTag, {});
-        Value *Info = IRB.CreateCall(BS.BsanFuncAllocStack, {Address, Size, ID, Tag});
-        ScalarProvenance Prov = ScalarProvenance(ID, Tag, Info);
-        setProvenance(Address, Prov);
-        return Prov;
     }
 
     // Allocates object metadata for a stack or heap allocation.
@@ -755,7 +734,15 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
             if (shouldInstrumentAlloca(AI)) {
                 registerAlloca(&AI);
             }
-            return;
+        }
+        if (CallBase::classof(&I)) {
+            CallBase *CB = dyn_cast<CallBase>(&I);
+            if(CB->getIntrinsicID() == Intrinsic::retag) {
+                assert(CB->arg_size() > 0 && "Missing arguments to retag.");
+                if(isFnEntryRetag(CB)) {
+                    NumFnEntryRetags += 1;
+                }
+            }
         }
         Instructions.push_back(&I);
     }
@@ -789,6 +776,23 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         }
 
         CB.eraseFromParent();
+    }
+
+
+    void visitAllocaInst(AllocaInst &AI) {
+        IRBuilder<> IRB(AI.getNextNode());
+
+        TypeSize TS = BS.getAllocaSizeInBytes(AI);
+        Value *Size = IRB.CreateTypeSize(BS.IntptrTy, TS);
+        
+        Value *ID = IRB.CreateCall(BS.BsanFuncNewAllocID, {});
+        Value *Tag = IRB.CreateCall(BS.BsanFuncNewBorrowTag, {});
+        Value *Info = IRB.CreateCall(BS.BsanFuncReserveStackSlot, {});
+
+        IRB.CreateCall(BS.BsanFuncAllocInPlace, {&AI, Size, ID, Tag, Info});
+
+        ScalarProvenance Prov = ScalarProvenance(ID, Tag, Info);
+        setProvenance(&AI, Prov);
     }
 
     Value *resolveAllocSize(IRBuilder<> &IRB, CallBase &CB) {
@@ -951,22 +955,14 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 
     // Inserts a check to validate a read access.
     void insertReadCheck(IRBuilder<> &IRB, Instruction *Inst, Value *Ptr, Value *Size) {
-        if(!ignoreAccess(Inst, Ptr)) {
-            ScalarProvenance Prov = assertScalarProvenance(Ptr);
-            IRB.CreateCall(BS.BsanFuncRead, {Ptr, Size, Prov.ID, Prov.Tag, Prov.Info});
-        }else{
-            NumReadsEliminated += 1;
-        }
+        ScalarProvenance Prov = assertScalarProvenance(Ptr);
+        IRB.CreateCall(BS.BsanFuncRead, {Ptr, Size, Prov.ID, Prov.Tag, Prov.Info});
     }
 
     // Inserts a check to validate a write access.
     void insertWriteCheck(IRBuilder<> &IRB, Instruction *Inst, Value *Ptr, Value *Size) {
-        if(!ignoreAccess(Inst, Ptr)) {
-            ScalarProvenance Prov = assertScalarProvenance(Ptr);
-            IRB.CreateCall(BS.BsanFuncWrite, {Ptr, Size, Prov.ID, Prov.Tag, Prov.Info});
-        }else{
-            NumWritesEliminated += 1;
-        }
+        ScalarProvenance Prov = assertScalarProvenance(Ptr);
+        IRB.CreateCall(BS.BsanFuncWrite, {Ptr, Size, Prov.ID, Prov.Tag, Prov.Info});
     }          
 
     void visitLoadInst(LoadInst &LI) {
@@ -1387,15 +1383,27 @@ void BorrowSanitizer::initializeCallbacks(Module &M, const TargetLibraryInfo &TL
         PtrTy, IntptrTy, Int64Ty, IntptrTy, IntptrTy, PtrTy
     );
 
-    BsanFuncPushFrame = M.getOrInsertFunction(
-        kBsanFuncPushFrameName, AL,
-        IRB.getVoidTy(),
-        IntptrTy
+    BsanFuncPushAllocaFrame = M.getOrInsertFunction(
+        kBsanFuncPushAllocaFrameName,
+        FunctionType::get(IRB.getVoidTy(), /*isVarArg=*/false),
+        AL
     );
 
-    BsanFuncPopFrame = M.getOrInsertFunction(
-        kBsanFuncPopFrameName,
-        FunctionType::get(IntptrTy, /*isVarArg=*/false),
+    BsanFuncPopAllocaFrame = M.getOrInsertFunction(
+        kBsanFuncPopAllocaFrameName,
+        FunctionType::get(IRB.getVoidTy(), /*isVarArg=*/false),
+        AL
+    );
+
+    BsanFuncPushRetagFrame = M.getOrInsertFunction(
+        kBsanFuncPushRetagFrameName,
+        FunctionType::get(IRB.getVoidTy(), /*isVarArg=*/false),
+        AL
+    );
+
+    BsanFuncPopRetagFrame = M.getOrInsertFunction(
+        kBsanFuncPopRetagFrameName,
+        FunctionType::get(IRB.getVoidTy(), /*isVarArg=*/false),
         AL
     );
 
@@ -1441,10 +1449,16 @@ void BorrowSanitizer::initializeCallbacks(Module &M, const TargetLibraryInfo &TL
         PtrTy, IntptrTy, IntptrTy, IntptrTy
     );
 
-    BsanFuncAllocStack = M.getOrInsertFunction(
-        kBsanFuncAllocStackName, AL,
-        PtrTy,
-        PtrTy, IntptrTy, IntptrTy, IntptrTy
+    BsanFuncReserveStackSlot = M.getOrInsertFunction(
+        kBsanFuncReserveStackSlotName, 
+        FunctionType::get(PtrTy, /*isVarArg=*/false),
+        AL
+    );
+
+    BsanFuncAllocInPlace = M.getOrInsertFunction(
+        kBsanFuncAllocInPlace, AL,
+        IRB.getVoidTy(),
+        PtrTy, IntptrTy, IntptrTy, IntptrTy, PtrTy
     );
 
     BsanFuncDealloc = M.getOrInsertFunction(

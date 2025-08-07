@@ -145,21 +145,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bsan-rt"
-version = "0.1.0"
-dependencies = [
- "backtrace",
- "bsan-shared",
- "foldhash",
- "hashbrown",
- "libc",
- "libc-print",
- "rustc-hash",
- "spin",
- "thiserror-no-std",
-]
-
-[[package]]
 name = "bsan-script"
 version = "0.1.0"
 dependencies = [
@@ -185,6 +170,20 @@ dependencies = [
 [[package]]
 name = "bsan-shared"
 version = "0.1.0"
+
+[[package]]
+name = "bsan_rt"
+version = "0.1.0"
+dependencies = [
+ "bsan-shared",
+ "foldhash",
+ "hashbrown",
+ "libc",
+ "libc-print",
+ "rustc-hash",
+ "spin",
+ "thiserror-no-std",
+]
 
 [[package]]
 name = "bstr"
@@ -306,9 +305,9 @@ checksum = "9555578bc9e57714c812a1f84e4fc5b4d21fcb063490c624de019f7464c91268"
 
 [[package]]
 name = "clap"
-version = "4.5.42"
+version = "4.5.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed87a9d530bb41a67537289bafcac159cb3ee28460e0a4571123d2a778a6a882"
+checksum = "50fd97c9dc2399518aa331917ac6f274280ec5eb34e555dd291899745c48ec6f"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -316,9 +315,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.42"
+version = "4.5.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64f4f3f3c77c94aff3c7e9aac9a2ca1974a5adf392a8bb751e827d6d127ab966"
+checksum = "c35b5830294e1fa0462034af85cc95225a4cb07092c088c55bda3147cfcd8f65"
 dependencies = [
  "anstream",
  "anstyle",
@@ -731,9 +730,9 @@ dependencies = [
 
 [[package]]
 name = "indenter"
-version = "0.3.3"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce23b50ad8242c51a442f3ff322d56b02f08852c77e4c0b4d3fd684abc89c683"
+checksum = "964de6e86d545b246d84badc0fef527924ace5134f30641c203ef52ba83f58d5"
 
 [[package]]
 name = "indexmap"
@@ -2018,9 +2017,9 @@ dependencies = [
 
 [[package]]
 name = "zerovec"
-version = "0.11.3"
+version = "0.11.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdbb9122ea75b11bf96e7492afb723e8a7fbe12c67417aa95e7e3d18144d37cd"
+checksum = "e7aa2bd55086f1ab526693ecbe444205da57e25f4489879da80635a46d90e73b"
 dependencies = [
  "yoke",
  "zerofrom",

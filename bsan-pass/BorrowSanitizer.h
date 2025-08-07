@@ -16,23 +16,35 @@ const char kBsanPrefix[] = BSAN_FN();
 
 const char kBsanFuncInitName[] = BSAN_FN("init");
 const char kBsanFuncDeinitName[] = BSAN_FN("deinit");
-const char kBsanFuncPushFrameName[] = BSAN_FN("push_frame");
-const char kBsanFuncPopFrameName[] = BSAN_FN("pop_frame");
+
+const char kBsanFuncPushAllocaFrameName[] = BSAN_FN("push_alloca_frame");
+const char kBsanFuncPushRetagFrameName[] = BSAN_FN("push_retag_frame");
+
+const char kBsanFuncPopAllocaFrameName[] = BSAN_FN("pop_alloca_frame");
+const char kBsanFuncPopRetagFrameName[] = BSAN_FN("pop_retag_frame");
+
 const char kBsanFuncShadowCopyName[] = BSAN_FN("shadow_copy");
 const char kBsanFuncShadowClearName[] = BSAN_FN("shadow_clear");
+
 const char kBsanFuncGetShadowDestName[] = BSAN_FN("shadow_dest");
 const char kBsanFuncGetShadowSrcName[] = BSAN_FN("shadow_src");
+
 const char kBsanFuncShadowLoadVectorName[] = BSAN_FN("shadow_load_vector");
 const char kBsanFuncShadowStoreVectorName[] = BSAN_FN("shadow_store_vector");
+
 const char kBsanFuncRetagName[] = BSAN_FN("retag");
 const char kBsanFuncAllocName[] = BSAN_FN("alloc");
-const char kBsanFuncAllocStackName[] = BSAN_FN("alloc_stack");
+
+const char kBsanFuncReserveStackSlotName[] = BSAN_FN("reserve_stack_slot");
+const char kBsanFuncAllocInPlace[] = BSAN_FN("alloc_in_place");
+
 const char kBsanFuncNewBorrowTagName[] = BSAN_FN("new_tag");
 const char kBsanFuncNewAllocIDName[] = BSAN_FN("new_alloc_id");
 const char kBsanFuncDeallocName[] = BSAN_FN("dealloc");
 const char kBsanFuncExposeTagName[] = BSAN_FN("expose_tag");
 const char kBsanFuncReadName[] = BSAN_FN("read");
 const char kBsanFuncWriteName[] = BSAN_FN("write");
+
 
 // Helper functions for debugging and testing.
 #define BSAN_DEBUG_PREFIX BSAN_FN("debug_")
