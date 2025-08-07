@@ -582,10 +582,7 @@ unsafe extern "C" fn __bsan_push_retag_frame() {
 unsafe extern "C" fn __bsan_push_alloca_frame() {
     let ctx = unsafe { global_ctx() };
     let local_ctx = unsafe { local_ctx_mut() };
-    local_ctx
-        .allocas
-        .push_frame()
-        .unwrap_or_else(|info| ctx.handle_error(info.into()))
+    local_ctx.allocas.push_frame().unwrap_or_else(|info| ctx.handle_error(info.into()))
 }
 
 /// Pushes a stack frame

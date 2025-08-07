@@ -117,8 +117,8 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
         unsafe {
             let table = {
                 let size_bytes = NonZero::new_unchecked(mem::size_of::<L1Array<T>>());
-                mmap::<L1Array<T>>(hooks.mmap_ptr, InternalAllocKind::ShadowHeap, size_bytes)?
-                    .cast()
+                mmap(hooks.mmap_ptr, InternalAllocKind::ShadowHeap, size_bytes)?
+                    .cast::<L1Array<T>>()
             };
             Ok(Self {
                 table,
@@ -146,9 +146,8 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
             let l2_table_ptr: *mut *mut L2Array<T> = &raw mut (*self.table.as_ptr())[idx.l1_index];
             if (*l2_table_ptr).is_null() {
                 let size_bytes = NonZero::new_unchecked(mem::size_of::<T>() * L2_LEN);
-                let l2_page: NonNull<L2Array<T>> =
-                    mmap::<L2Array<T>>(hooks.mmap_ptr, InternalAllocKind::ShadowHeap, size_bytes)?
-                        .cast();
+                let l2_page = mmap(hooks.mmap_ptr, InternalAllocKind::ShadowHeap, size_bytes)?
+                    .cast::<L2Array<T>>();
 
                 *l2_table_ptr = l2_page.as_ptr();
             }

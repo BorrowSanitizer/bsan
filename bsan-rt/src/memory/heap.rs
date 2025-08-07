@@ -1,6 +1,6 @@
 use core::mem;
 use core::num::NonZero;
-use core::ops::{Deref, DerefMut};
+use core::ops::DerefMut;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicPtr, AtomicU8, AtomicUsize, Ordering};
 
@@ -9,31 +9,20 @@ use spin::mutex::SpinMutex;
 use spin::rwlock::RwLock;
 
 use super::hooks::{BsanHooks, MMap, MUnmap};
-use super::{align_down, align_up};
 use crate::memory::{
     mmap, munmap, round_mut_ptr_up_to_unchecked, unmap_failed, AllocError, AllocResult,
-    InternalAllocKind,
+    InternalAllocKind, WordAligned,
 };
-
-static PAGE_SIZE: NonZero<usize> = NonZero::new(0x1000).unwrap();
 
 #[allow(unused)]
 #[derive(Debug, Copy, Clone)]
-struct PageSize(NonZero<usize>);
+struct PageSize;
 
 #[allow(unused)]
 impl PageSize {
-    fn try_new() -> AllocResult<Self> {
+    fn try_new() -> AllocResult<NonZero<usize>> {
         let page_size = unsafe { libc::sysconf(_SC_PAGESIZE) };
-        NonZero::try_from(page_size as usize).map(Self).map_err(|_| AllocError::InvalidPageSize)
-    }
-}
-
-impl Deref for PageSize {
-    type Target = NonZero<usize>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+        NonZero::new(page_size as usize).ok_or(AllocError::InvalidPageSize)
     }
 }
 
@@ -44,42 +33,52 @@ impl Deref for PageSize {
 /// than the `PAGE_SIZE` minus the size of a `HeapBlockHeader<T>`,
 /// but large enough to store a pointer to another `Heapable` instance.
 /// This allows values to act as nodes in a free list.
-pub(crate) unsafe trait Heapable<T>: Sized {
-    fn next(&mut self) -> *mut Option<NonNull<T>>;
+pub(crate) unsafe trait Heapable: WordAligned {
+    fn next(&mut self) -> *mut Option<NonNull<Self>>;
 
     #[allow(unused)]
-    fn is_heapable() -> bool {
-        let sized = mem::size_of::<T>() < (PAGE_SIZE.get() - mem::size_of::<HeapBlockHeader<T>>());
-        let aligned = align_of::<T>() == align_of::<usize>();
-        sized && aligned
+    fn is_heapable() -> AllocResult<bool> {
+        let block_size = PageSize::try_new()?;
+        let overhead = mem::size_of::<HeapBlockHeader<Self>>();
+        let within_capacity = block_size
+            .get()
+            .checked_sub(overhead)
+            .map(|capacity| capacity - mem::size_of::<Self>() > 0)
+            .unwrap_or(false);
+
+        Ok(within_capacity)
     }
 }
 
 #[derive(Debug)]
-pub struct Heap<T: Heapable<T>> {
+pub struct Heap<T: Heapable> {
     head: RwLock<HeapBlock<T>>,
     free_list: SpinMutex<Option<NonNull<T>>>,
     #[allow(unused)]
     grow_lock: AtomicU8,
+    block_size: NonZero<usize>,
     mmap: MMap,
     munmap: MUnmap,
 }
 
-unsafe impl<T: Heapable<T>> Send for Heap<T> {}
-unsafe impl<T: Heapable<T>> Sync for Heap<T> {}
+unsafe impl<T: Heapable> Send for Heap<T> {}
+unsafe impl<T: Heapable> Sync for Heap<T> {}
 
-impl<T: Heapable<T>> Heap<T> {
+impl<T: Heapable> Heap<T> {
     pub fn new(hooks: &BsanHooks) -> AllocResult<Self> {
         let mmap = hooks.mmap_ptr;
         let munmap = hooks.munmap_ptr;
 
-        let head = unsafe { HeapBlock::<T>::new(mmap)? };
+        let block_size = PageSize::try_new()?;
+
+        let head = unsafe { HeapBlock::<T>::new(mmap, block_size)? };
         let head = RwLock::new(head);
 
         Ok(Self {
             head,
             free_list: SpinMutex::new(None),
             grow_lock: AtomicU8::new(0),
+            block_size,
             mmap,
             munmap,
         })
@@ -108,7 +107,7 @@ impl<T: Heapable<T>> Heap<T> {
             }
             if let Ok(mut bump_writer) = bump_reader.try_upgrade() {
                 let writer = bump_writer.deref_mut();
-                let mut replacement = unsafe { HeapBlock::new(self.mmap)? };
+                let mut replacement = unsafe { HeapBlock::new(self.mmap, self.block_size)? };
                 let replacement_header = unsafe { replacement.header.as_mut() };
                 replacement_header.next = Some(writer.header);
                 *writer = replacement;
@@ -128,24 +127,29 @@ impl<T: Heapable<T>> Heap<T> {
     }
 
     fn parent_header(&self, ptr: NonNull<T>) -> &HeapBlockHeader<T> {
-        let high_end =
-            unsafe { round_mut_ptr_up_to_unchecked(ptr.as_ptr().cast::<u8>(), PAGE_SIZE.get()) };
+        let high_end = unsafe {
+            round_mut_ptr_up_to_unchecked(ptr.cast::<u8>().as_ptr(), self.block_size.get())
+        };
         let header = unsafe { high_end.cast::<HeapBlockHeader<T>>().sub(1) };
         debug_assert!(!header.is_null() && header.is_aligned());
         unsafe { &*header }
     }
 }
 
-impl<T: Heapable<T>> Drop for Heap<T> {
+impl<T: Heapable> Drop for Heap<T> {
     fn drop(&mut self) {
         let mut curr = Some(self.head.write().header);
         while let Some(header) = curr {
             let header = unsafe { &*header.as_ptr() };
             curr = header.next;
-
             unsafe {
-                munmap(self.munmap, InternalAllocKind::Heap, header.base_address(), header.size)
-                    .unwrap_or_else(|_| unmap_failed())
+                munmap(
+                    self.munmap,
+                    InternalAllocKind::Heap,
+                    header.base_address(),
+                    header.block_size,
+                )
+                .unwrap_or_else(|_| unmap_failed())
             };
         }
     }
@@ -159,25 +163,23 @@ pub struct HeapBlock<T: Sized> {
 unsafe impl<T> Send for HeapBlock<T> {}
 unsafe impl<T> Sync for HeapBlock<T> {}
 
-impl<T: Heapable<T>> HeapBlock<T> {
-    unsafe fn new(mmap_ptr: MMap) -> AllocResult<Self> {
-        let base_address = unsafe { mmap(mmap_ptr, InternalAllocKind::Heap, PAGE_SIZE)? };
+impl<T: Heapable> HeapBlock<T> {
+    unsafe fn new(mmap_ptr: MMap, block_size: NonZero<usize>) -> AllocResult<Self> {
+        let limit = unsafe { mmap(mmap_ptr, InternalAllocKind::Heap, block_size)? };
 
         let header = unsafe {
-            let high_end = base_address.add(PAGE_SIZE.get());
-            align_down::<u8, HeapBlockHeader<T>>(high_end).sub(1)
+            let high_end = limit.byte_add(block_size.get());
+            high_end.cast::<HeapBlockHeader<T>>().sub(1)
         };
 
-        let cursor = unsafe { align_down::<HeapBlockHeader<T>, T>(header).sub(1) };
+        let cursor = unsafe { header.cast::<T>().sub(1) };
         let cursor = AtomicPtr::new(cursor.as_ptr());
-
-        let limit = unsafe { align_up::<u8, T>(base_address) };
 
         unsafe {
             header.write(HeapBlockHeader {
                 cursor,
                 limit,
-                size: PAGE_SIZE,
+                block_size,
                 in_use: 0.into(),
                 next: None,
             });
@@ -203,12 +205,13 @@ impl<T: Heapable<T>> HeapBlock<T> {
     }
 }
 
+#[repr(align(8))]
 #[derive(Debug)]
 pub(crate) struct HeapBlockHeader<T> {
     cursor: AtomicPtr<T>,
-    limit: NonNull<T>,
+    limit: NonNull<u8>,
     in_use: AtomicUsize,
-    size: NonZero<usize>,
+    block_size: NonZero<usize>,
     next: Option<NonNull<HeapBlockHeader<T>>>,
 }
 
@@ -222,7 +225,7 @@ impl<T> HeapBlockHeader<T> {
     }
 
     fn base_address(&self) -> NonNull<u8> {
-        unsafe { super::align_down::<_, u8>(self.limit) }
+        self.limit
     }
 }
 
@@ -236,12 +239,15 @@ mod test {
     use crate::memory::{AllocError, AllocResult};
     use crate::AllocInfo;
 
+    #[repr(align(8))]
     #[derive(Default)]
     struct Link {
         next: usize,
     }
 
-    unsafe impl Heapable<Link> for Link {
+    unsafe impl WordAligned for Link {}
+
+    unsafe impl Heapable for Link {
         fn next(&mut self) -> *mut Option<NonNull<Link>> {
             (&raw mut self.next).cast::<Option<NonNull<Link>>>()
         }
@@ -297,7 +303,8 @@ mod test {
     }
 
     #[test]
-    fn heapable_alloc_info() {
-        assert!(AllocInfo::is_heapable())
+    fn heapable_alloc_info() -> AllocResult<()> {
+        assert!(AllocInfo::is_heapable()?);
+        Ok(())
     }
 }

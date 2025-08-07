@@ -1,12 +1,14 @@
 use core::marker::PhantomData;
-use core::mem::{self, MaybeUninit};
+use core::mem::MaybeUninit;
 use core::num::NonZero;
 use core::ops::Deref;
 
 use libc::rlimit;
 
 use crate::memory::hooks::{BsanHooks, MUnmap};
-use crate::memory::{mmap, munmap, unmap_failed, AllocError, AllocResult, InternalAllocKind};
+use crate::memory::{
+    mmap, munmap, unmap_failed, AllocError, AllocResult, InternalAllocKind, WordAligned,
+};
 use crate::{ptr, Debug, NonNull};
 
 #[derive(Debug, Copy, Clone)]
@@ -28,8 +30,8 @@ impl StackSize {
 
         #[cfg(miri)]
         let exit_code = unsafe {
-            (*limits.as_mut_ptr()).rlim_cur = 1024;
-            (*limits.as_mut_ptr()).rlim_max = 1024;
+            (*limits.as_mut_ptr()).rlim_cur = 8192;
+            (*limits.as_mut_ptr()).rlim_max = 8192;
             0
         };
 
@@ -44,37 +46,29 @@ impl StackSize {
     }
 }
 
-/// Types that can be allocated via a `Stack`.
-///
-/// # Safety
-/// `Stackable` types must be word-aligned.
-pub unsafe trait Stackable: Sized {
-    fn is_stackable() -> bool {
-        mem::align_of::<Self>() == mem::align_of::<usize>()
-    }
-}
-
 #[repr(align(8))]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Checkpoint {
     prev_checkpoint: *mut Checkpoint,
 }
 
-unsafe impl Stackable for Checkpoint {}
+unsafe impl WordAligned for Checkpoint {}
 
 #[derive(Debug)]
-pub struct Stack<T: Stackable> {
-    cursor: NonNull<usize>,
-    limit: NonNull<usize>,
+#[allow(private_bounds)]
+pub struct Stack<T: WordAligned> {
+    cursor: NonNull<u8>,
+    limit: NonNull<u8>,
     size: StackSize,
     checkpoint: *mut Checkpoint,
     munmap_ptr: MUnmap,
     data: PhantomData<*mut T>,
 }
 
-impl<T: Stackable> Stack<T> {
+#[allow(private_bounds)]
+impl<T: WordAligned> Stack<T> {
     pub fn new(hooks: BsanHooks) -> AllocResult<Self> {
-        assert!(T::is_stackable());
+        debug_assert!(T::is_word_aligned());
 
         let munmap_ptr = hooks.munmap_ptr;
 
@@ -98,18 +92,18 @@ impl<T: Stackable> Stack<T> {
         Ok(stack)
     }
 
-    fn next<B: Stackable>(&mut self) -> AllocResult<NonNull<B>> {
+    fn next<B: WordAligned>(&mut self) -> AllocResult<NonNull<B>> {
         self.extend(1)
     }
 
-    fn extend<B: Stackable>(&mut self, num_elems: usize) -> AllocResult<NonNull<B>> {
-        debug_assert!(B::is_stackable());
+    fn extend<B: WordAligned>(&mut self, num_elems: usize) -> AllocResult<NonNull<B>> {
+        debug_assert!(B::is_word_aligned());
         let capacity = self.cursor.as_ptr() as usize - self.limit.as_ptr() as usize;
         if (size_of::<B>() * num_elems) > capacity {
             Err(AllocError::StackOverflow)
         } else {
             let next = unsafe { self.cursor.cast::<B>().sub(num_elems) };
-            self.cursor = next.cast::<usize>();
+            self.cursor = next.cast::<u8>();
             Ok(next)
         }
     }
@@ -131,7 +125,7 @@ impl<T: Stackable> Stack<T> {
     pub unsafe fn pop_frame(&mut self) {
         debug_assert!(!self.checkpoint.is_null());
         let slot = unsafe { NonNull::new_unchecked(self.checkpoint) };
-        self.cursor = unsafe { slot.add(1).cast::<usize>() };
+        self.cursor = unsafe { slot.add(1).cast::<u8>() };
         self.checkpoint = unsafe { slot.as_ref().prev_checkpoint };
     }
 
@@ -156,13 +150,13 @@ impl<T: Stackable> Stack<T> {
         unsafe { core::slice::from_raw_parts(cursor.as_ptr(), self.frame_len()) }
     }
 
-    pub fn current_frame_mut(&self) -> &mut [T] {
+    pub fn current_frame_mut(&mut self) -> &mut [T] {
         let cursor = self.cursor.cast::<T>();
         unsafe { core::slice::from_raw_parts_mut(cursor.as_ptr(), self.frame_len()) }
     }
 }
 
-impl<T: Stackable> Drop for Stack<T> {
+impl<T: WordAligned> Drop for Stack<T> {
     fn drop(&mut self) {
         unsafe {
             munmap(self.munmap_ptr, InternalAllocKind::Stack, self.limit, *self.size)
@@ -175,8 +169,8 @@ impl<T: Stackable> Drop for Stack<T> {
 mod test {
     use super::{Stack, StackSize};
     use crate::memory::hooks::DEFAULT_HOOKS;
-    use crate::memory::stack::{Checkpoint, Stackable};
-    use crate::memory::AllocResult;
+    use crate::memory::stack::Checkpoint;
+    use crate::memory::{AllocResult, WordAligned};
     use crate::*;
 
     fn test_info(size: usize) -> AllocInfo {
@@ -252,7 +246,6 @@ mod test {
         let frame = prov.current_frame();
         assert_eq!(frame.len(), 10);
         for (i, info) in frame.iter().enumerate() {
-            crate::println!("{i:?}");
             assert_eq!(info.size, 19 - i);
         }
 
@@ -283,16 +276,16 @@ mod test {
 
     #[test]
     fn stackable_alloc_info() {
-        assert!(AllocInfo::is_stackable());
+        assert!(AllocInfo::is_word_aligned());
     }
 
     #[test]
     fn stackable_bor_tag() {
-        assert!(BorTag::is_stackable());
+        assert!(BorTag::is_word_aligned());
     }
 
     #[test]
     fn stackable_checkpoint() {
-        assert!(Checkpoint::is_stackable());
+        assert!(Checkpoint::is_word_aligned());
     }
 }

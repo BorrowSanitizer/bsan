@@ -12,7 +12,6 @@ use heap::Heapable;
 
 mod stack;
 pub use stack::Stack;
-use stack::Stackable;
 
 mod shadow;
 use core::ffi::c_void;
@@ -25,18 +24,24 @@ pub use shadow::ShadowHeap;
 use crate::{AllocInfo, BorTag};
 
 /// # Safety
+/// Values must be aligned to the word size of the current platform.
+pub(crate) unsafe trait WordAligned: Sized {
+    fn is_word_aligned() -> bool {
+        mem::align_of::<Self>() == mem::align_of::<usize>()
+    }
+}
+unsafe impl WordAligned for AllocInfo {}
+unsafe impl WordAligned for BorTag {}
+
+/// # Safety
 /// Values of type `AllocInfo` can fit within the size of a heap chunk.
-unsafe impl Heapable<AllocInfo> for AllocInfo {
+unsafe impl Heapable for AllocInfo {
     fn next(&mut self) -> *mut Option<NonNull<AllocInfo>> {
         // we are re-using the space of base_addr to store the free list pointer
         // SAFETY: this is safe because both union fields are raw pointers
         unsafe { &raw mut self.base_addr.free_list_next }
     }
 }
-
-unsafe impl Stackable for AllocInfo {}
-
-unsafe impl Stackable for BorTag {}
 
 /// All of our custom allocators depend on `mmap` and `munmap`. We propagate
 /// any nonzero exit-codes from these functions to the user as errors.
@@ -47,7 +52,6 @@ pub enum AllocError {
     StackOverflow,
     MMapFailed(InternalAllocKind, i32),
     MUnmapFailed(InternalAllocKind, i32),
-    InvalidHeapSize(usize),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -59,7 +63,6 @@ pub enum InternalAllocKind {
 
 pub(crate) type AllocResult<T> = Result<T, AllocError>;
 
-/// Credit: bumpalo
 #[cold]
 #[inline(never)]
 pub(crate) fn unmap_failed<T>() -> T {
@@ -92,15 +95,6 @@ pub(crate) unsafe fn round_up_to_unchecked(n: usize, divisor: usize) -> usize {
 }
 
 /// Credit: bumpalo
-/// Same as `round_down_to` but preserves pointer provenance.
-#[inline]
-pub(crate) fn round_mut_ptr_down_to<T>(ptr: *mut T, divisor: usize) -> *mut T {
-    debug_assert!(divisor > 0);
-    debug_assert!(divisor.is_power_of_two());
-    ptr.wrapping_sub(ptr as usize & (divisor - 1))
-}
-
-/// Credit: bumpalo
 #[inline]
 pub(crate) unsafe fn round_mut_ptr_up_to_unchecked(ptr: *mut u8, divisor: usize) -> *mut u8 {
     debug_assert!(divisor > 0);
@@ -110,43 +104,13 @@ pub(crate) unsafe fn round_mut_ptr_up_to_unchecked(ptr: *mut u8, divisor: usize)
     unsafe { ptr.add(delta) }
 }
 
-/// # Safety
-/// The pointer must be offset from the beginning of its allocation
-/// by at least `mem::size_of::<B>()` bytes.
-#[inline]
-pub unsafe fn align_down<A, B>(ptr: NonNull<A>) -> NonNull<B> {
-    debug_assert!(ptr.as_ptr().is_aligned());
-    unsafe {
-        let ptr = ptr.cast::<u8>();
-        let ptr = round_mut_ptr_down_to(ptr.as_ptr(), mem::align_of::<B>());
-        let ptr = ptr.cast::<B>();
-        debug_assert!(ptr.is_aligned());
-        NonNull::<B>::new_unchecked(ptr)
-    }
-}
-
-/// # Safety
-/// If the parameter is rounded up to the nearest multiple of `mem::align_of::<B>()`, then it must still\
-/// be within the allocation.
-#[inline]
-pub unsafe fn align_up<A, B>(ptr: NonNull<A>) -> NonNull<B> {
-    debug_assert!(ptr.as_ptr().is_aligned());
-    unsafe {
-        let ptr = ptr.cast::<u8>();
-        let ptr = round_mut_ptr_up_to_unchecked(ptr.as_ptr(), mem::align_of::<B>());
-        let ptr = ptr.cast::<B>();
-        debug_assert!(ptr.is_aligned());
-        NonNull::<B>::new_unchecked(ptr)
-    }
-}
-
 /// A wrapper around `mmap` that converts non-zero exit codes into errors.
 #[inline]
-pub unsafe fn mmap<T>(
+pub unsafe fn mmap(
     mmap: hooks::MMap,
     kind: InternalAllocKind,
     size_bytes: NonZero<usize>,
-) -> AllocResult<NonNull<T>> {
+) -> AllocResult<NonNull<u8>> {
     let size_bytes = size_bytes.get();
     unsafe {
         let ptr = (mmap)(ptr::null_mut(), size_bytes, BSAN_PROT_FLAGS, BSAN_MAP_FLAGS, -1, 0);
@@ -154,7 +118,7 @@ pub unsafe fn mmap<T>(
             let errno = *libc::__errno_location();
             Err(AllocError::MMapFailed(kind, errno))
         } else {
-            Ok(NonNull::<T>::new_unchecked(ptr.cast::<T>()))
+            Ok(NonNull::new_unchecked(ptr.cast()))
         }
     }
 }
