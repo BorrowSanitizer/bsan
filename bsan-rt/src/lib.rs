@@ -3,7 +3,6 @@
 #![warn(clippy::transmute_ptr_to_ptr)]
 #![warn(clippy::borrow_as_ptr)]
 #![feature(sync_unsafe_cell)]
-#![feature(strict_overflow_ops)]
 #![feature(thread_local)]
 #![feature(allocator_api)]
 #![feature(alloc_layout_extra)]

@@ -19,7 +19,7 @@ fn override_queries(_sess: &Session, providers: &mut Providers) {
 fn retag_perm<'tcx>(
     tcx: TyCtxt<'tcx>,
     key: (TypingEnv<'tcx>, Ty<'tcx>, Ty<'tcx>, RetagParams),
-) -> Option<(u64, bool)> {
+) -> Option<u64> {
     let (env, pointer_ty, pointee_ty, params) = key;
     let ty_is_freeze = pointee_ty.is_freeze(tcx, env);
     let ty_is_unpin = pointee_ty.is_unpin(tcx, env);
@@ -27,11 +27,11 @@ fn retag_perm<'tcx>(
     let info = match pointer_ty.kind() {
         ty::Ref(_, _, mutability) => {
             let (perm_kind, access_kind) = match mutability {
-                Mutability::Not if ty_is_unpin => (
+                Mutability::Mut if ty_is_unpin => (
                     Permission::new_reserved(ty_is_freeze && !params.in_unsafe_cell, is_protected),
                     Some(AccessKind::Read),
                 ),
-                Mutability::Mut if ty_is_freeze => {
+                Mutability::Not if ty_is_freeze => {
                     if params.in_unsafe_cell {
                         (Permission::new_cell(), None)
                     } else {
@@ -57,10 +57,5 @@ fn retag_perm<'tcx>(
         }
         _ => return None,
     };
-
-    let as_data = PermissionInfo::into_raw(info);
-    let as_struct = unsafe { PermissionInfo::from_raw(as_data) };
-    assert!(as_struct == info);
-
-    Some((PermissionInfo::into_raw(info), info.protector_kind.is_some()))
+    Some(PermissionInfo::into_raw(info))
 }

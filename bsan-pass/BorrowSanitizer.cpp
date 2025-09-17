@@ -658,7 +658,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         if(NumFnEntryRetags > 0) {
             FnPrologueStart = IRB.CreateCall(BS.BsanFuncPushRetagFrame, {});
         }else{
-            FnPrologueStart = IRB.CreateIntrinsic(Intrinsic::donothing, {}, {});
+            FnPrologueStart = IRB.CreateIntrinsic(Intrinsic::donothing, {});
         }
     }
 
@@ -737,12 +737,13 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         }
         if (CallBase::classof(&I)) {
             CallBase *CB = dyn_cast<CallBase>(&I);
+            /*
             if(CB->getIntrinsicID() == Intrinsic::retag) {
                 assert(CB->arg_size() > 0 && "Missing arguments to retag.");
                 if(isFnEntryRetag(CB)) {
                     NumFnEntryRetags += 1;
                 }
-            }
+            }*/
         }
         Instructions.push_back(&I);
     }
@@ -909,11 +910,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         }
     }
 
-    void visitIntrinsicInst(IntrinsicInst &I) {
-        if(I.getIntrinsicID() == Intrinsic::retag) {
-            instrumentRetag(I);
-        }
-    }
+    void visitIntrinsicInst(IntrinsicInst &I) {}
 
     void instrumentRetag(IntrinsicInst &I) {
         IRBuilder<> IRB(&I);
