@@ -18,7 +18,11 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --defau
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 FROM base AS build-image-dev
-COPY . . 
+RUN mkdir /build-xb
+COPY bsan-script /build-xb/bsan-script
+COPY config.toml /build-xb/
+COPY xb /build-xb/
+WORKDIR /build-xb
 RUN ./xb --skip setup
 
 FROM base AS image-dev
