@@ -176,10 +176,12 @@ name = "bsan_rt"
 version = "0.1.0"
 dependencies = [
  "bsan-shared",
+ "env_logger",
  "foldhash",
  "hashbrown",
  "libc",
  "libc-print",
+ "log",
  "rustc-hash",
  "spin",
  "thiserror-no-std",

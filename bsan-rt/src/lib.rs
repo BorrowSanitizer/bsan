@@ -26,6 +26,7 @@ use core::{fmt, ptr};
 
 use bsan_shared::{AccessKind, RetagInfo, Size};
 use libc_print::std_name::*;
+use log::debug;
 use spin::Mutex;
 
 mod global;
@@ -69,6 +70,19 @@ macro_rules! handle_err {
             $gtx.handle_error($err);
         }
     }};
+}
+
+struct DebugSummary {
+    op: &'static str,
+    ptr: usize,
+    alloc_id: AllocId,
+    bor_tag: BorTag,
+}
+
+impl fmt::Display for DebugSummary {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[{}] {}@({:?}, {:?})", self.op, self.ptr, self.alloc_id, self.bor_tag)
+    }
 }
 
 /// Unique identifier for an allocation
@@ -330,6 +344,7 @@ unsafe extern "C-unwind" fn __bsan_retag(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) -> BorTag {
+    debug!("{}", DebugSummary { op: "retag", ptr: object_addr.addr(), alloc_id, bor_tag });
     let global_ctx = unsafe { global_ctx() };
     let local_ctx = unsafe { local_ctx_mut() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
@@ -350,6 +365,7 @@ unsafe extern "C-unwind" fn __bsan_read(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) {
+    debug!("{}", DebugSummary { op: "read", ptr: ptr.addr(), alloc_id, bor_tag });
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     BorrowTracker::new(prov, ptr, Some(access_size))
@@ -366,6 +382,7 @@ unsafe extern "C-unwind" fn __bsan_write(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) {
+    debug!("{}", DebugSummary { op: "write", ptr: ptr.addr(), alloc_id, bor_tag });
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     BorrowTracker::new(prov, ptr, Some(access_size))
@@ -381,6 +398,7 @@ extern "C" fn __bsan_dealloc(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) {
+    debug!("{}", DebugSummary { op: "dealloc", ptr: ptr.addr(), alloc_id, bor_tag });
     let global_ctx = unsafe { global_ctx() };
     let prov: Provenance = Provenance { alloc_id, bor_tag, alloc_info };
     BorrowTracker::new(prov, ptr, None)
@@ -396,6 +414,7 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     alloc_id: AllocId,
     bor_tag: BorTag,
 ) -> NonNull<AllocInfo> {
+    debug!("{}", DebugSummary { op: "alloc", ptr: base_addr.addr(), alloc_id, bor_tag });
     let ctx = unsafe { global_ctx() };
     unsafe {
         bsan_alloc(ctx, base_addr, size, alloc_id, bor_tag)
@@ -670,13 +689,13 @@ extern "C" fn __bsan_debug_print(alloc_id: AllocId, bor_tag: BorTag, alloc_info:
     crate::println!("{prov:?}");
 }
 
-#[cfg(not(test))]
-#[panic_handler]
-fn panic(info: &PanicInfo<'_>) -> ! {
-    crate::eprintln!("The BorrowSanitizer runtime panicked!");
-    crate::eprintln!("{info}");
-    core::intrinsics::abort()
-}
+// #[cfg(not(test))]
+// #[panic_handler]
+// fn panic(info: &PanicInfo<'_>) -> ! {
+//     crate::eprintln!("The BorrowSanitizer runtime panicked!");
+//     crate::eprintln!("{info}");
+//     core::intrinsics::abort()
+// }
 
 #[cfg(test)]
 mod tests {
@@ -765,6 +784,7 @@ mod tests {
     #[test]
     fn bsan_read() {
         with_init(|| {
+            env_logger::Builder::from_default_env().filter_level(log::LevelFilter::Debug).init();
             with_heap_object(|obj: *mut c_void, size: usize| unsafe {
                 let prov = create_metadata(obj, size);
                 __bsan_read(obj, size, prov.alloc_id, prov.bor_tag, prov.alloc_info);
