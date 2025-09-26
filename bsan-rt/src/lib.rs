@@ -77,11 +77,22 @@ struct DebugSummary {
     ptr: usize,
     alloc_id: AllocId,
     bor_tag: BorTag,
+    info: AllocInfoSummary,
 }
 
 impl fmt::Display for DebugSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}] {}@({:?}, {:?})", self.op, self.ptr, self.alloc_id, self.bor_tag)
+        write!(
+            f,
+            "[{}] 0x{:x} @({:?}, {:?}) -> ({:?}, {:?}, {:?})",
+            self.op,
+            self.ptr,
+            self.alloc_id,
+            self.bor_tag,
+            self.info.alloc_id,
+            self.info.base_addr,
+            self.info.size
+        )
     }
 }
 
@@ -307,6 +318,19 @@ impl AllocInfo {
         self.size = 0;
         self.tree_lock.lock().take();
     }
+
+    fn summary(&self) -> AllocInfoSummary {
+        AllocInfoSummary { alloc_id: self.alloc_id, base_addr: self.base_addr, size: self.size }
+    }
+}
+
+/// A shallow version of `AllocInfo`, for use in debug logging.
+/// Only difference is it does not include the tree_lock `Mutex` field.
+#[derive(Debug)]
+pub struct AllocInfoSummary {
+    pub alloc_id: AllocId,
+    pub base_addr: FreeListAddrUnion,
+    pub size: usize,
 }
 
 /// Initializes the global state of the runtime library.
@@ -344,16 +368,26 @@ unsafe extern "C-unwind" fn __bsan_retag(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) -> BorTag {
-    debug!("{}", DebugSummary { op: "retag", ptr: object_addr.addr(), alloc_id, bor_tag });
     let global_ctx = unsafe { global_ctx() };
     let local_ctx = unsafe { local_ctx_mut() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     let retag_info = unsafe { RetagInfo::from_raw(access_size, perm) };
 
-    BorrowTracker::new(prov, object_addr, Some(access_size))
+    let bt = BorrowTracker::new(prov, object_addr, Some(access_size))
         .and_then(|opt| opt.map(|bt| bt.retag(global_ctx, local_ctx, retag_info)).transpose())
         .unwrap_or_else(|err| handle_err!(err, global_ctx))
-        .unwrap_or(bor_tag)
+        .unwrap_or(bor_tag);
+    debug!(
+        "{}",
+        DebugSummary {
+            op: "retag",
+            ptr: object_addr.addr(),
+            alloc_id,
+            bor_tag,
+            info: unsafe { alloc_info.as_ref().unwrap().summary() }
+        }
+    );
+    bt // TODO: find a way to not have to do this because of the debug
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -365,12 +399,21 @@ unsafe extern "C-unwind" fn __bsan_read(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) {
-    debug!("{}", DebugSummary { op: "read", ptr: ptr.addr(), alloc_id, bor_tag });
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     BorrowTracker::new(prov, ptr, Some(access_size))
         .and_then(|bt| bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Read)))
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
+    debug!(
+        "{}",
+        DebugSummary {
+            op: "read",
+            ptr: ptr.addr(),
+            alloc_id,
+            bor_tag,
+            info: unsafe { alloc_info.as_ref().unwrap().summary() }
+        }
+    );
 }
 
 /// Records a write access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -382,12 +425,21 @@ unsafe extern "C-unwind" fn __bsan_write(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) {
-    debug!("{}", DebugSummary { op: "write", ptr: ptr.addr(), alloc_id, bor_tag });
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     BorrowTracker::new(prov, ptr, Some(access_size))
         .and_then(|bt| bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Write)))
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
+    debug!(
+        "{}",
+        DebugSummary {
+            op: "write",
+            ptr: ptr.addr(),
+            alloc_id,
+            bor_tag,
+            info: unsafe { alloc_info.as_ref().unwrap().summary() }
+        }
+    );
 }
 
 /// Deregisters a heap allocation
@@ -398,12 +450,21 @@ extern "C" fn __bsan_dealloc(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) {
-    debug!("{}", DebugSummary { op: "dealloc", ptr: ptr.addr(), alloc_id, bor_tag });
     let global_ctx = unsafe { global_ctx() };
     let prov: Provenance = Provenance { alloc_id, bor_tag, alloc_info };
     BorrowTracker::new(prov, ptr, None)
         .and_then(|mut bt| bt.iter_mut().try_for_each(|t| t.dealloc(global_ctx)))
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
+    debug!(
+        "{}",
+        DebugSummary {
+            op: "dealloc",
+            ptr: ptr.addr(),
+            alloc_id,
+            bor_tag,
+            info: unsafe { alloc_info.as_ref().unwrap().summary() }
+        }
+    );
 }
 
 // Registers a heap allocation of size `size`, storing its provenance in the return pointer.
@@ -414,11 +475,21 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     alloc_id: AllocId,
     bor_tag: BorTag,
 ) -> NonNull<AllocInfo> {
-    debug!("{}", DebugSummary { op: "alloc", ptr: base_addr.addr(), alloc_id, bor_tag });
     let ctx = unsafe { global_ctx() };
     unsafe {
-        bsan_alloc(ctx, base_addr, size, alloc_id, bor_tag)
-            .unwrap_or_else(|info| ctx.handle_error(info))
+        let alloc_info = bsan_alloc(ctx, base_addr, size, alloc_id, bor_tag)
+            .unwrap_or_else(|info| ctx.handle_error(info));
+        debug!(
+            "{}",
+            DebugSummary {
+                op: "alloc",
+                ptr: base_addr.addr(),
+                alloc_id,
+                bor_tag,
+                info: alloc_info.as_ref().summary()
+            }
+        );
+        alloc_info
     }
 }
 
