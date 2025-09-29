@@ -44,6 +44,8 @@ pub enum Command {
     /// Emits both LLVM IR (*.ll) and MIR
     Inst {
         file: String,
+        #[arg(long)]
+        debug: bool,
         #[arg(trailing_var_arg = true, allow_hyphen_values(true))]
         args: Vec<String>,
     },

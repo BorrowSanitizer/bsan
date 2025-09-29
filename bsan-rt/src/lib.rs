@@ -593,8 +593,13 @@ unsafe extern "C" fn __bsan_alloc_in_place(
     bor_tag: BorTag,
     alloc_info: NonNull<MaybeUninit<AllocInfo>>,
 ) {
-    debug_bsan!("alloc_in_place", base_addr, alloc_id, bor_tag,
-        unsafe { &*alloc_info.as_ptr().cast::<AllocInfo>() }.summarize());
+    debug_bsan!(
+        "alloc_in_place",
+        base_addr,
+        alloc_id,
+        bor_tag,
+        unsafe { &*alloc_info.as_ptr().cast::<AllocInfo>() }.summarize()
+    );
     let ctx = unsafe { global_ctx() };
     bsan_alloc_in_place(ctx, base_addr, size, alloc_id, bor_tag, alloc_info)
         .unwrap_or_else(|info| ctx.handle_error(info))
@@ -825,7 +830,6 @@ mod tests {
     #[test]
     fn bsan_read() {
         with_init(|| {
-            env_logger::Builder::from_default_env().filter_level(log::LevelFilter::Debug).init();
             with_heap_object(|obj: *mut c_void, size: usize| unsafe {
                 let prov = create_metadata(obj, size);
                 __bsan_read(obj, size, prov.alloc_id, prov.bor_tag, prov.alloc_info);
@@ -837,7 +841,6 @@ mod tests {
     #[test]
     fn bsan_write() {
         with_init(|| {
-            env_logger::Builder::from_default_env().filter_level(log::LevelFilter::Debug).init();
             with_heap_object(|obj, size| unsafe {
                 let prov = create_metadata(obj, size);
                 __bsan_write(obj, size, prov.alloc_id, prov.bor_tag, prov.alloc_info);

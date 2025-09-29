@@ -48,7 +48,7 @@ impl Command {
                 c.miri(env, &args)?;
                 Ok(())
             }),
-            Command::Inst { file, args } => Self::inst(env, file, &args),
+            Command::Inst { file, debug, args } => Self::inst(env, file, debug, &args),
         }
     }
 
@@ -115,7 +115,7 @@ impl Command {
         Ok(())
     }
 
-    fn inst(env: &mut BsanEnv, file: String, args: &[String]) -> Result<()> {
+    fn inst(env: &mut BsanEnv, file: String, debug: bool, args: &[String]) -> Result<()> {
         let plugin = env.build_artifact(BsanPass, &[])?;
         let runtime = env.build_artifact(BsanRt, &[])?;
         let driver = env.build_artifact(BsanDriver, &[])?;
@@ -127,6 +127,10 @@ impl Command {
         env.sh.set_var("BSAN_DRIVER", &driver);
         env.sh.set_var("BSAN_RT_DIR", runtime.parent().unwrap());
         env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
+
+        if debug {
+            env.sh.set_var("RUST_LOG", "bsan-rt=debug");
+        }
 
         cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
 
