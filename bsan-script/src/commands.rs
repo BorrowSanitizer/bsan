@@ -129,7 +129,7 @@ impl Command {
         env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
 
         if debug {
-            env.sh.set_var("RUST_LOG", "bsan-rt=debug");
+            env.sh.set_var("RUST_LOG", "debug");
         }
 
         cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
