@@ -261,8 +261,13 @@ impl_component!(BsanDriver, "bsan-driver", true, false);
 impl_component!(CargoBsan, "cargo-bsan", true, false);
 impl_component!(BsanShared, "bsan-shared", false, true);
 
-static RT_FLAGS: &[&str] =
-    &["-Cpanic=abort", "-Zpanic_abort_tests", "-Cembed-bitcode=yes", "-Clto"];
+static RT_FLAGS: &[&str] = &[
+    "-Cpanic=abort",
+    "-Zpanic_abort_tests",
+    "-Cembed-bitcode=yes",
+    "-Clto",
+    "-Cforce-frame-pointers=yes",
+];
 
 struct BsanRt;
 
