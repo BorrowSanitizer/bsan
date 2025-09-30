@@ -25,7 +25,7 @@ pub const BSAN_DEFAULT_ARGS: &[&str] = &[
     "-Zemit-lifetime-markers",
     "-Zcodegen-emit-retag",
     "-Zinline-llvm=no",
-    "-Zinline-mir=no"
+    "-Zinline-mir=no",
 ];
 
 pub struct Config {
@@ -87,7 +87,6 @@ impl Config {
 
 /// Execute a compiler with the given CLI arguments and callbacks.
 pub fn run_compiler(mut config: Config) -> ! {
-    
     rustc_driver::run_compiler(&config.args, &mut config.callbacks);
     std::process::exit(0)
 }

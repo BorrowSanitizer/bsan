@@ -19,7 +19,6 @@ use super::*;
 use crate::diagnostics::{AccessCause, Event, NodeDebugInfo};
 use crate::errors::{TransitionError, TreeError, TreeTransitionResult, UBResult};
 use crate::memory::hooks::BsanAllocHooks;
-use crate::span::*;
 use crate::{AllocId, BorTag, GlobalCtx};
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -137,6 +136,7 @@ impl LocationState {
             .ok_or(TransitionError::ChildAccessForbidden(old_perm))?;
         self.accessed |= !rel_pos.is_foreign();
         self.permission = transition.applied(old_perm).unwrap();
+
         // Why do only accessed locations cause protector errors?
         // Consider two mutable references `x`, `y` into disjoint parts of
         // the same allocation. A priori, these may actually both be used to
@@ -908,7 +908,8 @@ where
             // `traverse_this_parents_children_other`.
             old_state.record_new_access(access_kind, rel_pos);
 
-            let protected = global.get_protector_kind(tag).is_some();
+            let protected = global.get_protector_kind(node.tag).is_some();
+
             let transition = old_state.perform_access(access_kind, rel_pos, protected)?;
             // Record the event as part of the history
             if !transition.is_noop() {

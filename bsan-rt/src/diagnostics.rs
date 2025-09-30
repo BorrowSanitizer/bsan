@@ -1,4 +1,3 @@
-#![allow(unused)]
 // Ported from Miri's `diagnostics.rs`
 // Won't be used exactly as it is used in Miri or at all
 // but nice to port in case there are any similar behaviors / as a starting point
@@ -14,8 +13,7 @@ use bsan_shared::{AccessKind, PermTransition, Permission, ProtectorKind};
 
 use crate::borrow_tracker::tree::{AllocRange, LocationState, Tree};
 use crate::errors::UBResult;
-use crate::span::*;
-use crate::{println, AllocId, BorTag};
+use crate::{println, AllocId, BorTag, Span};
 
 /// Cause of an access: either a real access or one
 /// inserted by Tree Borrows due to a reborrow or a deallocation.
@@ -104,7 +102,7 @@ pub struct History<A: Allocator = Global> {
 /// the use of `SpanData` rather than `Span`.
 #[derive(Debug, Clone)]
 pub struct HistoryData<A: Allocator = Global> {
-    pub events: Vec<(Option<SpanData>, String), A>, // includes creation
+    pub events: Vec<(Option<Span>, String), A>, // includes creation
 }
 
 impl<A> History<A>
@@ -123,7 +121,6 @@ where
 {
     // Format events from `new_history` into those recorded by `self`.
     //
-    // NOTE: also converts `Span` to `SpanData`.
     #[allow(unused)]
     fn extend(
         &mut self,
@@ -139,7 +136,7 @@ where
             maybe_msg_initial_state = if show_initial_state { &msg_initial_state } else { "" },
         );
 
-        self.events.push((Some(created.0.data().into()), msg_creation));
+        self.events.push((Some(created.0), msg_creation));
         for &Event {
             transition,
             is_foreign,
@@ -157,7 +154,7 @@ where
             //     None => format!("on every location previously accessed by this tag"),
             // };
             self.events.push((
-                Some(span.data().into()),
+                Some(span),
                 format!(
                     //"{this} later transitioned to {endpoint} due to a {access} {access_range_text}",
                     "{this} later transitioned due to a {access}",

@@ -108,8 +108,8 @@ where
         // The first offset that is not included any more.
         let end = offset + len;
         assert!(
-            end <= self.v.last().unwrap().range.end,
-            "iterating beyond the bounds of this RangeMap"
+            end <= self.size().bytes(),
+            "iterating beyond the bounds of this RangeMap: {offset:?} - {len:?}"
         );
         slice
             .iter()

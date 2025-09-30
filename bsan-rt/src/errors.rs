@@ -25,23 +25,27 @@ impl From<AllocError> for ErrorInfo {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ErrorInfo {
+    #[error("internal")]
     Internal(InternalError),
+    #[error("undefined behavior")]
     UndefinedBehavior(UBInfo),
 }
 
 #[derive(Error, Debug)]
 pub enum UBInfo {
-    #[error("Invalid provenance.")]
-    InvalidProvenance(Span),
-    #[error("Access out-of-bounds.")]
-    AccessOutOfBounds(Span, Provenance, *mut c_void, usize),
-    #[error("Use-after-free.")]
-    UseAfterFree(Span, AllocId),
-    #[error("Freeing global allocation.")]
-    GlobalFree(Span, AllocId),
-    #[error("Aliasing violation.")]
+    #[error("invalid provenance")]
+    InvalidProvenance,
+    #[error("access out-of-bounds")]
+    AccessOutOfBounds(Provenance, usize, usize, usize, usize),
+    #[error("use-after-free.")]
+    UseAfterFree(AllocId),
+    #[error("freeing global allocation")]
+    GlobalFree(AllocId),
+    #[error("freeing stack allocation")]
+    StackFree(AllocId),
+    #[error("aliasing violation")]
     AliasingViolation(Box<TreeError>),
 }
 

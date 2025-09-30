@@ -3,7 +3,6 @@ use core::cell::SyncUnsafeCell;
 use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
-use core::sync::atomic::AtomicUsize;
 
 use bsan_shared::ProtectorKind;
 use hashbrown::{DefaultHashBuilder, HashMap};
@@ -26,10 +25,6 @@ use crate::*;
 pub struct GlobalCtx {
     /// The set of allocation and deallocation functions.
     hooks: BsanHooks,
-    /// Counters for IDs assigned to allocations, threads, and borrow tags.
-    next_alloc_id: AtomicUsize,
-    next_thread_id: AtomicUsize,
-    next_bor_tag: AtomicUsize,
     #[allow(unused)]
     root_ptr_tags: Mutex<BHashMap<AllocId, BorTag>>,
     protected_tags: Mutex<BHashMap<BorTag, ProtectorKind>>,
@@ -43,9 +38,6 @@ impl GlobalCtx {
     fn new(hooks: BsanHooks) -> Result<Self, AllocError> {
         Ok(Self {
             hooks,
-            next_alloc_id: AtomicUsize::new(AllocId::min().get()),
-            next_thread_id: AtomicUsize::new(0),
-            next_bor_tag: AtomicUsize::new(0),
             root_ptr_tags: Mutex::new(BHashMap::new_in(hooks.alloc)),
             protected_tags: Mutex::new(BHashMap::new_in(hooks.alloc)),
             alloc_metadata_map: Heap::new(&hooks)?,
@@ -81,24 +73,6 @@ impl GlobalCtx {
         unsafe { (self.hooks.exit)(code) }
     }
 
-    pub fn new_thread_id(&self) -> ThreadId {
-        let id = self.next_thread_id.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        ThreadId::new(id)
-    }
-
-    pub fn new_alloc_id(&self) -> AllocId {
-        let id = self.next_alloc_id.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        AllocId::new(id)
-    }
-
-    // TODO: Discuss BorTag implementation
-    // Gitter499: I think it makes sense to keep track of the borrow tags at a global level
-    // Though I could see moving this responsibility completely to the tree
-    pub fn new_borrow_tag(&self) -> BorTag {
-        let id = self.next_bor_tag.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        BorTag(id)
-    }
-
     pub fn add_protected_tag(&self, bor_tag: BorTag, protector_kind: ProtectorKind) {
         let mut tag_map = self.protected_tags.lock();
         tag_map.insert(bor_tag, protector_kind);
@@ -107,9 +81,7 @@ impl GlobalCtx {
     pub fn remove_protected_tags(&self, bor_tags: &[BorTag]) {
         let mut tag_map = self.protected_tags.lock();
         for tag in bor_tags {
-            if *tag != BorTag(0) {
-                tag_map.remove(tag);
-            }
+            tag_map.remove(tag);
         }
     }
 
@@ -119,7 +91,7 @@ impl GlobalCtx {
     }
 
     pub fn handle_error(&self, info: ErrorInfo) -> ! {
-        crate::eprintln!("An error occurred: {info:?}\n\nExiting...");
+        crate::eprintln!("An error occurred: {info:?}\n\n");
         self.exit(1)
     }
 }

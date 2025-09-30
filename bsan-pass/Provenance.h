@@ -3,6 +3,8 @@
 
 #include "llvm/IR/Module.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
+#include <variant>
+#include <optional>
 
 namespace llvm {
 
@@ -22,78 +24,98 @@ enum ProvenanceKind {
     Vector
 };
 
+// Each component of provenance needs to be representable as either a scalar or a vector
+// of these components.
+template<typename ScalarType, typename VectorType>
+class ScalarOrVector {
+public:
+    using Variant = std::variant<ScalarType, VectorType>;
+
+    ScalarOrVector() : data_(ScalarType{}) {}
+    ScalarOrVector(const ScalarType& scalar) : data_(scalar) {}
+    ScalarOrVector(const VectorType& vector) : data_(vector) {}
+    ScalarOrVector(const Variant& variant) : data_(variant) {}
+    ProvenanceKind getKind() const {
+        return std::holds_alternative<ScalarType>(data_) ? ProvenanceKind::Scalar : ProvenanceKind::Vector;
+    }
+
+    bool isScalar() const { return getKind() == ProvenanceKind::Scalar; }
+    bool isVector() const { return getKind() == ProvenanceKind::Vector; }
+
+    std::optional<ScalarType> getScalar() const {
+        if (auto* scalar = std::get_if<ScalarType>(&data_)) {
+            return *scalar;
+        }
+        return std::nullopt;
+    }
+
+    ScalarType assertScalar() const {
+        return this->getScalar().value();
+    }
+
+    std::optional<VectorType> getVector() const {
+        if (auto* vector = std::get_if<VectorType>(&data_)) {
+            return *vector;
+        }
+        return std::nullopt;
+    }
+
+    VectorType assertVector() const {
+        return this->getVector().value();
+    }
+
+    bool operator==(const ScalarOrVector& other) const {
+        return data_ == other.data_;
+    }
+
+    bool operator!=(const ScalarOrVector& other) const {
+        return !(*this == other);
+    }
+
+private:
+    Variant data_;
+};
+
 // A single provenance value
-struct ScalarProvenance {
-    Value *ID = nullptr;
+struct ProvenanceScalar {
+    Value *Id = nullptr;
     Value *Tag = nullptr;
     Value *Info = nullptr;
-    ScalarProvenance() {}
-
-    ScalarProvenance(Value *I, Value *T, Value *F) : ID(I), Tag(T), Info(F) {}
-    bool operator==(const ScalarProvenance &other) const {
-        return this->ID == other.ID 
-            && this->Tag == other.Tag 
-            && this->Info == other.Info;
+    ProvenanceScalar() {}
+    ProvenanceScalar(Value *I, Value *T, Value *F) : Id(I), Tag(T), Info(F) {}
+    bool operator==(const ProvenanceScalar &other) const {
+        return this->Id == other.Id
+            && this->Tag == other.Tag
+            && this->Info == other.Info; 
     }
-    bool operator!=(const ScalarProvenance &other) const {
+    bool operator!=(const ProvenanceScalar &other) const {
         return !(*this == other);
     }
 };
 
 // A vector of provenance values.
-struct VectorProvenance {
-    Value *IDVector = nullptr;
+struct ProvenanceVector {
+    Value *IdVector = nullptr;
     Value *TagVector = nullptr;
     Value *InfoVector = nullptr;
     Value *Length = nullptr;
     ElementCount Elems;
 
-    VectorProvenance() {}
-    VectorProvenance(Value *ID, Value *Tag, Value *Info, Value *L, ElementCount E) :
-        IDVector(ID), TagVector(Tag), InfoVector(Info), Length(L), Elems(E) {}
+    ProvenanceVector() {}
+    ProvenanceVector(Value *I, Value *T, Value *F, Value *L, ElementCount E) : IdVector(I), TagVector(T), InfoVector(F), Length(L), Elems(E) {}
+    bool operator==(const ProvenanceVector &other) const {
+        return this->IdVector == other.IdVector
+            && this->TagVector == other.TagVector
+            && this->InfoVector == other.InfoVector 
+            && this->Length == other.Length
+            && this->Elems == other.Elems;
+    }
+    bool operator!=(const ProvenanceVector &other) const {
+        return !(*this == other);
+    }
 };
 
-
-// Either a scalar or vector provenance value. This struct is returned
-// whenever we query the provenance for a value. We use a union here;
-// alternatively, we could create an abstract class, but that would require
-// additional indirection.
-struct LoadedProvenance {
-    ProvenanceKind Kind;
-    LoadedProvenance() : Kind(Scalar) {}
-    LoadedProvenance(ScalarProvenance P) : Kind(Scalar), ScalarProv(P) {}
-    LoadedProvenance(VectorProvenance V) : Kind(Vector), VectorProv(V) {}
-
-    bool isVector() {
-        return Kind == ProvenanceKind::Vector;
-    }
-
-    bool isScalar() {
-        return Kind == ProvenanceKind::Scalar;
-    }
-
-    std::optional<ScalarProvenance> getScalarProvenance() {
-        if(isScalar()) {
-            return ScalarProv;
-        }else{
-            return std::nullopt;
-        }
-    }
-
-    std::optional<VectorProvenance> getVectorProvenance() {
-        if(isVector()) {
-            return VectorProv;
-        }else{
-            return std::nullopt;
-        }
-    }
-
-    private:
-    union {
-        VectorProvenance VectorProv;
-        ScalarProvenance ScalarProv;
-    };
-};
+using Provenance = ScalarOrVector<ProvenanceScalar, ProvenanceVector>;
 
 // A pointer to one or more adjacent provenance values in memory.
 // Represents a "provenancy-carrying-component" of a typed value,
@@ -152,6 +174,42 @@ struct ProvenanceComponent {
 
     bool isVector() {
         return Elems.isScalable();
+    }
+};
+
+using ProvenanceKey = std::pair<Value *, unsigned>;
+
+
+struct ProvenanceMap {
+    public:
+    DenseMap<Value *, DenseMap<unsigned, Provenance>> Inner;
+
+    bool contains(Value *V) {
+        return this->contains({V, 0});
+    }
+
+    bool contains(ProvenanceKey Key) {
+        return Inner.contains(Key.first) && Inner[Key.first].contains(Key.second);
+    }
+
+    void transferToValue(Value *Src, Value *Dest) {
+        if(this->contains(Src)){
+            DenseMap<unsigned, Provenance> *DestMap = &Inner[Dest];
+            for(const auto &[Idx, Prov] : Inner[Src]) {
+                (*DestMap)[Idx] = Prov;
+            }
+        }
+    }
+    void set(ProvenanceKey Key, Provenance Prov) {
+        Inner[Key.first][Key.second] = Prov;
+    } 
+
+    std::optional<Provenance> get(ProvenanceKey Key) {
+        if (this->contains(Key)) {
+            return Inner[Key.first][Key.second];
+        }else{
+            return std::nullopt;
+        }
     }
 };
 

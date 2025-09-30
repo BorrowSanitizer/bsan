@@ -22,6 +22,7 @@ use core::mem::MaybeUninit;
 #[cfg(not(test))]
 use core::panic::PanicInfo;
 use core::ptr::NonNull;
+use core::sync::atomic::AtomicUsize;
 use core::{fmt, ptr};
 
 use bsan_shared::{AccessKind, RetagInfo, Size};
@@ -49,10 +50,11 @@ mod errors;
 use crate::borrow_tracker::tree::Tree;
 use crate::errors::BorsanResult;
 use crate::memory::hooks;
+use crate::span::FramePointer;
 
 macro_rules! println {
     ($($arg:tt)*) => {
-        libc_print::std_name::println!($($arg)*);
+        libc_print::std_name::println!($($arg)*)
     };
 }
 
@@ -127,6 +129,8 @@ macro_rules! debug_bsan {
 macro_rules! debug_bsan {
     ($op:literal, $ptr:ident, $alloc_id:ident, $bor_tag:ident, $info:expr) => {{}};
 }
+#[unsafe(no_mangle)]
+pub static __BSAN_ALLOC_ID_CTR: AtomicUsize = AtomicUsize::new(3);
 
 /// Unique identifier for an allocation
 #[repr(transparent)]
@@ -170,6 +174,9 @@ impl fmt::Debug for AllocId {
     }
 }
 
+#[unsafe(no_mangle)]
+static THREAD_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
 /// Unique identifier for a thread
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -183,6 +190,9 @@ impl ThreadId {
         self.0
     }
 }
+
+#[unsafe(no_mangle)]
+pub static __BSAN_BOR_TAG_CTR: AtomicUsize = AtomicUsize::new(0);
 
 /// Unique identifier for a node within the tree
 #[repr(transparent)]
@@ -344,6 +354,7 @@ pub struct AllocInfo {
 }
 
 impl AllocInfo {
+    #[allow(unused)]
     unsafe fn force_dealloc(&mut self) {
         self.alloc_id = AllocId::invalid();
         self.base_addr = FreeListAddrUnion { base_addr: ptr::null_mut() };
@@ -407,17 +418,20 @@ unsafe extern "C-unwind" fn __bsan_retag(
     alloc_id: AllocId,
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
-) -> BorTag {
+    new_tag: BorTag,
+) -> *mut c_void {
     debug_bsan!("retag", object_addr, alloc_id, bor_tag, alloc_info);
     let global_ctx = unsafe { global_ctx() };
     let local_ctx = unsafe { local_ctx_mut() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     let retag_info = unsafe { RetagInfo::from_raw(access_size, perm) };
-
+    let span = FramePointer::current().prev().ip();
     BorrowTracker::new(prov, object_addr, Some(access_size))
-        .and_then(|opt| opt.map(|bt| bt.retag(global_ctx, local_ctx, retag_info)).transpose())
-        .unwrap_or_else(|err| handle_err!(err, global_ctx))
-        .unwrap_or(bor_tag)
+        .and_then(|opt| {
+            opt.map(|bt| bt.retag(global_ctx, local_ctx, retag_info, new_tag, span)).transpose()
+        })
+        .unwrap_or_else(|err| handle_err!(err, global_ctx));
+    object_addr
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -433,8 +447,9 @@ unsafe extern "C-unwind" fn __bsan_read(
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
 
+    let span = FramePointer::current().prev().ip();
     BorrowTracker::new(prov, ptr, Some(access_size))
-        .and_then(|bt| bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Read)))
+        .and_then(|bt| bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Read, span)))
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
 }
 
@@ -451,8 +466,9 @@ unsafe extern "C-unwind" fn __bsan_write(
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
 
+    let span = FramePointer::current().prev().ip();
     BorrowTracker::new(prov, ptr, Some(access_size))
-        .and_then(|bt| bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Write)))
+        .and_then(|bt| bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Write, span)))
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
 }
 
@@ -463,14 +479,33 @@ extern "C" fn __bsan_dealloc(
     alloc_id: AllocId,
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
+    is_heap: bool,
 ) {
     debug_bsan!("dealloc", ptr, alloc_id, bor_tag, alloc_info);
     let global_ctx = unsafe { global_ctx() };
     let prov: Provenance = Provenance { alloc_id, bor_tag, alloc_info };
 
+    let span = FramePointer::current().prev().ip();
     BorrowTracker::new(prov, ptr, None)
-        .and_then(|mut bt| bt.iter_mut().try_for_each(|t| t.dealloc(global_ctx)))
+        .and_then(|mut bt| bt.iter_mut().try_for_each(|t| t.dealloc(global_ctx, span, is_heap)))
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_dealloc_weak(
+    ptr: *mut c_void,
+    alloc_id: AllocId,
+    bor_tag: BorTag,
+    alloc_info: *mut AllocInfo,
+) {
+    if alloc_info.is_null() {
+        return;
+    }
+
+    if alloc_id != unsafe { (*alloc_info).alloc_id } {
+        return;
+    }
+    __bsan_dealloc(ptr, alloc_id, bor_tag, alloc_info, false)
 }
 
 // Registers a heap allocation of size `size`, storing its provenance in the return pointer.
@@ -481,54 +516,26 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     alloc_id: AllocId,
     bor_tag: BorTag,
 ) -> NonNull<AllocInfo> {
-    let ctx = unsafe { global_ctx() };
-    unsafe {
-        let alloc_info = bsan_alloc(ctx, base_addr, size, alloc_id, bor_tag)
-            .unwrap_or_else(|info| ctx.handle_error(info));
-        debug_bsan!("alloc", base_addr, alloc_id, bor_tag, alloc_info.as_ref());
-        alloc_info
-    }
-}
+    let global_ctx = unsafe { global_ctx() };
+    let span = FramePointer::current().prev().ip();
+    let alloc_info = unsafe {
+        global_ctx
+            .allocate_lock_location(AllocInfo {
+                alloc_id,
+                base_addr: FreeListAddrUnion { base_addr },
+                size,
+                tree_lock: Mutex::new(Some(Tree::new_in(
+                    bor_tag,
+                    Size::from_bytes(size),
+                    span,
+                    global_ctx.allocator(),
+                ))),
+            })
+            .unwrap_or_else(|info| global_ctx.handle_error(info))
 
-#[inline]
-unsafe fn bsan_alloc(
-    global_ctx: &GlobalCtx,
-    base_addr: *mut c_void,
-    size: usize,
-    alloc_id: AllocId,
-    bor_tag: BorTag,
-) -> BorsanResult<NonNull<AllocInfo>> {
-    // Initialize `AllocInfo`
-    let mut alloc_info = unsafe {
-        global_ctx.allocate_lock_location(AllocInfo {
-            alloc_id,
-            base_addr: FreeListAddrUnion { base_addr },
-            size,
-            tree_lock: Mutex::new(None),
-        })?
     };
-    unsafe {
-        let mut tree = alloc_info.as_mut().tree_lock.lock();
-        let _ = tree.insert(Tree::new_in(
-            bor_tag,
-            Size::from_bytes(size),
-            Span::new(),
-            global_ctx.allocator(),
-        ));
-    }
-    Ok(alloc_info)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_new_alloc_id() -> AllocId {
-    let global_ctx = unsafe { global_ctx() };
-    global_ctx.new_alloc_id()
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_new_tag() -> BorTag {
-    let global_ctx = unsafe { global_ctx() };
-    global_ctx.new_borrow_tag()
+    debug_bsan!("alloc", base_addr, alloc_id, bor_tag, alloc_info.as_ref());
+    alloc_info
 }
 
 /// Copies the provenance stored in the range `[src_addr, src_addr + access_size)` within the shadow heap
@@ -615,12 +622,12 @@ unsafe extern "C" fn __bsan_reserve_stack_slot() -> NonNull<AllocInfo> {
 
 /// Initializes stack allocation metadata in-place.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_alloc_in_place(
+unsafe extern "C" fn __bsan_alloc_stack(
     base_addr: *mut c_void,
     size: usize,
     alloc_id: AllocId,
     bor_tag: BorTag,
-    alloc_info: NonNull<MaybeUninit<AllocInfo>>,
+    alloc_info: NonNull<c_void>,
 ) {
     debug_bsan!(
         "alloc_in_place",
@@ -629,20 +636,9 @@ unsafe extern "C" fn __bsan_alloc_in_place(
         bor_tag,
         alloc_info.as_ptr().cast::<AllocInfo>()
     );
-    let ctx = unsafe { global_ctx() };
-    bsan_alloc_in_place(ctx, base_addr, size, alloc_id, bor_tag, alloc_info)
-        .unwrap_or_else(|info| ctx.handle_error(info))
-}
-
-#[inline]
-fn bsan_alloc_in_place(
-    global_ctx: &GlobalCtx,
-    base_addr: *mut c_void,
-    size: usize,
-    alloc_id: AllocId,
-    bor_tag: BorTag,
-    mut alloc_info: NonNull<MaybeUninit<AllocInfo>>,
-) -> BorsanResult<()> {
+    let mut alloc_info = alloc_info.cast::<MaybeUninit<AllocInfo>>();
+    let global_ctx = unsafe { global_ctx() };
+    let span = FramePointer::current().prev().ip();
     unsafe {
         alloc_info.as_mut().write(AllocInfo {
             alloc_id,
@@ -651,12 +647,11 @@ fn bsan_alloc_in_place(
             tree_lock: Mutex::new(Some(Tree::new_in(
                 bor_tag,
                 Size::from_bytes(size),
-                Span::new(),
+                span,
                 global_ctx.allocator(),
             ))),
         });
     }
-    Ok(())
 }
 
 /// Pushes a stack frame
@@ -675,16 +670,13 @@ unsafe extern "C" fn __bsan_push_retag_frame() {
 unsafe extern "C" fn __bsan_push_alloca_frame() {
     let ctx = unsafe { global_ctx() };
     let local_ctx = unsafe { local_ctx_mut() };
-    local_ctx.allocas.push_frame().unwrap_or_else(|info| ctx.handle_error(info.into()))
+    local_ctx.allocas.push_frame().unwrap_or_else(|info| ctx.handle_error(info.into()));
 }
 
 /// Pushes a stack frame
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_pop_alloca_frame() {
     let local_ctx = unsafe { local_ctx_mut() };
-    for info in local_ctx.allocas.current_frame_mut() {
-        unsafe { info.force_dealloc() };
-    }
     unsafe { local_ctx.allocas.pop_frame() }
 }
 
@@ -774,6 +766,7 @@ fn panic(info: &PanicInfo<'_>) -> ! {
 
 #[cfg(test)]
 mod tests {
+    use core::sync::atomic::Ordering;
 
     use crate::*;
 
@@ -791,15 +784,15 @@ mod tests {
 
     fn create_metadata(base_addr: *mut c_void, size: usize) -> Provenance {
         unsafe {
-            let alloc_id = __bsan_new_alloc_id();
-            let bor_tag = __bsan_new_tag();
+            let alloc_id = AllocId(__BSAN_ALLOC_ID_CTR.fetch_add(1, Ordering::Relaxed));
+            let bor_tag = BorTag(__BSAN_BOR_TAG_CTR.fetch_add(1, Ordering::Relaxed));
             let alloc_info = __bsan_alloc(base_addr, size, alloc_id, bor_tag).as_ptr();
             Provenance { alloc_id, bor_tag, alloc_info }
         }
     }
 
     fn destroy_metadata(ptr: *mut c_void, prov: Provenance) {
-        __bsan_dealloc(ptr, prov.alloc_id, prov.bor_tag, prov.alloc_info);
+        __bsan_dealloc(ptr, prov.alloc_id, prov.bor_tag, prov.alloc_info, true);
     }
 
     #[test]

@@ -10,5 +10,6 @@ edition = "2021"
 [dependencies]
 bsan-debug = { path = "../bsan-debug" }
 hashbrown = "0.15.4"
+libc = "0.2.174"
 
 [workspace]
