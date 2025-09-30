@@ -19,14 +19,13 @@ use core::cell::UnsafeCell;
 use core::ffi::c_void;
 use core::fmt::Debug;
 use core::mem::MaybeUninit;
-// #[cfg(not(test))]
-// use core::panic::PanicInfo;
+#[cfg(not(test))]
+use core::panic::PanicInfo;
 use core::ptr::NonNull;
 use core::{fmt, ptr};
 
 use bsan_shared::{AccessKind, RetagInfo, Size};
 use libc_print::std_name::*;
-use log::debug;
 use spin::Mutex;
 
 mod global;
@@ -73,6 +72,7 @@ macro_rules! handle_err {
 }
 
 /// A struct for summarizing debug information about memory operations
+#[cfg(feature = "debug")]
 struct DebugSummary {
     op: &'static str,
     ptr: usize,
@@ -81,6 +81,7 @@ struct DebugSummary {
     info: AllocInfoSummary,
 }
 
+#[cfg(feature = "debug")]
 impl fmt::Display for DebugSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -97,6 +98,7 @@ impl fmt::Display for DebugSummary {
     }
 }
 
+#[cfg(feature = "debug")]
 macro_rules! debug_bsan {
     ($op:literal, $ptr:ident, $alloc_id:ident, $bor_tag:ident, $info:expr) => {{
         let summary = DebugSummary {
@@ -106,8 +108,14 @@ macro_rules! debug_bsan {
             bor_tag: $bor_tag,
             info: $info.summarize(),
         };
-        debug!("{}", summary);
+        println!("{}", summary);
     }};
+}
+
+/// No-op macro when debug feature is disabled
+#[cfg(not(feature = "debug"))]
+macro_rules! debug_bsan {
+    ($op:literal, $ptr:ident, $alloc_id:ident, $bor_tag:ident, $info:expr) => {{}};
 }
 
 /// Unique identifier for an allocation
@@ -333,6 +341,7 @@ impl AllocInfo {
         self.tree_lock.lock().take();
     }
 
+    #[cfg(feature = "debug")]
     fn summarize(&self) -> AllocInfoSummary {
         AllocInfoSummary { alloc_id: self.alloc_id, base_addr: self.base_addr, size: self.size }
     }
@@ -340,6 +349,7 @@ impl AllocInfo {
 
 /// A shallow version of `AllocInfo`, for use in debug logging.
 /// Only difference is it does not include the tree_lock `Mutex` field.
+#[cfg(feature = "debug")]
 #[derive(Debug)]
 pub struct AllocInfoSummary {
     pub alloc_id: AllocId,
@@ -731,31 +741,18 @@ extern "C" fn __bsan_debug_print(alloc_id: AllocId, bor_tag: BorTag, alloc_info:
     crate::println!("{prov:?}");
 }
 
-// #[cfg(not(test))]
-// #[panic_handler]
-// fn panic(info: &PanicInfo<'_>) -> ! {
-//     crate::eprintln!("The BorrowSanitizer runtime panicked!");
-//     crate::eprintln!("{info}");
-//     core::intrinsics::abort()
-// }
+#[cfg(not(test))]
+#[panic_handler]
+fn panic(info: &PanicInfo<'_>) -> ! {
+    crate::eprintln!("The BorrowSanitizer runtime panicked!");
+    crate::eprintln!("{info}");
+    core::intrinsics::abort()
+}
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Once;
 
     use crate::*;
-
-    static INIT: Once = Once::new();
-
-    fn init_logger() {
-        INIT.call_once(|| {
-            env_logger::builder()
-                .is_test(true)
-                .format_timestamp(None)
-                .filter_level(log::LevelFilter::Debug)
-                .init();
-        });
-    }
 
     fn with_init(unit_test: fn()) {
         unsafe { __bsan_init() };
@@ -786,7 +783,6 @@ mod tests {
     fn bsan_alloc_increasing_alloc_id() {
         with_init(|| {
             with_heap_object(|obj1, size1| {
-                init_logger();
                 let prov1 = create_metadata(obj1, size1);
                 assert_eq!(prov1.alloc_id, AllocId::min());
                 with_heap_object(|obj2, size2| {
@@ -803,7 +799,6 @@ mod tests {
     fn bsan_alloc_and_dealloc() {
         with_init(|| {
             with_heap_object(|obj, size| unsafe {
-                init_logger();
                 let prov = create_metadata(obj, size);
                 destroy_metadata(obj, prov);
                 let alloc_metadata = &*prov.alloc_info;
@@ -843,7 +838,6 @@ mod tests {
     fn bsan_read() {
         with_init(|| {
             with_heap_object(|obj: *mut c_void, size: usize| unsafe {
-                init_logger();
                 let prov = create_metadata(obj, size);
                 __bsan_read(obj, size, prov.alloc_id, prov.bor_tag, prov.alloc_info);
                 destroy_metadata(obj, prov);
@@ -855,7 +849,6 @@ mod tests {
     fn bsan_write() {
         with_init(|| {
             with_heap_object(|obj, size| unsafe {
-                init_logger();
                 let prov = create_metadata(obj, size);
                 __bsan_write(obj, size, prov.alloc_id, prov.bor_tag, prov.alloc_info);
                 destroy_metadata(obj, prov);

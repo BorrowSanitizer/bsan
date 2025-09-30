@@ -117,7 +117,13 @@ impl Command {
 
     fn inst(env: &mut BsanEnv, file: String, debug: bool, args: &[String]) -> Result<()> {
         let plugin = env.build_artifact(BsanPass, &[])?;
-        let runtime = env.build_artifact(BsanRt, &[])?;
+
+        let runtime = if debug {
+            env.build_artifact(BsanRt, &["--features".to_string(), "debug".to_string()])?
+        } else {
+            env.build_artifact(BsanRt, &[])?
+        };
+
         let driver = env.build_artifact(BsanDriver, &[])?;
         let cargo_bsan = env.build_artifact(CargoBsan, &[])?;
 
@@ -127,10 +133,6 @@ impl Command {
         env.sh.set_var("BSAN_DRIVER", &driver);
         env.sh.set_var("BSAN_RT_DIR", runtime.parent().unwrap());
         env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
-
-        if debug {
-            env.sh.set_var("RUST_LOG", "debug");
-        }
 
         cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
 
