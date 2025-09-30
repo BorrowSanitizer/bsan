@@ -13,8 +13,20 @@ use std::path::PathBuf;
 pub use callbacks::BSanCallBacks;
 
 pub const BSAN_BUG_REPORT_URL: &str = "https://github.com/BorrowSanitizer/bsan/issues/new";
-pub const BSAN_DEFAULT_ARGS: &[&str] =
-    &["--cfg=bsan", "-Copt-level=0", "-Zmir-opt-level=0", "-Cpasses=bsan", "-Zmir-emit-retag=full"];
+pub const BSAN_DEFAULT_ARGS: &[&str] = &[
+    "--cfg=bsan",
+    "-Copt-level=0",
+    "-Zmir-opt-level=0",
+    "-Cpasses=bsan",
+    "-Zmir-emit-retag=full",
+    "-Cforce-frame-pointers=yes",
+    "-Zalways-encode-mir",
+    "-Zmir-preserve-ub",
+    "-Zemit-lifetime-markers",
+    "-Zcodegen-emit-retag",
+    "-Zinline-llvm=no",
+    "-Zinline-mir=no"
+];
 
 pub struct Config {
     args: Vec<String>,
@@ -75,6 +87,7 @@ impl Config {
 
 /// Execute a compiler with the given CLI arguments and callbacks.
 pub fn run_compiler(mut config: Config) -> ! {
+    
     rustc_driver::run_compiler(&config.args, &mut config.callbacks);
     std::process::exit(0)
 }
