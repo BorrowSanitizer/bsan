@@ -332,7 +332,7 @@ namespace
         SmallVector<std::tuple<BasicBlock *, AllocaInst *, ProvenanceScalar>> AllocaProvPHINodes;   
 
         // After inserting our instrumentation, we remove our retag intrinsics.
-        SmallVector<CallBase *> ToRemove;
+        SmallVector<Instruction *> ToRemove;
 
         // We use LLVM's lifetime analysis to determine which `allocas` are alive, and still need to be freed, at every exit point.
         std::unique_ptr<StackLifetime> LifetimeInfo;
@@ -773,8 +773,8 @@ namespace
 
             patchPHINodes();
 
-            for (CallBase *CB : ToRemove){
-                CB->eraseFromParent();
+            for (Instruction *I : ToRemove){
+                I->eraseFromParent();
             }
 
             return true;
@@ -846,6 +846,7 @@ namespace
             LifetimeInfo->run();
         }
 
+
         ProvenanceScalar processStackAlloca(IRBuilder<> &IRB, AllocaInst *AI) {
             TypeSize TS = BS.getAllocaSizeInBytes(*AI);
             Value *Size = IRB.CreateTypeSize(BS.IntptrTy, TS);
@@ -878,28 +879,62 @@ namespace
                     }
                 }else{
                     ProvenanceScalar ProvScalar = Prov.assertScalar();
-                    for (auto [V, IncomingBlock] : llvm::zip(PN->incoming_values(), PN->blocks())) {
-                        PHINode *IdNode = cast<PHINode>(ProvScalar.Id);
-                        PHINode *TagNode = cast<PHINode>(ProvScalar.Tag);
-                        PHINode *InfoNode = cast<PHINode>(ProvScalar.Info);
+                    PHINode *IdNode = cast<PHINode>(ProvScalar.Id);
+                    PHINode *TagNode = cast<PHINode>(ProvScalar.Tag);
+                    PHINode *InfoNode = cast<PHINode>(ProvScalar.Info);
 
+                    std::optional<ProvenanceScalar> Sentinel = std::nullopt;
+                    bool FoundDifferent = false;
+
+                    for (auto [V, IncomingBlock] : llvm::zip(PN->incoming_values(), PN->blocks())) {
                         ProvenanceScalar IncomingProv = assertProvenanceScalar(IncomingBlock, {V, Idx});
+                        if(Sentinel.has_value()) {
+                        // If a PHI node is dependent on itself, then we can ignore that
+                        // incoming edge when determining if all incoming edges produce the
+                        // same value. 
+                        if(IncomingProv != ProvScalar)
+                            FoundDifferent |= Sentinel.value() != IncomingProv;
+                        }else{
+                            Sentinel = IncomingProv;
+                        }
                         IdNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Id);
                         TagNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Tag);
                         InfoNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Info);
                     }
+                    if(!FoundDifferent && Sentinel.has_value()) {
+                        ProvenanceScalar ProvJoined = Sentinel.value();
+                        IdNode->replaceAllUsesWith(ProvJoined.Id);
+                        TagNode->replaceAllUsesWith(ProvJoined.Tag);
+                        InfoNode->replaceAllUsesWith(ProvJoined.Info);
+                    }
                 }
-
             }
             for (const auto &[BB, AI, Prov] : AllocaProvPHINodes) { 
                 PHINode *IdNode = cast<PHINode>(Prov.Id);
                 PHINode *TagNode = cast<PHINode>(Prov.Tag);
                 PHINode *InfoNode = cast<PHINode>(Prov.Info);
+                std::optional<ProvenanceScalar> Sentinel = std::nullopt;
+                bool FoundDifferent = false;
                 for (BasicBlock *IncomingBlock : predecessors(BB)) {
                     ProvenanceScalar IncomingProv = assertAllocaProvenance(IncomingBlock, AI);
-                    IdNode->setIncomingValueForBlock(IncomingBlock, BS.WildcardProvenance.Id);
-                    TagNode->setIncomingValueForBlock(IncomingBlock, BS.WildcardProvenance.Tag);
-                    InfoNode->setIncomingValueForBlock(IncomingBlock, BS.WildcardProvenance.Info);
+                    if(Sentinel.has_value()) {
+                        // If a PHI node is dependent on itself, then we can ignore that
+                        // incoming edge when determining if all incoming edges produce the
+                        // same value. 
+                        if(IncomingProv != Prov)
+                            FoundDifferent |= Sentinel.value() != IncomingProv;
+                    }else{
+                        Sentinel = IncomingProv;
+                    }
+                    IdNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Id);
+                    TagNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Tag);
+                    InfoNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Info);
+                }
+                if(!FoundDifferent && Sentinel.has_value()) {
+                    ProvenanceScalar ProvJoined = Sentinel.value();
+                    IdNode->replaceAllUsesWith(ProvJoined.Id);
+                    TagNode->replaceAllUsesWith(ProvJoined.Tag);
+                    InfoNode->replaceAllUsesWith(ProvJoined.Info);
                 }
             }
         }
