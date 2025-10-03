@@ -1,6 +1,7 @@
 // Ported from Miri's `diagnostics.rs`
 // Won't be used exactly as it is used in Miri or at all
 // but nice to port in case there are any similar behaviors / as a starting point
+#![allow(unused)]
 use alloc::alloc::Global;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;

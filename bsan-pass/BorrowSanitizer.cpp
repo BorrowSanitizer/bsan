@@ -865,12 +865,11 @@ namespace
             for (const auto &[PN, Prov, Idx] : ProvPHINodes) { 
                 if(Prov.isVector()) {
                     ProvenanceVector ProvVec = Prov.assertVector();
+                    PHINode *IdNode = cast<PHINode>(ProvVec.IdVector);
+                    PHINode *TagNode = cast<PHINode>(ProvVec.TagVector);
+                    PHINode *InfoNode = cast<PHINode>(ProvVec.InfoVector);
+                    PHINode *LengthNode = cast<PHINode>(ProvVec.Length);
                     for (auto [V, IncomingBlock] : llvm::zip(PN->incoming_values(), PN->blocks())) {
-                        PHINode *IdNode = cast<PHINode>(ProvVec.IdVector);
-                        PHINode *TagNode = cast<PHINode>(ProvVec.TagVector);
-                        PHINode *InfoNode = cast<PHINode>(ProvVec.InfoVector);
-                        PHINode *LengthNode = cast<PHINode>(ProvVec.Length);
-     
                         ProvenanceVector IncomingProv = assertProvenanceVector(EntryIRB, IncomingBlock, {V, Idx}, ProvVec.Elems);
                         IdNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.IdVector);
                         TagNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.TagVector);
@@ -882,33 +881,15 @@ namespace
                     PHINode *IdNode = cast<PHINode>(ProvScalar.Id);
                     PHINode *TagNode = cast<PHINode>(ProvScalar.Tag);
                     PHINode *InfoNode = cast<PHINode>(ProvScalar.Info);
-
-                    std::optional<ProvenanceScalar> Sentinel = std::nullopt;
-                    bool FoundDifferent = false;
-
                     for (auto [V, IncomingBlock] : llvm::zip(PN->incoming_values(), PN->blocks())) {
                         ProvenanceScalar IncomingProv = assertProvenanceScalar(IncomingBlock, {V, Idx});
-                        if(Sentinel.has_value()) {
-                        // If a PHI node is dependent on itself, then we can ignore that
-                        // incoming edge when determining if all incoming edges produce the
-                        // same value. 
-                        if(IncomingProv != ProvScalar)
-                            FoundDifferent |= Sentinel.value() != IncomingProv;
-                        }else{
-                            Sentinel = IncomingProv;
-                        }
                         IdNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Id);
                         TagNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Tag);
                         InfoNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Info);
                     }
-                    if(!FoundDifferent && Sentinel.has_value()) {
-                        ProvenanceScalar ProvJoined = Sentinel.value();
-                        IdNode->replaceAllUsesWith(ProvJoined.Id);
-                        TagNode->replaceAllUsesWith(ProvJoined.Tag);
-                        InfoNode->replaceAllUsesWith(ProvJoined.Info);
-                    }
                 }
             }
+            /*
             for (const auto &[BB, AI, Prov] : AllocaProvPHINodes) { 
                 PHINode *IdNode = cast<PHINode>(Prov.Id);
                 PHINode *TagNode = cast<PHINode>(Prov.Tag);
@@ -917,26 +898,11 @@ namespace
                 bool FoundDifferent = false;
                 for (BasicBlock *IncomingBlock : predecessors(BB)) {
                     ProvenanceScalar IncomingProv = assertAllocaProvenance(IncomingBlock, AI);
-                    if(Sentinel.has_value()) {
-                        // If a PHI node is dependent on itself, then we can ignore that
-                        // incoming edge when determining if all incoming edges produce the
-                        // same value. 
-                        if(IncomingProv != Prov)
-                            FoundDifferent |= Sentinel.value() != IncomingProv;
-                    }else{
-                        Sentinel = IncomingProv;
-                    }
                     IdNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Id);
                     TagNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Tag);
                     InfoNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Info);
                 }
-                if(!FoundDifferent && Sentinel.has_value()) {
-                    ProvenanceScalar ProvJoined = Sentinel.value();
-                    IdNode->replaceAllUsesWith(ProvJoined.Id);
-                    TagNode->replaceAllUsesWith(ProvJoined.Tag);
-                    InfoNode->replaceAllUsesWith(ProvJoined.Info);
-                }
-            }
+            }*/
         }
         
         Value *newAllocId(IRBuilder<> &IRB) {

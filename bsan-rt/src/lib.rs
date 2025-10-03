@@ -50,7 +50,6 @@ mod errors;
 use crate::borrow_tracker::tree::Tree;
 use crate::errors::BorsanResult;
 use crate::memory::hooks;
-use crate::span::FramePointer;
 
 macro_rules! println {
     ($($arg:tt)*) => {
@@ -425,10 +424,11 @@ unsafe extern "C-unwind" fn __bsan_retag(
     let local_ctx = unsafe { local_ctx_mut() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     let retag_info = unsafe { RetagInfo::from_raw(access_size, perm) };
-    let span = FramePointer::current().prev().ip();
+
     BorrowTracker::new(prov, object_addr, Some(access_size))
         .and_then(|opt| {
-            opt.map(|bt| bt.retag(global_ctx, local_ctx, retag_info, new_tag, span)).transpose()
+            opt.map(|bt| bt.retag(global_ctx, local_ctx, retag_info, new_tag, Span::new()))
+                .transpose()
         })
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
     object_addr
@@ -447,9 +447,10 @@ unsafe extern "C-unwind" fn __bsan_read(
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
 
-    let span = FramePointer::current().prev().ip();
     BorrowTracker::new(prov, ptr, Some(access_size))
-        .and_then(|bt| bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Read, span)))
+        .and_then(|bt| {
+            bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Read, Span::new()))
+        })
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
 }
 
@@ -466,9 +467,10 @@ unsafe extern "C-unwind" fn __bsan_write(
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
 
-    let span = FramePointer::current().prev().ip();
     BorrowTracker::new(prov, ptr, Some(access_size))
-        .and_then(|bt| bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Write, span)))
+        .and_then(|bt| {
+            bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Write, Span::new()))
+        })
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
 }
 
@@ -485,9 +487,10 @@ extern "C" fn __bsan_dealloc(
     let global_ctx = unsafe { global_ctx() };
     let prov: Provenance = Provenance { alloc_id, bor_tag, alloc_info };
 
-    let span = FramePointer::current().prev().ip();
     BorrowTracker::new(prov, ptr, None)
-        .and_then(|mut bt| bt.iter_mut().try_for_each(|t| t.dealloc(global_ctx, span, is_heap)))
+        .and_then(|mut bt| {
+            bt.iter_mut().try_for_each(|t| t.dealloc(global_ctx, Span::new(), is_heap))
+        })
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
 }
 
@@ -517,7 +520,6 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     bor_tag: BorTag,
 ) -> NonNull<AllocInfo> {
     let global_ctx = unsafe { global_ctx() };
-    let span = FramePointer::current().prev().ip();
     let alloc_info = unsafe {
         global_ctx
             .allocate_lock_location(AllocInfo {
@@ -527,7 +529,7 @@ unsafe extern "C-unwind" fn __bsan_alloc(
                 tree_lock: Mutex::new(Some(Tree::new_in(
                     bor_tag,
                     Size::from_bytes(size),
-                    span,
+                    Span::new(),
                     global_ctx.allocator(),
                 ))),
             })
@@ -638,7 +640,7 @@ unsafe extern "C" fn __bsan_alloc_stack(
     );
     let mut alloc_info = alloc_info.cast::<MaybeUninit<AllocInfo>>();
     let global_ctx = unsafe { global_ctx() };
-    let span = FramePointer::current().prev().ip();
+
     unsafe {
         alloc_info.as_mut().write(AllocInfo {
             alloc_id,
@@ -647,7 +649,7 @@ unsafe extern "C" fn __bsan_alloc_stack(
             tree_lock: Mutex::new(Some(Tree::new_in(
                 bor_tag,
                 Size::from_bytes(size),
-                span,
+                Span::new(),
                 global_ctx.allocator(),
             ))),
         });
@@ -755,6 +757,12 @@ extern "C" fn __bsan_debug_print(alloc_id: AllocId, bor_tag: BorTag, alloc_info:
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     crate::println!("{prov:?}");
 }
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_debug_retval_tls(_num: usize) {}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_debug_param_tls(_num: usize) {}
 
 #[cfg(not(test))]
 #[panic_handler]

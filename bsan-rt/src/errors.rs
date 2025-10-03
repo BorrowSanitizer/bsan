@@ -1,7 +1,6 @@
 // Components in this file were ported from Miri, and then modified by our team.
 use alloc::boxed::Box;
 use alloc::string::String;
-use core::ffi::c_void;
 
 use bsan_shared::Permission;
 use thiserror_no_std::Error;
