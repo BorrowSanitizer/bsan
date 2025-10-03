@@ -21,33 +21,25 @@ for (const archDirName of architectureDirs) {
   const archDirPath = path.join(ARTIFACTS_BASE_DIR, archDirName);
   benchmarkData[archDirName] = {};
 
-  const findJsonFiles = (dir, fileList = []) => {
-    const files = fs.readdirSync(dir);
-    files.forEach(file => {
-      const filePath = path.join(dir, file);
-      if (fs.statSync(filePath).isDirectory()) {
-        findJsonFiles(filePath, fileList);
-      } else if (path.extname(file) === '.json') {
-        fileList.push(filePath);
-      }
-    });
-    return fileList;
-  };
+  // Read all JSON files in the current architecture directory
+  const benchmarkFiles = fs.readdirSync(archDirPath, { withFileTypes: true })
+    .filter(dirent => dirent.isFile() && dirent.name.endsWith('.json'))
+    .map(dirent => dirent.name);
 
-  const jsonFiles = findJsonFiles(archDirPath);
+  for (const benchmarkFileName of benchmarkFiles) {
+    const benchmarkName = path.basename(benchmarkFileName, '.json');
+    const benchmarkFilePath = path.join(archDirPath, benchmarkFileName);
 
-  for (const benchmarkFilePath of jsonFiles) {
-    const benchmarkName = path.basename(benchmarkFilePath, '.json');
     try {
       const fileContent = fs.readFileSync(benchmarkFilePath, 'utf8');
       if (fileContent.trim() === '') {
-        console.warn(`Skipping empty file: ${benchmarkFilePath}`);
+        console.warn(`Skipping empty file: ${archDirName}/${benchmarkFileName}`);
         continue;
       }
       benchmarkData[archDirName][benchmarkName] = JSON.parse(fileContent);
-      console.log(`Successfully processed ${benchmarkFilePath}`);
+      console.log(`Successfully processed ${archDirName}/${benchmarkFileName}`);
     } catch (error) {
-      console.error(`Error processing ${benchmarkFilePath}:`, error);
+      console.error(`Error processing ${archDirName}/${benchmarkFileName}:`, error);
     }
   }
 }
