@@ -619,7 +619,14 @@ unsafe extern "C-unwind" fn __bsan_shadow_store_vector(
 unsafe extern "C" fn __bsan_reserve_stack_slot() -> NonNull<AllocInfo> {
     let global_ctx = unsafe { global_ctx() };
     let local_ctx = unsafe { local_ctx_mut() };
-    local_ctx.allocas.reserve_slots(1).unwrap_or_else(|info| global_ctx.handle_error(info.into()))
+    let mut info = local_ctx
+        .allocas
+        .reserve_slots(1)
+        .unwrap_or_else(|info| global_ctx.handle_error(info.into()));
+    unsafe {
+        info.as_mut().alloc_id = AllocId::invalid();
+    }
+    info
 }
 
 /// Initializes stack allocation metadata in-place.
