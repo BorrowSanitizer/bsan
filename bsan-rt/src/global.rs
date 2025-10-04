@@ -68,9 +68,10 @@ impl GlobalCtx {
         self.hooks.alloc
     }
 
-    #[allow(unused)]
     pub fn exit(&self, code: i32) -> ! {
-        unsafe { (self.hooks.exit)(code) }
+        unsafe {
+            (self.hooks.exit)(code);
+        }
     }
 
     pub fn add_protected_tag(&self, bor_tag: BorTag, protector_kind: ProtectorKind) {
@@ -94,10 +95,6 @@ impl GlobalCtx {
         crate::eprintln!("An error occurred: {info:?}\n\n");
         self.exit(1)
     }
-}
-
-impl Drop for GlobalCtx {
-    fn drop(&mut self) {}
 }
 
 // Logging for UI testing, which is enabled by the `ui_test` feature.
@@ -221,7 +218,7 @@ pub unsafe fn init_global_ctx<'a>(hooks: BsanHooks) -> &'a GlobalCtx {
 /// on the assumption that this function has not been called yet.
 #[inline]
 pub unsafe fn deinit_global_ctx() {
-    unsafe { ptr::replace(GLOBAL_CTX.get(), MaybeUninit::uninit()).assume_init() };
+    unsafe { drop(ptr::replace(GLOBAL_CTX.get(), MaybeUninit::uninit()).assume_init()) };
 }
 
 /// # Safety

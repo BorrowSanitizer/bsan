@@ -302,6 +302,7 @@ impl<T> Drop for ShadowHeap<T> {
         unsafe {
             // Free all L2 tables
             for i in self.l2_blocks.drain(..) {
+                crate::println!("dropping l2[{i:?}]");
                 let l2_table = (*self.table.as_ptr())[i];
                 if !l2_table.is_null() {
                     let l2_table_size = NonZero::new_unchecked(mem::size_of::<T>() * L2_LEN);

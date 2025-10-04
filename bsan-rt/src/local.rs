@@ -53,7 +53,7 @@ pub unsafe fn init_local_ctx(ctx: &GlobalCtx) -> BorsanResult<&LocalCtx> {
 /// on the assumption that the current thread remains initialized.
 #[inline]
 pub unsafe fn deinit_local_ctx() {
-    unsafe { ptr::replace(LOCAL_CTX.get(), MaybeUninit::uninit()).assume_init() };
+    unsafe { drop(ptr::replace(LOCAL_CTX.get(), MaybeUninit::uninit()).assume_init()) };
 }
 
 /// # Safety
@@ -69,8 +69,4 @@ pub unsafe fn local_ctx<'a>() -> &'a LocalCtx {
 pub unsafe fn local_ctx_mut<'a>() -> &'a mut LocalCtx {
     let ctx = LOCAL_CTX.get();
     unsafe { &mut *ctx.cast::<local::LocalCtx>() }
-}
-
-impl Drop for LocalCtx {
-    fn drop(&mut self) {}
 }

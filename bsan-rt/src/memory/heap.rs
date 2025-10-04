@@ -2,7 +2,7 @@ use core::mem;
 use core::num::NonZero;
 use core::ops::DerefMut;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicPtr, AtomicU8, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 use libc::_SC_PAGESIZE;
 use spin::mutex::SpinMutex;
@@ -54,8 +54,6 @@ pub(crate) unsafe trait Heapable: WordAligned {
 pub struct Heap<T: Heapable> {
     head: RwLock<HeapBlock<T>>,
     free_list: SpinMutex<Option<NonNull<T>>>,
-    #[allow(unused)]
-    grow_lock: AtomicU8,
     block_size: NonZero<usize>,
     mmap: MMap,
     munmap: MUnmap,
@@ -74,14 +72,7 @@ impl<T: Heapable> Heap<T> {
         let head = unsafe { HeapBlock::<T>::new(mmap, block_size)? };
         let head = RwLock::new(head);
 
-        Ok(Self {
-            head,
-            free_list: SpinMutex::new(None),
-            grow_lock: AtomicU8::new(0),
-            block_size,
-            mmap,
-            munmap,
-        })
+        Ok(Self { head, free_list: SpinMutex::new(None), block_size, mmap, munmap })
     }
 
     pub fn alloc(&self, elem: T) -> AllocResult<NonNull<T>> {
