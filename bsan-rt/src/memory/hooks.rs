@@ -6,9 +6,10 @@ use libc::off_t;
 
 pub static BSAN_PROT_FLAGS: i32 = libc::PROT_READ | libc::PROT_WRITE;
 #[cfg(not(miri))]
-pub static BSAN_MAP_FLAGS: i32 = libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE;
+pub static BSAN_MAP_FLAGS: i32 =
+    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_ANON | libc::MAP_NORESERVE;
 #[cfg(miri)]
-pub static BSAN_MAP_FLAGS: i32 = libc::MAP_PRIVATE | libc::MAP_ANONYMOUS;
+pub static BSAN_MAP_FLAGS: i32 = libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_ANON;
 
 pub type MMap = unsafe extern "C" fn(*mut c_void, usize, i32, i32, i32, off_t) -> *mut c_void;
 pub type MUnmap = unsafe extern "C" fn(*mut c_void, usize) -> i32;

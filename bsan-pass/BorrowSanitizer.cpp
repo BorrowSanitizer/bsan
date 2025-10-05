@@ -102,8 +102,7 @@ namespace
         // arguments and return values
         void createUserspaceApi(Module &M, const TargetLibraryInfo &TLI);
 
-        TypeSize getAllocaSizeInBytes(const AllocaInst &AI) const
-        {
+        TypeSize getAllocaSizeInBytes(const AllocaInst &AI) const {
             return *AI.getAllocationSize(AI.getDataLayout());
         }
 
@@ -478,6 +477,8 @@ namespace
         }
 
         ProvenanceScalar getAllocaProvenance(BasicBlock *BB, AllocaInst *AI) {
+            if(!shouldInstrumentAlloca(*AI))
+                return BS.WildcardProvenance;
             if(SingletonAllocaMap.contains(AI)){
                 const auto [Size, Prov] = SingletonAllocaMap[AI];
                 return Prov;
@@ -630,9 +631,14 @@ namespace
                 Value *IdDest, *TagDest, *InfoDest;
                 std::tie(IdDest, TagDest, InfoDest) = allocateProvenanceVectors(IRB, PV.Elems);
 
-                IRB.CreateStore(PV.IdVector, IdDest);
-                IRB.CreateStore(PV.TagVector, TagDest);
-                IRB.CreateStore(PV.InfoVector, InfoDest);
+                StoreInst *Id = IRB.CreateStore(PV.IdVector, IdDest);
+                Id->setVolatile(1);
+
+                StoreInst *Tag = IRB.CreateStore(PV.TagVector, TagDest);
+                Tag->setVolatile(1);
+
+                StoreInst *Info = IRB.CreateStore(PV.InfoVector, InfoDest);
+                Info->setVolatile(1);
 
                 IRB.CreateCall(BS.BsanFuncShadowStoreVector, {
                     ObjAddr,
@@ -655,9 +661,12 @@ namespace
                 ProvenanceVector VP = Prov.assertVector();
                 Value *IdDest, *TagDest, *InfoDest, *Next;
                 std::tie(IdDest, TagDest, InfoDest, Next) = getProvenanceVectorElements(IRB, Dest, VP.Elems);
-                IRB.CreateStore(VP.IdVector, IdDest);
-                IRB.CreateStore(VP.TagVector, TagDest);
-                IRB.CreateStore(VP.InfoVector, InfoDest);
+                StoreInst *Id = IRB.CreateStore(VP.IdVector, IdDest);
+                Id->setVolatile(1);
+                StoreInst *Tag = IRB.CreateStore(VP.TagVector, TagDest);
+                Tag->setVolatile(1);
+                StoreInst *Info = IRB.CreateStore(VP.InfoVector, InfoDest);
+                Info->setVolatile(1);
                 return Next;
             } else {
                 ProvenanceScalar PS = Prov.assertScalar();
@@ -708,9 +717,12 @@ namespace
             Value *Length, 
             ElementCount Elems
         ) {
-            Value *IdVector = IRB.CreateLoad(VectorType::get(BS.IntptrTy, Elems), IdPtr);
-            Value *TagVector = IRB.CreateLoad(VectorType::get(BS.IntptrTy, Elems), TagPtr);
-            Value *InfoVector = IRB.CreateLoad(VectorType::get(BS.PtrTy, Elems), InfoPtr);
+            LoadInst *IdVector = IRB.CreateLoad(VectorType::get(BS.IntptrTy, Elems), IdPtr);
+            IdVector->setVolatile(1);
+            LoadInst *TagVector = IRB.CreateLoad(VectorType::get(BS.IntptrTy, Elems), TagPtr);
+            TagVector->setVolatile(1);
+            LoadInst *InfoVector = IRB.CreateLoad(VectorType::get(BS.PtrTy, Elems), InfoPtr);
+            InfoVector->setVolatile(1);
             return ProvenanceVector(IdVector, TagVector, InfoVector, Length, Elems);
         }
 
@@ -718,9 +730,12 @@ namespace
         ProvenanceScalar loadProvenanceScalar(IRBuilder<> &IRB, Value *Src) {
             Value *IdPtr, *TagPtr, *InfoPtr;
             std::tie(IdPtr, TagPtr, InfoPtr) = getProvenanceElements(IRB, Src);
-            Value *Id = IRB.CreateLoad(BS.IntptrTy, IdPtr);
-            Value *Tag = IRB.CreateLoad(BS.IntptrTy, TagPtr);
-            Value *Info = IRB.CreateLoad(BS.PtrTy, InfoPtr);
+            LoadInst *Id = IRB.CreateLoad(BS.IntptrTy, IdPtr);
+            Id->setVolatile(1);
+            LoadInst *Tag = IRB.CreateLoad(BS.IntptrTy, TagPtr);
+            Tag->setVolatile(1);
+            LoadInst *Info = IRB.CreateLoad(BS.PtrTy, InfoPtr);
+            Info->setVolatile(1);
             return ProvenanceScalar(Id, Tag, Info);
         }
 
@@ -728,9 +743,12 @@ namespace
         void storeProvenanceScalar(IRBuilder<> &IRB, ProvenanceScalar Prov, Value *Dest) {
             Value *IdPtr, *TagPtr, *InfoPtr;
             std::tie(IdPtr, TagPtr, InfoPtr) = getProvenanceElements(IRB, Dest);
-            IRB.CreateStore(Prov.Id, IdPtr);
-            IRB.CreateStore(Prov.Tag, TagPtr);
-            IRB.CreateStore(Prov.Info, InfoPtr);
+            StoreInst *Id = IRB.CreateStore(Prov.Id, IdPtr);
+            Id->setVolatile(1);
+            StoreInst *Tag = IRB.CreateStore(Prov.Tag, TagPtr);
+            Tag->setVolatile(1);
+            StoreInst *Info = IRB.CreateStore(Prov.Info, InfoPtr);
+            Info->setVolatile(1);
         }
 
         std::tuple<Value *, Value *, Value *, Value *> getProvenanceVectorElements(IRBuilder<> &IRB, Value *ProvArray, ElementCount Elems) {
@@ -855,13 +873,10 @@ namespace
                     TotalNumProvenanceValues = EntryIRB.CreateAdd(TotalNumProvenanceValues, C.NumProvenanceValues);
                 }
             }
+            EntryIRB.CreateCall(BS.BsanFuncPushRetagFrame, {});
+            EntryIRB.CreateCall(BS.BsanFuncPushAllocaFrame, {});  
 
-            if(NumFnEntryRetags > 0){
-                EntryIRB.CreateCall(BS.BsanFuncPushRetagFrame, {});
-            }
-        
             if(StaticAllocaVec.size() > 0) {
-                EntryIRB.CreateCall(BS.BsanFuncPushAllocaFrame, {});  
                 for (AllocaInst *AI : StaticAllocaVec) {
                     if(HasLifetimeStart.contains(AI)) {
                         if(HasLifetimeStart[AI].size() > 1){
@@ -998,7 +1013,11 @@ namespace
 
         // We only instrument allocations that have a non-zero size.
         bool shouldInstrumentAlloca(AllocaInst &AI) {
-            return true;
+            // Although Rust emits retags for ZSTs, tracking
+            // allocations leads to false positive errors—probably
+            // due to interactions with lowering.
+            return (AI.getAllocatedType()->isSized() &&
+                !BS.getAllocaSizeInBytes(AI).isZero());
         }
 
         // Deallocates a pointer.
@@ -1108,7 +1127,8 @@ namespace
             
             Value *TagPtr;
             std::tie(std::ignore, TagPtr, std::ignore) = getProvenanceElements(IRB, ShadowPointer);
-            IRB.CreateStore(NewTag, TagPtr);
+            StoreInst *SI = IRB.CreateStore(NewTag, TagPtr);
+            SI->setVolatile(1);
         }
 
         void instrumentRetagOperand(CallBase &CB) {
@@ -1118,7 +1138,6 @@ namespace
             ProvenanceScalar Prov = assertProvenanceScalar(CB.getOperand(0));
             Value *NewTag = newBorrowTag(IRB);
             
-
             CallInst *RetagCall = IRB.CreateCall(BS.BsanFuncRetag, {
                 CB.getOperand(0),
                 CB.getOperand(1),
@@ -1176,7 +1195,6 @@ namespace
                     ParamArray = storeProvenance(Before, Prov, ParamArray);
                 }
             }
-            //Before.CreateCall(BS.BsanFuncDebugParamTLS, {TotalNumProvenanceValues});
 
             // We need to do some extra work here to compute where to insert our instructions,
             // since some function calls occur within terminators.
@@ -1215,6 +1233,7 @@ namespace
 
                 Value *ReturnArray = BS.RetvalTLS;
                 Value *RetvalByteWidth = BS.Zero;
+
                 for (const auto &[Idx, Comp] : llvm::enumerate(*ReturnComponents)) {
                     ProvenancePointer Ptr = Comp.getPointerToProvenance(After, ReturnArray);
                     setProvenance({&CB, Idx}, loadProvenance(After, Ptr));
@@ -1224,17 +1243,13 @@ namespace
                     ReturnArray = offsetPointer(After, ReturnArray, ByteWidth);
                 } 
 
-                //After.CreateCall(BS.BsanFuncDebugRetvalTLS, {TotalNumReturnProvenanceValues});
-
                 if (isExternFunction)
                     Before.CreateMemSet(
                         BS.RetvalTLS,
                         ConstantInt::get(BS.Int8Ty, 0),
                         RetvalByteWidth,
                         BS.ProvenanceAlign);
-            }//else{
-            //    After.CreateCall(BS.BsanFuncDebugRetvalTLS, {BS.Zero});
-            //}
+            }
         }
 
         ProvenanceVector createVectorProvenancePHI(IRBuilder<> &IRB, ElementCount Elems, iterator_range<pred_iterator> Blocks) {
@@ -1259,6 +1274,7 @@ namespace
                 InfoNode->addIncoming(WildcardVector.InfoVector, BB);
                 LengthNode->addIncoming(WildcardVector.Length, BB);
             }
+
             return ProvenanceVector(IdNode, TagNode, InfoNode, LengthNode, Elems);
         }
 
@@ -1338,7 +1354,8 @@ namespace
             if(CurrentProv != BS.InvalidProvenance && CurrentProv != BS.WildcardProvenance){
                 IRB.CreateCall(BS.BsanFuncDeallocWeak, {AI, CurrentProv.Id, CurrentProv.Tag, CurrentProv.Info});
             }
-
+            if(!shouldInstrumentAlloca(*AI))
+                return;
             if(SingletonAllocaMap.contains(AI)) {
                 const auto [Size, Prov] = SingletonAllocaMap[AI];
                 initAllocaMetadata(IRB, AI, Size, Prov);
@@ -1621,11 +1638,9 @@ namespace
                         IRB.CreateCall(BS.BsanFuncDeallocWeak, {AI, Root.Id, Root.Tag, Root.Info});
                     }
                 }
-                IRB.CreateCall(BS.BsanFuncPopAllocaFrame, {});
             }
-            if(NumFnEntryRetags > 0){
-                IRB.CreateCall(BS.BsanFuncPopRetagFrame, {});
-            }
+            IRB.CreateCall(BS.BsanFuncPopAllocaFrame, {});
+            IRB.CreateCall(BS.BsanFuncPopRetagFrame, {});
         } 
 
         void visitReturnInst(ReturnInst &I) {
@@ -1956,7 +1971,6 @@ bool BorrowSanitizer::instrumentFunction(Function &F, FunctionAnalysisManager &F
     initializeCallbacks(*F.getParent(), TLI);
     BorrowSanitizerVisitor Visitor(F, *this, SSGI, TLI, DT);
     bool status = Visitor.run();
-
     return status;
 }
 

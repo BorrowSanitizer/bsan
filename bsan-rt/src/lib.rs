@@ -557,7 +557,8 @@ unsafe extern "C-unwind" fn __bsan_shadow_copy(src: *mut u8, dst: *mut u8, acces
 unsafe extern "C-unwind" fn __bsan_shadow_clear(dst: *mut u8, access_size: usize) {
     let ctx = unsafe { global_ctx() };
     let heap = ctx.shadow_heap();
-    heap.clear(dst.addr(), access_size);
+    heap.clear(ctx.hooks(), dst.addr(), access_size, __BSAN_NULL_PROVENANCE)
+        .unwrap_or_else(|info| ctx.handle_error(info.into()))
 }
 
 /// Loads the provenance of a given address from shadow memory and stores
@@ -764,12 +765,6 @@ extern "C" fn __bsan_debug_print(alloc_id: AllocId, bor_tag: BorTag, alloc_info:
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     crate::println!("{prov:?}");
 }
-
-#[unsafe(no_mangle)]
-extern "C" fn __bsan_debug_retval_tls(_num: usize) {}
-
-#[unsafe(no_mangle)]
-extern "C" fn __bsan_debug_param_tls(_num: usize) {}
 
 #[cfg(not(test))]
 #[panic_handler]

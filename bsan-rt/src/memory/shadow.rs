@@ -82,7 +82,7 @@ impl TableIndex {
     fn add(self, num_elements: usize) -> Self {
         let element_offset = self.l2_index + num_elements;
         let l2_index = element_offset % L2_LEN;
-        let l1_index = Self::wrap_to_l1(element_offset);
+        let l1_index = self.l1_index + (element_offset / L2_LEN) % L1_LEN;
         TableIndex { l1_index, l2_index }
     }
 
@@ -155,36 +155,32 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
         }
     }
 
-    pub fn clear(&self, dst: usize, num_bytes: usize) {
-        if num_bytes < PTR_BYTES {
-            return;
-        }
+    pub fn clear(
+        &self,
+        hooks: &BsanHooks,
+        dst: usize,
+        num_bytes: usize,
+        value: T,
+    ) -> AllocResult<()> {
         // We allow writing partial provenance values here, because if a pointer
         // is partially overwritten, then it should become invalid.
-        let dst_index = TableIndex::new(dst);
+        let mut dst_index = TableIndex::new(dst);
 
         // Likewise, we want to round *up* to the nearest provenance value.
         #[cfg(target_endian = "little")]
-        let mut words_remaining = num_bytes.next_multiple_of(PTR_BYTES).shr(PTR_BYTES_POWER);
+        let mut prov_remaining = num_bytes.next_multiple_of(PTR_BYTES).shr(PTR_BYTES_POWER);
         #[cfg(target_endian = "big")]
-        let mut words_remaining = num_bytes.next_multiple_of(PTR_BYTES).shl(PTR_BYTES_POWER);
+        let mut prov_remaining = num_bytes.next_multiple_of(PTR_BYTES).shl(PTR_BYTES_POWER);
 
-        while words_remaining > 0 {
-            let l2_table_dst: Option<NonNull<[T; L2_LEN]>> = self.get_l2(dst_index);
-            // Attempting to read from an uninitialized L2 page will return the default provenance
-            // value, so we don't need to populate these pages ahead-of-time.
-            if let Some(l2_table_dst) = l2_table_dst {
-                let num_dst = dst_index.num_remaining_in_page();
-                let num_can_write = core::cmp::min(words_remaining, num_dst);
-                unsafe {
-                    let dst = &raw mut (*l2_table_dst.as_ptr())[dst_index.l2_index];
-                    ptr::write_bytes(dst, 0, num_can_write);
-                };
-                words_remaining -= num_can_write;
-            } else {
-                break;
+        while prov_remaining > 0 {
+            let l2_dest = self.ensure_l2(hooks, dst_index)?;
+            unsafe {
+                (*l2_dest.as_ptr())[dst_index.l2_index] = value;
             }
+            dst_index = dst_index.add(1);
+            prov_remaining -= 1;
         }
+        Ok(())
     }
 
     pub fn store_consecutive(
@@ -397,7 +393,7 @@ mod tests {
             }
         }
 
-        heap.clear(src_address, max * PTR_BYTES);
+        heap.clear(&DEFAULT_HOOKS, src_address, max * PTR_BYTES, TestProv::default()).unwrap();
         for offset in 0..max {
             let offset_bytes = offset * PTR_BYTES;
             let compare_prov = unsafe { *heap.get_src(src_address + offset_bytes) };
@@ -444,6 +440,17 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn index_arithmetic() {
+        let root = TableIndex { l1_index: 256, l2_index: 1024 };
+        let add_one = root.add(1);
+        assert!(add_one.l1_index == root.l1_index);
+        assert!(add_one.l2_index == root.l2_index + 1);
+        assert!(add_one == root.add(2).sub(1));
+
+        let sub_one = root.sub(1);
+        assert!(sub_one == root.sub(2).add(1));
+    }
     #[test]
     fn smoke() -> AllocResult<()> {
         let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV)?;

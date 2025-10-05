@@ -41,7 +41,7 @@ impl GlobalCtx {
             root_ptr_tags: Mutex::new(BHashMap::new_in(hooks.alloc)),
             protected_tags: Mutex::new(BHashMap::new_in(hooks.alloc)),
             alloc_metadata_map: Heap::new(&hooks)?,
-            shadow_heap: ShadowHeap::new(&hooks, &raw const __BSAN_NULL_PROVENANCE)?,
+            shadow_heap: ShadowHeap::new(&hooks, &raw const __BSAN_WILDCARD_PROVENANCE)?,
         })
     }
 
