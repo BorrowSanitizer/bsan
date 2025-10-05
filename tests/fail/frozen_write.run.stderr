@@ -1,0 +1,3 @@
+An error occurred: UndefinedBehavior(AliasingViolation(TreeError { error_kind: ChildAccessForbidden(Permission { inner: Frozen }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>, name: None, history: History { tag: <TAG>, created: (Span(0), Permission { inner: Frozen }), events: [] } }, access_cause: Explicit(Write), accessed_info: NodeDebugInfo { tag: <TAG>, name: None, history: History { tag: <TAG>, created: (Span(0), Permission { inner: Frozen }), events: [] } } }))
+
+
