@@ -85,15 +85,17 @@ struct DebugSummary {
 impl fmt::Display for DebugSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.info {
-            AllocInfoSummary::WildCard => write!(
-                f, "[{}] 0x{:x} @(*, {:?}) -> (wildcard)",
-                self.op, self.ptr, self.bor_tag),
+            AllocInfoSummary::WildCard => {
+                write!(f, "[{}] 0x{:x} @(*, {:?}) -> (wildcard)", self.op, self.ptr, self.bor_tag)
+            }
             AllocInfoSummary::Null => write!(
-                f, "[{}] 0x{:x} @({:?}, {:?}) -> (null)",
+                f,
+                "[{}] 0x{:x} @({:?}, {:?}) -> (null)",
                 self.op, self.ptr, self.alloc_id, self.bor_tag
             ),
             AllocInfoSummary::Valid { alloc_id, base_addr, size } => write!(
-                f, "[{}] 0x{:x} @({:?}, {:?}) -> ({:?}, {:?}, {:?})",
+                f,
+                "[{}] 0x{:x} @({:?}, {:?}) -> ({:?}, {:?}, {:?})",
                 self.op, self.ptr, self.alloc_id, self.bor_tag, alloc_id, base_addr, size
             ),
         }
