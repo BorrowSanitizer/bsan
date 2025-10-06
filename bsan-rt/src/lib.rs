@@ -84,29 +84,37 @@ struct DebugSummary {
 #[cfg(feature = "debug")]
 impl fmt::Display for DebugSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "[{}] 0x{:x} @({:?}, {:?}) -> ({:?}, {:?}, {:?})",
-            self.op,
-            self.ptr,
-            self.alloc_id,
-            self.bor_tag,
-            self.info.alloc_id,
-            self.info.base_addr,
-            self.info.size
-        )
+        match self.info {
+            AllocInfoSummary::WildCard => write!(
+                f, "[{}] 0x{:x} @(*, {:?}) -> (wildcard)",
+                self.op, self.ptr, self.bor_tag),
+            AllocInfoSummary::Null => write!(
+                f, "[{}] 0x{:x} @({:?}, {:?}) -> (null)",
+                self.op, self.ptr, self.alloc_id, self.bor_tag
+            ),
+            AllocInfoSummary::Valid { alloc_id, base_addr, size } => write!(
+                f, "[{}] 0x{:x} @({:?}, {:?}) -> ({:?}, {:?}, {:?})",
+                self.op, self.ptr, self.alloc_id, self.bor_tag, alloc_id, base_addr, size
+            ),
+        }
     }
 }
 
 #[cfg(feature = "debug")]
 macro_rules! debug_bsan {
-    ($op:literal, $ptr:ident, $alloc_id:ident, $bor_tag:ident, $info:expr) => {{
+    ($op:literal, $ptr:ident, $alloc_id:ident, $bor_tag:ident, $alloc_info:expr) => {{
+        #[allow(unused_unsafe)]
+        let info = match $alloc_id.0 {
+            0 => AllocInfoSummary::WildCard,
+            1 => AllocInfoSummary::Null,
+            _ => unsafe { &*$alloc_info }.summarize(),
+        };
         let summary = DebugSummary {
             op: $op,
             ptr: $ptr.addr(),
             alloc_id: $alloc_id,
             bor_tag: $bor_tag,
-            info: $info.summarize(),
+            info,
         };
         println!("{}", summary);
     }};
@@ -343,18 +351,24 @@ impl AllocInfo {
 
     #[cfg(feature = "debug")]
     fn summarize(&self) -> AllocInfoSummary {
-        AllocInfoSummary { alloc_id: self.alloc_id, base_addr: self.base_addr, size: self.size }
+        AllocInfoSummary::Valid {
+            alloc_id: self.alloc_id,
+            base_addr: self.base_addr,
+            size: self.size,
+        }
     }
 }
 
 /// A shallow version of `AllocInfo`, for use in debug logging.
-/// Only difference is it does not include the tree_lock `Mutex` field.
 #[cfg(feature = "debug")]
 #[derive(Debug)]
-pub struct AllocInfoSummary {
-    pub alloc_id: AllocId,
-    pub base_addr: FreeListAddrUnion,
-    pub size: usize,
+pub enum AllocInfoSummary {
+    /// When Prov is wildcard, AllocInfo is invalid
+    WildCard,
+    /// When Prov is null, AllocInfo is invalid
+    Null,
+    /// When Prov is valid, only drop the tree_lock field
+    Valid { alloc_id: AllocId, base_addr: FreeListAddrUnion, size: usize },
 }
 
 /// Initializes the global state of the runtime library.
@@ -392,7 +406,7 @@ unsafe extern "C-unwind" fn __bsan_retag(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) -> BorTag {
-    debug_bsan!("retag", object_addr, alloc_id, bor_tag, unsafe { &*alloc_info });
+    debug_bsan!("retag", object_addr, alloc_id, bor_tag, alloc_info);
     let global_ctx = unsafe { global_ctx() };
     let local_ctx = unsafe { local_ctx_mut() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
@@ -413,9 +427,10 @@ unsafe extern "C-unwind" fn __bsan_read(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) {
-    debug_bsan!("read", ptr, alloc_id, bor_tag, unsafe { &*alloc_info });
+    debug_bsan!("read", ptr, alloc_id, bor_tag, alloc_info);
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
+
     BorrowTracker::new(prov, ptr, Some(access_size))
         .and_then(|bt| bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Read)))
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
@@ -430,9 +445,10 @@ unsafe extern "C-unwind" fn __bsan_write(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) {
-    debug_bsan!("write", ptr, alloc_id, bor_tag, unsafe { &*alloc_info });
+    debug_bsan!("write", ptr, alloc_id, bor_tag, alloc_info);
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
+
     BorrowTracker::new(prov, ptr, Some(access_size))
         .and_then(|bt| bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Write)))
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
@@ -446,9 +462,10 @@ extern "C" fn __bsan_dealloc(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) {
-    debug_bsan!("dealloc", ptr, alloc_id, bor_tag, unsafe { &*alloc_info });
+    debug_bsan!("dealloc", ptr, alloc_id, bor_tag, alloc_info);
     let global_ctx = unsafe { global_ctx() };
     let prov: Provenance = Provenance { alloc_id, bor_tag, alloc_info };
+
     BorrowTracker::new(prov, ptr, None)
         .and_then(|mut bt| bt.iter_mut().try_for_each(|t| t.dealloc(global_ctx)))
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
@@ -603,9 +620,13 @@ unsafe extern "C" fn __bsan_alloc_in_place(
     bor_tag: BorTag,
     alloc_info: NonNull<MaybeUninit<AllocInfo>>,
 ) {
-    debug_bsan!("alloc_in_place", base_addr, alloc_id, bor_tag, unsafe {
-        &*alloc_info.as_ptr().cast::<AllocInfo>()
-    });
+    debug_bsan!(
+        "alloc_in_place",
+        base_addr,
+        alloc_id,
+        bor_tag,
+        alloc_info.as_ptr().cast::<AllocInfo>()
+    );
     let ctx = unsafe { global_ctx() };
     bsan_alloc_in_place(ctx, base_addr, size, alloc_id, bor_tag, alloc_info)
         .unwrap_or_else(|info| ctx.handle_error(info))
