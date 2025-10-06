@@ -2,7 +2,7 @@
 // and the Rust compiler's bootstrap script.
 #![feature(io_error_more)]
 use anyhow::Result;
-use clap::{command, Parser};
+use clap::Parser;
 use commands::Component;
 //mod commands;
 mod commands;

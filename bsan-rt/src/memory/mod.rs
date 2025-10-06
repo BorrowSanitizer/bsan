@@ -39,7 +39,10 @@ unsafe impl Heapable for AllocInfo {
     fn next(&mut self) -> *mut Option<NonNull<AllocInfo>> {
         // we are re-using the space of base_addr to store the free list pointer
         // SAFETY: this is safe because both union fields are raw pointers
-        unsafe { &raw mut self.base_addr.free_list_next }
+        #[allow(unused_unsafe)]
+        unsafe {
+            &raw mut self.base_addr.free_list_next
+        }
     }
 }
 

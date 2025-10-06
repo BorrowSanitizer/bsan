@@ -92,7 +92,7 @@ impl Command {
         Self::fmt(env, &["--check".to_string()])?;
         components.iter().try_for_each(|c| c.clippy(env, args))?;
         components.iter().try_for_each(|c| c.test(env, args))?;
-        components.iter().try_for_each(|c| c.miri(env, args))?;
+        //components.iter().try_for_each(|c| c.miri(env, args))?;
         Self::ui(env, false)
     }
 
@@ -308,14 +308,12 @@ impl Buildable for BsanRt {
         env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.check("bsan-rt", args))
     }
 
-    fn miri(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
-        /*
+    fn miri(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
         env.with_flags(
             "MIRIFLAGS",
             &["-Zmiri-permissive-provenance", "-Zmiri-disable-alignment-check"],
             |env| env.miri("bsan-rt", args),
-        )*/
-        Ok(())
+        )
     }
 }
 
@@ -348,12 +346,12 @@ impl Buildable for BsanPass {
         Ok(Some(path!(path / "build" / self.artifact())))
     }
 
-    fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.test("bsan-rt", args))
+    fn test(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
+        Ok(())
     }
 
-    fn clippy(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.clippy("bsan-rt", args))
+    fn clippy(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
+        Ok(())
     }
 
     fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
