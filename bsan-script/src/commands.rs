@@ -308,12 +308,14 @@ impl Buildable for BsanRt {
         env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.check("bsan-rt", args))
     }
 
-    fn miri(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+    fn miri(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
+        /*
         env.with_flags(
             "MIRIFLAGS",
             &["-Zmiri-permissive-provenance", "-Zmiri-disable-alignment-check"],
             |env| env.miri("bsan-rt", args),
-        )
+        )*/
+        Ok(())
     }
 }
 

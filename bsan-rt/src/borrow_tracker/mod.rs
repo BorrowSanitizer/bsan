@@ -63,8 +63,6 @@ impl BorrowTracker {
             if start.addr() < base_addr.addr() || (relative_offset + access_size > alloc_size) {
                 throw_ub!(UBInfo::AccessOutOfBounds(
                     prov,
-                    base_addr.addr(),
-                    start.addr(),
                     access_size,
                     alloc_size
                 ))

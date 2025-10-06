@@ -37,7 +37,7 @@ pub enum UBInfo {
     #[error("invalid provenance")]
     InvalidProvenance,
     #[error("access out-of-bounds")]
-    AccessOutOfBounds(Provenance, usize, usize, usize, usize),
+    AccessOutOfBounds(Provenance, usize, usize),
     #[error("use-after-free.")]
     UseAfterFree(AllocId),
     #[error("freeing global allocation")]
