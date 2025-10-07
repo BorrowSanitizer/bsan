@@ -57,9 +57,9 @@ pub enum Command {
     },
     /// Format all sources and tests.
     Fmt {
-        /// Flags that are passed through to `rustfmt`.
-        #[arg(allow_hyphen_values(true), last(true))]
-        args: Vec<String>,
+        /// Check that files are formatted.
+        #[arg(long)]
+        check: bool,
     },
     /// Build BorrowSanitizer.
     Build {

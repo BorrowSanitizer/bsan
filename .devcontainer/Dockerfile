@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y \
     cmake \
     ninja-build \ 
     clang \
+    clang-format \
     curl \ 
     vim \
     pkg-config \ 

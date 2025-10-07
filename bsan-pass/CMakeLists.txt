@@ -18,4 +18,14 @@ set(BSAN_HEADERS
   Provenance.h
 )
 
+add_custom_target(clang-format
+  COMMAND clang-format ${BSAN_SOURCES} ${BSAN_HEADERS} -i --style=file
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_custom_target(clang-format-check
+  COMMAND clang-format ${BSAN_SOURCES} ${BSAN_HEADERS} --dry-run --Werror --style=file
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
 add_library(bsan_plugin SHARED ${BSAN_SOURCES} ${BSAN_HEADERS})

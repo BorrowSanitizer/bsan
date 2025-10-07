@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::ValueEnum;
+use cmake::Config;
 use path_macro::path;
 use xshell::cmd;
 
@@ -25,7 +26,7 @@ impl Command {
             }),
             Command::Bin { binary_name, args } => Self::bin(env, binary_name, &args),
             Command::Opt { args } => Self::opt(env, &args),
-            Command::Fmt { args } => Self::fmt(env, &args),
+            Command::Fmt { check } => Self::fmt(env, check),
             Command::Build { components, args } => components.iter().try_for_each(|c| {
                 c.build(env, &args)?;
                 Ok(())
@@ -62,8 +63,9 @@ impl Command {
         Ok(())
     }
 
-    fn fmt(env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.fmt(args)
+    fn fmt(env: &mut BsanEnv, check: bool) -> Result<()> {
+        env.fmt(check)?;
+        BsanPass::fmt(env, check)
     }
 
     fn ui(env: &mut BsanEnv, _bless: bool) -> Result<()> {
@@ -89,7 +91,7 @@ impl Command {
         let components = crate::all_components!();
         // We want to ensure that all formatting steps are completed for every component
         // before we try running more expensive checks, like unit and integration tests.
-        Self::fmt(env, &["--check".to_string()])?;
+        Self::fmt(env, true)?;
         components.iter().try_for_each(|c| c.clippy(env, args))?;
         components.iter().try_for_each(|c| c.test(env, args))?;
         //components.iter().try_for_each(|c| c.miri(env, args))?;
@@ -319,6 +321,30 @@ impl Buildable for BsanRt {
 
 struct BsanPass;
 
+impl BsanPass {
+    fn cmake(env: &mut BsanEnv) -> Result<Config> {
+        let source_dir = path!(env.root_dir / "bsan-pass");
+        let mut cfg = env.cmake(source_dir);
+
+        let cxxflags = env.llvm_config().arg("--cxxflags").output()?.stdout;
+        let cxxflags: String = String::from_utf8(cxxflags)?;
+
+        cfg.define("CMAKE_CXX_FLAGS", cxxflags.trim());
+        Ok(cfg)
+    }
+
+    fn fmt(env: &mut BsanEnv, check: bool) -> Result<()> {
+        let mut cfg = BsanPass::cmake(env)?;
+        if check {
+            cfg.build_target("clang-format-check");
+        } else {
+            cfg.build_target("clang-format");
+        }
+        cfg.build();
+        Ok(())
+    }
+}
+
 impl Buildable for BsanPass {
     fn artifact(&self) -> &'static str {
         #[cfg(target_os = "macos")]
@@ -333,13 +359,7 @@ impl Buildable for BsanPass {
     }
 
     fn build(&self, env: &mut BsanEnv, _args: &[String]) -> Result<Option<PathBuf>> {
-        let source_dir = path!(env.root_dir / "bsan-pass");
-        let mut cfg = env.cmake(source_dir);
-
-        let cxxflags = env.llvm_config().arg("--cxxflags").output()?.stdout;
-        let cxxflags: String = String::from_utf8(cxxflags)?;
-
-        cfg.define("CMAKE_CXX_FLAGS", cxxflags.trim());
+        let mut cfg = BsanPass::cmake(env)?;
         cfg.build_target("bsan_plugin");
         cfg.pic(true);
         let path = cfg.build();
