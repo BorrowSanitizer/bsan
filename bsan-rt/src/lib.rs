@@ -534,7 +534,6 @@ unsafe extern "C-unwind" fn __bsan_alloc(
                 ))),
             })
             .unwrap_or_else(|info| global_ctx.handle_error(info))
-
     };
     debug_bsan!("alloc", base_addr, alloc_id, bor_tag, alloc_info.as_ref());
     alloc_info
