@@ -1,19 +1,14 @@
 #include "BorrowSanitizer.h"
-
+#include "Declarations.h"
 #include "llvm/ADT/DepthFirstIterator.h"
-#include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SmallSet.h"
-#include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
-#include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Analysis/StackLifetime.h"
 #include "llvm/Analysis/StackSafetyAnalysis.h"
-#include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
-#include "llvm/IR/CFG.h"
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/EHPersonalities.h"
@@ -25,233 +20,16 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/DebugCounter.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/EscapeEnumerator.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
 using namespace llvm;
 
-#define DEBUG_TYPE "bsan"
-
-// Command-line flags:
-static cl::opt<bool>
-    ClWithComdat("bsan-with-comdat",
-                 cl::desc("Place BSan constructors in comdat sections"),
-                 cl::Hidden, cl::init(true));
-
-static cl::opt<bool>
-    ClUseStackSafety("bsan-use-stack-safety", cl::Hidden, cl::init(true),
-                     cl::Hidden, cl::desc("Use Stack Safety analysis results"),
-                     cl::Optional);
-
-static cl::opt<bool>
-    ClTrustExtern("bsan-trust-extern", cl::Hidden, cl::init(true), cl::Hidden,
-                  cl::desc("Trust external functions to be instrumented."),
-                  cl::Optional);
-
-namespace {
-struct BorrowSanitizer {
-  BorrowSanitizer(Module &M)
-      : UseCtorComdat(ClWithComdat), TrustExtern(ClTrustExtern) {
-    C = &(M.getContext());
-    DL = &M.getDataLayout();
-    TargetTriple = Triple(M.getTargetTriple());
-
-    LongSize = M.getDataLayout().getPointerSizeInBits();
-
-    Int8Ty = Type::getInt8Ty(*C);
-    Int16Ty = Type::getInt16Ty(*C);
-    Int64Ty = Type::getInt64Ty(*C);
-    PtrTy = PointerType::getUnqual(*C);
-    IntptrTy = Type::getIntNTy(*C, LongSize);
-
-    ProvenanceTy = StructType::get(IntptrTy, IntptrTy, PtrTy);
-    ProvenanceAlign = DL->getABITypeAlign(ProvenanceTy);
-    ProvenanceSize = ConstantInt::get(IntptrTy, kProvenanceSize);
-
-    Zero = ConstantInt::get(IntptrTy, 0);
-    One = ConstantInt::get(IntptrTy, 1);
-
-    True = ConstantInt::get(Int8Ty, 1);
-    False = ConstantInt::get(Int8Ty, 0);
-
-    Constant *InvalidPtr = ConstantPointerNull::get(PtrTy);
-
-    WildcardProvenance = ProvenanceScalar(Zero, Zero, InvalidPtr);
-    InvalidProvenance = ProvenanceScalar(One, Zero, InvalidPtr);
-  }
-  bool instrumentModule(Module &);
-  bool instrumentFunction(Function &F, FunctionAnalysisManager &FAM,
-                          const StackSafetyGlobalInfo *const SSGI);
-
-  // Adds thread-local global variables for passing the provenance for
-  // arguments and return values
-  void createUserspaceApi(Module &M, const TargetLibraryInfo &TLI);
-
-  TypeSize getAllocaSizeInBytes(const AllocaInst &AI) const {
-    return *AI.getAllocationSize(AI.getDataLayout());
-  }
-
-private:
-  friend struct ThrowingCallTransformer;
-  friend struct BorrowSanitizerVisitor;
-
-  void initializeCallbacks(Module &M, const TargetLibraryInfo &TLI);
-  void instrumentGlobals(IRBuilder<> &IRB, Module &M, bool *CtorComdat);
-  Instruction *createBsanModuleDtor(Module &M);
-
-  bool UseCtorComdat;
-  bool TrustExtern;
-  LLVMContext *C;
-  const DataLayout *DL;
-
-  int LongSize;
-  Triple TargetTriple;
-  Type *Int8Ty;
-  Type *Int16Ty;
-  Type *Int64Ty;
-  PointerType *PtrTy;
-
-  Type *IntptrTy;
-  Align IntptrAlign;
-
-  StructType *ProvenanceTy;
-  Align ProvenanceAlign;
-  Value *ProvenanceSize;
-
-  bool CallbacksInitialized = false;
-
-  Function *BsanCtorFunction = nullptr;
-  Function *BsanDtorFunction = nullptr;
-
-  FunctionCallee BsanFuncRetag;
-  FunctionCallee BsanFuncShadowCopy;
-  FunctionCallee BsanFuncShadowClear;
-  FunctionCallee BsanFuncGetShadowSrc;
-  FunctionCallee BsanFuncGetShadowDest;
-
-  FunctionCallee BsanFuncReserveStackSlot;
-  FunctionCallee BsanFuncAllocStack;
-
-  FunctionCallee BsanFuncPushAllocaFrame;
-  FunctionCallee BsanFuncPushRetagFrame;
-
-  FunctionCallee BsanFuncPopAllocaFrame;
-  FunctionCallee BsanFuncPopRetagFrame;
-
-  FunctionCallee BsanFuncAlloc;
-  FunctionCallee BsanFuncDealloc;
-  FunctionCallee BsanFuncDeallocWeak;
-  FunctionCallee BsanFuncExposeTag;
-  FunctionCallee BsanFuncRead;
-  FunctionCallee BsanFuncWrite;
-
-  FunctionCallee BsanFuncShadowLoadVector;
-  FunctionCallee BsanFuncShadowStoreVector;
-
-  FunctionCallee BsanFuncAssertProvenanceInvalid;
-  FunctionCallee BsanFuncAssertProvenanceValid;
-  FunctionCallee BsanFuncAssertProvenanceNull;
-  FunctionCallee BsanFuncAssertProvenanceWildcard;
-  FunctionCallee BsanFuncDebugPrint;
-
-  FunctionCallee BsanFuncDebugParamTLS;
-  FunctionCallee BsanFuncDebugRetvalTLS;
-
-  FunctionCallee DefaultPersonalityFn;
-
-  ProvenanceScalar WildcardProvenance;
-  ProvenanceScalar InvalidProvenance;
-
-  // Thread-local storage for paramters
-  // and return values.
-  Value *ParamTLS = nullptr;
-  Value *RetvalTLS = nullptr;
-  Value *AllocIdCounter = nullptr;
-  Value *BorTagCounter = nullptr;
-
-  Constant *Zero = nullptr;
-  Constant *One = nullptr;
-
-  Constant *True = nullptr;
-  Constant *False = nullptr;
-};
-
-// If a function might unwind, then we need to insert a cleanup block
-// before it returns so that we can invalidate our stack metadata. Since this
-// involves a change to the CFG, we do this before inserting our
-// instrumentation; otherwise we would risk invalidating the lifetimes of
-// existing instructions during the pass. This is equivalent to LLVM's
-// `EscapeEnumerator`, but we cannot reuse that, since our retag intrinsics are
-// currently set to unwind, so they're accidentally caught in the
-// transformation. In the future, when we adjust that behavior, we might
-// consider replacing this with `EscapeEnumerator`.
-struct ThrowingCallTransformer : public InstVisitor<ThrowingCallTransformer> {
-  Function &F;
-  LLVMContext *C;
-  BorrowSanitizer &BS;
-  const TargetLibraryInfo *TLI;
-  SmallVector<CallInst *> ThrowingCalls;
-  DominatorTree &DT;
-
-  ThrowingCallTransformer(Function &F, BorrowSanitizer &BS,
-                          const TargetLibraryInfo *TLI, DominatorTree &DT)
-      : F(F), BS(BS), C(BS.C), TLI(TLI), DT(DT) {}
-
-  bool run() {
-    DomTreeUpdater DTU =
-        DomTreeUpdater(DT, DomTreeUpdater::UpdateStrategy::Lazy);
-
-    for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I)
-      InstVisitor<ThrowingCallTransformer>::visit(*I);
-
-    if (ThrowingCalls.empty())
-      return false;
-
-    for (CallInst *CI : llvm::reverse(ThrowingCalls)) {
-      IRBuilder<> IRB(CI);
-      BasicBlock *CallingBlock = CI->getParent();
-      Function *Callee = CI->getCalledFunction();
-      BasicBlock *CleanupBB = BasicBlock::Create(*BS.C, "cleanup", &F);
-      Type *ExnTy = StructType::get(BS.PtrTy, Type::getInt32Ty(*BS.C));
-      if (!F.hasPersonalityFn()) {
-        F.setPersonalityFn(cast<Constant>(BS.DefaultPersonalityFn.getCallee()));
-      }
-
-      if (isScopedEHPersonality(classifyEHPersonality(F.getPersonalityFn())))
-        report_fatal_error("Scoped EH not supported");
-
-      LandingPadInst *LPad =
-          LandingPadInst::Create(ExnTy, 1, "cleanup.lpad", CleanupBB);
-      LPad->setCleanup(true);
-
-      ResumeInst *RI = ResumeInst::Create(LPad, CleanupBB);
-      changeToInvokeAndSplitBasicBlock(CI, CleanupBB, &DTU);
-    }
-    DTU.flush();
-    return true;
-  }
-
-  using InstVisitor<ThrowingCallTransformer>::visit;
-  void visitCallBase(CallBase &CB) {
-    if (CallInst *CI = dyn_cast<CallInst>(&CB)) {
-      if (!CI->doesNotThrow() && !CI->isMustTailCall()) {
-        Function *Callee = CI->getCalledFunction();
-        // We exclude retag intrinsics
-        if (Callee && Callee->getName().starts_with(kBsanPrefix))
-          return;
-        ThrowingCalls.push_back(CI);
-      }
-    }
-  }
-};
-
-// This class implements function-level instrumentation.
-struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
+class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
+  friend class InstVisitor<BorrowSanitizerVisitor>;
   Function &F;
   BorrowSanitizer &BS;
   DIBuilder DIB;
@@ -360,12 +138,45 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // every exit point.
   std::unique_ptr<StackLifetime> LifetimeInfo;
 
+public:
   BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
                          const StackSafetyGlobalInfo *const SSGI,
                          const TargetLibraryInfo &TLI, DominatorTree &DT)
       : F(F), BS(BS), DIB(*F.getParent(), /*AllowUnresolved*/ false), C(BS.C),
         TLI(&TLI), SSGI(SSGI), CurrentBlock(&F.getEntryBlock()), DT(DT) {}
 
+  bool run() {
+    EscapeEnumerator EE(F, "bsan_cleanup", true);
+    while (IRBuilder<> *AtExit = EE.Next()) {
+    }
+
+    for (BasicBlock *BB :
+         ReversePostOrderTraversal<BasicBlock *>(&F.getEntryBlock())) {
+      populateBlock(BB);
+    }
+
+    if (Instructions.empty())
+      return false;
+
+    initStack();
+
+    for (auto const &[BB, Insts] : Instructions) {
+      CurrentBlock = BB;
+      for (Instruction *I : Insts) {
+        InstVisitor<BorrowSanitizerVisitor>::visit(*I);
+      }
+    }
+
+    patchPHINodes();
+
+    for (CallBase *CB : ToRemove) {
+      CB->eraseFromParent();
+    }
+
+    return true;
+  }
+
+private:
   ProvenanceScalar assertProvenanceScalar(Value *V) {
     return assertProvenanceScalar({V, 0});
   }
@@ -858,35 +669,6 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   }
 
   // The main function of the instrumentation pass.
-  bool run() {
-    ThrowingCallTransformer Transformer(F, BS, TLI, DT);
-    Transformer.run();
-
-    for (BasicBlock *BB :
-         ReversePostOrderTraversal<BasicBlock *>(&F.getEntryBlock())) {
-      populateBlock(BB);
-    }
-
-    if (Instructions.empty())
-      return false;
-
-    initStack();
-
-    for (auto const &[BB, Insts] : Instructions) {
-      CurrentBlock = BB;
-      for (Instruction *I : Insts) {
-        InstVisitor<BorrowSanitizerVisitor>::visit(*I);
-      }
-    }
-
-    patchPHINodes();
-
-    for (CallBase *CB : ToRemove) {
-      CB->eraseFromParent();
-    }
-
-    return true;
-  }
 
   void populateBlock(BasicBlock *BB) {
     SmallVector<Instruction *> Insts;
@@ -1121,8 +903,6 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     return false;
   }
 
-  using InstVisitor<BorrowSanitizerVisitor>::visit;
-
   void handleDebugFunction(CallBase &CB, Function *F) {
     IRBuilder<> IRB(&CB);
     auto Name = F->getName();
@@ -1211,6 +991,8 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     Prov.Tag = NewTag;
     setProvenance(RetagCall, Prov);
   }
+
+  using InstVisitor<BorrowSanitizerVisitor>::visit;
 
   void visitCallBase(CallBase &CB) {
     assert(!CB.getMetadata(LLVMContext::MD_nosanitize));
@@ -1809,34 +1591,6 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     return IRBuilder<>(NextInst);
   }
 };
-} // end anonymous namespace
-
-PreservedAnalyses BorrowSanitizerPass::run(Module &M,
-                                           ModuleAnalysisManager &MAM) {
-  BorrowSanitizer ModuleSanitizer(M);
-
-  bool Modified = false;
-
-  auto &FAM = MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
-
-  const StackSafetyGlobalInfo *const SSGI =
-      ClUseStackSafety ? &MAM.getResult<StackSafetyGlobalAnalysis>(M) : nullptr;
-
-  for (Function &F : M) {
-    Modified |= ModuleSanitizer.instrumentFunction(F, FAM, SSGI);
-  }
-  if (!Modified)
-    return PreservedAnalyses::all();
-
-  Modified |= ModuleSanitizer.instrumentModule(M);
-
-  PreservedAnalyses PA = PreservedAnalyses::none();
-  // GlobalsAA is considered stateless and does not get invalidated unless
-  // explicitly invalidated; PreservedAnalyses::none() is not enough. Sanitizers
-  // make changes that require GlobalsAA to be invalidated.
-  PA.abandon<GlobalsAA>();
-  return PA;
-}
 
 Instruction *BorrowSanitizer::createBsanModuleDtor(Module &M) {
   IRBuilder<> IRB(M.getContext());
@@ -2061,24 +1815,4 @@ bool BorrowSanitizer::instrumentFunction(
   initializeCallbacks(*F.getParent(), TLI);
   BorrowSanitizerVisitor Visitor(F, *this, SSGI, TLI, DT);
   return Visitor.run();
-}
-
-static llvm::PassPluginLibraryInfo getBorrowSanitizerPluginInfo() {
-  return {LLVM_PLUGIN_API_VERSION, "BorrowSanitizer", LLVM_VERSION_STRING,
-          [](PassBuilder &PB) {
-            PB.registerPipelineParsingCallback(
-                [](StringRef Name, ModulePassManager &MPM,
-                   ArrayRef<PassBuilder::PipelineElement>) {
-                  if (Name == "bsan") {
-                    MPM.addPass(BorrowSanitizerPass(BorrowSanitizerOptions()));
-                    return true;
-                  }
-                  return false;
-                });
-          }};
-}
-
-extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
-llvmGetPassPluginInfo() {
-  return getBorrowSanitizerPluginInfo();
 }

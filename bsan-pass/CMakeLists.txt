@@ -11,11 +11,15 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${LLVM_CXXFLAGS}")
 
 set(BSAN_SOURCES
   BorrowSanitizer.cpp
+  BorrowSanitizerPass.cpp
+
 )
 
 set(BSAN_HEADERS
   BorrowSanitizer.h
+  BorrowSanitizerPass.h
   Provenance.h
+  Declarations.h
 )
 
 add_custom_target(clang-format
