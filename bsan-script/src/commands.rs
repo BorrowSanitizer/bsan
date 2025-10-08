@@ -69,7 +69,7 @@ impl Command {
         CompilerRt::fmt(env, check)
     }
 
-    fn ui(env: &mut BsanEnv, _bless: bool) -> Result<()> {
+    fn ui(env: &mut BsanEnv, bless: bool) -> Result<()> {
         env.in_mode(Mode::Release, |env| {
             let args = &[];
             let driver = env.build_artifact(BsanDriver, args)?;
@@ -83,7 +83,8 @@ impl Command {
             env.sh.set_var("BSAN_SYSROOT", path!(&env.build_dir / "sysroot"));
 
             cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
-            cmd!(env.sh, "cargo test -p bsan --test ui").run()?;
+            let add_bless = if bless { "--bless" } else { "" };
+            cmd!(env.sh, "cargo test -p bsan --test ui -- {add_bless}").run()?;
             cmd!(env.sh, "python3 tests/test-cargo-bsan/run_test.py").run()?;
             Ok(())
         })
