@@ -328,7 +328,7 @@ impl BsanPass {
 
         let cxxflags = env.llvm_config().arg("--cxxflags").output()?.stdout;
         let cxxflags: String = String::from_utf8(cxxflags)?;
-
+        println!("{cxxflags:?}");
         cfg.define("CMAKE_CXX_FLAGS", cxxflags.trim());
         Ok(cfg)
     }

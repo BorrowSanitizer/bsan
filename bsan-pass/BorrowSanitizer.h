@@ -7,30 +7,14 @@
 
 namespace llvm {
 
-// Command-line flags:
-static cl::opt<bool>
-    ClWithComdat("bsan-with-comdat",
-                 cl::desc("Place BSan constructors in comdat sections"),
-                 cl::Hidden, cl::init(true));
-
-static cl::opt<bool>
-    ClUseStackSafety("bsan-use-stack-safety", cl::Hidden, cl::init(true),
-                     cl::Hidden, cl::desc("Use Stack Safety analysis results"),
-                     cl::Optional);
-
-static cl::opt<bool>
-    ClTrustExtern("bsan-trust-extern", cl::Hidden, cl::init(true), cl::Hidden,
-                  cl::desc("Trust external functions to be instrumented."),
-                  cl::Optional);
-
 struct BorrowSanitizer {
 public:
-  BorrowSanitizer(Module &M)
-      : UseCtorComdat(ClWithComdat), TrustExtern(ClTrustExtern) {
+  BorrowSanitizer(Module &M, ModuleAnalysisManager &MAM) {
     C = &(M.getContext());
     DL = &M.getDataLayout();
     TargetTriple = Triple(M.getTargetTriple());
 
+    PL = ProvenanceLayout(C, DL);
     LongSize = M.getDataLayout().getPointerSizeInBits();
 
     Int8Ty = Type::getInt8Ty(*C);
@@ -55,9 +39,8 @@ public:
     InvalidProvenance = ProvenanceScalar(One, Zero, InvalidPtr);
   }
 
-  bool instrumentModule(Module &);
-  bool instrumentFunction(Function &F, FunctionAnalysisManager &FAM,
-                          const StackSafetyGlobalInfo *const SSGI);
+  bool instrumentModule(Module &M);
+  bool instrumentFunction(Function &F, FunctionAnalysisManager &FAM);
 
   void initializeCallbacks(Module &M, const TargetLibraryInfo &TLI);
   void instrumentGlobals(IRBuilder<> &IRB, Module &M, bool *CtorComdat);
@@ -71,10 +54,10 @@ public:
     return *AI.getAllocationSize(AI.getDataLayout());
   }
 
-  bool UseCtorComdat;
-  bool TrustExtern;
   LLVMContext *C;
   const DataLayout *DL;
+  ProvenanceLayout PL;
+  const StackSafetyGlobalInfo *const SSGI = nullptr;
 
   int LongSize;
   Triple TargetTriple;

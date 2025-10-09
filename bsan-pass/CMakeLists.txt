@@ -12,7 +12,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${LLVM_CXXFLAGS}")
 set(BSAN_SOURCES
   BorrowSanitizer.cpp
   BorrowSanitizerPass.cpp
-
+  Provenance.cpp 
 )
 
 set(BSAN_HEADERS

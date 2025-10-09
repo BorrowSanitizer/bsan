@@ -1,6 +1,5 @@
 #include "BorrowSanitizerPass.h"
 #include "BorrowSanitizer.h"
-
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/Analysis/AliasAnalysis.h"
@@ -31,17 +30,14 @@ using namespace llvm;
 
 PreservedAnalyses BorrowSanitizerPass::run(Module &M,
                                            ModuleAnalysisManager &MAM) {
-  BorrowSanitizer ModuleSanitizer(M);
+  BorrowSanitizer ModuleSanitizer(M, MAM);
 
   bool Modified = false;
 
   auto &FAM = MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
 
-  const StackSafetyGlobalInfo *const SSGI =
-      ClUseStackSafety ? &MAM.getResult<StackSafetyGlobalAnalysis>(M) : nullptr;
-
   for (Function &F : M) {
-    Modified |= ModuleSanitizer.instrumentFunction(F, FAM, SSGI);
+    Modified |= ModuleSanitizer.instrumentFunction(F, FAM);
   }
   if (!Modified)
     return PreservedAnalyses::all();
