@@ -1,11 +1,12 @@
-FROM ubuntu:24.04 AS base
+FROM ubuntu:25.04 AS base
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
-    ninja-build \ 
     clang \
+    clang-tidy \
     clang-format \
+    ninja-build \ 
     curl \ 
     vim \
     pkg-config \ 

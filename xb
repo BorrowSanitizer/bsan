@@ -12,7 +12,7 @@ if [ $EXIT_CODE = 0 ]; then
 fi
 cargo +$TOOLCHAIN build --release $CARGO_EXTRA_FLAGS --manifest-path "$ROOT_DIR"/bsan-script/Cargo.toml \
   -Zroot-dir="$ROOT_DIR" \
-  -q --target-dir "$BSAN_SCRIPT_TARGET_DIR" $MESSAGE_FORMAT || \
+  --target-dir "$BSAN_SCRIPT_TARGET_DIR" $MESSAGE_FORMAT || \
   ( echo "Failed to build bsan-script."; exit 1 )
 # Instead of doing just `cargo run --manifest-path .. $@`, we invoke bsan-script binary directly. 
 # Invoking `cargo run` goes through rustup (that sets it's own environmental variables), which is undesirable.

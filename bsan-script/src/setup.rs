@@ -12,10 +12,8 @@ use crate::utils::{
 };
 use crate::TOOLCHAIN_NAME;
 
-static FIRST_INSTALL: &str =
-    "You need to install a custom Rust toolchain (`bsan`) to build BorrowSanitizer. Continue?";
-static UPDATE: &str =
-    "Your local version of the `bsan` toolchain is out-of-date. Would you like to update it?";
+static INSTALL_PROMPT: &str =
+    "You need to install the latest version of our custom Rust toolchain (`bsan`) to build BorrowSanitizer. Continue?";
 
 pub fn setup(
     sh: &Shell,
@@ -28,41 +26,41 @@ pub fn setup(
     // run the setup script, or we're in our Docker container, which has all of
     // the dependencies that we need. Once we set the active toolchain, we can
     // bail out.
-    let prompt_text = if let Ok(meta) = version_meta(sh, TOOLCHAIN_NAME) {
-        if let Some(ref commit_hash) = meta.commit_hash
-            && commit_hash == &config.sha
-        {
-            if active_toolchain()? != TOOLCHAIN_NAME {
-                cmd!(sh, "rustup override set {TOOLCHAIN_NAME}").run()?;
-            }
-            return Ok(meta);
-        } else {
-            UPDATE
+    let metadata = if let Ok(meta) = version_meta(sh, TOOLCHAIN_NAME)
+        && let Some(ref commit_hash) = meta.commit_hash
+        && commit_hash == &config.sha
+    {
+        if active_toolchain()? != TOOLCHAIN_NAME {
+            cmd!(sh, "rustup override set {TOOLCHAIN_NAME}").run()?;
         }
+        Some(meta)
     } else {
-        FIRST_INSTALL
+        None
     };
 
-    // First, check if the current platform is supported.
-    let current_target = &host.host;
-    if !config.targets.contains(&host.host) {
-        show_error!("The current target `{current_target}` is not supported.");
-    }
-
-    // Then, let's make sure that we have all of the right dependencies
+    // Let's make sure that we have all of the right dependencies
     for dep in config.dependencies.iter() {
         if which::which(dep).is_err() {
             show_error!("Unable to find `{dep}`, is it installed?");
         }
     }
 
-    // If we've passed these checks, then let's do the expensive step of
-    // downloading and installing our custom toolchain.
-    if let Some(PromptResult::Yes) = prompt_user_unless(skip_prompt, prompt_text)? {
-        fs::create_dir_all(toolchain_dir)?;
-        toolchain(sh, host, config, toolchain_dir)
+    if let Some(meta) = metadata {
+        return Ok(meta);
     } else {
-        std::process::exit(0)
+        // First, check if the current platform is supported.
+        let current_target = &host.host;
+        if !config.targets.contains(&host.host) {
+            show_error!("The current target `{current_target}` is not supported.");
+        }
+        // If we've passed these checks, then let's do the expensive step of
+        // downloading and installing our custom toolchain.
+        if let Some(PromptResult::Yes) = prompt_user_unless(skip_prompt, INSTALL_PROMPT)? {
+            fs::create_dir_all(toolchain_dir)?;
+            toolchain(sh, host, config, toolchain_dir)
+        } else {
+            std::process::exit(0)
+        }
     }
 }
 
