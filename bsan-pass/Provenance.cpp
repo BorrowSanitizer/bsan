@@ -41,6 +41,17 @@ ProvenanceVector Provenance::assertVector() const {
   return this->getVector().value();
 }
 
+ProvenancePointer::ProvenancePointer(IRBuilder<> &IRB,
+                                     const ProvenanceLayout &PL, Value *Base,
+                                     ElementCount Elems, ProvenanceKind Kind)
+    : WithProvenanceKind(Kind) {
+  if (Kind == ProvenanceKind::Scalar) {
+    *this = ProvenancePointerScalar(IRB, PL, Base);
+  } else {
+    *this = ProvenancePointerVector(IRB, PL, Base, Elems);
+  }
+}
+
 ProvenancePointerScalar::ProvenancePointerScalar(IRBuilder<> &IRB,
                                                  const ProvenanceLayout &PL,
                                                  Value *Base) {
