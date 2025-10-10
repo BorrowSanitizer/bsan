@@ -22,6 +22,8 @@ set(BSAN_HEADERS
   Declarations.h
 )
 
+set(CMAKE_CXX_CLANG_TIDY clang-tidy;-warnings-as-errors=*)
+
 add_custom_target(clang-format
   COMMAND clang-format ${BSAN_SOURCES} ${BSAN_HEADERS} -i --style=file
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}

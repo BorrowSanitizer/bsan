@@ -47,6 +47,9 @@ public:
   bool isVector() const { return Kind == ProvenanceKind::Vector; }
 };
 
+class ProvenancePointerScalar;
+class ProvenancePointerVector;
+
 // A pointer to one or more adjacent provenance values in memory.
 // Represents a "provenancy-carrying-component" of a typed value,
 // offset from a given location in an array of provenance values.
@@ -62,11 +65,29 @@ struct ProvenancePointer : public WithProvenanceKind {
 
   ProvenancePointer(IRBuilder<> &IRB, const ProvenanceLayout &PL, Value *Base,
                     ElementCount Elems, ProvenanceKind Kind);
+};
 
-  static ProvenancePointer scalar(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-                                  Value *Base);
-  static ProvenancePointer vector(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-                                  Value *Base, ElementCount Elems);
+class ProvenancePointerScalar : public ProvenancePointer {
+  using ProvenancePointer::ProvenancePointer;
+
+public:
+  ProvenancePointerScalar(Value *I, Value *T, Value *F)
+      : ProvenancePointer(I, T, F, ElementCount::get(0, false),
+                          ProvenanceKind::Scalar) {}
+  ProvenancePointerScalar(IRBuilder<> &IRB, const ProvenanceLayout &PL,
+                          Value *Base);
+};
+
+class ProvenancePointerVector : public ProvenancePointer {
+  using ProvenancePointer::ProvenancePointer;
+
+public:
+  ProvenancePointerVector(Value *I, Value *T, Value *F, ElementCount Elems)
+      : ProvenancePointer(I, T, F, Elems, ProvenanceKind::Vector) {}
+  ProvenancePointerVector(IRBuilder<> &IRB, const ProvenanceLayout &PL,
+                          Value *Base, ElementCount Elems);
+  static ProvenancePointerVector
+  alloc(IRBuilder<> &IRB, const ProvenanceLayout &PL, ElementCount Elems);
 };
 
 class ProvenanceScalar;
@@ -97,7 +118,12 @@ public:
              ProvenancePointer Dest);
   static Provenance load(IRBuilder<> &IRB, const ProvenanceLayout &PL,
                          ProvenancePointer ProvPtr);
-
+  static ProvenanceScalar loadScalar(IRBuilder<> &IRB,
+                                     const ProvenanceLayout &PL,
+                                     ProvenancePointerScalar ProvPtr);
+  static ProvenanceVector loadVector(IRBuilder<> &IRB,
+                                     const ProvenanceLayout &PL,
+                                     ProvenancePointerVector ProvPtr);
   static Provenance wildcard(IRBuilder<> &IRB, const ProvenanceLayout &PL,
                              ElementCount Elems, ProvenanceKind Kind);
 };
@@ -199,73 +225,7 @@ public:
     }
   }
 };
-/*
-struct ProvenanceManager {
-  // The provenance of an `alloca` will change from block to block, depending on
-  // the location of `lifetime.start` instructions.
-  BasicBlock *CurrentBlock;
 
-  // Pointers to the sections of the thread-local array where the
-  // provenance values for each argument are stored. Whenever we need to get the
-  // provenance for an argument, we take its pointer from this array and then
-  // insert the necessary instructions to load it from thread-local storage
-  // within the prologue of the function.
-  DenseMap<Argument *, SmallVector<ProvenancePointer>> ArgumentProvenance;
-
-  // With the exception of `allocas`, each value is associated with a unique
-  // provenance value. Provenanced values are indexed by each provenance
-  // carrying component. For example, if `ProvenanceComponents[V]` has length 3,
-  // then `ProvenanceMap[std::make_pair(V, 2)]` would return the third
-  // provenance value within `V`.
-  DenseMap<Value *, DenseMap<unsigned, Provenance>> BaseProvenanceMap;
-
-  // Most allocations have a single `lifetime.start`. We assign a single
-  // provenance value to these allocations starting from the entry block. It is
-  // left uninitialized until the `lifetime.start`. Uninitialized provenance
-  // values have the same semantics as invalid ones, so we can still detect UB
-  // for accesses outside of the lifetime. This is necessary; otherwise,
-  // ~thousands~ of PHI nodes can be emitted for certain edge-case functions.
-  DenseMap<AllocaInst *, std::pair<Value *, ProvenanceScalar>>
-      SingletonAllocaMap;
-
-  // If an `alloca` has multiple `lifetime.start` instructions, then we need to
-  // track each one, because any arbitrary access might be mutually dominated
-  // by more than one `lifetime.start`.
-  DenseMap<BasicBlock *, DenseMap<AllocaInst *, ProvenanceScalar>>
-      AllocaProvMap;
-
-  // Sometimes, a GEP is issued for an alloca before its `lifetime.start`.
-  // Rust's view of `lifetime.start` indicates that the result of this GEP
-should
-  // be invalid, but LLVM seems to permit this. For now, we defer
-  // initializing the provenance of a GEP for an `alloca` until we need to use
-  // it to validate an operation. Instead of setting the provenance for these
-  // GEPs, we indicate that they alias an `alloca` using this mapping. Then,
-when we
-  // need to get the provenance for the GEP, we look to see if it's an alias.
-  // If so, we return the provenance for the `alloca` based on whichever block
-that
-  // we're instrumenting. This interaction is only necessary for  edge cases
-where
-  // an `alloca` has multiple `lifetime.start`.
-  DenseMap<Value *, AllocaInst *> AllocaAliases;
-public:
-  Provenance() {}
-  setProvenance();
-
-  assertProvenance();
-  assertProvenanceScalar();
-  assertProvenanceVector();
-
-  getProvenance();
-  getProvenanceScalar();
-  getProvenanceVector();
-
-  assertAllocaProvenance();
-  getAllocaProvenance();
-
-  setAlias();
-};*/
 } // namespace llvm
 
 #endif // BORROWSANITIZER_PROVENANCE_H

@@ -7,18 +7,16 @@ Type *ProvenanceLayout::getPtrTy(ProvenanceKind Kind,
                                  ElementCount Elems) const {
   if (Kind == ProvenanceKind::Vector) {
     return VectorType::get(this->PtrTy, Elems);
-  } else {
-    return this->PtrTy;
   }
+  return this->PtrTy;
 }
 
 Type *ProvenanceLayout::getIntTy(ProvenanceKind Kind,
                                  ElementCount Elems) const {
   if (Kind == ProvenanceKind::Vector) {
     return VectorType::get(this->IntptrTy, Elems);
-  } else {
-    return this->IntptrTy;
   }
+  return this->IntptrTy;
 }
 
 std::optional<ProvenanceScalar> Provenance::getScalar() const {
@@ -43,30 +41,27 @@ ProvenanceVector Provenance::assertVector() const {
   return this->getVector().value();
 }
 
-ProvenancePointer ProvenancePointer::scalar(IRBuilder<> &IRB,
-                                            const ProvenanceLayout &PL,
-                                            Value *Base) {
+ProvenancePointerScalar::ProvenancePointerScalar(IRBuilder<> &IRB,
+                                                 const ProvenanceLayout &PL,
+                                                 Value *Base) {
 
   Value *ZeroIdx = ConstantInt::get(IRB.getInt64Ty(), 0);
 
-  Value *IdPtr = Base;
+  this->IdPtr = Base;
 
-  Value *TagPtr = IRB.CreateGEP(
+  this->TagPtr = IRB.CreateGEP(
       PL.ProvenanceTy, Base, {ZeroIdx, ConstantInt::get(IRB.getInt32Ty(), 1)});
 
-  Value *InfoPtr = IRB.CreateGEP(
+  this->InfoPtr = IRB.CreateGEP(
       PL.ProvenanceTy, Base, {ZeroIdx, ConstantInt::get(IRB.getInt32Ty(), 2)});
-
-  ElementCount Elems = ElementCount::get(1, false);
-  return ProvenancePointer(IdPtr, TagPtr, InfoPtr, Elems,
-                           ProvenanceKind::Scalar);
 }
 
-ProvenancePointer ProvenancePointer::vector(IRBuilder<> &IRB,
-                                            const ProvenanceLayout &PL,
-                                            Value *Base, ElementCount Elems) {
-  Value *IdPtr = Base;
-
+ProvenancePointerVector::ProvenancePointerVector(IRBuilder<> &IRB,
+                                                 const ProvenanceLayout &PL,
+                                                 Value *Base,
+                                                 ElementCount Elems) {
+  this->IdPtr = Base;
+  this->Elems = Elems;
   Value *IntVecSize = IRB.CreateTypeSize(
       PL.IntptrTy,
       PL.DL->getTypeAllocSize(VectorType::get(PL.IntptrTy, Elems)));
@@ -76,23 +71,9 @@ ProvenancePointer ProvenancePointer::vector(IRBuilder<> &IRB,
 
   Value *TagBase = IRB.CreatePointerCast(IdPtr, IRB.getIntPtrTy(*PL.DL));
   Value *TagOffset = IRB.CreateAdd(Base, IntVecSize);
-  Value *TagPtr = IRB.CreateIntToPtr(TagOffset, PL.PtrTy);
-  Value *InfoPtr =
+  this->TagPtr = IRB.CreateIntToPtr(TagOffset, PL.PtrTy);
+  this->InfoPtr =
       IRB.CreateIntToPtr(IRB.CreateAdd(TagOffset, IntVecSize), PL.PtrTy);
-
-  return ProvenancePointer(IdPtr, TagPtr, InfoPtr, Elems,
-                           ProvenanceKind::Vector);
-}
-
-ProvenancePointer::ProvenancePointer(IRBuilder<> &IRB,
-                                     const ProvenanceLayout &PL, Value *Base,
-                                     ElementCount Elems, ProvenanceKind Kind)
-    : WithProvenanceKind(Kind) {
-  if (this->isVector()) {
-    *this = ProvenancePointer::vector(IRB, PL, Base, Elems);
-  } else {
-    *this = ProvenancePointer::scalar(IRB, PL, Base);
-  }
 }
 
 void Provenance::addIncoming(BasicBlock *IncomingBlock,
@@ -123,6 +104,17 @@ Provenance Provenance::load(IRBuilder<> &IRB, const ProvenanceLayout &PL,
   return Provenance(Id, Tag, Info, ProvPtr.Elems, ProvPtr.Kind);
 }
 
+ProvenanceScalar Provenance::loadScalar(IRBuilder<> &IRB,
+                                        const ProvenanceLayout &PL,
+                                        ProvenancePointerScalar ProvPtr) {
+  return Provenance::load(IRB, PL, ProvPtr).assertScalar();
+}
+ProvenanceVector Provenance::loadVector(IRBuilder<> &IRB,
+                                        const ProvenanceLayout &PL,
+                                        ProvenancePointerVector ProvPtr) {
+  return Provenance::load(IRB, PL, ProvPtr).assertVector();
+}
+
 void Provenance::store(IRBuilder<> &IRB, const ProvenanceLayout &PL,
                        ProvenancePointer Dest) {
 
@@ -140,9 +132,8 @@ Provenance Provenance::wildcard(IRBuilder<> &IRB, const ProvenanceLayout &PL,
                                 ElementCount Elems, ProvenanceKind Kind) {
   if (Kind == ProvenanceKind::Scalar) {
     return ProvenanceScalar::wildcard(PL);
-  } else {
-    return ProvenanceVector::wildcard(IRB, PL, Elems);
   }
+  return ProvenanceVector::wildcard(IRB, PL, Elems);
 }
 
 ProvenanceScalar ProvenanceScalar::wildcard(const ProvenanceLayout &PL) {

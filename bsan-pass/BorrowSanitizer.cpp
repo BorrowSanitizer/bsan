@@ -512,7 +512,7 @@ private:
       Value *ShadowPointer =
           IRB.CreateCall(BS.BsanFuncGetShadowDest, {ObjAddr});
       ProvenancePointer Dest =
-          ProvenancePointer::scalar(IRB, BS.PL, ShadowPointer);
+          ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
       Prov.store(IRB, BS.PL, Dest);
     }
   }
@@ -541,11 +541,11 @@ private:
           BS.BsanFuncShadowLoadVector,
           {ObjAddr, Comp.NumProvenanceValues, IdVector, TagVector, InfoVector});
 
-      ProvPtr = ProvenancePointer(IdVector, TagVector, InfoVector, Comp.Elems,
-                                  ProvenanceKind::Vector);
+      ProvPtr =
+          ProvenancePointerVector(IdVector, TagVector, InfoVector, Comp.Elems);
     } else {
       Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncGetShadowSrc, {ObjAddr});
-      ProvPtr = ProvenancePointer::scalar(IRB, BS.PL, ShadowPointer);
+      ProvPtr = ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
     }
     return Provenance::load(IRB, BS.PL, ProvPtr);
   }
@@ -831,10 +831,9 @@ private:
 
     Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncGetShadowSrc, {ObjAddr});
 
-    ProvenancePointer ProvPtr =
-        ProvenancePointer::scalar(IRB, BS.PL, ShadowPointer);
-    ProvenanceScalar Prov =
-        Provenance::load(IRB, BS.PL, ProvPtr).assertScalar();
+    ProvenancePointerScalar ProvPtr =
+        ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
+    ProvenanceScalar Prov = Provenance::loadScalar(IRB, BS.PL, ProvPtr);
 
     Value *NewTag = newBorrowTag(IRB);
     IRB.CreateCall(BS.BsanFuncRetag,
@@ -903,12 +902,11 @@ private:
           getProvenanceComponents(Before, Arg->getType());
       for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
         Value *Slot = offsetPointer(Before, BS.DL, BS.ParamTLS, ParamByteWidth);
-        ;
 
-        Provenance Prov = assertProvenance(Before, Comp, {Arg, Idx});
+        Provenance ProvSrc = assertProvenance(Before, Comp, {Arg, Idx});
         ProvenancePointer Dest =
-            ProvenancePointer(Before, BS.PL, Slot, Comp.Elems, Prov.Kind);
-        Prov.store(Before, BS.PL, Dest);
+            ProvenancePointer(Before, BS.PL, Slot, Comp.Elems, ProvSrc.Kind);
+        ProvSrc.store(Before, BS.PL, Dest);
 
         Value *ByteWidth =
             Before.CreateMul(Comp.NumProvenanceValues, BS.ProvenanceSize);
