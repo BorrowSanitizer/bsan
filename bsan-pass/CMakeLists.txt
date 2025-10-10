@@ -35,3 +35,4 @@ add_custom_target(clang-format-check
 )
 
 add_library(bsan_plugin SHARED ${BSAN_SOURCES} ${BSAN_HEADERS})
+add_dependencies(bsan_plugin clang-format)
