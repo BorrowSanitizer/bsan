@@ -258,8 +258,10 @@ fn main() -> Result<()> {
     ui(Mode::Fail, "tests/fail", &meta, WithoutDependencies, tmpdir.path())?;
     ui(Mode::Fail, "tests/fail-dep", &meta, WithDependencies, tmpdir.path())?;
     ui(Mode::Fail, "miri-tests/fail", &meta, WithoutDependencies, tmpdir.path())?;
+    ui(Mode::Pass, "miri-tests/pass", &meta, WithoutDependencies, tmpdir.path())?;
 
     // TODO: BSAN should detect errors in those tests but currently doesn't.
     ui(Mode::Pass, "miri-tests/should-fail", &meta, WithoutDependencies, tmpdir.path())?;
+    ui(Mode::Fail, "miri-tests/should-pass", &meta, WithoutDependencies, tmpdir.path())?;
     Ok(())
 }
