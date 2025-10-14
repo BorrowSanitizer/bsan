@@ -418,7 +418,7 @@ unsafe extern "C-unwind" fn __bsan_retag(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
     new_tag: BorTag,
-) -> *mut c_void {
+) {
     debug_bsan!("retag", object_addr, alloc_id, bor_tag, alloc_info);
     let global_ctx = unsafe { global_ctx() };
     let local_ctx = unsafe { local_ctx_mut() };
@@ -431,7 +431,6 @@ unsafe extern "C-unwind" fn __bsan_retag(
                 .transpose()
         })
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
-    object_addr
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.

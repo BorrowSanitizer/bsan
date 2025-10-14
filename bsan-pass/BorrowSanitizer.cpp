@@ -149,6 +149,8 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // After inserting our instrumentation, we remove our retag intrinsics.
   SmallVector<CallBase *> ToRemove;
 
+  SmallVector<CallBase *> ToReplace;
+
   // We use LLVM's lifetime analysis to determine which `allocas` are alive at
   // every exit point.
   std::unique_ptr<StackLifetime> LifetimeInfo;
@@ -186,7 +188,10 @@ public:
     for (CallBase *CB : ToRemove) {
       CB->eraseFromParent();
     }
-
+    for (CallBase *CB : ToReplace) {
+      CB->replaceAllUsesWith(CB->getOperand(0));
+      CB->eraseFromParent();
+    }
     return true;
   }
 
@@ -844,18 +849,16 @@ private:
   }
 
   void instrumentRetagOperand(CallBase &CB) {
+    ToReplace.push_back(&CB);
     IRBuilder<> IRB(&CB);
-    ToRemove.push_back(&CB);
-
     ProvenanceScalar Prov = assertProvenanceScalar(CB.getOperand(0));
     Value *NewTag = newBorrowTag(IRB);
 
-    CallInst *RetagCall = IRB.CreateCall(
-        BS.BsanFuncRetag, {CB.getOperand(0), CB.getOperand(1), CB.getOperand(2),
-                           Prov.Id, Prov.Tag, Prov.Info, NewTag});
-    CB.replaceAllUsesWith(RetagCall);
+    IRB.CreateCall(BS.BsanFuncRetag,
+                   {CB.getOperand(0), CB.getOperand(1), CB.getOperand(2),
+                    Prov.Id, Prov.Tag, Prov.Info, NewTag});
     Prov.Tag = NewTag;
-    setProvenance(RetagCall, Prov);
+    setProvenance(&CB, Prov);
   }
 
   using InstVisitor<BorrowSanitizerVisitor>::visit;
@@ -1543,9 +1546,9 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   AttributeList AL;
   AL = AL.addFnAttribute(*C, Attribute::NoUnwind);
 
-  BsanFuncRetag =
-      M.getOrInsertFunction(kBsanFuncRetagName, AL, PtrTy, PtrTy, IntptrTy,
-                            Int64Ty, IntptrTy, IntptrTy, PtrTy, IntptrTy);
+  BsanFuncRetag = M.getOrInsertFunction(kBsanFuncRetagName, AL, IRB.getVoidTy(),
+                                        PtrTy, IntptrTy, Int64Ty, IntptrTy,
+                                        IntptrTy, PtrTy, IntptrTy);
 
   BsanFuncPushAllocaFrame = M.getOrInsertFunction(
       kBsanFuncPushAllocaFrameName,
