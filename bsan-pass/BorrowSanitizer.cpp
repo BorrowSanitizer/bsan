@@ -192,6 +192,10 @@ public:
       CB->replaceAllUsesWith(CB->getOperand(0));
       CB->eraseFromParent();
     }
+
+    if (F.getName().contains("sanitize_standard_fds")) {
+      F.print(llvm::outs());
+    }
     return true;
   }
 
@@ -834,6 +838,9 @@ private:
     IRBuilder<> IRB(&CB);
     Value *ObjAddr = CB.getOperand(0);
 
+    LoadInst *PointerWithin = IRB.CreateLoad(BS.PtrTy, ObjAddr);
+    PointerWithin->setVolatile(1);
+
     Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncGetShadowSrc, {ObjAddr});
 
     ProvenancePointerScalar ProvPtr =
@@ -842,8 +849,8 @@ private:
 
     Value *NewTag = newBorrowTag(IRB);
     IRB.CreateCall(BS.BsanFuncRetag,
-                   {CB.getOperand(0), CB.getOperand(1), CB.getOperand(2),
-                    Prov.Id, Prov.Tag, Prov.Info, NewTag});
+                   {PointerWithin, CB.getOperand(1), CB.getOperand(2), Prov.Id,
+                    Prov.Tag, Prov.Info, NewTag});
     StoreInst *SI = IRB.CreateStore(NewTag, ProvPtr.TagPtr);
     SI->setVolatile(1);
   }
