@@ -7,10 +7,18 @@ extern crate rustc_session;
 
 mod callbacks;
 use std::env;
-use std::error::Error;
 use std::path::PathBuf;
 
 pub use callbacks::BSanCallBacks;
+
+pub fn show_error_(msg: &impl std::fmt::Display) -> ! {
+    eprintln!("{msg}");
+    std::process::exit(1)
+}
+
+macro_rules! show_error {
+    ($($tt:tt)*) => { show_error_(&format_args!($($tt)*)) };
+}
 
 pub const BSAN_BUG_REPORT_URL: &str = "https://github.com/BorrowSanitizer/bsan/issues/new";
 pub const BSAN_DEFAULT_ARGS: &[&str] = &[
@@ -28,16 +36,16 @@ pub const BSAN_DEFAULT_ARGS: &[&str] = &[
     "-Zinline-mir=no",
 ];
 
+static BSAN_RT_EXPECTED: &str = "libbsan_rt.a";
+static BSAN_PLUGIN_EXPECTED: &str = "libbsan_plugin.so";
+
 pub struct Config {
     args: Vec<String>,
     callbacks: BSanCallBacks,
 }
 
 impl Config {
-    pub fn new(raw_args: Vec<String>) -> Result<Self, Box<dyn Error>> {
-        let runtime_dir = PathBuf::from(env::var("BSAN_RT_DIR")?);
-        let plugin_path = PathBuf::from(env::var("BSAN_PLUGIN")?);
-
+    pub fn new(raw_args: Vec<String>) -> Self {
         let (mut args, target_crate) = {
             // If the `BSAN_BE_RUSTC` environment variable is set, we are being invoked as
             // rustc to build a crate for either the "target" architecture, or the "host"
@@ -50,7 +58,7 @@ impl Config {
                 let is_target = match crate_kind.as_str() {
                     "host" => false,
                     "target" => true,
-                    _ => panic!("invalid `BSAN_BE_RUSTC` value: {crate_kind:?}"),
+                    _ => show_error!("Invalid value for `BSAN_BE_RUSTC`: {crate_kind:?}"),
                 };
                 (raw_args, is_target)
             } else if env::var("RUSTC_WRAPPER").is_ok() {
@@ -74,15 +82,38 @@ impl Config {
             }
         };
         if target_crate {
+            let rt = assert_env_file("BSAN_RT", BSAN_RT_EXPECTED);
+            let rt = rt.parent().unwrap().to_path_buf();
+
+            let plugin = assert_env_file("BSAN_PLUGIN", BSAN_PLUGIN_EXPECTED);
+
             let mut additional_args =
                 BSAN_DEFAULT_ARGS.iter().map(ToString::to_string).collect::<Vec<_>>();
-            additional_args.push(format!("-Zllvm-plugins={}", plugin_path.display()));
-            additional_args.push(format!("-L{}", runtime_dir.display()));
+            additional_args.push(format!("-Zllvm-plugins={}", plugin.display()));
+            additional_args.push(format!("-L{}", rt.display()));
             additional_args.push("-lstatic=bsan_rt".to_string());
             args.splice(1..1, additional_args);
         }
-        Ok(Self { args, callbacks: BSanCallBacks {} })
+        Self { args, callbacks: BSanCallBacks {} }
     }
+}
+
+fn assert_env_file(key: &str, expected_file_name: &str) -> PathBuf {
+    let rt_var = env::var(key);
+    if rt_var.is_err() {
+        show_error!("Missing value for variable `{key}`.");
+    }
+    let rt = PathBuf::from(rt_var.unwrap());
+    if !rt.exists() {
+        show_error!("The path specified in `BSAN_RT` does not exist: {}.", rt.display());
+    }
+    if !rt.is_file() || !rt.file_name().unwrap().eq(expected_file_name) {
+        show_error!(
+            "Expected `BSAN_RT` to be the path to `{expected_file_name}`, but found: {}",
+            rt.display()
+        );
+    }
+    rt
 }
 
 /// Execute a compiler with the given CLI arguments and callbacks.

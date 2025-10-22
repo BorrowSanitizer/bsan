@@ -30,7 +30,7 @@ pub enum RustcPhase {
 }
 
 pub fn show_error_(msg: &impl std::fmt::Display) -> ! {
-    eprintln!("fatal error: {msg}");
+    eprintln!("{msg}");
     std::process::exit(1)
 }
 
@@ -56,18 +56,6 @@ pub fn find_library(default: &str, sysroot: &Path, libname: &str) -> Option<Path
         let plugin: PathBuf = path!(sysroot / "lib" / libname);
         if plugin.exists() {
             Some(plugin)
-        } else {
-            None
-        }
-    })
-}
-
-pub fn find_library_dir(default: &str, sysroot: &Path, libname: &str) -> Option<PathBuf> {
-    env::var_os(default).map(|o| o.into()).or_else(|| {
-        let libdir = path!(sysroot / "lib");
-        let plugin = path!(&libdir / libname);
-        if plugin.exists() {
-            Some(libdir)
         } else {
             None
         }
@@ -249,7 +237,15 @@ fn cargo_extra_flags() -> Vec<String> {
 
 pub fn get_cargo_metadata() -> Metadata {
     // This will honor the `CARGO` env var the same way our `cargo()` does.
-    MetadataCommand::new().no_deps().other_options(cargo_extra_flags()).exec().unwrap()
+    MetadataCommand::new().no_deps().other_options(cargo_extra_flags()).exec().unwrap_or_else(
+        |err| {
+            if let cargo_metadata::Error::CargoMetadata { stderr } = err {
+                show_error!("{stderr}")
+            } else {
+                show_error!("{err}")
+            }
+        },
+    )
 }
 
 pub fn clean_sysroot_dir() {

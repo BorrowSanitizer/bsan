@@ -78,11 +78,13 @@ impl Command {
 
             env.sh.set_var("BSAN_PLUGIN", plugin);
             env.sh.set_var("BSAN_DRIVER", driver);
-            env.sh.set_var("BSAN_RT_DIR", runtime.parent().unwrap());
+            env.sh.set_var("BSAN_RT", runtime);
             env.sh.set_var("BSAN_SYSROOT", path!(&env.build_dir / "sysroot"));
 
             cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
             cmd!(env.sh, "cargo test -p bsan --test ui").run()?;
+            cmd!(env.sh, "python3 tests/test-cargo-bsan/run_test.py").run()?;
+
             Ok(())
         })
     }
@@ -133,7 +135,7 @@ impl Command {
 
         env.sh.set_var("BSAN_PLUGIN", plugin);
         env.sh.set_var("BSAN_DRIVER", &driver);
-        env.sh.set_var("BSAN_RT_DIR", runtime.parent().unwrap());
+        env.sh.set_var("BSAN_RT", runtime);
         env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
 
         cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;

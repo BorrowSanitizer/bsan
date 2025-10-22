@@ -84,7 +84,7 @@ fn bsan_config(
                     ],
                     ..CommandBuilder::cargo()
                 },
-                crate_manifest_path: Path::new("test_dependencies").join("Cargo.toml"),
+                crate_manifest_path: Path::new("tests/deps").join("Cargo.toml"),
                 build_std: None,
                 bless_lockfile: bless,
             },

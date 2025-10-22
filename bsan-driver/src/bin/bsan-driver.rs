@@ -11,7 +11,7 @@ fn main() {
     rustc_driver::install_ice_hook(bsan_driver::BSAN_BUG_REPORT_URL, |_| ());
 
     let raw_args = rustc_driver::args::raw_args(&early_dcx);
-    let config = bsan_driver::Config::new(raw_args).unwrap();
+    let config = bsan_driver::Config::new(raw_args);
 
     bsan_driver::run_compiler(config)
 }
