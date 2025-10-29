@@ -1,5 +1,4 @@
-// TODO(bsan): when this is fixed the directive should be only `run` without `: 1`
-//@run: 1
+//@run
 // This test relies on a specific interleaving that cannot be enforced
 // with just barriers. We must remove preemption so that the execution and the
 // error messages are deterministic.

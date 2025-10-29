@@ -1,4 +1,4 @@
-//@run: 0
+//@run: 1
 
 unsafe fn test(mut x: Box<i32>, y: *const i32) -> i32 {
     // We will call this in a way that x and y alias.

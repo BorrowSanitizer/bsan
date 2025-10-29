@@ -3,8 +3,7 @@
 // specific interleaving of operations that we want, but only the preemption
 // rate guarantees that the error message is also deterministic.
 
-// TODO(bsan): when this is fixed the directive should be only `run` without `: 1`
-//@run: 1 
+//@run
 
 use std::sync::{Arc, Barrier};
 use std::thread;
