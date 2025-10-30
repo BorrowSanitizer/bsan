@@ -12,7 +12,7 @@ use crate::diagnostics::AccessCause;
 use crate::errors::{BorsanResult, UBInfo};
 use crate::memory::hooks::BsanAllocHooks;
 use crate::span::Span;
-use crate::{throw_ub, AllocId, BorTag, GlobalCtx, LocalCtx, Provenance};
+use crate::{throw_ub, AllocId, BorTag, GlobalCtx, Provenance};
 
 pub mod tree;
 pub mod unimap;
@@ -74,7 +74,6 @@ impl BorrowTracker {
     pub fn retag(
         &self,
         global_ctx: &GlobalCtx,
-        local_ctx: &mut LocalCtx,
         retag_info: RetagInfo,
         new_tag: BorTag,
         span: Span,
@@ -93,7 +92,6 @@ impl BorrowTracker {
             // This makes creating a protector slower, but checking whether a tag
             // is protected faster.
             global_ctx.add_protected_tag(new_tag, protector_kind);
-            local_ctx.protected_tags.push(new_tag)?;
         }
 
         let mut initial_perms = RangeMap::new_in(

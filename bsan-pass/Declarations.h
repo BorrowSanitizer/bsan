@@ -15,6 +15,7 @@ const char kBsanModuleDtorName[] = "bsan.module_dtor";
 
 const char kBsanPrefix[] = BSAN_FN();
 const char kBsanRetagPrefix[] = BSAN_FN("retag_");
+
 const char kBsanIntrinsicRetagPlaceName[] = BSAN_FN("retag_place");
 const char kBsanIntrinsicRetagOperandName[] = BSAN_FN("retag_operand");
 
@@ -22,10 +23,8 @@ const char kBsanFuncInitName[] = BSAN_FN("init");
 const char kBsanFuncDeinitName[] = BSAN_FN("deinit");
 
 const char kBsanFuncPushAllocaFrameName[] = BSAN_FN("push_alloca_frame");
-const char kBsanFuncPushRetagFrameName[] = BSAN_FN("push_retag_frame");
-
 const char kBsanFuncPopAllocaFrameName[] = BSAN_FN("pop_alloca_frame");
-const char kBsanFuncPopRetagFrameName[] = BSAN_FN("pop_retag_frame");
+const char kBsanFuncRemoveProtectedTags[] = BSAN_FN("remove_protected_tags");
 
 const char kBsanFuncShadowCopyName[] = BSAN_FN("shadow_copy");
 const char kBsanFuncShadowClearName[] = BSAN_FN("shadow_clear");
@@ -61,6 +60,7 @@ const char kBsanFuncDebugPrint[] = BSAN_DEBUG_FN("print");
 const char kBsanFuncDebugParamTLS[] = BSAN_DEBUG_FN("param_tls");
 const char kBsanFuncDebugRetvalTLS[] = BSAN_DEBUG_FN("retval_tls");
 
+const char kBsanTagStackName[] = "__BSAN_PROT_TAG_STACK";
 const char kBsanParamTLSName[] = "__BSAN_PARAM_TLS";
 const char kBsanRetvalTLSName[] = "__BSAN_RETVAL_TLS";
 const char kBsanBorTagCounterName[] = "__BSAN_BOR_TAG_CTR";

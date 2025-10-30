@@ -92,6 +92,7 @@ void Provenance::addIncoming(BasicBlock *IncomingBlock,
   PHINode *IdNode = cast<PHINode>(this->Id);
   PHINode *TagNode = cast<PHINode>(this->Tag);
   PHINode *InfoNode = cast<PHINode>(this->Info);
+
   IdNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Id);
   TagNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Tag);
   InfoNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Info);
@@ -103,14 +104,9 @@ Provenance Provenance::load(IRBuilder<> &IRB, const ProvenanceLayout &PL,
   Type *IntTy = PL.getIntTy(ProvPtr.Kind, ProvPtr.Elems);
   Type *PtrTy = PL.getPtrTy(ProvPtr.Kind, ProvPtr.Elems);
 
-  LoadInst *Id = IRB.CreateLoad(IntTy, ProvPtr.IdPtr);
-  Id->setVolatile(1);
-
-  LoadInst *Tag = IRB.CreateLoad(IntTy, ProvPtr.TagPtr);
-  Tag->setVolatile(1);
-
-  LoadInst *Info = IRB.CreateLoad(PtrTy, ProvPtr.InfoPtr);
-  Info->setVolatile(1);
+  LoadInst *Id = IRB.CreateLoad(IntTy, ProvPtr.IdPtr, true);
+  LoadInst *Tag = IRB.CreateLoad(IntTy, ProvPtr.TagPtr, true);
+  LoadInst *Info = IRB.CreateLoad(PtrTy, ProvPtr.InfoPtr, true);
 
   return Provenance(Id, Tag, Info, ProvPtr.Elems, ProvPtr.Kind);
 }
@@ -129,14 +125,9 @@ ProvenanceVector Provenance::loadVector(IRBuilder<> &IRB,
 void Provenance::store(IRBuilder<> &IRB, const ProvenanceLayout &PL,
                        ProvenancePointer Dest) {
 
-  StoreInst *Id = IRB.CreateStore(this->Id, Dest.IdPtr);
-  Id->setVolatile(1);
-
-  StoreInst *Tag = IRB.CreateStore(this->Tag, Dest.TagPtr);
-  Tag->setVolatile(1);
-
-  StoreInst *Info = IRB.CreateStore(this->Info, Dest.InfoPtr);
-  Info->setVolatile(1);
+  StoreInst *Id = IRB.CreateStore(this->Id, Dest.IdPtr, true);
+  StoreInst *Tag = IRB.CreateStore(this->Tag, Dest.TagPtr, true);
+  StoreInst *Info = IRB.CreateStore(this->Info, Dest.InfoPtr, true);
 }
 
 Provenance Provenance::wildcard(IRBuilder<> &IRB, const ProvenanceLayout &PL,

@@ -12,7 +12,7 @@ use crate::memory::{
 use crate::{ptr, Debug, NonNull};
 
 #[derive(Debug, Copy, Clone)]
-struct StackSize(NonZero<usize>);
+pub struct StackSize(NonZero<usize>);
 
 impl Deref for StackSize {
     type Target = NonZero<usize>;
@@ -23,7 +23,7 @@ impl Deref for StackSize {
 }
 
 impl StackSize {
-    fn try_new() -> AllocResult<Self> {
+    pub fn try_new() -> AllocResult<Self> {
         let mut limits = MaybeUninit::<rlimit>::uninit();
         #[cfg(not(miri))]
         let exit_code = unsafe { libc::getrlimit(libc::RLIMIT_STACK, limits.as_mut_ptr()) };

@@ -19,6 +19,7 @@ public:
 
     Int8Ty = Type::getInt8Ty(*C);
     Int16Ty = Type::getInt16Ty(*C);
+    Int32Ty = Type::getInt32Ty(*C);
     Int64Ty = Type::getInt64Ty(*C);
     PtrTy = PointerType::getUnqual(*C);
     IntptrTy = Type::getIntNTy(*C, LongSize);
@@ -63,6 +64,7 @@ public:
   Triple TargetTriple;
   Type *Int8Ty;
   Type *Int16Ty;
+  Type *Int32Ty;
   Type *Int64Ty;
   PointerType *PtrTy;
 
@@ -88,10 +90,8 @@ public:
   FunctionCallee BsanFuncAllocStack;
 
   FunctionCallee BsanFuncPushAllocaFrame;
-  FunctionCallee BsanFuncPushRetagFrame;
-
   FunctionCallee BsanFuncPopAllocaFrame;
-  FunctionCallee BsanFuncPopRetagFrame;
+  FunctionCallee BsanFuncRemoveProtectedTags;
 
   FunctionCallee BsanFuncAlloc;
   FunctionCallee BsanFuncDealloc;
@@ -121,6 +121,7 @@ public:
   // and return values.
   Value *ParamTLS = nullptr;
   Value *RetvalTLS = nullptr;
+  Value *TagStack = nullptr;
   Value *AllocIdCounter = nullptr;
   Value *BorTagCounter = nullptr;
 

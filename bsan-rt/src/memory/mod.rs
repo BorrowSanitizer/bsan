@@ -11,7 +11,7 @@ pub use heap::Heap;
 use heap::Heapable;
 
 mod stack;
-pub use stack::Stack;
+pub use stack::{Stack, StackSize};
 
 mod shadow;
 use core::ffi::c_void;

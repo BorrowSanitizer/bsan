@@ -11,7 +11,8 @@
 #![feature(yeet_expr)]
 #![feature(unsafe_cell_access)]
 #![feature(stmt_expr_attributes)]
-
+#![feature(ub_checks)]
+#![feature(pointer_is_aligned_to)]
 #[macro_use]
 extern crate alloc;
 
@@ -23,7 +24,7 @@ use core::mem::MaybeUninit;
 use core::panic::PanicInfo;
 use core::ptr::NonNull;
 use core::sync::atomic::AtomicUsize;
-use core::{fmt, ptr};
+use core::{fmt, ptr, slice};
 
 use bsan_shared::{AccessKind, RetagInfo, Size};
 use libc_print::std_name::*;
@@ -393,7 +394,6 @@ unsafe extern "C-unwind" fn __bsan_init() {
         let ctx = init_global_ctx(hooks::DEFAULT_HOOKS);
         let _ = init_local_ctx(ctx);
     }
-    ui_test!("bsan_init");
 }
 
 /// Deinitializes the global state of the runtime library.
@@ -401,7 +401,6 @@ unsafe extern "C-unwind" fn __bsan_init() {
 /// will be called after this function has executed.
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_deinit() {
-    ui_test!("bsan_deinit");
     unsafe {
         deinit_local_ctx();
         deinit_global_ctx();
@@ -421,14 +420,12 @@ unsafe extern "C-unwind" fn __bsan_retag(
 ) {
     debug_bsan!("retag", object_addr, alloc_id, bor_tag, alloc_info);
     let global_ctx = unsafe { global_ctx() };
-    let local_ctx = unsafe { local_ctx_mut() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     let retag_info = unsafe { RetagInfo::from_raw(access_size, perm) };
 
     BorrowTracker::new(prov, object_addr, Some(access_size))
         .and_then(|opt| {
-            opt.map(|bt| bt.retag(global_ctx, local_ctx, retag_info, new_tag, Span::new()))
-                .transpose()
+            opt.map(|bt| bt.retag(global_ctx, retag_info, new_tag, Span::new())).transpose()
         })
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
 }
@@ -491,6 +488,13 @@ extern "C" fn __bsan_dealloc(
             bt.iter_mut().try_for_each(|t| t.dealloc(global_ctx, Span::new(), is_heap))
         })
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_remove_protected_tags(data: *mut BorTag, len: usize) {
+    let global_ctx = unsafe { global_ctx() };
+    let tags = unsafe { slice::from_raw_parts(data, len) };
+    global_ctx.remove_protected_tags(tags);
 }
 
 #[unsafe(no_mangle)]
@@ -664,17 +668,6 @@ unsafe extern "C" fn __bsan_alloc_stack(
 
 /// Pushes a stack frame
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_push_retag_frame() {
-    let global_ctx = unsafe { global_ctx() };
-    let local_ctx = unsafe { local_ctx_mut() };
-    local_ctx
-        .protected_tags
-        .push_frame()
-        .unwrap_or_else(|info| global_ctx.handle_error(info.into()));
-}
-
-/// Pushes a stack frame
-#[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_push_alloca_frame() {
     let ctx = unsafe { global_ctx() };
     let local_ctx = unsafe { local_ctx_mut() };
@@ -686,15 +679,6 @@ unsafe extern "C" fn __bsan_push_alloca_frame() {
 unsafe extern "C" fn __bsan_pop_alloca_frame() {
     let local_ctx = unsafe { local_ctx_mut() };
     unsafe { local_ctx.allocas.pop_frame() }
-}
-
-/// Pushes a stack frame
-#[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_pop_retag_frame() {
-    let global_ctx: &GlobalCtx = unsafe { global_ctx() };
-    let local_ctx = unsafe { local_ctx_mut() };
-    global_ctx.remove_protected_tags(local_ctx.protected_tags.current_frame());
-    unsafe { local_ctx.protected_tags.pop_frame() }
 }
 
 /// Marks the borrow tag for `prov` as "exposed," allowing it to be resolved to
