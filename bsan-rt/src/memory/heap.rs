@@ -64,6 +64,8 @@ unsafe impl<T: Heapable> Sync for Heap<T> {}
 
 impl<T: Heapable> Heap<T> {
     pub fn new(hooks: &BsanHooks) -> AllocResult<Self> {
+        debug_assert!(T::is_word_aligned());
+
         let mmap = hooks.mmap_ptr;
         let munmap = hooks.munmap_ptr;
 

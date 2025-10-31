@@ -148,8 +148,12 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 
   // After inserting our instrumentation, we remove our retag intrinsics.
   SmallVector<CallBase *> ToRemove;
-
   SmallVector<CallBase *> ToReplace;
+
+  // The start of the current frame of protected tags. This is the "top" of the
+  // frame, since we decrement from the beginning of the chunk. The thread-local
+  // frame pointer is reset to this value when the function returns.
+  Value *FrameTop = nullptr;
 
   // We use LLVM's lifetime analysis to determine which `allocas` are alive at
   // every exit point.
@@ -204,6 +208,16 @@ private:
         return Pointer;
     Value *Base = IRB.CreatePointerCast(Pointer, IRB.getIntPtrTy(*DL));
     Base = IRB.CreateAdd(Base, Offset);
+    return IRB.CreateIntToPtr(Base, IRB.getPtrTy());
+  }
+
+  Value *subtractPointer(IRBuilder<> &IRB, const DataLayout *DL, Value *Pointer,
+                         Value *Offset) {
+    if (ConstantInt *CI = dyn_cast<ConstantInt>(Offset))
+      if (CI->isZero())
+        return Pointer;
+    Value *Base = IRB.CreatePointerCast(Pointer, IRB.getIntPtrTy(*DL));
+    Base = IRB.CreateSub(Base, Offset);
     return IRB.CreateIntToPtr(Base, IRB.getPtrTy());
   }
 
@@ -602,6 +616,7 @@ private:
     IRBuilder<> EntryIRB(EntryBlock, EntryBlock->getFirstNonPHIIt());
 
     Value *TotalNumProvenanceValues = BS.Zero;
+
     for (auto &Arg : F.args()) {
       SmallVector<ProvenanceComponent> *Components =
           getProvenanceComponents(EntryIRB, Arg.getType());
@@ -617,12 +632,12 @@ private:
             EntryIRB.CreateAdd(TotalNumProvenanceValues, C.NumProvenanceValues);
       }
     }
+
     if (NumFnEntryRetags > 0) {
-      EntryIRB.CreateCall(BS.BsanFuncPushRetagFrame, {});
+      FrameTop = EntryIRB.CreateLoad(BS.PtrTy, BS.TagStack);
     }
 
     if (StaticAllocaVec.size() > 0) {
-      EntryIRB.CreateCall(BS.BsanFuncPushAllocaFrame, {});
       for (AllocaInst *AI : StaticAllocaVec) {
         if (HasLifetimeStart.contains(AI)) {
           if (HasLifetimeStart[AI].size() > 1) {
@@ -835,8 +850,7 @@ private:
     IRBuilder<> IRB(&CB);
     Value *ObjAddr = CB.getOperand(0);
 
-    LoadInst *PointerWithin = IRB.CreateLoad(BS.PtrTy, ObjAddr);
-    PointerWithin->setVolatile(1);
+    LoadInst *PointerWithin = IRB.CreateLoad(BS.PtrTy, ObjAddr, true);
 
     Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncGetShadowSrc, {ObjAddr});
 
@@ -848,8 +862,10 @@ private:
     IRB.CreateCall(BS.BsanFuncRetag,
                    {PointerWithin, CB.getOperand(1), CB.getOperand(2), Prov.Id,
                     Prov.Tag, Prov.Info, NewTag});
-    StoreInst *SI = IRB.CreateStore(NewTag, ProvPtr.TagPtr);
-    SI->setVolatile(1);
+    IRB.CreateStore(NewTag, ProvPtr.TagPtr, true);
+
+    if (isFnEntryRetag(&CB))
+      addProtectedTag(IRB, NewTag);
   }
 
   void instrumentRetagOperand(CallBase &CB) {
@@ -862,7 +878,21 @@ private:
                    {CB.getOperand(0), CB.getOperand(1), CB.getOperand(2),
                     Prov.Id, Prov.Tag, Prov.Info, NewTag});
     Prov.Tag = NewTag;
+
+    if (isFnEntryRetag(&CB))
+      addProtectedTag(IRB, NewTag);
+
     setProvenance(&CB, Prov);
+  }
+
+  void addProtectedTag(IRBuilder<> &IRB, Value *Tag) {
+    // Offset to the next tag slot, and store the protected tag there.
+    Value *TagSize =
+        IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeAllocSize(BS.IntptrTy));
+    Value *PrevSlot = IRB.CreateLoad(BS.PtrTy, BS.TagStack, true);
+    Value *TagSlot = subtractPointer(IRB, BS.DL, PrevSlot, TagSize);
+    IRB.CreateStore(Tag, TagSlot, true);
+    IRB.CreateStore(TagSlot, BS.TagStack, true);
   }
 
   using InstVisitor<BorrowSanitizerVisitor>::visit;
@@ -1397,11 +1427,13 @@ private:
                          {AI, Root.Id, Root.Tag, Root.Info});
         }
       }
-      IRB.CreateCall(BS.BsanFuncPopAllocaFrame, {});
     }
 
     if (NumFnEntryRetags > 0) {
-      IRB.CreateCall(BS.BsanFuncPopRetagFrame, {});
+      Value *FrameBottom = IRB.CreateLoad(BS.PtrTy, BS.TagStack, true);
+      Value *FrameLen = IRB.CreatePtrDiff(BS.PtrTy, FrameTop, FrameBottom);
+      IRB.CreateCall(BS.BsanFuncRemoveProtectedTags, {FrameBottom, FrameLen});
+      IRB.CreateStore(FrameTop, BS.TagStack, true);
     }
   }
 
@@ -1554,21 +1586,8 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
                                         PtrTy, IntptrTy, Int64Ty, IntptrTy,
                                         IntptrTy, PtrTy, IntptrTy);
 
-  BsanFuncPushAllocaFrame = M.getOrInsertFunction(
-      kBsanFuncPushAllocaFrameName,
-      FunctionType::get(IRB.getVoidTy(), /*isVarArg=*/false), AL);
-
-  BsanFuncPopAllocaFrame = M.getOrInsertFunction(
-      kBsanFuncPopAllocaFrameName,
-      FunctionType::get(IRB.getVoidTy(), /*isVarArg=*/false), AL);
-
-  BsanFuncPushRetagFrame = M.getOrInsertFunction(
-      kBsanFuncPushRetagFrameName,
-      FunctionType::get(IRB.getVoidTy(), /*isVarArg=*/false), AL);
-
-  BsanFuncPopRetagFrame = M.getOrInsertFunction(
-      kBsanFuncPopRetagFrameName,
-      FunctionType::get(IRB.getVoidTy(), /*isVarArg=*/false), AL);
+  BsanFuncRemoveProtectedTags = M.getOrInsertFunction(
+      kBsanFuncRemoveProtectedTags, AL, IRB.getVoidTy(), PtrTy, IntptrTy);
 
   BsanFuncShadowCopy = M.getOrInsertFunction(
       kBsanFuncShadowCopyName, AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
@@ -1662,6 +1681,9 @@ void BorrowSanitizer::createUserspaceApi(Module &M,
                                    ArrayType::get(ProvenanceTy, kTLSSize));
   ParamTLS = getOrInsertTLSGlobal(M, kBsanParamTLSName,
                                   ArrayType::get(ProvenanceTy, kTLSSize));
+
+  TagStack = getOrInsertTLSGlobal(M, kBsanTagStackName, IRB.getPtrTy());
+
   AllocIdCounter = getOrInsertGlobal(M, kBsanAllocIdCounterName, IntptrTy);
   BorTagCounter = getOrInsertGlobal(M, kBsanBorTagCounterName, IntptrTy);
 }

@@ -1,7 +1,7 @@
 use core::mem::MaybeUninit;
 
 use crate::errors::BorsanResult;
-use crate::memory::Stack;
+use crate::memory::{mmap, InternalAllocKind, StackSize};
 use crate::*;
 
 #[thread_local]
@@ -17,17 +17,28 @@ pub static mut __BSAN_RETVAL_TLS: [Provenance; TLS_SIZE] = [Provenance::wildcard
 #[unsafe(no_mangle)]
 pub static mut __BSAN_PARAM_TLS: [Provenance; TLS_SIZE] = [Provenance::wildcard(); TLS_SIZE];
 
-#[derive(Debug)]
-pub struct LocalCtx {
-    pub allocas: Stack<AllocInfo>,
-    pub protected_tags: Stack<BorTag>,
-}
+#[thread_local]
+#[unsafe(no_mangle)]
+pub static mut __BSAN_PROT_TAG_STACK: *mut BorTag = core::ptr::null_mut();
 
+#[thread_local]
+#[unsafe(no_mangle)]
+pub static mut __BSAN_PROT_TAG_STACK_TOP: *mut BorTag = core::ptr::null_mut();
+
+#[derive(Debug)]
+pub struct LocalCtx;
 impl LocalCtx {
     pub fn new(ctx: &GlobalCtx) -> BorsanResult<Self> {
-        let allocas = Stack::<AllocInfo>::new(*ctx.hooks())?;
-        let protected_tags = Stack::<BorTag>::new(*ctx.hooks())?;
-        Ok(Self { allocas, protected_tags })
+        let size = StackSize::try_new()?;
+        unsafe {
+            let limit = mmap(ctx.hooks().mmap_ptr, InternalAllocKind::Stack, *size)?;
+            debug_assert!(limit.is_aligned());
+            let cursor = limit.byte_add((*size).into());
+            debug_assert!(cursor.is_aligned());
+            __BSAN_PROT_TAG_STACK = cursor.cast::<BorTag>().as_ptr();
+            __BSAN_PROT_TAG_STACK_TOP = __BSAN_PROT_TAG_STACK;
+        }
+        Ok(LocalCtx)
     }
 }
 

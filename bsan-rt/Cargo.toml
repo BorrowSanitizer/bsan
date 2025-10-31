@@ -20,6 +20,5 @@ crate-type = ["staticlib"]
 
 [features]
 default = ["pic"]
-ui_test = []
 pic = []
 debug = []

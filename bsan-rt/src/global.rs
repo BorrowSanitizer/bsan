@@ -25,8 +25,6 @@ use crate::*;
 pub struct GlobalCtx {
     /// The set of allocation and deallocation functions.
     hooks: BsanHooks,
-    #[allow(unused)]
-    root_ptr_tags: Mutex<BHashMap<AllocId, BorTag>>,
     protected_tags: Mutex<BHashMap<BorTag, ProtectorKind>>,
     alloc_metadata_map: Heap<AllocInfo>,
     shadow_heap: ShadowHeap<Provenance>,
@@ -38,7 +36,6 @@ impl GlobalCtx {
     fn new(hooks: BsanHooks) -> Result<Self, AllocError> {
         Ok(Self {
             hooks,
-            root_ptr_tags: Mutex::new(BHashMap::new_in(hooks.alloc)),
             protected_tags: Mutex::new(BHashMap::new_in(hooks.alloc)),
             alloc_metadata_map: Heap::new(&hooks)?,
             shadow_heap: ShadowHeap::new(&hooks, &raw const __BSAN_WILDCARD_PROVENANCE)?,
@@ -96,15 +93,6 @@ impl GlobalCtx {
         self.exit(1)
     }
 }
-
-// Logging for UI testing, which is enabled by the `ui_test` feature.
-macro_rules! ui_test {
-    ($($arg:tt)*) => {
-        #[cfg(feature = "ui_test")]
-        crate::println!($($arg)*);
-    };
-}
-pub(crate) use ui_test;
 
 /// A thin wrapper around `Vec` that uses `GlobalCtx` as its allocator
 #[derive(Debug, Clone, Eq, PartialEq)]

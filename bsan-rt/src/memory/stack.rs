@@ -11,40 +11,6 @@ use crate::memory::{
 };
 use crate::{ptr, Debug, NonNull};
 
-#[derive(Debug, Copy, Clone)]
-struct StackSize(NonZero<usize>);
-
-impl Deref for StackSize {
-    type Target = NonZero<usize>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl StackSize {
-    fn try_new() -> AllocResult<Self> {
-        let mut limits = MaybeUninit::<rlimit>::uninit();
-        #[cfg(not(miri))]
-        let exit_code = unsafe { libc::getrlimit(libc::RLIMIT_STACK, limits.as_mut_ptr()) };
-
-        #[cfg(miri)]
-        let exit_code = unsafe {
-            (*limits.as_mut_ptr()).rlim_cur = 8192;
-            (*limits.as_mut_ptr()).rlim_max = 8192;
-            0
-        };
-
-        let stack_size_bytes = if exit_code != 0 {
-            panic!("Failed to obtain stack size limit.");
-        } else {
-            let limits = unsafe { MaybeUninit::assume_init(limits) };
-            limits.rlim_cur as usize
-        };
-
-        NonZero::try_from(stack_size_bytes).map(Self).map_err(|_| AllocError::InvalidStackSize)
-    }
-}
 
 #[repr(align(8))]
 #[derive(Debug, Clone, Copy)]
