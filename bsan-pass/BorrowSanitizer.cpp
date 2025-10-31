@@ -638,7 +638,6 @@ private:
     }
 
     if (StaticAllocaVec.size() > 0) {
-      EntryIRB.CreateCall(BS.BsanFuncPushAllocaFrame, {});
       for (AllocaInst *AI : StaticAllocaVec) {
         if (HasLifetimeStart.contains(AI)) {
           if (HasLifetimeStart[AI].size() > 1) {
@@ -1428,7 +1427,6 @@ private:
                          {AI, Root.Id, Root.Tag, Root.Info});
         }
       }
-      IRB.CreateCall(BS.BsanFuncPopAllocaFrame, {});
     }
 
     if (NumFnEntryRetags > 0) {
@@ -1587,14 +1585,6 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncRetag = M.getOrInsertFunction(kBsanFuncRetagName, AL, IRB.getVoidTy(),
                                         PtrTy, IntptrTy, Int64Ty, IntptrTy,
                                         IntptrTy, PtrTy, IntptrTy);
-
-  BsanFuncPushAllocaFrame = M.getOrInsertFunction(
-      kBsanFuncPushAllocaFrameName,
-      FunctionType::get(IRB.getVoidTy(), /*isVarArg=*/false), AL);
-
-  BsanFuncPopAllocaFrame = M.getOrInsertFunction(
-      kBsanFuncPopAllocaFrameName,
-      FunctionType::get(IRB.getVoidTy(), /*isVarArg=*/false), AL);
 
   BsanFuncRemoveProtectedTags = M.getOrInsertFunction(
       kBsanFuncRemoveProtectedTags, AL, IRB.getVoidTy(), PtrTy, IntptrTy);

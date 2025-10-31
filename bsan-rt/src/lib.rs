@@ -621,15 +621,16 @@ unsafe extern "C-unwind" fn __bsan_shadow_store_vector(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_reserve_stack_slot() -> NonNull<AllocInfo> {
     let global_ctx = unsafe { global_ctx() };
-    let local_ctx = unsafe { local_ctx_mut() };
-    let mut info = local_ctx
-        .allocas
-        .reserve_slots(1)
-        .unwrap_or_else(|info| global_ctx.handle_error(info.into()));
     unsafe {
-        info.as_mut().alloc_id = AllocId::invalid();
+        global_ctx
+            .allocate_lock_location(AllocInfo {
+                alloc_id: AllocId::invalid(),
+                base_addr: FreeListAddrUnion { base_addr: ptr::null_mut() },
+                size: 0,
+                tree_lock: Mutex::new(None),
+            })
+            .unwrap_or_else(|info| global_ctx.handle_error(info))
     }
-    info
 }
 
 /// Initializes stack allocation metadata in-place.
@@ -642,7 +643,7 @@ unsafe extern "C" fn __bsan_alloc_stack(
     alloc_info: NonNull<c_void>,
 ) {
     debug_bsan!(
-        "alloc_in_place",
+        "alloc_stack",
         base_addr,
         alloc_id,
         bor_tag,
@@ -664,21 +665,6 @@ unsafe extern "C" fn __bsan_alloc_stack(
             ))),
         });
     }
-}
-
-/// Pushes a stack frame
-#[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_push_alloca_frame() {
-    let ctx = unsafe { global_ctx() };
-    let local_ctx = unsafe { local_ctx_mut() };
-    local_ctx.allocas.push_frame().unwrap_or_else(|info| ctx.handle_error(info.into()));
-}
-
-/// Pushes a stack frame
-#[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_pop_alloca_frame() {
-    let local_ctx = unsafe { local_ctx_mut() };
-    unsafe { local_ctx.allocas.pop_frame() }
 }
 
 /// Marks the borrow tag for `prov` as "exposed," allowing it to be resolved to

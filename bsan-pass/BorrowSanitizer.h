@@ -88,9 +88,6 @@ public:
 
   FunctionCallee BsanFuncReserveStackSlot;
   FunctionCallee BsanFuncAllocStack;
-
-  FunctionCallee BsanFuncPushAllocaFrame;
-  FunctionCallee BsanFuncPopAllocaFrame;
   FunctionCallee BsanFuncRemoveProtectedTags;
 
   FunctionCallee BsanFuncAlloc;

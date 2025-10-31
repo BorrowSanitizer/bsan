@@ -1,7 +1,7 @@
 use core::mem::MaybeUninit;
 
 use crate::errors::BorsanResult;
-use crate::memory::{mmap, InternalAllocKind, Stack, StackSize};
+use crate::memory::{mmap, InternalAllocKind, StackSize};
 use crate::*;
 
 #[thread_local]
@@ -26,14 +26,10 @@ pub static mut __BSAN_PROT_TAG_STACK: *mut BorTag = core::ptr::null_mut();
 pub static mut __BSAN_PROT_TAG_STACK_TOP: *mut BorTag = core::ptr::null_mut();
 
 #[derive(Debug)]
-pub struct LocalCtx {
-    pub allocas: Stack<AllocInfo>,
-}
-
+pub struct LocalCtx;
 impl LocalCtx {
     pub fn new(ctx: &GlobalCtx) -> BorsanResult<Self> {
         let size = StackSize::try_new()?;
-
         unsafe {
             let limit = mmap(ctx.hooks().mmap_ptr, InternalAllocKind::Stack, *size)?;
             debug_assert!(limit.is_aligned());
@@ -42,9 +38,7 @@ impl LocalCtx {
             __BSAN_PROT_TAG_STACK = cursor.cast::<BorTag>().as_ptr();
             __BSAN_PROT_TAG_STACK_TOP = __BSAN_PROT_TAG_STACK;
         }
-
-        let allocas = Stack::<AllocInfo>::new(*ctx.hooks())?;
-        Ok(Self { allocas })
+        Ok(LocalCtx)
     }
 }
 

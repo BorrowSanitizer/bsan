@@ -9,19 +9,53 @@ use hooks::*;
 mod heap;
 pub use heap::Heap;
 use heap::Heapable;
-
-mod stack;
-pub use stack::{Stack, StackSize};
+use libc::rlimit;
 
 mod shadow;
 use core::ffi::c_void;
-use core::mem;
+use core::mem::{self, MaybeUninit};
 use core::num::NonZero;
+use core::ops::Deref;
 use core::ptr::{self, NonNull};
 
 pub use shadow::ShadowHeap;
 
 use crate::{AllocInfo, BorTag};
+
+#[derive(Debug, Copy, Clone)]
+pub struct StackSize(NonZero<usize>);
+
+impl Deref for StackSize {
+    type Target = NonZero<usize>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl StackSize {
+    pub fn try_new() -> AllocResult<Self> {
+        let mut limits = MaybeUninit::<rlimit>::uninit();
+        #[cfg(not(miri))]
+        let exit_code = unsafe { libc::getrlimit(libc::RLIMIT_STACK, limits.as_mut_ptr()) };
+
+        #[cfg(miri)]
+        let exit_code = unsafe {
+            (*limits.as_mut_ptr()).rlim_cur = 8192;
+            (*limits.as_mut_ptr()).rlim_max = 8192;
+            0
+        };
+
+        let stack_size_bytes = if exit_code != 0 {
+            panic!("Failed to obtain stack size limit.");
+        } else {
+            let limits = unsafe { MaybeUninit::assume_init(limits) };
+            limits.rlim_cur as usize
+        };
+
+        NonZero::try_from(stack_size_bytes).map(Self).map_err(|_| AllocError::InvalidStackSize)
+    }
+}
 
 /// # Safety
 /// Values must be aligned to the word size of the current platform.
