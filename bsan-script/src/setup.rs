@@ -181,7 +181,7 @@ pub fn ensure_llvm_cmake(
         let link_source = path!(root_dir / "bsan-rt" / "llvm-wrapper");
         let link_target = path!(toolchain_dir / "compiler-rt" / "lib" / "bsan");
         cmd!(sh, "ln -s {link_source} {link_target}").run()?;
-    
+
         fs::write(lockfile, &branch)?;
     }
 

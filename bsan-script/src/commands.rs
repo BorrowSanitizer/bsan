@@ -195,15 +195,25 @@ pub trait Buildable {
 
     fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()>;
 
-    fn doc(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {Ok(())}
+    fn doc(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
+        Ok(())
+    }
 
-    fn test(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {Ok(())}
+    fn test(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
+        Ok(())
+    }
 
-    fn clippy(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {Ok(())}
+    fn clippy(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
+        Ok(())
+    }
 
-    fn check(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> { Ok(())}
+    fn check(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
+        Ok(())
+    }
 
-    fn miri(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> { Ok(())} 
+    fn miri(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
+        Ok(())
+    }
 }
 
 macro_rules! impl_component {
@@ -287,7 +297,7 @@ impl Buildable for BsanRt {
     fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
         let llvm_ar = env.target_binary("llvm-ar");
         let llvm_objcopy = env.target_binary("llvm-objcopy");
-        
+
         let llvm_wrapper = env.build_artifact(Crt, args)?;
         let rust_runtime = env.with_flags("RUSTFLAGS", RT_FLAGS, |env| {
             env.build("bsan-rt", args)?;
