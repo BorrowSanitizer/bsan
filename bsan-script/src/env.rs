@@ -4,18 +4,18 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use path_macro::path;
-use rustc_version::VersionMeta;
 use serde::{Deserialize, Serialize};
 use xshell::{cmd, Cmd, Shell};
 
 use crate::commands::Buildable;
+use crate::setup::ToolchainConfig;
 use crate::utils::{active_libdir, active_sysroot, active_toolchain, show_error};
 use crate::{setup, utils, TOOLCHAIN_NAME};
 
 #[allow(dead_code)]
 pub struct BsanEnv {
-    /// Dependency metadata
-    pub meta: VersionMeta,
+    /// Installation configuration for the toolchain.
+    pub toolchain_config: ToolchainConfig,
     /// The target bin directory within the sysroot, which contains LLVM tool binaries.
     pub target_bindir: PathBuf,
     /// The sysroot of the nightly toolchain.
@@ -90,6 +90,8 @@ pub struct BsanConfig {
     pub version: String,
     pub dependencies: Vec<String>,
     pub targets: Vec<String>,
+    pub llvm_branch: String,
+    pub llvm_url: String,
 }
 
 impl BsanConfig {
@@ -125,7 +127,8 @@ impl BsanEnv {
 
         let config_path = path!(root_dir / "config.toml");
         let mut config = BsanConfig::from_file(&config_path)?;
-        let meta = setup::setup(&sh, &host, &mut config, &deps_dir, skip)?;
+        let toolchain_config =
+            setup::setup_toolchain(&sh, &host, &mut config, &deps_dir, &root_dir, skip)?;
         config.save(&config_path)?;
 
         let build_dir = path!(root_dir / "target");
@@ -175,7 +178,7 @@ impl BsanEnv {
 
         Ok(Self {
             sh,
-            meta,
+            toolchain_config,
             sysroot,
             target_bindir,
             build_dir,
@@ -188,9 +191,9 @@ impl BsanEnv {
         })
     }
 
-    pub fn with_flags<F>(&mut self, var: &str, flags: &[&str], f: F) -> Result<()>
+    pub fn with_flags<F, T>(&mut self, var: &str, flags: &[&str], f: F) -> Result<T>
     where
-        F: Fn(&mut BsanEnv) -> Result<()>,
+        F: Fn(&mut BsanEnv) -> Result<T>,
     {
         let prev_flags = self.sh.var(var).ok().unwrap_or(String::from(""));
         let mut curr_flags = prev_flags.clone();
@@ -199,9 +202,9 @@ impl BsanEnv {
             curr_flags.push_str(flag);
         }
         self.sh.set_var(var, curr_flags);
-        f(&mut *self)?;
+        let result = f(&mut *self)?;
         self.sh.set_var(var, prev_flags);
-        Ok(())
+        Ok(result)
     }
 
     pub fn in_mode<F, T>(&mut self, m: Mode, f: F) -> Result<T>
@@ -213,6 +216,17 @@ impl BsanEnv {
         let r = f(&mut *self)?;
         self.mode = prev;
         Ok(r)
+    }
+
+    pub fn cd<F, T>(&mut self, dir: &Path, f: F) -> Result<T>
+    where
+        F: Fn(&mut BsanEnv) -> Result<T>,
+    {
+        let current_dir = self.sh.current_dir();
+        self.sh.change_dir(dir);
+        let result = f(&mut *self);
+        self.sh.change_dir(current_dir);
+        result
     }
 
     pub fn copy_to_sysroot_libdir(&self, file: &Path) -> Result<()> {
@@ -245,6 +259,18 @@ impl BsanEnv {
         if !binary.exists() {
             show_error!(
                 "Unable to locate binary `{binary_name}` within the target bindir ({target_bindir:?})."
+            );
+        } else {
+            binary
+        }
+    }
+
+    pub fn sysroot_binary(&self, binary_name: &str) -> PathBuf {
+        let bin_dir = path!(self.sysroot / "bin");
+        let binary = path!(bin_dir / binary_name);
+        if !binary.exists() {
+            show_error!(
+                "Unable to locate binary `{binary_name}` within the sysroot bindir ({bin_dir:?})."
             );
         } else {
             binary
@@ -343,28 +369,40 @@ impl BsanEnv {
         cfg.cargo_debug(false)
             .cargo_metadata(false)
             .cargo_output(false)
-            .target(&self.meta.host)
-            .host(&self.meta.host)
+            .target(&self.toolchain_config.meta.host)
+            .host(&self.toolchain_config.meta.host)
             .debug(self.mode.debug_info())
             .warnings_into_errors(true)
             .opt_level(self.mode.opt_level());
         cfg
     }
 
-    pub fn cmake(&self, path: PathBuf) -> cmake::Config {
+    pub fn llvm_cmake(
+        &self,
+        path: &Path,
+        out_dir: &Path,
+        include_dirs: &[PathBuf],
+    ) -> Result<cmake::Config> {
+        let llvm_config = self.sysroot_binary("llvm-config");
+        let cxxflags = cmd!(self.sh, "{llvm_config}").arg("--cxxflags").output()?.stdout;
+        let cxxflags: String = String::from_utf8(cxxflags)?;
+
+        let includes = include_dirs
+            .iter()
+            .map(|dir| format!("-I{}", dir.display()))
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let cxxflags = format!("{} {}", includes, cxxflags.trim());
         let mut cfg = cmake::Config::new(path);
         cfg.profile(self.mode.profile());
-        cfg.target(&self.meta.host);
-        cfg.host(&self.meta.host);
-        cfg.out_dir(self.artifact_dir());
+        cfg.target(&self.toolchain_config.meta.host);
+        cfg.host(&self.toolchain_config.meta.host);
+        cfg.out_dir(out_dir);
         cfg.generator("Ninja");
-        cfg
-    }
+        cfg.define("CMAKE_CXX_FLAGS", cxxflags.trim());
 
-    pub fn llvm_config(&self) -> Cmd<'_> {
-        let bin_dir = path!(self.sysroot / "bin");
-        let llvm_config = path!(bin_dir / "llvm-config");
-        cmd!(self.sh, "{llvm_config}")
+        Ok(cfg)
     }
 
     pub fn install(

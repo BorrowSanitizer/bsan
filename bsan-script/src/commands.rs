@@ -326,11 +326,8 @@ struct BsanPass;
 impl BsanPass {
     fn cmake(env: &mut BsanEnv) -> Result<Config> {
         let source_dir = path!(env.root_dir / "bsan-pass");
-        let mut cfg = env.cmake(source_dir);
-
-        let cxxflags = env.llvm_config().arg("--cxxflags").output()?.stdout;
-        let cxxflags: String = String::from_utf8(cxxflags)?;
-        cfg.define("CMAKE_CXX_FLAGS", cxxflags.trim());
+        let output_dir = path!(env.artifact_dir() / "bsan-pass");
+        let cfg = env.llvm_cmake(&source_dir, &output_dir, &[])?;
         Ok(cfg)
     }
 
