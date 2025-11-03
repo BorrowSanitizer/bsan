@@ -65,7 +65,8 @@ impl Command {
 
     fn fmt(env: &mut BsanEnv, check: bool) -> Result<()> {
         env.fmt(check)?;
-        BsanPass::fmt(env, check)
+        BsanPass::fmt(env, check)?;
+        Crt::fmt(env, check)
     }
 
     fn ui(env: &mut BsanEnv, _bless: bool) -> Result<()> {
@@ -189,21 +190,31 @@ impl Deref for Component {
 }
 
 pub trait Buildable {
-    fn artifact(&self) -> &'static str;
-
-    fn doc(&self, env: &mut BsanEnv, args: &[String]) -> Result<()>;
+    fn artifact(&self, env: &BsanEnv) -> String;
 
     fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>>;
 
-    fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()>;
-
-    fn clippy(&self, env: &mut BsanEnv, args: &[String]) -> Result<()>;
-
     fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()>;
 
-    fn check(&self, env: &mut BsanEnv, args: &[String]) -> Result<()>;
+    fn doc(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
+        Ok(())
+    }
 
-    fn miri(&self, env: &mut BsanEnv, args: &[String]) -> Result<()>;
+    fn test(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
+        Ok(())
+    }
+
+    fn clippy(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
+        Ok(())
+    }
+
+    fn check(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
+        Ok(())
+    }
+
+    fn miri(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
+        Ok(())
+    }
 }
 
 macro_rules! impl_component {
@@ -212,17 +223,17 @@ macro_rules! impl_component {
 
         impl Buildable for $struct_name {
             #[inline]
-            fn artifact(&self) -> &'static str {
-                $artifact_name
+            fn artifact(&self, _env: &BsanEnv) -> String {
+                $artifact_name.into()
             }
 
             fn doc(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-                env.doc(self.artifact(), args)
+                env.doc(self.artifact(env), args)
             }
 
             fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
-                let artifact = self.artifact();
-                env.build(artifact, args)?;
+                let artifact = self.artifact(env);
+                env.build(&artifact, args)?;
                 if $should_install {
                     Ok(Some(path!(env.artifact_dir() / artifact)))
                 } else {
@@ -231,28 +242,28 @@ macro_rules! impl_component {
             }
 
             fn clippy(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-                env.clippy(self.artifact(), args)
+                env.clippy(self.artifact(env), args)
             }
 
             fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
                 if $should_install {
-                    env.install(self.artifact(), args)
+                    env.install(self.artifact(env), args)
                 } else {
                     Ok(()) // Or `Err(anyhow!("Installation not supported"))` if you want it to fail
                 }
             }
 
             fn check(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-                env.check(self.artifact(), args)
+                env.check(self.artifact(env), args)
             }
 
             fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-                env.test(self.artifact(), args)
+                env.test(self.artifact(env), args)
             }
 
             fn miri(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
                 if $should_miri {
-                    env.miri(self.artifact(), args)
+                    env.miri(self.artifact(env), args)
                 } else {
                     Ok(())
                 }
@@ -276,8 +287,8 @@ static RT_FLAGS: &[&str] = &[
 struct BsanRt;
 
 impl Buildable for BsanRt {
-    fn artifact(&self) -> &'static str {
-        "libbsan_rt.a"
+    fn artifact(&self, _env: &BsanEnv) -> String {
+        "libbsan_rt.a".into()
     }
 
     fn doc(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
@@ -285,11 +296,42 @@ impl Buildable for BsanRt {
     }
 
     fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
-        env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.build("bsan-rt", args))?;
-        let artifact = env.assert_artifact(self.artifact());
+        let llvm_ar = env.target_binary("llvm-ar");
         let llvm_objcopy = env.target_binary("llvm-objcopy");
-        cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_* -G __BSAN_*").arg(&artifact).quiet().run()?;
-        Ok(Some(path!(env.artifact_dir() / artifact)))
+
+        let llvm_wrapper = env.build_artifact(Crt, args)?;
+        let rust_runtime = env.with_flags("RUSTFLAGS", RT_FLAGS, |env| {
+            env.build("bsan-rt", args)?;
+            Ok(env.assert_artifact(&self.artifact(env)))
+        })?;
+
+        cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_* -G __BSAN_*")
+            .arg(&rust_runtime)
+            .quiet()
+            .run()?;
+
+        let tmp_dir = env.sh.create_temp_dir()?;
+        env.cd(tmp_dir.path(), |env| {
+            cmd!(env.sh, "{llvm_ar} -x {llvm_wrapper}").run()?;
+
+            let file_names: Vec<String> = fs::read_dir(tmp_dir.path())
+                .unwrap()
+                .filter_map(|entry| {
+                    let path = entry.ok().unwrap().path();
+                    if path.is_file() {
+                        path.to_str().map(|s| s.to_owned())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Finally, add the objects into the static archive of C++ component.
+            cmd!(env.sh, "{llvm_ar} -ru {rust_runtime}").args(file_names).quiet().run()?;
+            Ok(())
+        })?;
+
+        Ok(Some(path!(env.artifact_dir() / rust_runtime)))
     }
 
     fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
@@ -303,7 +345,7 @@ impl Buildable for BsanRt {
     fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
         env.in_mode(Mode::Release, |env| {
             self.build(env, args)?;
-            let runtime = env.assert_artifact(self.artifact());
+            let runtime = env.assert_artifact(&self.artifact(env));
             env.copy_to_sysroot_libdir(&runtime)
         })
     }
@@ -321,16 +363,74 @@ impl Buildable for BsanRt {
     }
 }
 
+struct Crt;
+impl Crt {
+    fn cmake(env: &mut BsanEnv) -> Result<Config> {
+        let output_dir = path!(env.artifact_dir() / "compiler-rt");
+        let src_dir = path!(env.sysroot / "compiler-rt");
+        let crt_include = path!(src_dir / "include");
+        let sanitizer_common = path!(src_dir / "lib");
+
+        let mut cfg = env.llvm_cmake(&src_dir, &output_dir, &[crt_include, sanitizer_common])?;
+
+        cfg.define("LLVM_MAIN_SRC_DIR", &env.sysroot);
+        cfg.define("COMPILER_RT_SANITIZERS_TO_BUILD", "bsan");
+        cfg.define("COMPILER_RT_HAS_BSAN", "TRUE");
+        cfg.define("COMPILER_RT_HAS_LLVMTESTINGSUPPORT", "FALSE");
+        cfg.define("LLVM_COMMON_CMAKE_UTILS", &env.toolchain_config.llvm_cmake.common);
+        cfg.define("LLVM_CMAKE_DIR", &env.toolchain_config.llvm_cmake.llvm);
+        cfg.pic(true);
+        cfg.build_target(&Crt.artifact(env));
+        Ok(cfg)
+    }
+
+    fn fmt(env: &mut BsanEnv, check: bool) -> Result<()> {
+        let mut cfg = Self::cmake(env)?;
+        if check {
+            cfg.build_target("clang-format-check");
+        } else {
+            cfg.build_target("clang-format");
+        }
+        cfg.build();
+        Ok(())
+    }
+}
+
+impl Buildable for Crt {
+    fn artifact(&self, env: &BsanEnv) -> String {
+        let host = &env.toolchain_config.meta.host;
+        let arch = host
+            .split("-")
+            .next()
+            .expect(&format!("Invalid target triple: `{}`", env.toolchain_config.meta.host));
+        format!("libclang_rt.bsan-{}.a", arch)
+    }
+
+    fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
+        let mut cfg = Self::cmake(env)?;
+        args.iter().for_each(|arg| {
+            cfg.build_arg(arg);
+        });
+        let target_dir = path!(cfg.build() / "build" / "lib" / "linux");
+        let target = path!(target_dir / self.artifact(env));
+        Ok(Some(target))
+    }
+
+    fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+        env.in_mode(Mode::Release, |env| {
+            let pass = self.build(env, args)?.expect("CompilerRT wrapper was not built.");
+            env.copy_to_sysroot_libdir(&pass)
+        })
+    }
+}
+
 struct BsanPass;
 
 impl BsanPass {
     fn cmake(env: &mut BsanEnv) -> Result<Config> {
         let source_dir = path!(env.root_dir / "bsan-pass");
-        let mut cfg = env.cmake(source_dir);
-
-        let cxxflags = env.llvm_config().arg("--cxxflags").output()?.stdout;
-        let cxxflags: String = String::from_utf8(cxxflags)?;
-        cfg.define("CMAKE_CXX_FLAGS", cxxflags.trim());
+        let output_dir = path!(env.artifact_dir() / "bsan-pass");
+        let cfg = env.llvm_cmake(&source_dir, &output_dir, &[])?;
         Ok(cfg)
     }
 
@@ -347,12 +447,12 @@ impl BsanPass {
 }
 
 impl Buildable for BsanPass {
-    fn artifact(&self) -> &'static str {
+    fn artifact(&self, _env: &BsanEnv) -> String {
         #[cfg(target_os = "macos")]
         let artifact = "libbsan_plugin.dylib";
         #[cfg(target_os = "linux")]
         let artifact = "libbsan_plugin.so";
-        artifact
+        artifact.into()
     }
 
     fn doc(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
@@ -364,7 +464,7 @@ impl Buildable for BsanPass {
         cfg.build_target("bsan_plugin");
         cfg.pic(true);
         let path = cfg.build();
-        Ok(Some(path!(path / "build" / self.artifact())))
+        Ok(Some(path!(path / "build" / self.artifact(env))))
     }
 
     fn test(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {

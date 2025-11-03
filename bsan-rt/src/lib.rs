@@ -389,7 +389,7 @@ pub enum AllocInfoSummary {
 /// function having been executed. We assume the global invariant that
 /// no other API functions will be called prior to that point.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_init() {
+unsafe extern "C-unwind" fn __bsan_internal_init() {
     unsafe {
         let ctx = init_global_ctx(hooks::DEFAULT_HOOKS);
         let _ = init_local_ctx(ctx);
@@ -400,7 +400,7 @@ unsafe extern "C-unwind" fn __bsan_init() {
 /// We assume the global invariant that no other API functions
 /// will be called after this function has executed.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_deinit() {
+unsafe extern "C-unwind" fn __bsan_internal_deinit() {
     unsafe {
         deinit_local_ctx();
         deinit_global_ctx();
@@ -749,9 +749,9 @@ mod tests {
     use crate::*;
 
     fn with_init(unit_test: fn()) {
-        unsafe { __bsan_init() };
+        unsafe { __bsan_internal_init() };
         unit_test();
-        unsafe { __bsan_deinit() };
+        unsafe { __bsan_internal_deinit() };
     }
 
     fn with_heap_object(unit_test: fn(obj: *mut c_void, size: usize)) {

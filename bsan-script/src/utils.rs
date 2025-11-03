@@ -39,23 +39,23 @@ pub fn prompt_user_unless(skip: bool, prompt: &str) -> Result<Option<PromptResul
         prompt_user(prompt)
     }
 }
+
 /// Prompt a user for a answer, looping until they enter an accepted input or nothing
 pub fn prompt_user(prompt: &str) -> Result<Option<PromptResult>> {
     if is_running_on_ci() {
         Ok(Some(PromptResult::Yes))
     } else {
         let mut input = String::new();
-        print!("{prompt}  [Y/n]: ");
-        io::stdout().flush()?;
-        input.clear();
-        io::stdin().read_line(&mut input)?;
-        match input.trim().to_lowercase().as_str() {
-            "y" | "yes" => Ok(Some(PromptResult::Yes)),
-            "n" | "no" => Ok(Some(PromptResult::No)),
-            "" => Ok(Some(PromptResult::Yes)),
-            _ => {
-                eprintln!("Unrecognized option '{}'.", input.trim());
-                Ok(None)
+        loop {
+            input.clear();
+            print!("{prompt}  [Y/n]: ");
+            io::stdout().flush()?;
+            io::stdin().read_line(&mut input)?;
+            match input.trim().to_lowercase().as_str() {
+                "y" | "yes" => return Ok(Some(PromptResult::Yes)),
+                "n" | "no" => return Ok(Some(PromptResult::No)),
+                "" => return Ok(Some(PromptResult::Yes)),
+                _ => eprintln!("Unrecognized option '{}'.", input.trim()),
             }
         }
     }
