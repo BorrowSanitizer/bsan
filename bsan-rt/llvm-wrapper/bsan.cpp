@@ -10,7 +10,6 @@ bool bsan_init_is_running;
 bool bsan_deinit_is_running;
 } // namespace __bsan
 
-
 extern "C" {
 void __bsan_internal_init();
 void __bsan_internal_deinit();
