@@ -53,8 +53,3 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_deinit() {
   bsan_deinit_is_running = false;
   bsan_inited = false;
 }
-
-#if SANITIZER_CAN_USE_PREINIT_ARRAY
-__attribute__((section(".preinit_array"),
-               used)) static void (*bsan_init_ptr)() = __bsan_init;
-#endif
