@@ -180,11 +180,11 @@ pub fn ensure_llvm_cmake(
 
         let link_source = path!(root_dir / "bsan-rt" / "llvm-wrapper");
         let link_target = path!(toolchain_dir / "compiler-rt" / "lib" / "bsan");
-        if !link_target.exists() {
-            cmd!(sh, "ln -s {link_source} {link_target}").run()?;
-        }
+        cmd!(sh, "ln -s {link_source} {link_target}").run()?;
+    
         fs::write(lockfile, &branch)?;
     }
+
     Ok(LLVMCmake {
         llvm: path!(toolchain_dir / "llvm" / "cmake"),
         common: path!(toolchain_dir / "cmake"),
