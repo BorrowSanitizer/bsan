@@ -1,4 +1,3 @@
-
 set(BSAN_SUPPORTED_ARCH ${SANITIZER_COMMON_SUPPORTED_ARCH})
 
 # Runtime library sources and build flags.
@@ -8,6 +7,16 @@ set(BSAN_SOURCES
 
 SET(BSAN_HEADERS
   bsan.h
+)
+
+add_custom_target(clang-format
+  COMMAND clang-format ${BSAN_SOURCES} ${BSAN_HEADERS} -i --style=LLVM
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_custom_target(clang-format-check
+  COMMAND clang-format ${BSAN_SOURCES} ${BSAN_HEADERS} --dry-run --Werror --style=LLVM
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 set(BSAN_COMMON_CFLAGS ${SANITIZER_COMMON_CFLAGS})

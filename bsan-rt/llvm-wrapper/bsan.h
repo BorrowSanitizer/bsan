@@ -3,6 +3,5 @@
 
 #include "sanitizer_common/sanitizer_internal_defs.h"
 
-namespace __bsan
-{} // namespace __bsan
-#endif // BSAN_H
+namespace __bsan {} // namespace __bsan
+#endif              // BSAN_H

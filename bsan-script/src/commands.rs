@@ -65,7 +65,8 @@ impl Command {
 
     fn fmt(env: &mut BsanEnv, check: bool) -> Result<()> {
         env.fmt(check)?;
-        BsanPass::fmt(env, check)
+        BsanPass::fmt(env, check)?;
+        Crt::fmt(env, check)
     }
 
     fn ui(env: &mut BsanEnv, _bless: bool) -> Result<()> {
@@ -364,7 +365,7 @@ impl Buildable for BsanRt {
 
 struct Crt;
 impl Crt {
-    fn cmake(&self, env: &mut BsanEnv) -> Result<Config> {
+    fn cmake(env: &mut BsanEnv) -> Result<Config> {
         let output_dir = path!(env.artifact_dir() / "compiler-rt");
         let src_dir = path!(env.sysroot / "compiler-rt");
         let crt_include = path!(src_dir / "include");
@@ -379,10 +380,19 @@ impl Crt {
         cfg.define("LLVM_COMMON_CMAKE_UTILS", &env.toolchain_config.llvm_cmake.common);
         cfg.define("LLVM_CMAKE_DIR", &env.toolchain_config.llvm_cmake.llvm);
         cfg.pic(true);
-
-        cfg.build_target(&self.artifact(env));
-
+        cfg.build_target(&Crt.artifact(env));
         Ok(cfg)
+    }
+
+    fn fmt(env: &mut BsanEnv, check: bool) -> Result<()> {
+        let mut cfg = Self::cmake(env)?;
+        if check {
+            cfg.build_target("clang-format-check");
+        } else {
+            cfg.build_target("clang-format");
+        }
+        cfg.build();
+        Ok(())
     }
 }
 
@@ -397,7 +407,7 @@ impl Buildable for Crt {
     }
 
     fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
-        let mut cfg = self.cmake(env)?;
+        let mut cfg = Self::cmake(env)?;
         args.iter().for_each(|arg| {
             cfg.build_arg(arg);
         });
