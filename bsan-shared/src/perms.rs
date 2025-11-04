@@ -389,12 +389,12 @@ impl Permission {
 
     /// Default initial permission of a reborrowed mutable reference that is either
     /// protected or not interior mutable.
-    fn new_reserved_frz() -> Self {
+    pub fn new_reserved_frz() -> Self {
         Self { inner: ReservedFrz { conflicted: false } }
     }
 
     /// Default initial permission of an unprotected interior mutable reference.
-    fn new_reserved_im() -> Self {
+    pub fn new_reserved_im() -> Self {
         Self { inner: ReservedIM }
     }
 
