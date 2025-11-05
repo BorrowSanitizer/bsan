@@ -86,9 +86,11 @@ struct DebugSummary {
 impl fmt::Display for DebugSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.info {
-            AllocInfoSummary::WildCard => {
-                write!(f, "[{}] 0x{:x} @(*, {:?}) -> (wildcard)", self.op, self.ptr, self.bor_tag)
-            }
+            AllocInfoSummary::WildCard => write!(
+                f,
+                "[{}] 0x{:x} @({:?}, {:?}) -> (wildcard)",
+                self.op, self.ptr, self.alloc_id, self.bor_tag
+            ),
             AllocInfoSummary::Null => write!(
                 f,
                 "[{}] 0x{:x} @({:?}, {:?}) -> (null)",
@@ -535,7 +537,7 @@ unsafe extern "C-unwind" fn __bsan_alloc(
             })
             .unwrap_or_else(|info| global_ctx.handle_error(info))
     };
-    debug_bsan!("alloc", base_addr, alloc_id, bor_tag, alloc_info.as_ref());
+    debug_bsan!("alloc", base_addr, alloc_id, bor_tag, &alloc_info);
     alloc_info
 }
 

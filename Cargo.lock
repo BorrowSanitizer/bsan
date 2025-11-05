@@ -8,7 +8,9 @@ version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b5d307320b3181d6d7954e663bd7c774a838b8220fe0593c86d9fb09f498b4b"
 dependencies = [
+ "cpp_demangle",
  "gimli",
+ "rustc-demangle",
 ]
 
 [[package]]
@@ -175,6 +177,7 @@ version = "0.1.0"
 name = "bsan_rt"
 version = "0.1.0"
 dependencies = [
+ "addr2line",
  "bsan-shared",
  "cfg-if",
  "foldhash",
@@ -417,6 +420,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cpp_demangle"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2bb79cb74d735044c972aae58ed0aaa9a837e85b01106a54c39e42e97f62253"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "crossbeam-channel"
 version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -635,6 +647,10 @@ name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
+
+[[package]]
+name = "hello_world"
+version = "0.1.0"
 
 [[package]]
 name = "icu_collections"

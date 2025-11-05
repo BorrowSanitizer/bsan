@@ -1,9 +1,10 @@
 // Components in this file were ported from Miri, and then modified by our team.
 use alloc::boxed::Box;
 use alloc::string::String;
+use core::fmt::Debug;
+use core::fmt::Display;
 
 use bsan_shared::Permission;
-use thiserror_no_std::Error;
 
 use crate::diagnostics::{AccessCause, NodeDebugInfo};
 use crate::memory::{self, AllocError};
@@ -24,27 +25,27 @@ impl From<AllocError> for ErrorInfo {
     }
 }
 
-#[derive(Debug, Error)]
 pub enum ErrorInfo {
-    #[error("internal")]
     Internal(InternalError),
-    #[error("undefined behavior")]
     UndefinedBehavior(UBInfo),
 }
 
-#[derive(Error, Debug)]
+impl Debug for ErrorInfo {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ErrorInfo::Internal(e) => write!(f, "{:?}", e),
+            ErrorInfo::UndefinedBehavior(e) => write!(f, "UndefinedBehavior({})", e),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum UBInfo {
-    #[error("invalid provenance")]
     InvalidProvenance,
-    #[error("access out-of-bounds")]
     AccessOutOfBounds(Provenance, usize, usize),
-    #[error("use-after-free.")]
     UseAfterFree(AllocId),
-    #[error("freeing global allocation")]
     GlobalFree(AllocId),
-    #[error("freeing stack allocation")]
     StackFree(AllocId),
-    #[error("aliasing violation")]
     AliasingViolation(Box<TreeError>),
 }
 
@@ -53,6 +54,32 @@ pub type UBResult<T> = Result<T, UBInfo>;
 impl From<UBInfo> for ErrorInfo {
     fn from(err: UBInfo) -> ErrorInfo {
         ErrorInfo::UndefinedBehavior(err)
+    }
+}
+
+impl Display for UBInfo {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            UBInfo::InvalidProvenance => write!(f, "{:?}", self),
+            UBInfo::AccessOutOfBounds(..) => write!(f, "{:?}", self),
+            UBInfo::UseAfterFree(..) => write!(f, "{:?}", self),
+            UBInfo::GlobalFree(..) => write!(f, "{:?}", self),
+            UBInfo::StackFree(..) => write!(f, "{:?}", self),
+            UBInfo::AliasingViolation(error) => {
+                if let Some(event) = error.conflicting_info.history.last_event() {
+                    let span = event.span;
+                    if let Some(_fp) = span.find_fp() {
+                        write!(f, "fp found, error: {:?}", error)
+                    }
+                    else {
+                        write!(f, "fp not found, error: {:?}", error)
+                    }
+                }
+                else {
+                    write!(f, "no event found, error: {:?}", error)
+                }
+            },
+        }
     }
 }
 
