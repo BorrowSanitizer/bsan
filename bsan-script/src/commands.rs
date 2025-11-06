@@ -66,7 +66,7 @@ impl Command {
     fn fmt(env: &mut BsanEnv, check: bool) -> Result<()> {
         env.fmt(check)?;
         BsanPass::fmt(env, check)?;
-        Crt::fmt(env, check)
+        CompilerRt::fmt(env, check)
     }
 
     fn ui(env: &mut BsanEnv, _bless: bool) -> Result<()> {
@@ -157,6 +157,8 @@ pub enum Component {
     BsanDriver,
     CargoBsan,
     BsanRt,
+    BsanRtCore,
+    CompilerRt,
     BsanPass,
     BsanShared,
 }
@@ -168,6 +170,8 @@ macro_rules! all_components {
             Component::BsanDriver,
             Component::CargoBsan,
             Component::BsanRt,
+            Component::BsanRtCore,
+            Component::CompilerRt,
             Component::BsanPass,
             Component::BsanShared,
         ]
@@ -182,6 +186,8 @@ impl Deref for Component {
             Component::BsanDriver => &BsanDriver,
             Component::CargoBsan => &CargoBsan,
             Component::BsanRt => &BsanRt,
+            Component::BsanRtCore => &BsanRtCore,
+            Component::CompilerRt => &CompilerRt,
             Component::BsanPass => &BsanPass,
             Component::BsanShared => &BsanShared,
         }
@@ -193,7 +199,9 @@ pub trait Buildable {
 
     fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>>;
 
-    fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()>;
+    fn install(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
+        Ok(())
+    }
 
     fn doc(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
         Ok(())
@@ -297,19 +305,8 @@ impl Buildable for BsanRt {
 
     fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
         let llvm_ar = env.target_binary("llvm-ar");
-        let llvm_objcopy = env.target_binary("llvm-objcopy");
-
-        let llvm_wrapper = env.build_artifact(Crt, &[])?;
-
-        let rust_runtime = env.with_flags("RUSTFLAGS", RT_FLAGS, |env| {
-            env.build("bsan-rt", args)?;
-            Ok(env.assert_artifact("libbsan_rt_core.a"))
-        })?;
-
-        cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_* -G __BSAN_*")
-            .arg(&rust_runtime)
-            .quiet()
-            .run()?;
+        let llvm_wrapper = env.build_artifact(CompilerRt, &[])?;
+        let rust_runtime = env.build_artifact(BsanRtCore, args)?;
 
         let dest_archive = path!(env.artifact_dir() / self.artifact(env));
         cmd!(env.sh, "cp {llvm_wrapper} {dest_archive}").quiet().run()?;
@@ -338,14 +335,6 @@ impl Buildable for BsanRt {
         Ok(Some(path!(env.artifact_dir() / dest_archive)))
     }
 
-    fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.test("bsan-rt", args))
-    }
-
-    fn clippy(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.clippy("bsan-rt", args))
-    }
-
     fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
         env.in_mode(Mode::Release, |env| {
             self.build(env, args)?;
@@ -353,22 +342,10 @@ impl Buildable for BsanRt {
             env.copy_to_sysroot_libdir(&runtime)
         })
     }
-
-    fn check(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.check("bsan-rt", args))
-    }
-
-    fn miri(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.with_flags(
-            "MIRIFLAGS",
-            &["-Zmiri-permissive-provenance", "-Zmiri-disable-alignment-check"],
-            |env| env.miri("bsan-rt", args),
-        )
-    }
 }
 
-struct Crt;
-impl Crt {
+struct CompilerRt;
+impl CompilerRt {
     fn cmake(env: &mut BsanEnv) -> Result<Config> {
         let output_dir = path!(env.artifact_dir() / "compiler-rt");
         let src_dir = path!(env.sysroot / "compiler-rt");
@@ -382,7 +359,7 @@ impl Crt {
         cfg.define("COMPILER_RT_HAS_LLVMTESTINGSUPPORT", "FALSE");
         cfg.define("LLVM_COMMON_CMAKE_UTILS", &env.toolchain_config.llvm_cmake.common);
         cfg.define("LLVM_CMAKE_DIR", &env.toolchain_config.llvm_cmake.llvm);
-        cfg.build_target(&Crt.artifact(env));
+        cfg.build_target(&CompilerRt.artifact(env));
         Ok(cfg)
     }
 
@@ -398,7 +375,7 @@ impl Crt {
     }
 }
 
-impl Buildable for Crt {
+impl Buildable for CompilerRt {
     fn artifact(&self, env: &BsanEnv) -> String {
         let host = &env.toolchain_config.meta.host;
         let arch = host
@@ -417,12 +394,52 @@ impl Buildable for Crt {
         let target = path!(target_dir / self.artifact(env));
         Ok(Some(target))
     }
+}
 
-    fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.in_mode(Mode::Release, |env| {
-            let pass = self.build(env, args)?.expect("CompilerRT wrapper was not built.");
-            env.copy_to_sysroot_libdir(&pass)
-        })
+struct BsanRtCore;
+
+impl Buildable for BsanRtCore {
+    fn artifact(&self, _env: &BsanEnv) -> String {
+        "libbsan_rt_core.a".into()
+    }
+
+    fn doc(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+        env.doc("bsan-rt", args)
+    }
+
+    fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
+        let llvm_objcopy = env.target_binary("llvm-objcopy");
+        let rust_runtime = env.with_flags("RUSTFLAGS", RT_FLAGS, |env| {
+            env.build("bsan-rt", args)?;
+            Ok(env.assert_artifact(&self.artifact(env)))
+        })?;
+
+        cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_* -G __BSAN_*")
+            .arg(&rust_runtime)
+            .quiet()
+            .run()?;
+
+        Ok(Some(rust_runtime))
+    }
+
+    fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+        env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.test("bsan-rt", args))
+    }
+
+    fn clippy(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+        env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.clippy("bsan-rt", args))
+    }
+
+    fn check(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+        env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.check("bsan-rt", args))
+    }
+
+    fn miri(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+        env.with_flags(
+            "MIRIFLAGS",
+            &["-Zmiri-permissive-provenance", "-Zmiri-disable-alignment-check"],
+            |env| env.miri("bsan-rt", args),
+        )
     }
 }
 
