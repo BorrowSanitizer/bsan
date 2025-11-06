@@ -85,7 +85,6 @@ impl Command {
             cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
             cmd!(env.sh, "cargo test -p bsan --test ui").run()?;
             cmd!(env.sh, "python3 tests/test-cargo-bsan/run_test.py").run()?;
-
             Ok(())
         })
     }
@@ -282,6 +281,7 @@ static RT_FLAGS: &[&str] = &[
     "-Cembed-bitcode=yes",
     "-Clto",
     "-Cforce-frame-pointers=yes",
+    "-Crelocation-model=pic",
 ];
 
 struct BsanRt;
@@ -299,10 +299,11 @@ impl Buildable for BsanRt {
         let llvm_ar = env.target_binary("llvm-ar");
         let llvm_objcopy = env.target_binary("llvm-objcopy");
 
-        let llvm_wrapper = env.build_artifact(Crt, args)?;
+        let llvm_wrapper = env.build_artifact(Crt, &[])?;
+
         let rust_runtime = env.with_flags("RUSTFLAGS", RT_FLAGS, |env| {
             env.build("bsan-rt", args)?;
-            Ok(env.assert_artifact(&self.artifact(env)))
+            Ok(env.assert_artifact("libbsan_rt_core.a"))
         })?;
 
         cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_* -G __BSAN_*")
@@ -310,9 +311,12 @@ impl Buildable for BsanRt {
             .quiet()
             .run()?;
 
+        let dest_archive = path!(env.artifact_dir() / self.artifact(env));
+        cmd!(env.sh, "cp {llvm_wrapper} {dest_archive}").quiet().run()?;
+
         let tmp_dir = env.sh.create_temp_dir()?;
         env.cd(tmp_dir.path(), |env| {
-            cmd!(env.sh, "{llvm_ar} -x {llvm_wrapper}").run()?;
+            cmd!(env.sh, "{llvm_ar} -x {rust_runtime}").quiet().run()?;
 
             let file_names: Vec<String> = fs::read_dir(tmp_dir.path())
                 .unwrap()
@@ -327,11 +331,11 @@ impl Buildable for BsanRt {
                 .collect();
 
             // Finally, add the objects into the static archive of C++ component.
-            cmd!(env.sh, "{llvm_ar} -ru {rust_runtime}").args(file_names).quiet().run()?;
+            cmd!(env.sh, "{llvm_ar} -r {dest_archive}").args(file_names).quiet().run()?;
             Ok(())
         })?;
 
-        Ok(Some(path!(env.artifact_dir() / rust_runtime)))
+        Ok(Some(path!(env.artifact_dir() / dest_archive)))
     }
 
     fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
@@ -372,14 +376,12 @@ impl Crt {
         let sanitizer_common = path!(src_dir / "lib");
 
         let mut cfg = env.llvm_cmake(&src_dir, &output_dir, &[crt_include, sanitizer_common])?;
-
         cfg.define("LLVM_MAIN_SRC_DIR", &env.sysroot);
         cfg.define("COMPILER_RT_SANITIZERS_TO_BUILD", "bsan");
         cfg.define("COMPILER_RT_HAS_BSAN", "TRUE");
         cfg.define("COMPILER_RT_HAS_LLVMTESTINGSUPPORT", "FALSE");
         cfg.define("LLVM_COMMON_CMAKE_UTILS", &env.toolchain_config.llvm_cmake.common);
         cfg.define("LLVM_CMAKE_DIR", &env.toolchain_config.llvm_cmake.llvm);
-        cfg.pic(true);
         cfg.build_target(&Crt.artifact(env));
         Ok(cfg)
     }
