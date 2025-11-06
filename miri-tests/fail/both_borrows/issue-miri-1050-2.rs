@@ -1,4 +1,5 @@
 //@run: 1
+// Ensure this even hits the aliasing model
 use std::ptr::NonNull;
 
 fn main() {
