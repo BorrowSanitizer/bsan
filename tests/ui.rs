@@ -269,10 +269,14 @@ fn main() -> Result<()> {
     //ui(Mode::Pass, "miri-tests/should_pass", &meta, WithoutDependencies, tmpdir.path())?;
     /*ui(
         Mode::Fail,
-        "miri-tests/unexpected-internal-error",
+        "miri-tests/multithreading",
         &meta,
         WithoutDependencies,
         tmpdir.path(),
     )?;*/
+
+    //FIXME: needs test utils implementation
+    //ui(Mode::Fail, "miri-tests/with-miri-utils", &meta, WithoutDependencies, tmpdir.path())?;
+
     Ok(())
 }
