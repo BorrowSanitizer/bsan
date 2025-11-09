@@ -210,7 +210,12 @@ impl BorTag {
 
 impl fmt::Debug for BorTag {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "<{}>", self.0)
+        let global = unsafe { global_ctx() };
+        let protector = match global.get_protector_kind(*self) {
+            Some(kind) => &format!("{:?}", kind),
+            None => "unprotected",
+        };
+        write!(f, "<{}>({})", self.0, protector)
     }
 }
 
