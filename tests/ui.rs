@@ -12,6 +12,7 @@ use ui_test::dependencies::DependencyBuilder;
 use ui_test::spanned::Spanned;
 use ui_test::{ignore_output_conflict, status_emitter, CommandBuilder, Config, Format, Match};
 
+#[allow(unused)]
 #[derive(Copy, Clone, Debug)]
 enum Mode {
     Pass,
@@ -210,6 +211,7 @@ regexes! {
     r"[^ ]*/\.?cargo/registry/.*/(.*\.rs)"  => "CARGO_REGISTRY/.../$1",
 }
 
+#[allow(unused)]
 enum Dependencies {
     WithDependencies,
     WithoutDependencies,
@@ -254,27 +256,16 @@ fn main() -> Result<()> {
     ui_test::color_eyre::install()?;
     let tmpdir = tempfile::Builder::new().prefix("bsan-uitest-").tempdir()?;
     let meta = get_version_info();
-    let _args = std::env::args_os();
 
     ui(Mode::Pass, "tests/pass", &meta, WithoutDependencies, tmpdir.path())?;
-    //does not extist yet: ui(Mode::Pass, "tests/pass-dep", &meta, WithDependencies, tmpdir.path())?;
-    //does not extist yet: ui(Mode::Panic, "tests/panic", &meta, WithDependencies, tmpdir.path())?;
     ui(Mode::Fail, "tests/fail", &meta, WithoutDependencies, tmpdir.path())?;
-    //does not extist yet: ui(Mode::Fail, "tests/fail-dep", &meta, WithDependencies, tmpdir.path())?;
-    ui(Mode::Fail, "miri-tests/fail", &meta, WithoutDependencies, tmpdir.path())?;
-    ui(Mode::Pass, "miri-tests/pass", &meta, WithoutDependencies, tmpdir.path())?;
+    ui(Mode::Fail, "tests/miri-tests/fail", &meta, WithoutDependencies, tmpdir.path())?;
+    ui(Mode::Pass, "tests/miri-tests/pass", &meta, WithoutDependencies, tmpdir.path())?;
 
     // FIXME: BSAN does not behave as expected for those tests.
-    //ui(Mode::Fail, "miri-tests/should_fail", &meta, WithoutDependencies, tmpdir.path())?;
-    //ui(Mode::Pass, "miri-tests/should_pass", &meta, WithoutDependencies, tmpdir.path())?;
-    /*ui(
-        Mode::Fail,
-        "miri-tests/multithreading",
-        &meta,
-        WithoutDependencies,
-        tmpdir.path(),
-    )?;*/
-
+    //ui(Mode::Fail, "tests/miri-tests/should_fail", &meta, WithoutDependencies, tmpdir.path())?;
+    //ui(Mode::Pass, "tests/miri-tests/should_pass", &meta, WithoutDependencies, tmpdir.path())?;
+    //ui(Mode::Fail, "tests/miri-tests/multithreading", &meta, WithoutDependencies, tmpdir.path())?;
     //FIXME: needs test utils implementation
     //ui(Mode::Fail, "miri-tests/with-miri-utils", &meta, WithoutDependencies, tmpdir.path())?;
 
