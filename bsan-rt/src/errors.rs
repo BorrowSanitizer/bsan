@@ -1,8 +1,7 @@
 // Components in this file were ported from Miri, and then modified by our team.
 use alloc::boxed::Box;
 use alloc::string::String;
-use core::fmt::Debug;
-use core::fmt::Display;
+use core::fmt::{Debug, Display};
 
 use bsan_shared::Permission;
 
@@ -70,15 +69,13 @@ impl Display for UBInfo {
                     let span = event.span;
                     if let Some(_fp) = span.find_fp() {
                         write!(f, "fp found, error: {:?}", error)
-                    }
-                    else {
+                    } else {
                         write!(f, "fp not found, error: {:?}", error)
                     }
-                }
-                else {
+                } else {
                     write!(f, "no event found, error: {:?}", error)
                 }
-            },
+            }
         }
     }
 }
