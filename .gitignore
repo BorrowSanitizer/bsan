@@ -10,3 +10,5 @@ CMakeFiles
 *.o
 .toolchain
 .vscode
+book
+.DS_Store
