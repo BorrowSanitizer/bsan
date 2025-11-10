@@ -16,7 +16,7 @@ cfg-if = "1.0.3"
 addr2line = { version = "0.25.0", default-features = false, features = ["rustc-demangle", "cpp_demangle"]}
 
 [lib]
-name = "bsan_rt"
+name = "bsan_rt_core"
 crate-type = ["staticlib"] 
 
 [features]

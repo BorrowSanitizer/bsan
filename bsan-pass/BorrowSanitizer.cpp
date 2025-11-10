@@ -1246,7 +1246,7 @@ private:
 
   void visitIntToPtrInst(IntToPtrInst &I) {
     // Pointers converted from integers receive a wildcard provenance value.
-    setProvenance(&I, BS.WildcardProvenance);
+    setProvenance(&I, BS.InvalidProvenance);
   }
 
   void visitExtractValueInst(ExtractValueInst &EI) {

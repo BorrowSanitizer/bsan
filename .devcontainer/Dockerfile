@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \ 
     sudo \
     git \
+    gdb \
     && rm -rf /var/lib/apt/lists/*
 RUN update-alternatives --install /usr/bin/cc cc /usr/bin/clang 100 \
     && update-alternatives --install /usr/bin/c++ c++ /usr/bin/clang++ 100

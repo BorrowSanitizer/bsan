@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use colored::*;
 use regex::bytes::Regex;
 use rustc_version::VersionMeta;
-use ui_test::color_eyre::eyre::{Context, Result};
+use ui_test::color_eyre::eyre::{self, Context, Result};
 use ui_test::custom_flags::edition::Edition;
 use ui_test::dependencies::DependencyBuilder;
 use ui_test::spanned::Spanned;
@@ -224,6 +224,10 @@ fn ui(
     with_dependencies: Dependencies,
     tmpdir: &Path,
 ) -> Result<()> {
+    // check if path exists
+    if !Path::new(path).exists() {
+        return Err(eyre::eyre!("UI test path {path} does not exist"));
+    }
     let msg = format!("## Running ui tests in {path}.");
     eprintln!("{}", msg.green().bold());
 
@@ -253,9 +257,26 @@ fn main() -> Result<()> {
     let _args = std::env::args_os();
 
     ui(Mode::Pass, "tests/pass", &meta, WithoutDependencies, tmpdir.path())?;
-    ui(Mode::Pass, "tests/pass-dep", &meta, WithDependencies, tmpdir.path())?;
-    ui(Mode::Panic, "tests/panic", &meta, WithDependencies, tmpdir.path())?;
+    //does not extist yet: ui(Mode::Pass, "tests/pass-dep", &meta, WithDependencies, tmpdir.path())?;
+    //does not extist yet: ui(Mode::Panic, "tests/panic", &meta, WithDependencies, tmpdir.path())?;
     ui(Mode::Fail, "tests/fail", &meta, WithoutDependencies, tmpdir.path())?;
-    ui(Mode::Fail, "tests/fail-dep", &meta, WithDependencies, tmpdir.path())?;
+    //does not extist yet: ui(Mode::Fail, "tests/fail-dep", &meta, WithDependencies, tmpdir.path())?;
+    ui(Mode::Fail, "miri-tests/fail", &meta, WithoutDependencies, tmpdir.path())?;
+    ui(Mode::Pass, "miri-tests/pass", &meta, WithoutDependencies, tmpdir.path())?;
+
+    // FIXME: BSAN does not behave as expected for those tests.
+    //ui(Mode::Fail, "miri-tests/should_fail", &meta, WithoutDependencies, tmpdir.path())?;
+    //ui(Mode::Pass, "miri-tests/should_pass", &meta, WithoutDependencies, tmpdir.path())?;
+    /*ui(
+        Mode::Fail,
+        "miri-tests/multithreading",
+        &meta,
+        WithoutDependencies,
+        tmpdir.path(),
+    )?;*/
+
+    //FIXME: needs test utils implementation
+    //ui(Mode::Fail, "miri-tests/with-miri-utils", &meta, WithoutDependencies, tmpdir.path())?;
+
     Ok(())
 }
