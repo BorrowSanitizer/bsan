@@ -5,6 +5,7 @@
 --------------
 
 [Development Guide](dev/guide.md)
+[Retags RFC](dev/retags.md)
 
 --------------
 [About](about.md)

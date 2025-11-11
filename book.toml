@@ -2,7 +2,7 @@
 authors = ["Ian McCormack"]
 language = "en"
 multilingual = false
-src = "src"
+src = "docs"
 title = "BorrowSanitizer"
 
 [output.html]
@@ -14,3 +14,5 @@ after = [ "image-size" ]
 [preprocessor.image-size]
 command = "mdbook-image-size"
 
+[build]
+build-dir = "target/book"

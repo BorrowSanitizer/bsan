@@ -260,4 +260,3 @@ We know that the second component of the pair will need to be replaced with an a
   %alias = phi ptr [%alias1, %left], [%alias2, %right]
 ```
 The value `%alias` will be equal to `%alias1` if we came from the `%left` block and `alias2` if we came from the `%right` block.
-
