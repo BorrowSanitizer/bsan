@@ -191,11 +191,10 @@ pub static GLOBAL_CTX: SyncUnsafeCell<MaybeUninit<GlobalCtx>> =
 /// It is marked as `unsafe`, because it relies on the set of function pointers in
 /// `BsanHooks` to be valid.
 #[inline]
-pub unsafe fn init_global_ctx<'a>(hooks: BsanHooks) -> &'a GlobalCtx {
+pub unsafe fn init_global_ctx(hooks: BsanHooks) {
     unsafe {
         (*GLOBAL_CTX.get())
             .write(GlobalCtx::new(hooks).expect("failed to allocate global context"));
-        global_ctx()
     }
 }
 
