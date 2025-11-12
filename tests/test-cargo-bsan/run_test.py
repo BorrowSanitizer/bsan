@@ -129,6 +129,12 @@ def test_cargo_bsan_run():
         cargo_bsan("run", quiet=False),
     )
 
+def test_cargo_bsan_test():
+    test("`cargo bsan test`",
+        cargo_bsan("test"),
+        stdout_ref="test.stdout.ref",
+    )
+
 args_parser = argparse.ArgumentParser(description='`cargo bsan` testing')
 args_parser.add_argument('--bless', help='bless the reference files', action='store_true')
 
@@ -138,6 +144,7 @@ os.chdir(os.path.dirname(os.path.realpath(__file__)))
 
 test_cargo_bsan_setup()
 test_cargo_bsan_run()
+test_cargo_bsan_test()
 
 print("\nTEST SUCCESSFUL!")
 sys.exit(0)

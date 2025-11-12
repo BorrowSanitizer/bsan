@@ -11,12 +11,6 @@ namespace __bsan {
 static pthread_key_t TSD_KEY;
 static bool TSD_KEY_INITED = false;
 
-void BsanTSDInit() {
-  CHECK(!TSD_KEY_INITED);
-  TSD_KEY_INITED = true;
-  CHECK_EQ(0, pthread_key_create(&TSD_KEY, BsanTSDDtor));
-}
-
 BsanThread *GetCurrentThread() { return (BsanThread *)__BSAN_CURR_THREAD; }
 
 void SetCurrentThread(BsanThread *t) {
@@ -40,6 +34,12 @@ void BsanTSDDtor(void *tsd) {
   // Make sure that signal handler can not see a stale current thread pointer.
   atomic_signal_fence(memory_order_seq_cst);
   BsanThread::TSDDtor(tsd);
+}
+
+void BsanTSDInit() {
+  CHECK(!TSD_KEY_INITED);
+  TSD_KEY_INITED = true;
+  CHECK_EQ(0, pthread_key_create(&TSD_KEY, BsanTSDDtor));
 }
 
 } // namespace __bsan

@@ -3,5 +3,15 @@
 
 #include "sanitizer_common/sanitizer_internal_defs.h"
 
-namespace __bsan {} // namespace __bsan
-#endif              // BSAN_H
+extern THREADLOCAL void *__BSAN_CURR_THREAD;
+extern THREADLOCAL void *__BSAN_PROT_TAG_STACK;
+
+extern bool bsan_inited;
+extern bool bsan_init_is_running;
+extern bool bsan_deinit_is_running;
+
+namespace __bsan {
+void BsanTSDInit();
+void InitializeInterceptors();
+} // namespace __bsan
+#endif // BSAN_H

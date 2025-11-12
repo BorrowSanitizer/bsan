@@ -725,23 +725,24 @@ pub mod diagnostics {
                         (Active, Frozen) => false,
                         (ReservedFrz { conflicted: true }, _) => false,
 
-                        (_, Disabled) =>
-                            unreachable!(
-                                "permission that results in Disabled should not itself be Disabled in the first place"
-                            ),
+                        (_, Disabled) => unreachable!(
+                            "permission that results in Disabled should not itself be Disabled in the first place"
+                        ),
                         // No transition has `Reserved { conflicted: false }` or `ReservedIM` as its `.to`
                         // unless it's a noop. `Cell` cannot be in its `.to` because all child
                         // accesses are a noop.
-                        (ReservedFrz { conflicted: false } | ReservedIM | Cell, _) =>
-                            unreachable!("self is a noop transition"),
+                        (ReservedFrz { conflicted: false } | ReservedIM | Cell, _) => {
+                            unreachable!("self is a noop transition")
+                        }
 
                         // Permissions only evolve in the order `Reserved -> Active -> Frozen -> Disabled`,
                         // so permissions found must be increasing in the order
                         // `self.from < self.to <= forbidden.from < forbidden.to`.
                         (Disabled, Cell | ReservedFrz { .. } | ReservedIM | Active | Frozen)
                         | (Frozen, Cell | ReservedFrz { .. } | ReservedIM | Active)
-                        | (Active, Cell | ReservedFrz { .. } | ReservedIM) =>
-                            unreachable!("permissions between self and err must be increasing"),
+                        | (Active, Cell | ReservedFrz { .. } | ReservedIM) => {
+                            unreachable!("permissions between self and err must be increasing")
+                        }
                     }
                 }
                 // We don't care because protectors evolve independently from
