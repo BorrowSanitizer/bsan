@@ -121,7 +121,9 @@ impl BsanEnv {
             if let Some(parent) = sysroot.parent() {
                 path!(parent / "bsan")
             } else {
-                show_error!("Please specify an installation directory for our toolchain using `xb --toolchain-dir=[dir]`.")
+                show_error!(
+                    "Please specify an installation directory for our toolchain using `xb --toolchain-dir=[dir]`."
+                )
             }
         };
 

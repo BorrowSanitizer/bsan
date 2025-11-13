@@ -16,7 +16,6 @@
 #[macro_use]
 extern crate alloc;
 
-use core::cell::UnsafeCell;
 use core::ffi::c_void;
 use core::fmt::Debug;
 use core::mem::MaybeUninit;
@@ -396,8 +395,7 @@ pub enum AllocInfoSummary {
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_internal_init() {
     unsafe {
-        let ctx = init_global_ctx(hooks::DEFAULT_HOOKS);
-        let _ = init_local_ctx(ctx);
+        init_global_ctx(hooks::DEFAULT_HOOKS);
     }
 }
 
@@ -407,7 +405,6 @@ unsafe extern "C-unwind" fn __bsan_internal_init() {
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_internal_deinit() {
     unsafe {
-        deinit_local_ctx();
         deinit_global_ctx();
     }
 }

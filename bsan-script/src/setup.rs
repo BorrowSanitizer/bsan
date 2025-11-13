@@ -12,8 +12,7 @@ use crate::utils::{
 };
 use crate::TOOLCHAIN_NAME;
 
-static INSTALL_PROMPT: &str =
-    "You need to install the latest version of our custom Rust toolchain (`bsan`) to build BorrowSanitizer. Continue?";
+static INSTALL_PROMPT: &str = "You need to install the latest version of our custom Rust toolchain (`bsan`) to build BorrowSanitizer. Continue?";
 
 pub struct ToolchainConfig {
     pub llvm_cmake: LLVMCmake,
@@ -147,7 +146,9 @@ pub fn ensure_llvm_cmake(
 ) -> Result<LLVMCmake> {
     let compiler_rt_src = path!(toolchain_dir / "compiler-rt");
     if !compiler_rt_src.exists() {
-        show_error!("Unable to locate the source for `compiler-rt` within the sysroot for the `bsan` toolchain.");
+        show_error!(
+            "Unable to locate the source for `compiler-rt` within the sysroot for the `bsan` toolchain."
+        );
     }
 
     let llvm_sparse = path!(root_dir / "llvm-sparse");
@@ -183,8 +184,9 @@ pub fn ensure_llvm_cmake(
 
     let link_source = path!(root_dir / "bsan-rt" / "llvm-wrapper");
     let link_target = path!(toolchain_dir / "compiler-rt" / "lib" / "bsan");
-    cmd!(sh, "ln -fs {link_source} {link_target}").run()?;
-
+    if !link_target.exists() {
+        cmd!(sh, "ln -fs {link_source} {link_target}").quiet().run()?;
+    }
     Ok(LLVMCmake {
         llvm: path!(toolchain_dir / "llvm" / "cmake"),
         common: path!(toolchain_dir / "cmake"),

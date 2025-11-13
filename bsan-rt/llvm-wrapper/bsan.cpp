@@ -1,14 +1,13 @@
 #include "bsan.h"
+#include "bsan_thread.h"
 #include "sanitizer_common/sanitizer_common.h"
 
 using namespace __sanitizer;
 using namespace __bsan;
 
-namespace __bsan {
 bool bsan_inited = false;
 bool bsan_init_is_running;
 bool bsan_deinit_is_running;
-} // namespace __bsan
 
 extern "C" {
 void __bsan_internal_init();
@@ -29,6 +28,13 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_init() {
     return;
   bsan_init_is_running = true;
   BsanInit();
+  InitializeInterceptors();
+
+  BsanTSDInit();
+  BsanThread *main_thread = BsanThread::Create(nullptr, nullptr);
+  SetCurrentThread(main_thread);
+  main_thread->Init();
+
   bsan_init_is_running = false;
   bsan_inited = true;
 }
