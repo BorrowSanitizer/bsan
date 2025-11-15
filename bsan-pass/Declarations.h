@@ -39,12 +39,12 @@ const char kBsanFuncRetagName[] = BSAN_FN("retag");
 const char kBsanFuncAllocName[] = BSAN_FN("alloc");
 
 const char kBsanFuncReserveStackSlotName[] = BSAN_FN("reserve_stack_slot");
-const char kBsanFuncAllocStack[] = BSAN_FN("alloc_stack");
+const char kBsanFuncDestroyStackSlotName[] = BSAN_FN("destroy_stack_slot");
+const char kBsanFuncAllocStackName[] = BSAN_FN("alloc_stack");
 
 const char kBsanFuncNewBorrowTagName[] = BSAN_FN("new_tag");
 const char kBsanFuncNewAllocIDName[] = BSAN_FN("new_alloc_id");
 const char kBsanFuncDeallocName[] = BSAN_FN("dealloc");
-const char kBsanFuncDeallocWeakName[] = BSAN_FN("dealloc_weak");
 const char kBsanFuncExposeTagName[] = BSAN_FN("expose_tag");
 const char kBsanFuncReadName[] = BSAN_FN("read");
 const char kBsanFuncWriteName[] = BSAN_FN("write");
