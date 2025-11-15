@@ -775,7 +775,7 @@ mod tests {
     }
 
     fn destroy_metadata(ptr: *mut c_void, prov: Provenance) {
-        __bsan_dealloc(ptr, prov.alloc_id, prov.bor_tag, prov.alloc_info, true);
+        __bsan_dealloc(ptr, prov.alloc_id, prov.bor_tag, prov.alloc_info, false);
     }
 
     #[test]
