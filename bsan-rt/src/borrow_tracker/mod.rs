@@ -178,12 +178,7 @@ impl BorrowTracker {
         Ok(())
     }
 
-    pub fn dealloc(
-        &mut self,
-        global_ctx: &GlobalCtx,
-        span: Span,
-        is_heap: bool,
-    ) -> BorsanResult<()> {
+    pub fn dealloc(&mut self, global_ctx: &GlobalCtx, span: Span) -> BorsanResult<()> {
         let prov = self.prov;
         let range = self.range;
 
@@ -195,9 +190,7 @@ impl BorrowTracker {
 
         let info = unsafe { &mut *self.prov.alloc_info };
         info.alloc_id = AllocId::invalid();
-        if is_heap {
-            unsafe { global_ctx.deallocate_lock_location(self.prov.alloc_info) };
-        }
+
         Ok(())
     }
 }

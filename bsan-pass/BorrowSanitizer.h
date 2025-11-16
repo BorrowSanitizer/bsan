@@ -87,12 +87,12 @@ public:
   FunctionCallee BsanFuncGetShadowDest;
 
   FunctionCallee BsanFuncReserveStackSlot;
+  FunctionCallee BsanFuncDestroyStackSlot;
   FunctionCallee BsanFuncAllocStack;
   FunctionCallee BsanFuncRemoveProtectedTags;
 
   FunctionCallee BsanFuncAlloc;
   FunctionCallee BsanFuncDealloc;
-  FunctionCallee BsanFuncDeallocWeak;
   FunctionCallee BsanFuncExposeTag;
   FunctionCallee BsanFuncRead;
   FunctionCallee BsanFuncWrite;

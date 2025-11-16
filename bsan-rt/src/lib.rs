@@ -479,17 +479,29 @@ extern "C" fn __bsan_dealloc(
     alloc_id: AllocId,
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
-    is_heap: bool,
+    weak: bool,
 ) {
     debug_bsan!("dealloc", ptr, alloc_id, bor_tag, alloc_info);
     let global_ctx = unsafe { global_ctx() };
     let prov: Provenance = Provenance { alloc_id, bor_tag, alloc_info };
 
+    if weak {
+        if alloc_info.is_null() {
+            return;
+        }
+
+        if alloc_id != unsafe { (*alloc_info).alloc_id } {
+            return;
+        }
+    }
+
     BorrowTracker::new(prov, ptr, None)
-        .and_then(|mut bt| {
-            bt.iter_mut().try_for_each(|t| t.dealloc(global_ctx, Span::new(), is_heap))
-        })
+        .and_then(|mut bt| bt.iter_mut().try_for_each(|t| t.dealloc(global_ctx, Span::new())))
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
+
+    if !weak {
+        unsafe { global_ctx.deallocate_lock_location(alloc_info) };
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -497,23 +509,6 @@ extern "C" fn __bsan_remove_protected_tags(data: *mut BorTag, len: usize) {
     let global_ctx = unsafe { global_ctx() };
     let tags = unsafe { slice::from_raw_parts(data, len) };
     global_ctx.remove_protected_tags(tags);
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn __bsan_dealloc_weak(
-    ptr: *mut c_void,
-    alloc_id: AllocId,
-    bor_tag: BorTag,
-    alloc_info: *mut AllocInfo,
-) {
-    if alloc_info.is_null() {
-        return;
-    }
-
-    if alloc_id != unsafe { (*alloc_info).alloc_id } {
-        return;
-    }
-    __bsan_dealloc(ptr, alloc_id, bor_tag, alloc_info, false)
 }
 
 // Registers a heap allocation of size `size`, storing its provenance in the return pointer.
@@ -632,6 +627,14 @@ unsafe extern "C" fn __bsan_reserve_stack_slot() -> NonNull<AllocInfo> {
                 tree_lock: Mutex::new(None),
             })
             .unwrap_or_else(|info| global_ctx.handle_error(info))
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __bsan_destroy_stack_slot(slot: *mut AllocInfo) {
+    let global_ctx = unsafe { global_ctx() };
+    unsafe {
+        global_ctx.deallocate_lock_location(slot);
     }
 }
 
@@ -772,7 +775,7 @@ mod tests {
     }
 
     fn destroy_metadata(ptr: *mut c_void, prov: Provenance) {
-        __bsan_dealloc(ptr, prov.alloc_id, prov.bor_tag, prov.alloc_info, true);
+        __bsan_dealloc(ptr, prov.alloc_id, prov.bor_tag, prov.alloc_info, false);
     }
 
     #[test]

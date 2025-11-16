@@ -70,36 +70,20 @@ pub(crate) fn unmap_failed<T>() -> T {
 }
 
 /// Credit: bumpalo
-#[inline]
-pub(crate) const fn round_up_to(n: usize, divisor: usize) -> Option<usize> {
-    debug_assert!(divisor > 0);
-    debug_assert!(divisor.is_power_of_two());
-    match n.checked_add(divisor - 1) {
-        Some(x) => Some(x & !(divisor - 1)),
-        None => None,
-    }
-}
-
-/// Credit: bumpalo
 /// Like `round_up_to` but turns overflow into undefined behavior rather than
 /// returning `None`.
 #[inline]
-pub(crate) unsafe fn round_up_to_unchecked(n: usize, divisor: usize) -> usize {
-    match round_up_to(n, divisor) {
-        Some(x) => x,
-        None => {
-            debug_assert!(false, "round_up_to_unchecked failed");
-            unsafe { core::hint::unreachable_unchecked() }
-        }
-    }
+pub(crate) unsafe fn next_greater_multiple_unchecked(n: usize, divisor: usize) -> usize {
+    debug_assert!(divisor > 0);
+    debug_assert!(divisor.is_power_of_two());
+    debug_assert!(usize::MAX - n >= divisor);
+    unsafe { n.unchecked_add(divisor) & !(divisor - 1) }
 }
 
 /// Credit: bumpalo
 #[inline]
 pub(crate) unsafe fn round_mut_ptr_up_to_unchecked(ptr: *mut u8, divisor: usize) -> *mut u8 {
-    debug_assert!(divisor > 0);
-    debug_assert!(divisor.is_power_of_two());
-    let aligned = unsafe { round_up_to_unchecked(ptr as usize, divisor) };
+    let aligned = unsafe { next_greater_multiple_unchecked(ptr as usize, divisor) };
     let delta = aligned - (ptr as usize);
     unsafe { ptr.add(delta) }
 }
@@ -142,5 +126,16 @@ pub unsafe fn munmap<T>(
         } else {
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::memory::next_greater_multiple_unchecked;
+
+    #[test]
+    fn rounding() {
+        unsafe { assert_eq!(next_greater_multiple_unchecked(4, 4), 8) }
+        unsafe { assert_eq!(next_greater_multiple_unchecked(4, 8), 8) }
     }
 }

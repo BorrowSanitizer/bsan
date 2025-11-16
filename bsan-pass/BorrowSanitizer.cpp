@@ -759,7 +759,7 @@ private:
   void instrumentDeallocation(IRBuilder<> &IRB, Value *Ptr) {
     ProvenanceScalar Prov = assertProvenanceScalar(Ptr);
     IRB.CreateCall(BS.BsanFuncDealloc,
-                   {Ptr, Prov.Id, Prov.Tag, Prov.Info, BS.True});
+                   {Ptr, Prov.Id, Prov.Tag, Prov.Info, BS.False});
   }
 
   bool isRustShim(CallBase &CB) {
@@ -1123,8 +1123,8 @@ private:
     ProvenanceScalar CurrentProv = getAllocaProvenance(CurrentBlock, AI);
     if (CurrentProv != BS.InvalidProvenance &&
         CurrentProv != BS.WildcardProvenance) {
-      IRB.CreateCall(BS.BsanFuncDeallocWeak,
-                     {AI, CurrentProv.Id, CurrentProv.Tag, CurrentProv.Info});
+      IRB.CreateCall(BS.BsanFuncDealloc, {AI, CurrentProv.Id, CurrentProv.Tag,
+                                          CurrentProv.Info, BS.True});
     }
     if (!shouldInstrumentAlloca(*AI))
       return;
@@ -1144,8 +1144,8 @@ private:
 
     ProvenanceScalar Root = assertProvenanceScalar(AI);
     if (Root != BS.InvalidProvenance && Root != BS.WildcardProvenance) {
-      IRB.CreateCall(BS.BsanFuncDeallocWeak,
-                     {AI, Root.Id, Root.Tag, Root.Info});
+      IRB.CreateCall(BS.BsanFuncDealloc,
+                     {AI, Root.Id, Root.Tag, Root.Info, BS.True});
     }
   }
 
@@ -1423,8 +1423,9 @@ private:
       for (AllocaInst *AI : StaticAllocaVec) {
         if (LifetimeInfo->isAliveAfter(AI, &I)) {
           ProvenanceScalar Root = assertProvenanceScalar(AI);
-          IRB.CreateCall(BS.BsanFuncDeallocWeak,
-                         {AI, Root.Id, Root.Tag, Root.Info});
+          IRB.CreateCall(BS.BsanFuncDealloc,
+                         {AI, Root.Id, Root.Tag, Root.Info, BS.True});
+          IRB.CreateCall(BS.BsanFuncDestroyStackSlot, {Root.Info});
         }
       }
     }
@@ -1608,17 +1609,16 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
       M.getOrInsertFunction(kBsanFuncReserveStackSlotName,
                             FunctionType::get(PtrTy, /*isVarArg=*/false), AL);
 
+  BsanFuncDestroyStackSlot = M.getOrInsertFunction(
+      kBsanFuncDestroyStackSlotName, AL, IRB.getVoidTy(), PtrTy);
+
   BsanFuncAllocStack =
-      M.getOrInsertFunction(kBsanFuncAllocStack, AL, IRB.getVoidTy(), PtrTy,
+      M.getOrInsertFunction(kBsanFuncAllocStackName, AL, IRB.getVoidTy(), PtrTy,
                             IntptrTy, IntptrTy, IntptrTy, PtrTy);
 
   BsanFuncDealloc =
       M.getOrInsertFunction(kBsanFuncDeallocName, AL, IRB.getVoidTy(), PtrTy,
                             IntptrTy, IntptrTy, PtrTy, Int8Ty);
-
-  BsanFuncDeallocWeak =
-      M.getOrInsertFunction(kBsanFuncDeallocWeakName, AL, IRB.getVoidTy(),
-                            PtrTy, IntptrTy, IntptrTy, PtrTy);
 
   BsanFuncExposeTag = M.getOrInsertFunction(
       kBsanFuncExposeTagName, AL, IRB.getVoidTy(), IntptrTy, IntptrTy, PtrTy);
