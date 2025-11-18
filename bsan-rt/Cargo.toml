@@ -17,7 +17,7 @@ addr2line = { version = "0.25.0", default-features = false, features = ["rustc-d
 
 [lib]
 name = "bsan_rt_core"
-crate-type = ["staticlib"] 
+crate-type = ["staticlib"]
 
 [features]
 default = ["pic"]

@@ -2,7 +2,6 @@ use core::arch::asm;
 use core::ptr;
 
 use cfg_if::cfg_if;
-use libc_print::std_name::println;
 
 unsafe extern "C" {
     // Symbol defined by the linker
@@ -35,20 +34,16 @@ impl Span {
     }
     // Finds a frame pointer from the current call stack walking backwards
     pub fn find_fp(&self) -> Option<FramePointer> {
-        // println!("Finding FP for span: {:?}", self);
         let mut fp = FramePointer::current();
         loop {
             let prev = fp.prev();
             if fp == prev {
                 break;
             }
-
             let ip = fp.ip();
-            // println!("current span: {:?}", ip);
             if ip == *self {
                 return Some(fp);
             }
-
             fp = prev;
         }
         None
@@ -66,11 +61,15 @@ impl From<Span> for SpanData {
         SpanData(val.0)
     }
 }
-
+#[repr(transparent)]
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct FramePointer(*const usize);
 
 impl FramePointer {
+    pub fn addr(&self) -> usize {
+        self.0.addr()
+    }
+
     #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
     pub fn current() -> Self {
         let fp: usize;
@@ -105,6 +104,10 @@ impl FramePointer {
             let prev_fp = unsafe { ptr::read(fp) };
             Self(prev_fp)
         }
+    }
+
+    pub const fn null() -> Self {
+        Self(ptr::null())
     }
 }
 

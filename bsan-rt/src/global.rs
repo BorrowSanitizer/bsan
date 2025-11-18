@@ -57,8 +57,8 @@ impl GlobalCtx {
         Ok(self.alloc_metadata_map.alloc(info)?)
     }
 
-    pub(crate) unsafe fn deallocate_lock_location(&self, ptr: *mut AllocInfo) {
-        unsafe { self.alloc_metadata_map.dealloc(NonNull::new_unchecked(ptr)) };
+    pub(crate) unsafe fn deallocate_lock_location(&self, ptr: NonNull<AllocInfo>) {
+        unsafe { self.alloc_metadata_map.dealloc(ptr) };
     }
 
     pub fn allocator(&self) -> BsanAllocHooks {

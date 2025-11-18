@@ -109,6 +109,10 @@ public:
   FunctionCallee BsanFuncDebugParamTLS;
   FunctionCallee BsanFuncDebugRetvalTLS;
 
+  FunctionCallee BsanFuncMarkTLS;
+  FunctionCallee BsanFuncValidateRetvalTLS;
+  FunctionCallee BsanFuncValidateParamTLS;
+
   FunctionCallee DefaultPersonalityFn;
 
   ProvenanceScalar WildcardProvenance;

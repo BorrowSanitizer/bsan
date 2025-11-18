@@ -15,7 +15,6 @@
 #![feature(pointer_is_aligned_to)]
 #[macro_use]
 extern crate alloc;
-
 use core::ffi::c_void;
 use core::fmt::Debug;
 use core::mem::MaybeUninit;
@@ -50,6 +49,7 @@ mod errors;
 use crate::borrow_tracker::tree::Tree;
 use crate::errors::BorsanResult;
 use crate::memory::hooks;
+use crate::span::FramePointer;
 
 macro_rules! println {
     ($($arg:tt)*) => {
@@ -496,12 +496,11 @@ extern "C" fn __bsan_dealloc(
             return;
         }
     }
-
     BorrowTracker::new(prov, ptr, None)
         .and_then(|mut bt| bt.iter_mut().try_for_each(|t| t.dealloc(global_ctx, Span::new())))
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
 
-    if !weak {
+    if !weak && let Some(alloc_info) = NonNull::new(alloc_info) {
         unsafe { global_ctx.deallocate_lock_location(alloc_info) };
     }
 }
@@ -511,6 +510,33 @@ extern "C" fn __bsan_remove_protected_tags(data: *mut BorTag, len: usize) {
     let global_ctx = unsafe { global_ctx() };
     let tags = unsafe { slice::from_raw_parts(data, len) };
     global_ctx.remove_protected_tags(tags);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_mark_tls() -> usize {
+    unsafe { ptr::replace(&raw mut __BSAN_TLS_MARKER, FramePointer::current().prev()).addr() }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_validate_param_tls(len: usize) {
+    let caller = FramePointer::current().prev().prev();
+    unsafe {
+        if caller != __BSAN_TLS_MARKER {
+            __BSAN_PARAM_TLS[0..len].fill(Provenance::wildcard());
+            __BSAN_TLS_MARKER = FramePointer::null()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_validate_retval_tls(len: usize, ptr: FramePointer) {
+    let current = FramePointer::current().prev();
+    unsafe {
+        if current != __BSAN_TLS_MARKER {
+            __BSAN_RETVAL_TLS[0..len].fill(Provenance::wildcard());
+            __BSAN_TLS_MARKER = ptr
+        }
+    }
 }
 
 // Registers a heap allocation of size `size`, storing its provenance in the return pointer.
@@ -633,7 +659,7 @@ unsafe extern "C" fn __bsan_reserve_stack_slot() -> NonNull<AllocInfo> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_destroy_stack_slot(slot: *mut AllocInfo) {
+unsafe extern "C" fn __bsan_destroy_stack_slot(slot: NonNull<AllocInfo>) {
     let global_ctx = unsafe { global_ctx() };
     unsafe {
         global_ctx.deallocate_lock_location(slot);
