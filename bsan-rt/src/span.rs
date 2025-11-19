@@ -79,7 +79,7 @@ impl FramePointer {
         }
         #[cfg(target_arch = "aarch64")]
         unsafe {
-            asm!("mov {0}, x29", out(reg) fp, options(nomem, nostack, preserves_flags));
+            asm!("mov {0}, fp", out(reg) fp, options(nomem, nostack, preserves_flags));
         }
         Self(fp as *const usize)
     }
