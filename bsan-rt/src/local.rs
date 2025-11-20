@@ -49,7 +49,7 @@ pub static mut __BSAN_PARAM_TLS_MARKER: FramePointer = FramePointer::null();
 /// After validating the parameter TLS, we set this marker equal to the value of
 /// the parameter TLS marker. This will be the null frame pointer if we came from
 /// an uninstrumented function, and it will be the value of our "grandparent" frame
-/// pointer if we came from an instrumented function. The caller of a possibly 
+/// pointer if we came from an instrumented function. The caller of a possibly
 /// uninstrumented function can check this value after the call against the value it
 /// stored in the parameter TLS marker. If they match, then the return value can be
 /// trusted. If not, then we overwrite the return value TLS with wildcard values.
