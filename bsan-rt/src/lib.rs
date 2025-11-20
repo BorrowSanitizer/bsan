@@ -515,6 +515,7 @@ extern "C" fn __bsan_remove_protected_tags(data: *mut BorTag, len: usize) {
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_mark_tls() -> usize {
     unsafe {
+        __BSAN_RETVAL_TLS_MARKER = FramePointer::null();
         ptr::replace(&raw mut __BSAN_PARAM_TLS_MARKER, FramePointer::current().prev().prev()).addr()
     }
 }
@@ -526,8 +527,9 @@ extern "C" fn __bsan_validate_param_tls(len: usize) {
         if caller != __BSAN_PARAM_TLS_MARKER {
             __BSAN_PARAM_TLS[0..len].fill(Provenance::wildcard());
             __BSAN_PARAM_TLS_MARKER = FramePointer::null()
+        } else {
+            __BSAN_RETVAL_TLS_MARKER = __BSAN_PARAM_TLS_MARKER;
         }
-        __BSAN_RETVAL_TLS_MARKER = __BSAN_PARAM_TLS_MARKER;
     }
 }
 
