@@ -1,4 +1,7 @@
 name: Security audit
+permissions:
+  issues: write
+  checks: write
 on:
   push:
     paths: 

@@ -8,7 +8,9 @@ version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b5d307320b3181d6d7954e663bd7c774a838b8220fe0593c86d9fb09f498b4b"
 dependencies = [
+ "cpp_demangle",
  "gimli",
+ "rustc-demangle",
 ]
 
 [[package]]
@@ -175,6 +177,8 @@ version = "0.1.0"
 name = "bsan_rt"
 version = "0.1.0"
 dependencies = [
+ "addr2line",
+ "backtrace",
  "bsan-shared",
  "cfg-if",
  "foldhash",
@@ -414,6 +418,15 @@ dependencies = [
  "once_cell",
  "unicode-width 0.2.1",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "cpp_demangle"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2bb79cb74d735044c972aae58ed0aaa9a837e85b01106a54c39e42e97f62253"
+dependencies = [
+ "cfg-if",
 ]
 
 [[package]]

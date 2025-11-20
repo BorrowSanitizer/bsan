@@ -1,5 +1,6 @@
 use core::{ffi, ptr};
 
+use crate::span::FramePointer;
 use crate::{BorTag, Provenance};
 
 /// The number of `Provenance` values stored in the thread
@@ -34,3 +35,24 @@ pub static mut __BSAN_PROT_TAG_STACK: *mut BorTag = ptr::null_mut();
 #[thread_local]
 #[unsafe(no_mangle)]
 pub static mut __BSAN_CURR_THREAD: *mut ffi::c_void = ptr::null_mut();
+
+/// The frame pointer of the caller of the last instrumented function that called an
+/// uninstrumented function. When we enter an instrumented function from
+/// an possibly uninstrumented function, we check to see if our "grandparent"
+/// frame pointer matches this value. If so, we can trust that the contents
+/// of `__BSAN_PARAM_TLS` are correct and initialized. Otherwise, we need to
+/// overwrite it with wildcard values and set this pointer to null.
+#[thread_local]
+#[unsafe(no_mangle)]
+pub static mut __BSAN_PARAM_TLS_MARKER: FramePointer = FramePointer::null();
+
+/// After validating the parameter TLS, we set this marker equal to the value of
+/// the parameter TLS marker. This will be the null frame pointer if we came from
+/// an uninstrumented function, and it will be the value of our "grandparent" frame
+/// pointer if we came from an instrumented function. The caller of a possibly
+/// uninstrumented function can check this value after the call against the value it
+/// stored in the parameter TLS marker. If they match, then the return value can be
+/// trusted. If not, then we overwrite the return value TLS with wildcard values.
+#[thread_local]
+#[unsafe(no_mangle)]
+pub static mut __BSAN_RETVAL_TLS_MARKER: FramePointer = FramePointer::null();

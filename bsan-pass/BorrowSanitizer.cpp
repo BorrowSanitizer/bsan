@@ -1,9 +1,6 @@
 #include "BorrowSanitizer.h"
 #include "Declarations.h"
-#include "llvm/ADT/DepthFirstIterator.h"
-#include "llvm/ADT/SmallSet.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/StackLifetime.h"
@@ -13,13 +10,13 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/EHPersonalities.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassPlugin.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Error.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/EscapeEnumerator.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
@@ -196,7 +193,10 @@ public:
       CB->replaceAllUsesWith(CB->getOperand(0));
       CB->eraseFromParent();
     }
-
+    if (F.getName().contains(
+            "_RNvCs2vsUOJiIILG_7___rustc19___rust_alloc_zeroed")) {
+      F.print(llvm::outs());
+    }
     return true;
   }
 
@@ -633,6 +633,11 @@ private:
       }
     }
 
+    if (needsTLSValidation(&F)) {
+      EntryIRB.CreateCall(BS.BsanFuncValidateParamTLS,
+                          {TotalNumProvenanceValues});
+    }
+
     if (NumFnEntryRetags > 0) {
       FrameTop = EntryIRB.CreateLoad(BS.PtrTy, BS.TagStack);
     }
@@ -763,8 +768,8 @@ private:
   }
 
   bool isRustShim(CallBase &CB) {
-    if (isAllocationFn(&CB, TLI) || getFreedOperand(&CB, TLI)) {
-      if (Function *Callee = CB.getCalledFunction()) {
+    if (Function *Callee = CB.getCalledFunction()) {
+      if (isAllocationFn(&CB, TLI) || getFreedOperand(&CB, TLI)) {
         for (const char *Name : kRustAllocFns) {
           if (Callee->getName().ends_with(Name)) {
             return true;
@@ -895,6 +900,12 @@ private:
     IRB.CreateStore(TagSlot, BS.TagStack, true);
   }
 
+  bool needsTLSValidation(Function *Callee) {
+    return !Callee ||
+           (Callee->isDeclaration() || Callee->hasExternalLinkage() ||
+            Callee->hasExternalWeakLinkage());
+  }
+
   using InstVisitor<BorrowSanitizerVisitor>::visit;
 
   void visitCallBase(CallBase &CB) {
@@ -923,7 +934,6 @@ private:
     // function. We need to pass its arguments into our thread-local array and
     // then read the provenance for the return value.
     IRBuilder<> Before(&CB);
-    bool IsExternFunction = !Callee || (Callee && Callee->isDeclaration());
 
     // Store the provenance for each argument into the thread-local storage for
     // parameters. The process for computing provenance components is
@@ -955,12 +965,12 @@ private:
     // instructions, since some function calls occur within terminators.
     IRBuilder<> After = switchToInsertionPointAfterCall(&CB);
 
-    if (!isRustShim(CB)) {
-      // If we're calling a heap allocation or deallocation function,
-      // then we can skip handling argument provenance and defer to our
-      // run-time calls.
-      std::optional<APInt> AllocSize = getAllocSize(&CB, TLI);
+    // If we're calling a heap allocation or deallocation function,
+    // then we can skip handling argument provenance and defer to our
+    // run-time calls.
+    std::optional<APInt> AllocSize = getAllocSize(&CB, TLI);
 
+    if (!isRustShim(CB)) {
       if (isAllocLikeFn(&CB, TLI)) {
         Value *Size = resolveAllocSize(After, CB);
         instrumentHeapAllocation(After, &CB, Size);
@@ -975,14 +985,14 @@ private:
       }
 
       if (Value *Operand = getFreedOperand(&CB, TLI)) {
-        instrumentDeallocation(After, Operand);
+        instrumentDeallocation(Before, Operand);
         return;
       }
     }
-
-    // Unsized return types do not have provenance, so we can skip handling the
-    // return array.
+    Value *NumProvenanceValues = BS.Zero;
     if (CB.getType()->isSized()) {
+      // Unsized return types do not have provenance, so we can skip handling
+      // the return array.
       SmallVector<ProvenanceComponent> *ReturnComponents =
           getProvenanceComponents(Before, CB.getType());
 
@@ -991,9 +1001,7 @@ private:
       // provenance components that we expect to be here. If the function that
       // we are calling is uninstrumented, then we need ensure that the return
       // array is populated with default values.
-
       Value *RetvalByteWidth = BS.Zero;
-
       for (const auto &[Idx, Comp] : llvm::enumerate(*ReturnComponents)) {
         Value *Slot =
             offsetPointer(After, BS.DL, BS.RetvalTLS, RetvalByteWidth);
@@ -1004,11 +1012,16 @@ private:
         Value *ByteWidth =
             Before.CreateMul(Comp.NumProvenanceValues, BS.ProvenanceSize);
         RetvalByteWidth = Before.CreateAdd(RetvalByteWidth, ByteWidth);
+        NumProvenanceValues =
+            Before.CreateAdd(NumProvenanceValues, Comp.NumProvenanceValues);
       }
-
-      if (IsExternFunction)
-        Before.CreateMemSet(BS.RetvalTLS, ConstantInt::get(BS.Int8Ty, 0),
-                            RetvalByteWidth, BS.ProvenanceAlign);
+    }
+    if (needsTLSValidation(Callee)) {
+      Value *Prev = Before.CreateCall(BS.BsanFuncMarkTLS, {});
+      if (NumProvenanceValues != BS.Zero) {
+        After.CreateCall(BS.BsanFuncValidateRetvalTLS,
+                         {NumProvenanceValues, Prev});
+      }
     }
   }
 
@@ -1663,6 +1676,15 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   BsanFuncDebugRetvalTLS = M.getOrInsertFunction(kBsanFuncDebugRetvalTLS, AL,
                                                  IRB.getVoidTy(), IntptrTy);
+
+  BsanFuncValidateParamTLS = M.getOrInsertFunction(
+      kBsanFuncValidateParamTLSName, AL, IRB.getVoidTy(), IntptrTy);
+
+  BsanFuncValidateRetvalTLS = M.getOrInsertFunction(
+      kBsanFuncValidateRetvalTLSName, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
+
+  BsanFuncMarkTLS = M.getOrInsertFunction(
+      kBsanFuncMarkTLSName, FunctionType::get(PtrTy, /*isVarArg=*/false), AL);
 
   EHPersonality Pers = getDefaultEHPersonality(TargetTriple);
   DefaultPersonalityFn =

@@ -114,6 +114,11 @@ where
     pub fn push(&mut self, event: Event) {
         self.events.push(event);
     }
+
+    /// Return the last recorded event, if any.
+    pub fn last_event(&self) -> Option<&Event> {
+        self.events.last()
+    }
 }
 
 impl<A> HistoryData<A>
