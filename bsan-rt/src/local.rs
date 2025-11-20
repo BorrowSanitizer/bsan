@@ -47,4 +47,17 @@ pub static mut __BSAN_CURR_THREAD: *mut ffi::c_void = ptr::null_mut();
 /// to indicate whether we should trust `__BSAN_RETVAL_TLS`.
 #[thread_local]
 #[unsafe(no_mangle)]
-pub static mut __BSAN_TLS_MARKER: FramePointer = FramePointer::null();
+pub static mut __BSAN_PARAM_TLS_MARKER: FramePointer = FramePointer::null();
+
+/// The frame pointer of the last instrumented function that called an
+/// uninstrumented function. When we enter an instrumented function from
+/// an potentially-uninstrumented function, we check to see if the caller's
+/// frame pointer matches this value. If so, we can trust that the contents
+/// of `__BSAN_PARAM_TLS` are correct and initialized. Otherwise, we need to
+/// overwrite it with wildcard values and set this pointer to null. Likewise,
+/// if we are returning from a possibly uninstrumented function into an instrumented
+/// context, we check to see if this marker is still equal to the current frame pointer,
+/// to indicate whether we should trust `__BSAN_RETVAL_TLS`.
+#[thread_local]
+#[unsafe(no_mangle)]
+pub static mut __BSAN_RETVAL_TLS_MARKER: FramePointer = FramePointer::null();

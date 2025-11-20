@@ -22,7 +22,7 @@ impl SpanData {
 }
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub struct Span(usize);
+pub struct Span(pub usize);
 
 impl Span {
     pub fn new() -> Span {

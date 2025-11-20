@@ -514,17 +514,20 @@ extern "C" fn __bsan_remove_protected_tags(data: *mut BorTag, len: usize) {
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_mark_tls() -> usize {
-    unsafe { ptr::replace(&raw mut __BSAN_TLS_MARKER, FramePointer::current().prev()).addr() }
+    unsafe {
+        ptr::replace(&raw mut __BSAN_PARAM_TLS_MARKER, FramePointer::current().prev().prev()).addr()
+    }
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_validate_param_tls(len: usize) {
-    let caller = FramePointer::current().prev().prev();
+    let caller = FramePointer::current().prev().prev().prev();
     unsafe {
-        if caller != __BSAN_TLS_MARKER {
+        if caller != __BSAN_PARAM_TLS_MARKER {
             __BSAN_PARAM_TLS[0..len].fill(Provenance::wildcard());
-            __BSAN_TLS_MARKER = FramePointer::null()
+            __BSAN_PARAM_TLS_MARKER = FramePointer::null()
         }
+        __BSAN_RETVAL_TLS_MARKER = __BSAN_PARAM_TLS_MARKER;
     }
 }
 
@@ -532,9 +535,9 @@ extern "C" fn __bsan_validate_param_tls(len: usize) {
 extern "C" fn __bsan_validate_retval_tls(len: usize, ptr: FramePointer) {
     let current = FramePointer::current().prev();
     unsafe {
-        if current != __BSAN_TLS_MARKER {
+        if current != __BSAN_RETVAL_TLS_MARKER {
             __BSAN_RETVAL_TLS[0..len].fill(Provenance::wildcard());
-            __BSAN_TLS_MARKER = ptr
+            __BSAN_PARAM_TLS_MARKER = ptr
         }
     }
 }
