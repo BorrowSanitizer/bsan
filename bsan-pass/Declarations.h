@@ -12,14 +12,26 @@
 #define RUST_ALLOC_FN(name) RUST_ALLOC_PREFIX name
 #define RUST_SHIM_FN(name) RUST_SHIM_PREFIX name
 
+// @__rust_retag(ptr, i64, i64, i8, ptr)
+const char kBsanRustIntrinsicRetag[] = RUST_SHIM_FN("retag");
+// Arguments are:
+// 1. The pointer being retagged
+// 2. The size of the retag
+// 3. The permission applied by the retag
+// 4. If nonzero, then this is a function-entry retag
+// 5. A pointer to a constant array of pairs of integers.
+//    For each pair, the first integer is an offset from the pointer,
+//    and the seocnd is a size in bytes. Together, they indicate a range
+//    within the width of the retag that should be treated as interior mutable.
+
+// @__rust_expose_tag(ptr)
+// Indicates that this pointer is a reference being cast into a raw pointer.
+const char kBsanRustIntrinsicExposeTag[] = RUST_SHIM_FN("expose_tag");
+
 const char kBsanModuleCtorName[] = "bsan.module_ctor";
 const char kBsanModuleDtorName[] = "bsan.module_dtor";
 
 const char kBsanPrefix[] = BSAN_FN();
-const char kBsanRetagPrefix[] = BSAN_FN("retag_");
-
-const char kBsanIntrinsicRetagPlaceName[] = BSAN_FN("retag_place");
-const char kBsanIntrinsicRetagOperandName[] = BSAN_FN("retag_operand");
 
 const char kBsanFuncInitName[] = BSAN_FN("init");
 const char kBsanFuncDeinitName[] = BSAN_FN("deinit");
