@@ -2,18 +2,18 @@
 #define BORROWSANITIZER_DECLARATIONS
 
 #define BSAN_PREFIX "__bsan_"
-#define RUST_ALLOC_PREFIX "__rust_"
-#define RUST_SHIM_PREFIX "__rdl_"
+#define RUST_PREFIX "__rust_"
+#define RUST_RDL_PREFIX "__rdl_"
 
 #define BSAN_FN(name) BSAN_PREFIX name
 #define BSAN_DEBUG_PREFIX BSAN_FN("debug_")
 
 #define BSAN_DEBUG_FN(name) BSAN_DEBUG_PREFIX name
-#define RUST_ALLOC_FN(name) RUST_ALLOC_PREFIX name
-#define RUST_SHIM_FN(name) RUST_SHIM_PREFIX name
+#define RUST_FN(name) RUST_PREFIX name
+#define RUST_RDL_FN(name) RUST_RDL_PREFIX name
 
 // @__rust_retag(ptr, i64, i64, i8, ptr)
-const char kBsanRustIntrinsicRetag[] = RUST_SHIM_FN("retag");
+const char kBsanRustIntrinsicRetag[] = RUST_FN("retag");
 // Arguments are:
 // 1. The pointer being retagged
 // 2. The size of the retag
@@ -26,7 +26,7 @@ const char kBsanRustIntrinsicRetag[] = RUST_SHIM_FN("retag");
 
 // @__rust_expose_tag(ptr)
 // Indicates that this pointer is a reference being cast into a raw pointer.
-const char kBsanRustIntrinsicExposeTag[] = RUST_SHIM_FN("expose_tag");
+const char kBsanRustIntrinsicExposeTag[] = RUST_FN("expose_tag");
 
 const char kBsanModuleCtorName[] = "bsan.module_ctor";
 const char kBsanModuleDtorName[] = "bsan.module_dtor";
@@ -87,17 +87,17 @@ const char kBsanAllocIdCounterName[] = "__BSAN_ALLOC_ID_CTR";
 static const unsigned kTLSSize = 100;
 
 const char *kRustAllocFns[] = {
-    RUST_ALLOC_FN("alloc"),
-    RUST_ALLOC_FN("dealloc"),
-    RUST_ALLOC_FN("realloc"),
-    RUST_ALLOC_FN("alloc_zeroed"),
+    RUST_FN("alloc"),
+    RUST_FN("dealloc"),
+    RUST_FN("realloc"),
+    RUST_FN("alloc_zeroed"),
 };
 
 const char *kRustAllocShimFns[] = {
-    RUST_SHIM_FN("alloc"),
-    RUST_SHIM_FN("dealloc"),
-    RUST_SHIM_FN("realloc"),
-    RUST_SHIM_FN("alloc_zeroed"),
+    RUST_RDL_FN("alloc"),
+    RUST_RDL_FN("dealloc"),
+    RUST_RDL_FN("realloc"),
+    RUST_RDL_FN("alloc_zeroed"),
 };
 
 #endif // BORROWSANITIZER_DECLARATIONS

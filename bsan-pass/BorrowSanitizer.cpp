@@ -193,10 +193,7 @@ public:
       CB->replaceAllUsesWith(CB->getOperand(0));
       CB->eraseFromParent();
     }
-    if (F.getName().contains(
-            "_RNvCs2vsUOJiIILG_7___rustc19___rust_alloc_zeroed")) {
-      F.print(llvm::outs());
-    }
+
     return true;
   }
 
@@ -884,25 +881,12 @@ private:
     setProvenance(&CB, Prov);
   }
 
-<<<<<<< HEAD
-  void addProtectedTag(IRBuilder<> &IRB, Value *Tag) {
-    // Offset to the next tag slot, and store the protected tag there.
-    Value *TagSize =
-        IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeAllocSize(BS.IntptrTy));
-    Value *PrevSlot = IRB.CreateLoad(BS.PtrTy, BS.TagStack, true);
-    Value *TagSlot = subtractPointer(IRB, BS.DL, PrevSlot, TagSize);
-    IRB.CreateStore(Tag, TagSlot, true);
-    IRB.CreateStore(TagSlot, BS.TagStack, true);
-  }
-
   bool needsTLSValidation(Function *Callee) {
     return !Callee ||
            (Callee->isDeclaration() || Callee->hasExternalLinkage() ||
             Callee->hasExternalWeakLinkage());
   }
 
-=======
->>>>>>> 116f951 (Removed .)
   using InstVisitor<BorrowSanitizerVisitor>::visit;
 
   void visitCallBase(CallBase &CB) {
