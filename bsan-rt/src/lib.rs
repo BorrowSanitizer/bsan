@@ -421,6 +421,8 @@ unsafe extern "C-unwind" fn __bsan_retag(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
     new_tag: BorTag,
+    _im_array: *const [usize; 2],
+    _im_len: usize,
 ) {
     debug_bsan!("retag", object_addr, alloc_id, bor_tag, alloc_info);
     let global_ctx = unsafe { global_ctx() };

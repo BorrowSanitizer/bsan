@@ -6,6 +6,7 @@
 #include "llvm/Analysis/StackLifetime.h"
 #include "llvm/Analysis/StackSafetyAnalysis.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/EHPersonalities.h"
@@ -854,9 +855,20 @@ private:
     ProvenanceScalar Prov = assertProvenanceScalar(CB.getOperand(0));
     Value *NewTag = newBorrowTag(IRB);
 
+    Value *ImArray = CB.getOperand(4);
+    Value *ImArrayLen = BS.Zero;
+    if (GlobalVariable *GV = dyn_cast<GlobalVariable>(ImArray)) {
+      if (ConstantDataArray *CA =
+              dyn_cast<ConstantDataArray>(GV->getInitializer())) {
+        uint64_t NumPointerSizedPairs =
+            CA->getNumElements() / (BS.DL->getTypeAllocSize(BS.IntptrTy) * 2);
+        ImArrayLen = ConstantInt::get(BS.IntptrTy, NumPointerSizedPairs);
+      }
+    }
+
     IRB.CreateCall(BS.BsanFuncRetag,
                    {CB.getOperand(0), CB.getOperand(1), CB.getOperand(2),
-                    Prov.Id, Prov.Tag, Prov.Info, NewTag});
+                    Prov.Id, Prov.Tag, Prov.Info, NewTag, ImArray, ImArrayLen});
     Prov.Tag = NewTag;
 
     if (isFnEntryRetag(&CB)) {
@@ -1580,9 +1592,9 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   AttributeList AL;
   AL = AL.addFnAttribute(*C, Attribute::NoUnwind);
 
-  BsanFuncRetag = M.getOrInsertFunction(kBsanFuncRetagName, AL, IRB.getVoidTy(),
-                                        PtrTy, IntptrTy, Int64Ty, IntptrTy,
-                                        IntptrTy, PtrTy, IntptrTy);
+  BsanFuncRetag = M.getOrInsertFunction(
+      kBsanFuncRetagName, AL, IRB.getVoidTy(), PtrTy, IntptrTy, Int64Ty,
+      IntptrTy, IntptrTy, PtrTy, IntptrTy, PtrTy, IntptrTy);
 
   BsanFuncRemoveProtectedTags = M.getOrInsertFunction(
       kBsanFuncRemoveProtectedTags, AL, IRB.getVoidTy(), PtrTy, IntptrTy);
