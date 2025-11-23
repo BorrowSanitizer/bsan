@@ -1,9 +1,7 @@
 // Components in this library were ported from Miri and then modified by our team.
 use core::ffi::c_void;
 
-use bsan_shared::{
-    AccessKind, IdempotentForeignAccess, Permission, ProtectorKind, RangeMap, RetagInfo, Size,
-};
+use bsan_shared::{AccessKind, ProtectorKind, RangeMap, RetagInfo, Size};
 use spin::MutexGuard;
 use tree::{AllocRange, Tree};
 
@@ -74,7 +72,7 @@ impl BorrowTracker {
     pub fn retag(
         &self,
         global_ctx: &GlobalCtx,
-        retag_info: RetagInfo,
+        retag_info: RetagInfo<'_>,
         new_tag: BorTag,
         span: Span,
     ) -> BorsanResult<()> {
@@ -84,70 +82,74 @@ impl BorrowTracker {
 
         let parent_tag = self.prov.bor_tag;
 
-        let is_protected = retag_info.perm.protector_kind.is_some();
-        let requires_access = retag_info.perm.access_kind.is_some();
-
-        if let Some(protector_kind) = retag_info.perm.protector_kind {
+        let protected = retag_info.perm.protector.is_some();
+        if let Some(protector) = retag_info.perm.protector {
             // We register the protection in two different places.
             // This makes creating a protector slower, but checking whether a tag
             // is protected faster.
-            global_ctx.add_protected_tag(new_tag, protector_kind);
+            global_ctx.add_protected_tag(new_tag, protector);
         }
 
-        let mut initial_perms = RangeMap::new_in(
+        // Compute initial "inside" permissions.
+        let loc_state = |frozen: bool| -> LocationState {
+            let (perm, access) = if frozen {
+                (retag_info.perm.freeze_perm, retag_info.perm.freeze_access)
+            } else {
+                (retag_info.perm.nonfreeze_perm, retag_info.perm.nonfreeze_access.is_some())
+            };
+            let sifa = perm.strongest_idempotent_foreign_access(protected);
+            if access {
+                LocationState::new_accessed(perm, sifa)
+            } else {
+                LocationState::new_non_accessed(perm, sifa)
+            }
+        };
+
+        let initial_state = loc_state(retag_info.perm.ty_is_freeze);
+        let mut inside_perms = RangeMap::new_in(
             Size::from_bytes(retag_info.size),
-            LocationState::new_accessed(Permission::new_disabled(), IdempotentForeignAccess::None),
+            initial_state,
             global_ctx.allocator(),
         );
 
-        let sifa = retag_info.perm.perm_kind.strongest_idempotent_foreign_access(is_protected);
-        let new_loc = if requires_access {
-            LocationState::new_accessed(retag_info.perm.perm_kind, sifa)
-        } else {
-            LocationState::new_non_accessed(retag_info.perm.perm_kind, sifa)
-        };
-
-        for (_loc_range, loc) in initial_perms.iter_mut_all() {
-            *loc = new_loc;
-        }
-
-        let base_offset = self.range.start;
-        if let Some(access_kind) = retag_info.perm.access_kind {
-            for (perm_range, perm) in initial_perms.iter_mut_all() {
-                if perm.is_accessed() {
-                    // Some reborrows incur a read access to the parent.
-                    // Adjust range to be relative to allocation start
-                    let range_in_alloc = AllocRange {
-                        start: Size::from_bytes(perm_range.start) + base_offset,
-                        size: Size::from_bytes(perm_range.end - perm_range.start),
-                    };
-
-                    // Perform the access (update the Tree Borrows FSM)
-                    tree.perform_access(
-                        parent_tag,
-                        // TODO: Validate the Range
-                        Some((range_in_alloc, access_kind, AccessCause::Reborrow)),
-                        global_ctx,
-                        self.prov.alloc_id,
-                        // TODO: Replace with actual span
-                        span,
-                        // Passing in allocator explicitly to stay consistent with API
-                        global_ctx.allocator(),
-                    )?;
-                }
+        if let Some(im_layout) = retag_info.im_layout {
+            for [start, size] in im_layout {
+                inside_perms.iter_mut(*start, *size).for_each(|(_, loc)| *loc = loc_state(false));
             }
         }
 
-        let protected = retag_info.perm.protector_kind.is_some();
-        let default_perm = retag_info.perm.perm_kind;
+        let base_offset = self.range.start;
+        for (perm_range, perm) in inside_perms.iter_all() {
+            if perm.is_accessed() {
+                // Some reborrows incur a read access to the parent.
+                // Adjust range to be relative to allocation start
+                let range_in_alloc = AllocRange {
+                    start: Size::from_bytes(perm_range.start) + base_offset,
+                    size: Size::from_bytes(perm_range.end - perm_range.start),
+                };
+
+                // Perform the access (update the Tree Borrows FSM)
+                tree.perform_access(
+                    parent_tag,
+                    // TODO: Validate the Range
+                    Some((range_in_alloc, AccessKind::Read, AccessCause::Reborrow)),
+                    global_ctx,
+                    self.prov.alloc_id,
+                    // TODO: Replace with actual span
+                    span,
+                    // Passing in allocator explicitly to stay consistent with API
+                    global_ctx.allocator(),
+                )?;
+            }
+        }
 
         // base offset should be the offset, from zero, where the retag is taking place within the allocation.
         let child_params = ChildParams {
             base_offset,
             parent_tag,
             new_tag,
-            initial_perms,
-            default_perm,
+            inside_perms,
+            default_perm: retag_info.perm.default_perm(),
             protected,
             span,
         };

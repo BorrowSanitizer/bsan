@@ -6,6 +6,7 @@
 #include "llvm/Analysis/StackLifetime.h"
 #include "llvm/Analysis/StackSafetyAnalysis.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/EHPersonalities.h"
@@ -15,7 +16,6 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/EscapeEnumerator.h"
@@ -31,29 +31,21 @@ static cl::opt<bool>
                  cl::desc("Place BSan constructors in comdat sections"),
                  cl::Hidden, cl::init(true));
 
-static cl::opt<bool>
-    ClUseStackSafety("bsan-use-stack-safety", cl::Hidden, cl::init(true),
-                     cl::Hidden, cl::desc("Use Stack Safety analysis results"),
-                     cl::Optional);
-
-static cl::opt<bool>
-    ClTrustExtern("bsan-trust-extern", cl::Hidden, cl::init(true), cl::Hidden,
-                  cl::desc("Trust external functions to be instrumented."),
-                  cl::Optional);
-
 class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   friend class InstVisitor<BorrowSanitizerVisitor>;
-  Function &F;
   BorrowSanitizer &BS;
+
+  Function &F;
   DIBuilder DIB;
   LLVMContext *C;
 
   DominatorTree &DT;
   const TargetLibraryInfo *TLI;
 
-  // The first instruction in the body of the function, which is set to be
-  // a call to __bsan_push_frame.
-  Instruction *FnPrologueStart;
+  // The end of the function's prologue, which is a call to `llvm.donothing()`.
+  Instruction *FnPrologueEnd;
+
+  // The current basic block that we are visiting.
   BasicBlock *CurrentBlock;
 
   // We iterate over instructions in chunks for each block corresponding to a
@@ -138,14 +130,17 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   SmallVector<std::tuple<PHINode *, Provenance, unsigned int>> ProvPHINodes;
 
   // Since `allocas` have multiple provenance values, the provenance for any
-  // given `alloca` in a particular block will depend on all of its incoming
-  // blocks.
+  // `alloca` in a basic block will depend on its provenance in all of the
+  // incoming basic blocks.
   SmallVector<std::tuple<BasicBlock *, AllocaInst *, ProvenanceScalar>>
       AllocaProvPHINodes;
 
-  // After inserting our instrumentation, we remove our retag intrinsics.
-  SmallVector<CallBase *> ToRemove;
-  SmallVector<CallBase *> ToReplace;
+  // Retag intrinsics (`__rust_retag`), which need to be replaced with their
+  // first argument (the pointer being retagged).
+  SmallVector<CallBase *> RetagVec;
+
+  // Expose tag intrinsics (`__expose_tag`), which are deleted entirely.
+  SmallVector<CallBase *> ExposeTagVec;
 
   // The start of the current frame of protected tags. This is the "top" of the
   // frame, since we decrement from the beginning of the chunk. The thread-local
@@ -160,9 +155,16 @@ public:
   BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
                          const TargetLibraryInfo &TLI, DominatorTree &DT)
       : F(F), BS(BS), DIB(*F.getParent(), /*AllowUnresolved*/ false), C(BS.C),
-        TLI(&TLI), CurrentBlock(&F.getEntryBlock()), DT(DT) {}
+        TLI(&TLI), CurrentBlock(&F.getEntryBlock()), DT(DT) {
+    removeUnreachableBlocks(F);
+  }
 
   bool run() {
+    // Before a function returns, we need to deallocate the metadata for
+    // each of its stack allocations and remove any protected tags. For this,
+    // we need a cleanup block before each `ret` or `resume` instruction.
+    // TODO: wait to create these blocks until we know that the function has
+    // protected tags and stack allocations that need to be deinitialized.
     EscapeEnumerator EE(F, "bsan_cleanup", true);
     while (IRBuilder<> *AtExit = EE.Next()) {
     }
@@ -171,9 +173,6 @@ public:
          ReversePostOrderTraversal<BasicBlock *>(&F.getEntryBlock())) {
       populateBlock(BB);
     }
-
-    if (Instructions.empty())
-      return false;
 
     initStack();
 
@@ -186,17 +185,15 @@ public:
 
     patchPHINodes();
 
-    for (CallBase *CB : ToRemove) {
+    for (CallBase *CB : ExposeTagVec) {
       CB->eraseFromParent();
     }
-    for (CallBase *CB : ToReplace) {
+
+    for (CallBase *CB : RetagVec) {
       CB->replaceAllUsesWith(CB->getOperand(0));
       CB->eraseFromParent();
     }
-    if (F.getName().contains(
-            "_RNvCs2vsUOJiIILG_7___rustc19___rust_alloc_zeroed")) {
-      F.print(llvm::outs());
-    }
+
     return true;
   }
 
@@ -303,7 +300,6 @@ private:
       }
       return Prov;
     }
-
     return Provenance::wildcard(IRB, BS.PL, Elems, Kind);
   }
 
@@ -331,7 +327,7 @@ private:
       // We always need to load the provenance for arguments right at the
       // beginning of the function. Otherwise, subsequent function calls could
       // overwrite them before they can be read from TLS
-      IRBuilder<> EntryIRB(FnPrologueStart);
+      IRBuilder<> EntryIRB(FnPrologueEnd);
       if (ArgumentProvenance.count(Arg)) {
         if (Key.second >= ArgumentProvenance[Arg].size()) {
           report_fatal_error("Invalid argument provenance!");
@@ -514,7 +510,6 @@ private:
   // address.
   void storeProvenanceToShadow(IRBuilder<> &IRB, Value *ObjAddr,
                                Provenance Prov) {
-
     ProvenancePointer ProvPtr;
     if (Prov.isVector()) {
       Value *IdDest, *TagDest, *InfoDest;
@@ -657,14 +652,14 @@ private:
       }
     }
 
-    FnPrologueStart = EntryIRB.CreateIntrinsic(Intrinsic::donothing, {});
+    FnPrologueEnd = EntryIRB.CreateIntrinsic(Intrinsic::donothing, {});
     LifetimeInfo = std::make_unique<StackLifetime>(
         F, StaticAllocaVec, StackLifetime::LivenessType::May);
     LifetimeInfo->run();
   }
 
   void patchPHINodes() {
-    IRBuilder<> EntryIRB(FnPrologueStart);
+    IRBuilder<> EntryIRB(FnPrologueEnd);
 
     for (auto &[PN, Prov, Idx] : ProvPHINodes) {
       for (auto [V, IncomingBlock] :
@@ -706,7 +701,7 @@ private:
         }
       }
       for (PHINode *PN : PHIToDelete) {
-        PN->removeFromParent();
+        PN->eraseFromParent();
       }
       Worklist = PendingWorklist;
     } while (PHIToDelete.size() > 0);
@@ -782,7 +777,7 @@ private:
 
   bool isFnEntryRetag(CallBase *CB) {
     if (Function *Callee = CB->getCalledFunction()) {
-      if (Callee->getName().starts_with(kBsanRetagPrefix)) {
+      if (Callee->getName() == kBsanRustIntrinsicRetag) {
         std::optional<Value *> LastOperand = std::nullopt;
         LastOperand = CB->getOperand(3);
         if (LastOperand.has_value()) {
@@ -849,55 +844,41 @@ private:
     return AllocSize;
   }
 
-  void instrumentRetagPlace(CallBase &CB) {
-    ToRemove.push_back(&CB);
+  void instrumentExposeTag(CallBase &CB) { ExposeTagVec.push_back(&CB); }
 
-    IRBuilder<> IRB(&CB);
-    Value *ObjAddr = CB.getOperand(0);
-
-    LoadInst *PointerWithin = IRB.CreateLoad(BS.PtrTy, ObjAddr, true);
-
-    Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncGetShadowSrc, {ObjAddr});
-
-    ProvenancePointerScalar ProvPtr =
-        ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
-    ProvenanceScalar Prov = Provenance::loadScalar(IRB, BS.PL, ProvPtr);
-
-    Value *NewTag = newBorrowTag(IRB);
-    IRB.CreateCall(BS.BsanFuncRetag,
-                   {PointerWithin, CB.getOperand(1), CB.getOperand(2), Prov.Id,
-                    Prov.Tag, Prov.Info, NewTag});
-    IRB.CreateStore(NewTag, ProvPtr.TagPtr, true);
-
-    if (isFnEntryRetag(&CB))
-      addProtectedTag(IRB, NewTag);
-  }
-
-  void instrumentRetagOperand(CallBase &CB) {
-    ToReplace.push_back(&CB);
+  void instrumentRetag(CallBase &CB) {
+    RetagVec.push_back(&CB);
     IRBuilder<> IRB(&CB);
     ProvenanceScalar Prov = assertProvenanceScalar(CB.getOperand(0));
     Value *NewTag = newBorrowTag(IRB);
 
+    Value *ImArray = CB.getOperand(4);
+    Value *ImArrayLen = BS.Zero;
+    if (GlobalVariable *GV = dyn_cast<GlobalVariable>(ImArray)) {
+      if (ConstantDataArray *CA =
+              dyn_cast<ConstantDataArray>(GV->getInitializer())) {
+        uint64_t NumPointerSizedPairs =
+            CA->getNumElements() / (BS.DL->getTypeAllocSize(BS.IntptrTy) * 2);
+        ImArrayLen = ConstantInt::get(BS.IntptrTy, NumPointerSizedPairs);
+      }
+    }
+
     IRB.CreateCall(BS.BsanFuncRetag,
                    {CB.getOperand(0), CB.getOperand(1), CB.getOperand(2),
-                    Prov.Id, Prov.Tag, Prov.Info, NewTag});
+                    Prov.Id, Prov.Tag, Prov.Info, NewTag, ImArray, ImArrayLen});
     Prov.Tag = NewTag;
 
-    if (isFnEntryRetag(&CB))
-      addProtectedTag(IRB, NewTag);
+    if (isFnEntryRetag(&CB)) {
+      // Offset to the next tag slot, and store the protected tag there.
+      Value *TagSize =
+          IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeAllocSize(BS.IntptrTy));
+      Value *PrevSlot = IRB.CreateLoad(BS.PtrTy, BS.TagStack, true);
+      Value *TagSlot = subtractPointer(IRB, BS.DL, PrevSlot, TagSize);
+      IRB.CreateStore(NewTag, TagSlot, true);
+      IRB.CreateStore(TagSlot, BS.TagStack, true);
+    }
 
     setProvenance(&CB, Prov);
-  }
-
-  void addProtectedTag(IRBuilder<> &IRB, Value *Tag) {
-    // Offset to the next tag slot, and store the protected tag there.
-    Value *TagSize =
-        IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeAllocSize(BS.IntptrTy));
-    Value *PrevSlot = IRB.CreateLoad(BS.PtrTy, BS.TagStack, true);
-    Value *TagSlot = subtractPointer(IRB, BS.DL, PrevSlot, TagSize);
-    IRB.CreateStore(Tag, TagSlot, true);
-    IRB.CreateStore(TagSlot, BS.TagStack, true);
   }
 
   bool needsTLSValidation(Function *Callee) {
@@ -912,23 +893,24 @@ private:
     assert(!CB.getMetadata(LLVMContext::MD_nosanitize));
     assert(!isa<IntrinsicInst>(CB) && "intrinsics are handled elsewhere");
 
+    Function *Callee = CB.getCalledFunction();
+    if (Callee) {
+      if (Callee->getName().starts_with(kBsanDebugPrefix)) {
+        return handleDebugFunction(CB, Callee);
+      }
+      if (Callee->getName().starts_with(kBsanPrefix)) {
+        return;
+      }
+      if (Callee->getName() == kBsanRustIntrinsicRetag) {
+        return instrumentRetag(CB);
+      }
+      if (Callee->getName() == kBsanRustIntrinsicExposeTag) {
+        return instrumentExposeTag(CB);
+      }
+    }
+
     if (CB.isInlineAsm())
       return;
-
-    Function *Callee = CB.getCalledFunction();
-
-    if (Callee && Callee->getName().starts_with(kBsanDebugPrefix)) {
-      return handleDebugFunction(CB, Callee);
-    }
-
-    if (Callee && Callee->getName().starts_with(kBsanPrefix)) {
-      if (Callee->getName() == kBsanIntrinsicRetagOperandName) {
-        instrumentRetagOperand(CB);
-      } else if (Callee->getName() == kBsanIntrinsicRetagPlaceName) {
-        instrumentRetagPlace(CB);
-      }
-      return;
-    }
 
     // If we've made it here, then we don't have a hard-coded way to handle this
     // function. We need to pass its arguments into our thread-local array and
@@ -941,9 +923,7 @@ private:
     // provenance value everywhere it's been stored here, unless we're dealing
     // with a situation where function bindings are incorrect, which is
     // undefined behavior.
-
     Value *ParamByteWidth = BS.Zero;
-
     for (const auto &[i, Arg] : llvm::enumerate(CB.args())) {
       SmallVector<ProvenanceComponent> *Components =
           getProvenanceComponents(Before, Arg->getType());
@@ -1596,9 +1576,9 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   AttributeList AL;
   AL = AL.addFnAttribute(*C, Attribute::NoUnwind);
 
-  BsanFuncRetag = M.getOrInsertFunction(kBsanFuncRetagName, AL, IRB.getVoidTy(),
-                                        PtrTy, IntptrTy, Int64Ty, IntptrTy,
-                                        IntptrTy, PtrTy, IntptrTy);
+  BsanFuncRetag = M.getOrInsertFunction(
+      kBsanFuncRetagName, AL, IRB.getVoidTy(), PtrTy, IntptrTy, Int64Ty,
+      IntptrTy, IntptrTy, PtrTy, IntptrTy, PtrTy, IntptrTy);
 
   BsanFuncRemoveProtectedTags = M.getOrInsertFunction(
       kBsanFuncRemoveProtectedTags, AL, IRB.getVoidTy(), PtrTy, IntptrTy);
@@ -1721,9 +1701,16 @@ bool BorrowSanitizer::instrumentFunction(Function &F,
   if (F.getName().starts_with(kBsanPrefix)) {
     return false;
   }
+
+  if (F.getName() == kBsanRustIntrinsicRetag ||
+      F.getName() == kBsanRustIntrinsicExposeTag) {
+    return false;
+  }
+
   if (F.isPresplitCoroutine()) {
     return false;
   }
+
   if (F.hasFnAttribute(Attribute::DisableSanitizerInstrumentation)) {
     return false;
   }

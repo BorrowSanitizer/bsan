@@ -1,4 +1,4 @@
-use bsan_shared::{AccessKind, Permission, PermissionInfo, ProtectorKind};
+use bsan_shared::{AccessKind, NewPermission, Permission, ProtectorKind};
 use rustc_interface::Config;
 use rustc_middle::mir::RetagKind;
 use rustc_middle::ty::{Mutability, Ty, TyCtxt, TypingEnv};
@@ -32,35 +32,39 @@ fn retag_perm<'tcx>(
         return None;
     }
 
-    let perm_kind = if ty_is_freeze {
-        match ref_mutability {
-            // Shared references are frozen.
-            Some(Mutability::Not) => Permission::new_frozen(),
-            // Mutable references and Boxes are reserved.
-            _ => Permission::new_reserved_frz(),
-        }
-    } else {
-        match ref_mutability {
-            // Shared references are "transparent".
-            Some(Mutability::Not) => Permission::new_cell(),
-            // *Protected* mutable references and boxes are reserved without regarding for interior mutability.
-            _ if is_protected => Permission::new_reserved_frz(),
-            // Unprotected mutable references and boxes start in `ReservedIm`.
-            _ => Permission::new_reserved_im(),
-        }
+    let freeze_perm = match ref_mutability {
+        // Shared references are frozen.
+        Some(Mutability::Not) => Permission::new_frozen(),
+        // Mutable references and Boxes are reserved.
+        _ => Permission::new_reserved_frz(),
     };
 
-    let access_kind = (!perm_kind.is_cell()).then_some(AccessKind::Read);
+    let nonfreeze_perm = match ref_mutability {
+        // Shared references are "transparent".
+        Some(Mutability::Not) => Permission::new_cell(),
+        // *Protected* mutable references and boxes are reserved without regarding for interior mutability.
+        _ if is_protected => Permission::new_reserved_frz(),
+        // Unprotected mutable references and boxes start in `ReservedIm`.
+        _ => Permission::new_reserved_im(),
+    };
 
-    let protector_kind = is_protected.then_some(if ref_mutability.is_some() {
-        // Strong protector for references
-        ProtectorKind::StrongProtector
-    } else {
-        // Weak protector for boxes
-        ProtectorKind::WeakProtector
-    });
+    // Everything except for `Cell` gets an initial access.
+    let initial_access = |perm: &Permission| !perm.is_cell();
 
-    let info = PermissionInfo { perm_kind, protector_kind, access_kind };
+    let perm = NewPermission {
+        freeze_perm,
+        freeze_access: initial_access(&freeze_perm),
+        nonfreeze_perm,
+        nonfreeze_access: initial_access(&nonfreeze_perm).then(|| AccessKind::Read),
+        ty_is_freeze,
+        protector: is_protected.then_some(if ref_mutability.is_some() {
+            // Strong protector for references
+            ProtectorKind::StrongProtector
+        } else {
+            // Weak protector for boxes
+            ProtectorKind::WeakProtector
+        }),
+    };
 
-    Some(PermissionInfo::into_raw(info))
+    Some(NewPermission::into_raw(perm))
 }

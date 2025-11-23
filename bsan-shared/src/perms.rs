@@ -4,74 +4,132 @@ use core::cmp::Ordering;
 use core::{fmt, mem};
 
 use super::helpers::{AccessKind, AccessRelatedness};
+use crate::Size;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RetagInfo {
+pub struct RetagInfo<'a> {
     pub size: usize,
-    pub perm: PermissionInfo,
+    pub perm: NewPermission,
+    pub im_layout: Option<&'a [[Size; 2]]>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PermissionInfo {
-    pub perm_kind: Permission,
-    pub protector_kind: Option<ProtectorKind>,
-    pub access_kind: Option<AccessKind>,
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub struct NewPermission {
+    /// Permission for the frozen part of the range.
+    pub freeze_perm: Permission,
+    /// Whether a read access should be performed on the frozen part on a retag.
+    pub freeze_access: bool,
+    /// Permission for the non-frozen part of the range.
+    pub nonfreeze_perm: Permission,
+    /// What kind of access should be performed on the non-frozen part on a retag.
+    pub nonfreeze_access: Option<AccessKind>,
+    // Whether the type is frozen.
+    pub ty_is_freeze: bool,
+    /// Whether this pointer is part of the arguments of a function call.
+    /// `protector` is `Some(_)` for all pointers marked `noalias`.
+    pub protector: Option<ProtectorKind>,
 }
 
-impl PermissionInfo {
+impl NewPermission {
+    pub fn default_perm(&self) -> Permission {
+        if self.ty_is_freeze {
+            self.freeze_perm
+        } else {
+            self.nonfreeze_perm
+        }
+    }
+
     pub fn into_raw(self) -> u64 {
-        let perm_kind: u16 = Permission::into_raw(self.perm_kind);
-        let protector_kind: u8 = ProtectorKind::into_raw(self.protector_kind);
-        let access_kind: u8 = AccessKind::into_raw(self.access_kind);
+        let freeze_perm: u16 = Permission::into_raw(self.freeze_perm);
+        let nonfreeze_perm: u16 = Permission::into_raw(self.nonfreeze_perm);
+        let freeze_access: u8 = self.freeze_access as u8;
+        let nonfreeze_access: u8 = AccessKind::into_raw(self.nonfreeze_access);
+        let ty_is_freeze: u8 = self.ty_is_freeze as u8;
+        let protector_kind: u8 = ProtectorKind::into_raw(self.protector);
+
         cfg_select! {
             target_endian = "little" => {
-                perm_kind as u64 | ((protector_kind as u64) << 16) | ((access_kind as u64) << 24)
+                freeze_perm as u64
+                | (nonfreeze_perm as u64) << 16
+                | (freeze_access as u64) << 24
+                | (nonfreeze_access as u64) << 32
+                | (ty_is_freeze as u64) << 48
+                | (protector_kind as u64) << 56
             }
             target_endian = "big" => {
-                perm_kind as u64 | ((protector_kind as u64) >> 16) | ((access_kind as u64) >> 24)
-            }
+                freeze_perm as u64
+                | (nonfreeze_perm as u64) >> 16
+                | (freeze_access as u64) >> 24
+                | (nonfreeze_access as u64) >> 32
+                | (ty_is_freeze as u64) >> 48
+                | (protector_kind as u64) >> 56            }
         }
     }
 
     /// # Safety
-    /// The first 32 bits of `perm` must contain the `Permission`,
-    /// the `ProtectorKind`, and the `AccessKind, in that order.`
     #[inline]
     #[allow(clippy::needless_late_init)]
     pub unsafe fn from_raw(perm: u64) -> Self {
-        let perm_kind: u16;
-        let protector_kind: u8;
-        let access_kind: u8;
+        let freeze_perm: u16;
+        let nonfreeze_perm: u16;
+        let freeze_access: u8;
+        let nonfreeze_access: u8;
+        let ty_is_freeze: u8;
+        let protector: u8;
 
         cfg_select! {
             target_endian = "little" => {
-                perm_kind = (perm & 0xFF) as u16;
-                protector_kind = ((perm >> 16) & 0xF) as u8;
-                access_kind = ((perm >> 24) & 0xF) as u8;
+                freeze_perm = (perm & 0xFF) as u16;
+                nonfreeze_perm = ((perm >> 16) & 0xFF) as u16;
+                freeze_access = ((perm >> 24) & 0xF)  as u8;
+                nonfreeze_access = ((perm >> 32) & 0xF) as u8;
+                ty_is_freeze = ((perm >> 48) & 0xF) as u8;
+                protector = ((perm >> 56) & 0xF) as u8;
             }
             target_endian = "big" => {
-                perm_kind = (perm & 0xFF) as u32;
-                protector_kind = (perm << 16) & 0xF as u8;
-                access_kind = (perm << 24 ) & 0xF as u8;
+                freeze_perm = (perm & 0xFF) as u16;
+                nonfreeze_perm = ((perm << 16) & 0xFF) as u16;
+                freeze_access = ((perm << 24) & 0xF)  as u8;
+                nonfreeze_access = ((perm << 32) & 0xF) as u8;
+                ty_is_freeze = ((perm << 48) & 0xF) as u8;
+                protector = ((perm << 56) & 0xF) as u8;
             }
         }
 
         unsafe {
-            let perm_kind = Permission::from_raw(perm_kind);
-            let protector_kind = ProtectorKind::from_raw(protector_kind);
-            let access_kind = AccessKind::from_raw(access_kind);
-            Self { perm_kind, protector_kind, access_kind }
+            let freeze_perm = Permission::from_raw(freeze_perm);
+            let nonfreeze_perm = Permission::from_raw(nonfreeze_perm);
+            let freeze_access = freeze_access != 0;
+            let nonfreeze_access = AccessKind::from_raw(nonfreeze_access);
+            let ty_is_freeze = ty_is_freeze != 0;
+            let protector = ProtectorKind::from_raw(protector);
+            Self {
+                freeze_perm,
+                nonfreeze_perm,
+                freeze_access,
+                nonfreeze_access,
+                ty_is_freeze,
+                protector,
+            }
         }
     }
 }
 
-impl RetagInfo {
+impl<'a> RetagInfo<'a> {
     /// # Safety
     /// The first 32 bits of `perm` must contain the `Permission`,
     /// the `ProtectorKind`, and the `AccessKind, in that order.`
-    pub unsafe fn from_raw(size: usize, perm: u64) -> Self {
-        let perm = unsafe { PermissionInfo::from_raw(perm) };
-        Self { size, perm }
+    pub unsafe fn from_raw(
+        size: usize,
+        perm: u64,
+        im_data: *const [usize; 2],
+        im_len: usize,
+    ) -> Self {
+        let im_data = unsafe { mem::transmute::<*const [usize; 2], *const [Size; 2]>(im_data) };
+        let im_layout =
+            (!im_data.is_null()).then(|| unsafe { core::slice::from_raw_parts(im_data, im_len) });
+        let perm = unsafe { NewPermission::from_raw(perm) };
+        Self { size, perm, im_layout }
     }
 }
 
@@ -769,12 +827,11 @@ impl Permission {
         }
     }
 }
-
+#[cfg(test)]
 mod test {
-
-    #[cfg(test)]
+    #[test]
     fn perm_into_raw_roundtrip() {
-        use crate::{AccessKind, Permission, PermissionInfo, ProtectorKind};
+        use crate::{AccessKind, NewPermission, Permission, ProtectorKind};
         let initial_perms = [
             Permission::new_reserved_frz(),
             Permission::new_reserved_im(),
@@ -786,14 +843,32 @@ mod test {
         let protector_kinds =
             [Some(ProtectorKind::StrongProtector), Some(ProtectorKind::WeakProtector), None];
 
-        for perm_kind in initial_perms {
-            for access_kind in access_kinds {
-                for protector_kind in protector_kinds {
-                    let perm = PermissionInfo { perm_kind, protector_kind, access_kind };
-                    assert_eq!(
-                        unsafe { PermissionInfo::from_raw(PermissionInfo::into_raw(perm)) },
-                        perm
-                    );
+        for freeze_perm in initial_perms {
+            for nonfreeze_perm in initial_perms {
+                for nonfreeze_access in access_kinds {
+                    for protector in protector_kinds {
+                        let new_perm = |freeze_access: bool, ty_is_freeze: bool| -> NewPermission {
+                            NewPermission {
+                                freeze_perm,
+                                nonfreeze_perm,
+                                freeze_access,
+                                nonfreeze_access,
+                                ty_is_freeze,
+                                protector,
+                            }
+                        };
+                        for perm in [
+                            new_perm(true, true),
+                            new_perm(true, false),
+                            new_perm(false, false),
+                            new_perm(false, true),
+                        ] {
+                            assert_eq!(
+                                unsafe { NewPermission::from_raw(NewPermission::into_raw(perm)) },
+                                perm
+                            );
+                        }
+                    }
                 }
             }
         }
