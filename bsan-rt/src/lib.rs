@@ -421,13 +421,13 @@ unsafe extern "C-unwind" fn __bsan_retag(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
     new_tag: BorTag,
-    _im_array: *const [usize; 2],
-    _im_len: usize,
+    im_data: *const [usize; 2],
+    im_len: usize,
 ) {
     debug_bsan!("retag", object_addr, alloc_id, bor_tag, alloc_info);
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-    let retag_info = unsafe { RetagInfo::from_raw(access_size, perm) };
+    let retag_info = unsafe { RetagInfo::from_raw(access_size, perm, im_data, im_len) };
 
     BorrowTracker::new(prov, object_addr, Some(access_size))
         .and_then(|opt| {

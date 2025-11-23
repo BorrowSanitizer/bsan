@@ -674,7 +674,7 @@ pub(super) struct ChildParams {
     pub base_offset: Size,
     pub parent_tag: BorTag,
     pub new_tag: BorTag,
-    pub initial_perms: RangeMap<LocationState, BsanAllocHooks>,
+    pub inside_perms: RangeMap<LocationState, BsanAllocHooks>,
     pub default_perm: Permission,
     pub protected: bool,
     pub span: Span,
@@ -701,7 +701,7 @@ where
             new_tag,
             base_offset,
             parent_tag,
-            initial_perms,
+            inside_perms,
             default_perm,
             protected,
             span,
@@ -730,10 +730,10 @@ where
         self.nodes.get_mut(parent_idx).unwrap().children.push(idx);
 
         for (Range { start, end }, &perm) in
-            initial_perms.iter(Size::from_bytes(0), initial_perms.size())
+            inside_perms.iter(Size::from_bytes(0), inside_perms.size())
         {
             assert!(perm.is_initial());
-            for (_perms_range, perms) in self
+            for (_, perms) in self
                 .rperms
                 .iter_mut(Size::from_bytes(start) + base_offset, Size::from_bytes(end - start))
             {
