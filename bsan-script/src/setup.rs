@@ -192,7 +192,7 @@ pub fn ensure_llvm(sh: &Shell, root_dir: &Path) -> Result<LLVMCmake> {
     let link_source = path!(root_dir / "bsan-rt" / "llvm-wrapper");
     let link_target = path!(llvm_dir / "compiler-rt" / "lib" / "bsan");
     if !link_target.exists() {
-        cmd!(sh, "ln -fs {link_source} {link_target}").run()?;
+        cmd!(sh, "ln -s {link_source} {link_target}").run()?;
     }
 
     Ok(LLVMCmake { llvm: path!(llvm_dir / "llvm" / "cmake"), common: path!(llvm_dir / "cmake") })

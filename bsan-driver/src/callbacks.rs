@@ -55,7 +55,7 @@ fn retag_perm<'tcx>(
         freeze_perm,
         freeze_access: initial_access(&freeze_perm),
         nonfreeze_perm,
-        nonfreeze_access: initial_access(&nonfreeze_perm).then(|| AccessKind::Read),
+        nonfreeze_access: initial_access(&nonfreeze_perm).then_some(AccessKind::Read),
         ty_is_freeze,
         protector: is_protected.then_some(if ref_mutability.is_some() {
             // Strong protector for references
