@@ -90,8 +90,6 @@ pub struct BsanConfig {
     pub version: String,
     pub dependencies: Vec<String>,
     pub targets: Vec<String>,
-    pub llvm_branch: String,
-    pub llvm_url: String,
 }
 
 impl BsanConfig {
