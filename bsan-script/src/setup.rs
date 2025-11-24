@@ -8,8 +8,8 @@ use xshell::{cmd, Shell};
 
 use crate::env::BsanConfig;
 use crate::utils::{
-    self, active_toolchain, ensure_directory_is_empty, prompt_user_unless, show_error,
-    version_meta, PromptResult,
+    self, active_toolchain, ensure_directory_is_empty, is_running_on_ci, prompt_user_unless,
+    show_error, version_meta, PromptResult,
 };
 use crate::TOOLCHAIN_NAME;
 
@@ -191,8 +191,13 @@ pub fn ensure_llvm(sh: &Shell, root_dir: &Path) -> Result<LLVMCmake> {
 
     let link_source = path!(root_dir / "bsan-rt" / "llvm-wrapper");
     let link_target = path!(llvm_dir / "compiler-rt" / "lib" / "bsan");
+
     if !link_target.exists() {
-        cmd!(sh, "ln -s {link_source} {link_target}").run()?;
+        if is_running_on_ci() {
+            cmd!(sh, "cp -r {link_source} {link_target}").run()?;
+        } else {
+            cmd!(sh, "ln -s {link_source} {link_target}").run()?;
+        }
     }
 
     Ok(LLVMCmake { llvm: path!(llvm_dir / "llvm" / "cmake"), common: path!(llvm_dir / "cmake") })

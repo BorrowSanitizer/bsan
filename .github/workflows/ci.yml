@@ -34,11 +34,5 @@ jobs:
             - name: Setup dependencies
               run: |
                   ln -s /root/.rustup/ $HOME/.rustup
-            - name: Setup
-              run: ./xb setup
-            - name: Confirmation
-              run: |
-                  cd ./llvm-project/compiler-rt/lib && ls -la
             - name: CI
-              run: |
-                  ./xb ci
+              run: ./xb ci
