@@ -189,11 +189,12 @@ pub fn ensure_llvm(sh: &Shell, root_dir: &Path) -> Result<LLVMCmake> {
         cmd!(sh, "git --git-dir=llvm-project/.git --work-tree=llvm-project checkout").run()?;
     }
 
-    let link_source = path!(root_dir / "bsan-rt" / "llvm-wrapper");
     let link_target = path!(llvm_dir / "compiler-rt" / "lib" / "bsan");
 
     if !link_target.exists() {
+        let mut link_source = path!(root_dir / "bsan-rt" / "llvm-wrapper");
         if is_running_on_ci() {
+            link_source.push(".");
             fs::create_dir_all(&link_target)?;
             cmd!(sh, "cp -R {link_source} {link_target}").run()?;
         } else {
