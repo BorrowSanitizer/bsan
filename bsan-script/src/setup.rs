@@ -143,17 +143,21 @@ pub fn ensure_llvm(sh: &Shell, root_dir: &Path) -> Result<LLVMCmake> {
     let llvm_git_dir = path!(llvm_dir / ".git");
     let llvm_gitmodules_dir = path!(".git" / "modules" / "llvm-project");
 
+    let llvm_sparse = root_dir.join("llvm-sparse");
+    if !llvm_sparse.exists() {
+        show_error!("Unable to find `llvm-sparse` file in the root of the repository.")
+    }
+
     if !(llvm_git_dir.exists() && llvm_gitmodules_dir.exists()) {
         cmd!(sh, "git submodule init {llvm_dir}").run()?;
 
-        fs::remove_dir_all(&llvm_dir)?;
-        fs::create_dir_all(&llvm_dir)?;
-        fs::remove_dir_all(&llvm_gitmodules_dir)?;
+        #[allow(unused)]
+        fs::remove_dir_all(&llvm_dir);
 
-        let llvm_sparse = root_dir.join("llvm-sparse");
-        if !llvm_sparse.exists() {
-            show_error!("Unable to find `llvm-sparse` file in the root of the repository.")
-        }
+        fs::create_dir_all(&llvm_dir)?;
+
+        #[allow(unused)]
+        fs::remove_dir_all(&llvm_gitmodules_dir);
 
         let url = cmd!(sh, "git config submodule.llvm-project.url")
             .output()
@@ -178,21 +182,21 @@ pub fn ensure_llvm(sh: &Shell, root_dir: &Path) -> Result<LLVMCmake> {
         .run()?;
 
         cmd!(sh, "git submodule absorbgitdirs {llvm_dir}").run()?;
-        cmd!(sh, "git -C llvm-project config core.sparseCheckout true").run()?;
 
         let mut sparse_checkout = path!(llvm_gitmodules_dir / "info");
         fs::create_dir_all(&sparse_checkout)?;
         sparse_checkout.push("sparse-checkout");
+
         cmd!(sh, "ln -s {llvm_sparse} {sparse_checkout}").run()?;
-    } else {
-        cmd!(sh, "git submodule update --init").quiet().run()?;
+
+        cmd!(sh, "git -C llvm-project config core.sparseCheckout true").run()?;
+        cmd!(sh, "git --git-dir=llvm-project/.git --work-tree=llvm-project checkout").run()?;
     }
-    cmd!(sh, "git --work-tree={llvm_dir} checkout -f").quiet().run()?;
 
     let link_source = path!(root_dir / "bsan-rt" / "llvm-wrapper");
     let link_target = path!(llvm_dir / "compiler-rt" / "lib" / "bsan");
     if !link_target.exists() {
-        cmd!(sh, "ln -fs {link_source} {link_target}").quiet().run()?;
+        cmd!(sh, "ln -fs {link_source} {link_target}").run()?;
     }
 
     Ok(LLVMCmake { llvm: path!(llvm_dir / "llvm" / "cmake"), common: path!(llvm_dir / "cmake") })
