@@ -26,6 +26,20 @@ pub fn is_running_on_ci() -> bool {
     std::env::var("GITHUB_ACTIONS").is_ok_and(|e| e == "true")
 }
 
+pub fn ensure_directory_is_empty(dir: &Path) -> Result<()> {
+    if !dir.exists() {
+        fs::create_dir_all(dir)?;
+    } else {
+        let mut entries = fs::read_dir(dir)?;
+        let first_entry = entries.next();
+        if first_entry.is_some() {
+            fs::remove_dir_all(dir)?;
+        }
+        fs::create_dir_all(dir)?;
+    }
+    Ok(())
+}
+
 #[derive(PartialEq)]
 pub enum PromptResult {
     Yes, // y/Y/yes

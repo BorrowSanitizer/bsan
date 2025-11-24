@@ -8,7 +8,8 @@ use xshell::{cmd, Shell};
 
 use crate::env::BsanConfig;
 use crate::utils::{
-    self, active_toolchain, prompt_user_unless, show_error, version_meta, PromptResult,
+    self, active_toolchain, ensure_directory_is_empty, prompt_user_unless, show_error,
+    version_meta, PromptResult,
 };
 use crate::TOOLCHAIN_NAME;
 
@@ -151,13 +152,8 @@ pub fn ensure_llvm(sh: &Shell, root_dir: &Path) -> Result<LLVMCmake> {
     if !(llvm_git_dir.exists() && llvm_gitmodules_dir.exists()) {
         cmd!(sh, "git submodule init {llvm_dir}").run()?;
 
-        #[allow(unused)]
-        fs::remove_dir_all(&llvm_dir);
-
-        fs::create_dir_all(&llvm_dir)?;
-
-        #[allow(unused)]
-        fs::remove_dir_all(&llvm_gitmodules_dir);
+        ensure_directory_is_empty(&llvm_dir)?;
+        ensure_directory_is_empty(&llvm_gitmodules_dir)?;
 
         let url = cmd!(sh, "git config submodule.llvm-project.url")
             .output()

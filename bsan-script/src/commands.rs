@@ -357,7 +357,6 @@ impl CompilerRt {
         cfg.define("LLVM_MAIN_SRC_DIR", &env.sysroot);
         cfg.define("COMPILER_RT_SANITIZERS_TO_BUILD", "bsan");
         cfg.define("COMPILER_RT_HAS_BSAN", "TRUE");
-        cfg.define("COMPILER_RT_HAS_LLVMTESTINGSUPPORT", "FALSE");
         cfg.define("LLVM_COMMON_CMAKE_UTILS", &env.toolchain_config.llvm_cmake.common);
         cfg.define("LLVM_CMAKE_DIR", &env.toolchain_config.llvm_cmake.llvm);
         cfg.build_target(&CompilerRt.artifact(env));
