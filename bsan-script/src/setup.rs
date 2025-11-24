@@ -28,7 +28,7 @@ pub fn setup_toolchain(
     skip_prompt: bool,
 ) -> Result<ToolchainConfig> {
     let meta = ensure_toolchain(sh, host, config, toolchain_dir, skip_prompt)?;
-    let llvm_cmake = ensure_llvm_cmake(sh, config, toolchain_dir, root_dir)?;
+    let llvm_cmake = ensure_llvm(sh, root_dir)?;
     Ok(ToolchainConfig { llvm_cmake, meta })
 }
 fn ensure_toolchain(
@@ -138,57 +138,62 @@ pub struct LLVMCmake {
     pub llvm: PathBuf,
 }
 
-pub fn ensure_llvm_cmake(
-    sh: &Shell,
-    config: &BsanConfig,
-    toolchain_dir: &Path,
-    root_dir: &Path,
-) -> Result<LLVMCmake> {
-    let compiler_rt_src = path!(toolchain_dir / "compiler-rt");
-    if !compiler_rt_src.exists() {
-        show_error!(
-            "Unable to locate the source for `compiler-rt` within the sysroot for the `bsan` toolchain."
-        );
-    }
+pub fn ensure_llvm(sh: &Shell, root_dir: &Path) -> Result<LLVMCmake> {
+    let llvm_dir = path!(root_dir / "llvm-project");
+    let llvm_git_dir = path!(llvm_dir / ".git");
+    let llvm_gitmodules_dir = path!(".git" / "modules" / "llvm-project");
 
-    let llvm_sparse = path!(root_dir / "llvm-sparse");
-    if !llvm_sparse.exists() {
-        show_error!(
-            "Unable to locate sparse checkout config file `llvm-sparse` in the root directory."
-        );
-    }
-    let tmp_dir = sh.create_temp_dir()?;
-    let tmp_dir = tmp_dir.path();
+    if !(llvm_git_dir.exists() && llvm_gitmodules_dir.exists()) {
+        cmd!(sh, "git submodule init {llvm_dir}").run()?;
 
-    let url = &config.llvm_url;
-    let branch = &config.llvm_branch;
-    let lockfile = path!(toolchain_dir / ".llvm.lock");
+        fs::remove_dir_all(&llvm_dir)?;
+        fs::create_dir_all(&llvm_dir)?;
+        fs::remove_dir_all(&llvm_gitmodules_dir)?;
 
-    if !(lockfile.exists() && fs::read_to_string(&lockfile)?.eq(branch)) {
-        cmd!(sh, "git clone -n --depth=1 --filter=tree:0 --branch={branch} {url} {tmp_dir}")
-            .run()?;
+        let llvm_sparse = root_dir.join("llvm-sparse");
+        if !llvm_sparse.exists() {
+            show_error!("Unable to find `llvm-sparse` file in the root of the repository.")
+        }
 
-        let mut sparse_checkout = path!(&tmp_dir / ".git/info");
+        let url = cmd!(sh, "git config submodule.llvm-project.url")
+            .output()
+            .map(|o| String::from_utf8(o.stdout))?
+            .unwrap_or_else(|_| {
+                show_error!("Unable to resolve the URL of the `llvm-project` submodule.")
+            });
+        let url = url.trim();
+
+        let branch = cmd!(sh, "git config -f .gitmodules submodule.llvm-project.branch")
+            .output()
+            .map(|o| String::from_utf8(o.stdout))?
+            .unwrap_or_else(|_| {
+                show_error!("Unable to resolve the target branch of the `llvm-project` submodule.")
+            });
+        let branch = branch.trim();
+
+        cmd!(
+            sh,
+            "git clone --filter=blob:none --no-checkout --depth=1 --branch={branch} {url} {llvm_dir}"
+        )
+        .run()?;
+
+        cmd!(sh, "git submodule absorbgitdirs {llvm_dir}").run()?;
+        cmd!(sh, "git -C llvm-project config core.sparseCheckout true").run()?;
+
+        let mut sparse_checkout = path!(llvm_gitmodules_dir / "info");
         fs::create_dir_all(&sparse_checkout)?;
         sparse_checkout.push("sparse-checkout");
-
         cmd!(sh, "ln -s {llvm_sparse} {sparse_checkout}").run()?;
-
-        cmd!(sh, "git -C {tmp_dir} sparse-checkout init").run()?;
-        cmd!(sh, "git -C {tmp_dir} checkout").run()?;
-        cmd!(sh, "cp -fr {tmp_dir}/llvm {toolchain_dir}").run()?;
-        cmd!(sh, "cp -fr {tmp_dir}/cmake {toolchain_dir}").run()?;
-
-        fs::write(lockfile, &branch)?;
+    } else {
+        cmd!(sh, "git submodule update --init").quiet().run()?;
     }
+    cmd!(sh, "git --work-tree={llvm_dir} checkout -f").quiet().run()?;
 
     let link_source = path!(root_dir / "bsan-rt" / "llvm-wrapper");
-    let link_target = path!(toolchain_dir / "compiler-rt" / "lib" / "bsan");
+    let link_target = path!(llvm_dir / "compiler-rt" / "lib" / "bsan");
     if !link_target.exists() {
         cmd!(sh, "ln -fs {link_source} {link_target}").quiet().run()?;
     }
-    Ok(LLVMCmake {
-        llvm: path!(toolchain_dir / "llvm" / "cmake"),
-        common: path!(toolchain_dir / "cmake"),
-    })
+
+    Ok(LLVMCmake { llvm: path!(llvm_dir / "llvm" / "cmake"), common: path!(llvm_dir / "cmake") })
 }
