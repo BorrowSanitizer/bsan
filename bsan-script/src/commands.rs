@@ -349,12 +349,14 @@ struct CompilerRt;
 impl CompilerRt {
     fn cmake(env: &mut BsanEnv) -> Result<Config> {
         let output_dir = path!(env.artifact_dir() / "compiler-rt");
-        let src_dir = path!(env.sysroot / "compiler-rt");
-        let crt_include = path!(src_dir / "include");
-        let sanitizer_common = path!(src_dir / "lib");
+        let llvm_src_dir = path!(env.root_dir / "llvm-project");
+        let compiler_rt_src_dir = path!(llvm_src_dir / "compiler-rt");
+        let crt_include = path!(compiler_rt_src_dir / "include");
+        let sanitizer_common = path!(compiler_rt_src_dir / "lib");
 
-        let mut cfg = env.llvm_cmake(&src_dir, &output_dir, &[crt_include, sanitizer_common])?;
-        cfg.define("LLVM_MAIN_SRC_DIR", &env.sysroot);
+        let mut cfg =
+            env.llvm_cmake(&compiler_rt_src_dir, &output_dir, &[crt_include, sanitizer_common])?;
+        cfg.define("LLVM_MAIN_SRC_DIR", &llvm_src_dir);
         cfg.define("COMPILER_RT_SANITIZERS_TO_BUILD", "bsan");
         cfg.define("COMPILER_RT_HAS_BSAN", "TRUE");
         cfg.define("LLVM_COMMON_CMAKE_UTILS", &env.toolchain_config.llvm_cmake.common);
