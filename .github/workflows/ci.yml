@@ -1,38 +1,38 @@
 name: CI
 on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-  schedule:
-    - cron: '0 0 * * *'
-  workflow_dispatch: 
+    push:
+        branches: ["main"]
+    pull_request:
+        branches: ["main"]
+    schedule:
+        - cron: "0 0 * * *"
+    workflow_dispatch:
 env:
-  CARGO_TERM_COLOR: always
+    CARGO_TERM_COLOR: always
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        config:
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-24.04-arm
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-    runs-on: '${{ matrix.config.os }}'
-    container:
-      image: ghcr.io/borrowsanitizer/bsan:latest
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.github_token }}
-    name: '${{ matrix.config.target }}'
-    steps:
-    - uses: actions/checkout@v4
-    - name: Setup dependencies
-      run: |
-        ln -s /root/.rustup/ $HOME/.rustup
-    - name: CI
-      run: ./xb ci
-       
-        
-
+    build:
+        strategy:
+            fail-fast: false
+            matrix:
+                config:
+                    - target: aarch64-unknown-linux-gnu
+                      os: ubuntu-24.04-arm
+                    - target: x86_64-unknown-linux-gnu
+                      os: ubuntu-latest
+        runs-on: "${{ matrix.config.os }}"
+        container:
+            image: ghcr.io/borrowsanitizer/bsan:latest
+            credentials:
+                username: ${{ github.actor }}
+                password: ${{ secrets.github_token }}
+        name: "${{ matrix.config.target }}"
+        steps:
+            - uses: actions/checkout@v4
+            - name: Allow submodule checkout
+              run: |
+                  git config --global --add safe.directory $GITHUB_WORKSPACE
+            - name: Setup dependencies
+              run: |
+                  ln -s /root/.rustup/ $HOME/.rustup
+            - name: CI
+              run: ./xb ci
