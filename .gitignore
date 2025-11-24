@@ -10,4 +10,3 @@ CMakeFiles
 *.o
 .toolchain
 .vscode
-llvm-project
