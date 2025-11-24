@@ -182,13 +182,13 @@ pub fn ensure_llvm(sh: &Shell, root_dir: &Path) -> Result<LLVMCmake> {
         .run()?;
 
         cmd!(sh, "git submodule absorbgitdirs {llvm_dir}").run()?;
+    }
 
-        let mut sparse_checkout = path!(llvm_gitmodules_dir / "info");
-        fs::create_dir_all(&sparse_checkout)?;
-        sparse_checkout.push("sparse-checkout");
-
+    let mut sparse_checkout = path!(llvm_gitmodules_dir / "info");
+    fs::create_dir_all(&sparse_checkout)?;
+    sparse_checkout.push("sparse-checkout");
+    if !sparse_checkout.exists() {
         cmd!(sh, "ln -s {llvm_sparse} {sparse_checkout}").run()?;
-
         cmd!(sh, "git -C llvm-project config core.sparseCheckout true").run()?;
         cmd!(sh, "git --git-dir=llvm-project/.git --work-tree=llvm-project checkout").run()?;
     }
