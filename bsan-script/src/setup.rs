@@ -194,7 +194,8 @@ pub fn ensure_llvm(sh: &Shell, root_dir: &Path) -> Result<LLVMCmake> {
 
     if !link_target.exists() {
         if is_running_on_ci() {
-            cmd!(sh, "cp -r {link_source} {link_target}").run()?;
+            fs::create_dir_all(&link_target)?;
+            cmd!(sh, "cp -R {link_source} {link_target}").run()?;
         } else {
             cmd!(sh, "ln -s {link_source} {link_target}").run()?;
         }
