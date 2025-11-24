@@ -8,8 +8,8 @@ use xshell::{cmd, Shell};
 
 use crate::env::BsanConfig;
 use crate::utils::{
-    self, active_toolchain, ensure_directory_is_empty, is_running_on_ci, prompt_user_unless,
-    show_error, version_meta, PromptResult,
+    self, active_toolchain, ensure_directory_is_empty, prompt_user_unless, show_error,
+    version_meta, PromptResult,
 };
 use crate::TOOLCHAIN_NAME;
 
