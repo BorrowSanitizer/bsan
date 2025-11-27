@@ -306,34 +306,29 @@ impl Buildable for BsanRt {
 
     fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
         let llvm_ar = env.target_binary("llvm-ar");
+        // Use system-wide clang for partial linking; we only invoke the linker driver
+        // to create a relocatable object from existing archives.
+        let clang = "clang"; // rely on PATH
         let llvm_wrapper = env.build_artifact(CompilerRt, &[])?;
         let rust_runtime = env.build_artifact(BsanRtCore, args)?;
 
         let dest_archive = path!(env.artifact_dir() / self.artifact(env));
-        cmd!(env.sh, "cp {llvm_wrapper} {dest_archive}").quiet().run()?;
-
         let tmp_dir = env.sh.create_temp_dir()?;
+        let merged_obj = path!(tmp_dir.path() / "bsan_rt_merged.o");
+
         env.cd(tmp_dir.path(), |env| {
-            cmd!(env.sh, "{llvm_ar} -x {rust_runtime}").quiet().run()?;
-
-            let file_names: Vec<String> = fs::read_dir(tmp_dir.path())
-                .unwrap()
-                .filter_map(|entry| {
-                    let path = entry.ok().unwrap().path();
-                    if path.is_file() {
-                        path.to_str().map(|s| s.to_owned())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            // Finally, add the objects into the static archive of C++ component.
-            cmd!(env.sh, "{llvm_ar} -r {dest_archive}").args(file_names).quiet().run()?;
+            // Avoid pulling all objects from core (which contains duplicate symbol definitions)
+            // by only whole-archiving compiler-rt and letting the linker select needed objects
+            // from the core archive. This prevents multiple definition errors for __bsan_*.
+            cmd!(env.sh, "{clang} -Wl,--whole-archive {llvm_wrapper} -Wl,--no-whole-archive {rust_runtime} -r -o {merged_obj}")
+                .quiet()
+                .run()?;
+            cmd!(env.sh, "rm -f {dest_archive}").quiet().run()?;
+            cmd!(env.sh, "{llvm_ar} rcs {dest_archive} {merged_obj}").quiet().run()?;
             Ok(())
         })?;
 
-        Ok(Some(path!(env.artifact_dir() / dest_archive)))
+        Ok(Some(dest_archive))
     }
 
     fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
