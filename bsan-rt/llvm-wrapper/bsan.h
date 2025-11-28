@@ -10,6 +10,8 @@ extern bool bsan_inited;
 extern bool bsan_init_is_running;
 extern bool bsan_deinit_is_running;
 
+#define BSAN_SANITIZER_TOOL_NAME "BorrowSanitizer"
+
 namespace __bsan {
 void BsanTSDInit();
 void InitializeInterceptors();

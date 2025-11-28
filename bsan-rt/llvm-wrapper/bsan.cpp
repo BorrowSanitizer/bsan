@@ -2,6 +2,7 @@
 #include "bsan_thread.h"
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_flags.h"
+#include "sanitizer_common/sanitizer_stackdepot.h"
 #include "sanitizer_common/sanitizer_stacktrace.h"
 
 using namespace __sanitizer;
@@ -72,7 +73,7 @@ void __sanitizer::BufferedStackTrace::UnwindImpl(uptr pc, uptr bp,
          request_fast);
 }
 
-extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_reportError() {
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_printCurrentStackTrace() {
   // Capture current stack trace
   GET_CURRENT_PC_BP; // This macro defines 'pc' and 'bp' variables
   BufferedStackTrace stack;
@@ -84,6 +85,20 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_reportError() {
 
   // Print stack trace
   stack.Print();
+}
 
-  ReportErrorSummary("bsan error message here", &stack);
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE void
+__bsan_printStackTrace(u32 stackId) {
+  StackTrace stack = StackDepotGet(stackId);
+  CHECK(stack.trace);
+  stack.Print();
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE u32 __bsan_StackDepotPut() {
+  // Capture current stack trace
+  GET_CURRENT_PC_BP; // This macro defines 'pc' and 'bp' variables
+  BufferedStackTrace stack;
+  stack.Unwind(pc, bp, /*context=*/nullptr, /*request_fast=*/true,
+               /*max_depth=*/kStackTraceMax);
+  return StackDepotPut(stack);
 }

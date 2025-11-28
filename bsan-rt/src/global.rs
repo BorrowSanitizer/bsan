@@ -11,14 +11,6 @@ use crate::memory::hooks::{BsanAllocHooks, BsanHooks};
 use crate::memory::{AllocError, Heap, ShadowHeap};
 use crate::*;
 
-// Calls into LLVM's sanitizer framework
-// Those are disabled during unit tests to avoid linking issues
-#[cfg(not(test))]
-unsafe extern "C" {
-    ///  to print the error report
-    fn __bsan_reportError();
-}
-
 /// Every action that requires a heap allocation must be performed through a globally
 /// accessible, singleton instance of `GlobalCtx`. Initializing or obtaining
 /// a reference to this instance is unsafe, since it requires having been initialized
@@ -35,6 +27,8 @@ pub struct GlobalCtx {
     protected_tags: Mutex<BHashMap<BorTag, ProtectorKind>>,
     alloc_metadata_map: Heap<AllocInfo>,
     shadow_heap: ShadowHeap<Provenance>,
+    #[cfg(not(test))]
+    allocation_stack_depot: Mutex<crate::sanitizer_common_interface::StackTraceDepot>,
 }
 
 impl GlobalCtx {
@@ -46,6 +40,10 @@ impl GlobalCtx {
             protected_tags: Mutex::new(BHashMap::new_in(hooks.alloc)),
             alloc_metadata_map: Heap::new(&hooks)?,
             shadow_heap: ShadowHeap::new(&hooks, &raw const __BSAN_WILDCARD_PROVENANCE)?,
+            #[cfg(not(test))]
+            allocation_stack_depot: Mutex::new(
+                crate::sanitizer_common_interface::StackTraceDepot::new_in(hooks.alloc),
+            ),
         })
     }
 
@@ -92,14 +90,33 @@ impl GlobalCtx {
         tag_map.get(&bor_tag).copied()
     }
 
+    #[cfg(not(test))]
+    pub fn store_stacktrace_for_allocation(&self, alloc_id: AllocId) {
+        match self.allocation_stack_depot.lock().capture_stack(alloc_id) {
+            Ok(()) => {}
+            Err(e) => {
+                self.handle_error(e);
+            }
+        }
+    }
+
     #[inline(never)] // never inline to have specific break point for debugging with GDB
     pub fn handle_error(&self, info: ErrorInfo) -> ! {
         crate::eprintln!("An error occurred: {info:?}\n\n");
+
+        // code below uses sanitizer common interface to print stack traces and detailed error info
         #[cfg(not(test))]
-        if let ErrorInfo::UndefinedBehavior(_ub_info) = info {
-            crate::eprintln!("BSAN detected undefined behavior. Printing Error Report\n");
-            unsafe {
-                __bsan_reportError();
+        if let ErrorInfo::UndefinedBehavior(ub_info) = info {
+            crate::eprintln!("BSAN detected undefined behavior: {ub_info:?}\n\n");
+            crate::eprintln!("Caused by\n\n");
+            sanitizer_common_interface::print_stack_trace(None);
+            if let Some(alloc_id) = ub_info.get_alloc_id() {
+                if let Ok(stack_id) = self.allocation_stack_depot.lock().print_trace(&alloc_id) {
+                    crate::eprintln!("{:?} previously allocated here:\n", alloc_id);
+                    sanitizer_common_interface::print_stack_trace(Some(stack_id));
+                } else {
+                    crate::eprintln!("No stack trace found for allocation {:?}", alloc_id);
+                }
             }
         }
         self.exit(1)
@@ -124,7 +141,7 @@ impl<K, V> DerefMut for BHashMap<K, V> {
 }
 
 impl<K, V> BHashMap<K, V> {
-    fn new_in(hooks: BsanAllocHooks) -> Self {
+    pub(crate) fn new_in(hooks: BsanAllocHooks) -> Self {
         Self(HashMap::with_hasher_in(foldhash::fast::RandomState::default(), hooks))
     }
 }

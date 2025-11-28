@@ -16,6 +16,7 @@ pub type TreeTransitionResult<T> = core::result::Result<T, TransitionError>;
 #[derive(Debug)]
 pub enum InternalError {
     Alloc(memory::AllocError),
+    Unexpected(String),
 }
 
 impl From<AllocError> for ErrorInfo {
@@ -76,6 +77,19 @@ impl Display for UBInfo {
                     write!(f, "no event found, error: {:?}", error)
                 }
             }
+        }
+    }
+}
+
+impl UBInfo {
+    pub fn get_alloc_id(&self) -> Option<AllocId> {
+        match self {
+            UBInfo::UseAfterFree(alloc_id)
+            | UBInfo::GlobalFree(alloc_id)
+            | UBInfo::StackFree(alloc_id) => Some(*alloc_id),
+            UBInfo::AliasingViolation(error) => Some(error.alloc_id),
+            UBInfo::AccessOutOfBounds(prov, _access_size, _alloc_size) => Some(prov.alloc_id),
+            UBInfo::InvalidProvenance => None,
         }
     }
 }

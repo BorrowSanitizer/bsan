@@ -35,6 +35,9 @@ mod memory;
 
 mod errors;
 
+#[cfg(not(test))]
+mod sanitizer_common_interface;
+
 use crate::borrow_tracker::tree::Tree;
 use crate::errors::BorsanResult;
 use crate::memory::hooks;
@@ -552,6 +555,9 @@ unsafe extern "C-unwind" fn __bsan_alloc(
         .create_alloc_info(AllocInfo::new(ctx, base_addr, size, alloc_id, bor_tag))
         .unwrap_or_else(|info| ctx.handle_error(info));
     debug_bsan!("alloc", base_addr, alloc_id, bor_tag, alloc_info.as_ptr());
+    // TODO: this needs to be inserted whereever we need to track allocations
+    #[cfg(not(test))]
+    global_ctx.store_stacktrace_for_allocation(alloc_id);
     alloc_info
 }
 
