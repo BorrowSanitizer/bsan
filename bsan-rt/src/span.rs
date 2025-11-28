@@ -3,6 +3,9 @@ use core::ptr;
 
 use cfg_if::cfg_if;
 
+#[cfg(not(test))]
+use crate::sanitizer_common_interface::capture_current_stack_trace;
+
 unsafe extern "C" {
     // Symbol defined by the linker
     unsafe static __executable_start: [u8; 0];
@@ -26,6 +29,11 @@ pub struct Span(pub usize);
 
 impl Span {
     pub fn new() -> Span {
+        #[cfg(not(test))]
+        {
+            let stack_id = capture_current_stack_trace();
+            return Span(stack_id.0 as usize);
+        }
         Span(0)
     }
     // Returns a DummySpanData with inner zero

@@ -22,8 +22,12 @@ pub(crate) fn print_stack_trace(stack_id: Option<StackTraceId>) {
     }
 }
 
+pub(crate) fn capture_current_stack_trace() -> StackTraceId {
+    unsafe { StackTraceId(__bsan_StackDepotPut()) }
+}
+
 #[derive(Copy, Clone)]
-pub(crate) struct StackTraceId(u32);
+pub(crate) struct StackTraceId(pub(crate) u32);
 pub(crate) struct StackTraceDepot {
     /// map from allocation ID to its stack ID
     alloc_stacks: BHashMap<AllocId, StackTraceId>,

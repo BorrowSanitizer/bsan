@@ -119,6 +119,14 @@ where
     pub fn last_event(&self) -> Option<&Event> {
         self.events.last()
     }
+
+    pub fn created_at(&self) -> (Span, Permission) {
+        self.created.clone()
+    }
+
+    pub fn events_iter(&self) -> core::slice::Iter<'_, Event> {
+        self.events.iter()
+    }
 }
 
 impl<A> HistoryData<A>

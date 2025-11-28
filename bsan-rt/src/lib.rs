@@ -557,7 +557,9 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     debug_bsan!("alloc", base_addr, alloc_id, bor_tag, alloc_info.as_ptr());
     // TODO: this needs to be inserted whereever we need to track allocations
     #[cfg(not(test))]
-    global_ctx.store_stacktrace_for_allocation(alloc_id);
+    unsafe {
+        global_ctx().store_stacktrace_for_allocation(alloc_id);
+    }
     alloc_info
 }
 

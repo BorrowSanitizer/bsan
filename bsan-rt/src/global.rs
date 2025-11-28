@@ -118,6 +118,25 @@ impl GlobalCtx {
                     crate::eprintln!("No stack trace found for allocation {:?}", alloc_id);
                 }
             }
+
+            if let errors::UBInfo::AliasingViolation(tree_error) = ub_info {
+                crate::eprintln!("Aliasing violation details: {:#?}\n", tree_error);
+                let history = &tree_error.conflicting_info.history;
+                let (created_span, created_perm) = history.created_at();
+                crate::eprintln!("Borrow created (with {:?}) at \n", created_perm);
+                sanitizer_common_interface::print_stack_trace(Some(
+                    sanitizer_common_interface::StackTraceId(
+                        u32::try_from(created_span.0).unwrap(),
+                    ),
+                ));
+                tree_error.conflicting_info.history.events_iter().for_each(|event| {
+                    crate::eprintln!("  Stack trace for {:?}\n", event);
+                    let stack_id = sanitizer_common_interface::StackTraceId(
+                        u32::try_from(event.span.0).unwrap(),
+                    );
+                    sanitizer_common_interface::print_stack_trace(Some(stack_id));
+                });
+            }
         }
         self.exit(1)
     }
