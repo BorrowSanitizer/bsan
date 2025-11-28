@@ -15,9 +15,8 @@ BsanThread *BsanThread::Create(thread_callback_t start_routine, void *arg) {
 }
 
 void BsanThread::Init() {
-  uptr bottom, top;
-  GetThreadStackTopAndBottom(IsMainThread(), &bottom, &top);
-  this->stack_size = bottom - top;
+  GetThreadStackTopAndBottom(IsMainThread(), &stack_top_, &stack_bottom_);
+  this->stack_size = stack_top_ - stack_bottom_;
   this->stack_alloc = (u8 *)MmapOrDie(this->stack_size, __func__);
   __BSAN_PROT_TAG_STACK = (uptr *)(this->stack_alloc + this->stack_size);
 }

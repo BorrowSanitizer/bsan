@@ -16,12 +16,16 @@ public:
   void Init(); // Should be called from the thread itself.
   thread_return_t ThreadStart();
   bool IsMainThread() { return start_routine_ == nullptr; }
+  uptr stack_top() { return stack_top_; }
+  uptr stack_bottom() { return stack_bottom_; }
   int destructor_iterations_;
   __sanitizer_sigset_t starting_sigset_;
 
 private:
   thread_callback_t start_routine_;
   void *arg_;
+  uptr stack_top_;
+  uptr stack_bottom_;
   uptr stack_size;
   u8 *stack_alloc;
 };

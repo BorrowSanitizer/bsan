@@ -11,6 +11,14 @@ use crate::memory::hooks::{BsanAllocHooks, BsanHooks};
 use crate::memory::{AllocError, Heap, ShadowHeap};
 use crate::*;
 
+// Calls into LLVM's sanitizer framework
+// Those are disabled during unit tests to avoid linking issues
+#[cfg(not(test))]
+unsafe extern "C" {
+    ///  to print the error report
+    fn __bsan_reportError();
+}
+
 /// Every action that requires a heap allocation must be performed through a globally
 /// accessible, singleton instance of `GlobalCtx`. Initializing or obtaining
 /// a reference to this instance is unsafe, since it requires having been initialized
@@ -84,8 +92,16 @@ impl GlobalCtx {
         tag_map.get(&bor_tag).copied()
     }
 
+    #[inline(never)] // never inline to have specific break point for debugging with GDB
     pub fn handle_error(&self, info: ErrorInfo) -> ! {
         crate::eprintln!("An error occurred: {info:?}\n\n");
+        #[cfg(not(test))]
+        if let ErrorInfo::UndefinedBehavior(_ub_info) = info {
+            crate::eprintln!("BSAN detected undefined behavior. Printing Error Report\n");
+            unsafe {
+                __bsan_reportError();
+            }
+        }
         self.exit(1)
     }
 }
