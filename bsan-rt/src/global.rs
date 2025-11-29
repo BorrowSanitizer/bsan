@@ -1,4 +1,3 @@
-use alloc::vec::Vec;
 use core::cell::SyncUnsafeCell;
 use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
@@ -91,46 +90,6 @@ impl GlobalCtx {
     pub fn handle_error(&self, info: ErrorInfo) -> ! {
         crate::eprintln!("An error occurred: {info:?}\n\n");
         self.exit(1)
-    }
-}
-
-/// A thin wrapper around `Vec` that uses `GlobalCtx` as its allocator
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct BVec<T>(Vec<T, BsanAllocHooks>);
-
-impl<T> Deref for BVec<T> {
-    type Target = Vec<T, BsanAllocHooks>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<T> DerefMut for BVec<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl<T> BVec<T> {
-    #[allow(unused)]
-    fn new(ctx: &GlobalCtx) -> Self {
-        Self(Vec::new_in(ctx.allocator()))
-    }
-}
-
-/// We provide this trait implementation so that we can use `BVec` to
-/// store the temporary results of formatting a string in the implementation
-/// of `GlobalCtx::print`
-impl core::fmt::Write for BVec<u8> {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        let bytes = s.bytes();
-        if self.try_reserve_exact(bytes.len()).is_err() {
-            Err(core::fmt::Error)
-        } else {
-            self.extend(bytes);
-            Ok(())
-        }
     }
 }
 

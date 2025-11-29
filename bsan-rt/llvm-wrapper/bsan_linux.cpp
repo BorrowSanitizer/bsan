@@ -1,10 +1,7 @@
 #include "bsan.h"
 #include "bsan_thread.h"
-#include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_linux.h"
-#include "sanitizer_common/sanitizer_platform.h"
 #include <pthread.h>
-#include <signal.h>
 
 namespace __bsan {
 

@@ -1,18 +1,8 @@
 #![cfg_attr(not(test), no_std)]
-#![allow(internal_features)]
-#![warn(clippy::transmute_ptr_to_ptr)]
-#![warn(clippy::borrow_as_ptr)]
-#![feature(sync_unsafe_cell)]
 #![feature(thread_local)]
 #![feature(allocator_api)]
-#![feature(alloc_layout_extra)]
-#![feature(format_args_nl)]
-#![feature(core_intrinsics)]
+#![feature(sync_unsafe_cell)]
 #![feature(yeet_expr)]
-#![feature(unsafe_cell_access)]
-#![feature(stmt_expr_attributes)]
-#![feature(ub_checks)]
-#![feature(pointer_is_aligned_to)]
 #[macro_use]
 extern crate alloc;
 use core::ffi::c_void;
@@ -172,23 +162,6 @@ impl fmt::Debug for AllocId {
         } else {
             write!(f, "alloc{}", self.0)
         }
-    }
-}
-
-#[unsafe(no_mangle)]
-static THREAD_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-/// Unique identifier for a thread
-#[repr(transparent)]
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ThreadId(usize);
-
-impl ThreadId {
-    pub fn new(i: usize) -> Self {
-        ThreadId(i)
-    }
-    pub fn get(&self) -> usize {
-        self.0
     }
 }
 
@@ -360,14 +333,6 @@ pub struct AllocInfo {
 }
 
 impl AllocInfo {
-    #[allow(unused)]
-    unsafe fn force_dealloc(&mut self) {
-        self.alloc_id = AllocId::invalid();
-        self.base_addr = FreeListAddrUnion { base_addr: ptr::null_mut() };
-        self.size = 0;
-        self.tree_lock.lock().take();
-    }
-
     #[cfg(feature = "debug")]
     fn summarize(&self) -> AllocInfoSummary {
         AllocInfoSummary::Valid {
@@ -776,10 +741,8 @@ extern "C" fn __bsan_debug_print(alloc_id: AllocId, bor_tag: BorTag, alloc_info:
 
 #[cfg(not(test))]
 #[panic_handler]
-fn panic(info: &PanicInfo<'_>) -> ! {
-    crate::eprintln!("The BorrowSanitizer runtime panicked!");
-    crate::eprintln!("{info}");
-    core::intrinsics::abort()
+fn panic(_: &PanicInfo<'_>) -> ! {
+    loop {}
 }
 
 #[cfg(test)]
