@@ -49,14 +49,11 @@ impl GlobalCtx {
         &self.hooks
     }
 
-    pub(crate) unsafe fn allocate_lock_location(
-        &self,
-        info: AllocInfo,
-    ) -> BorsanResult<NonNull<AllocInfo>> {
+    pub(crate) fn create_alloc_info(&self, info: AllocInfo) -> BorsanResult<NonNull<AllocInfo>> {
         Ok(self.alloc_metadata_map.alloc(info)?)
     }
 
-    pub(crate) unsafe fn deallocate_lock_location(&self, ptr: NonNull<AllocInfo>) {
+    pub(crate) unsafe fn destroy_alloc_info(&self, ptr: NonNull<AllocInfo>) {
         unsafe { self.alloc_metadata_map.dealloc(ptr) };
     }
 
