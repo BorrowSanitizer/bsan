@@ -7,7 +7,6 @@
 extern crate alloc;
 use core::ffi::c_void;
 use core::fmt::Debug;
-use core::mem::MaybeUninit;
 #[cfg(not(test))]
 use core::panic::PanicInfo;
 use core::ptr::NonNull;
@@ -333,6 +332,35 @@ pub struct AllocInfo {
 }
 
 impl AllocInfo {
+    fn invalid() -> Self {
+        AllocInfo {
+            alloc_id: AllocId::invalid(),
+            base_addr: FreeListAddrUnion { base_addr: ptr::null_mut() },
+            size: 0,
+            tree_lock: Mutex::new(None),
+        }
+    }
+
+    fn new(
+        ctx: &GlobalCtx,
+        base_addr: *mut c_void,
+        size: usize,
+        alloc_id: AllocId,
+        bor_tag: BorTag,
+    ) -> Self {
+        Self {
+            alloc_id,
+            base_addr: FreeListAddrUnion { base_addr },
+            size,
+            tree_lock: Mutex::new(Some(Tree::new_in(
+                bor_tag,
+                Size::from_bytes(size),
+                Span::new(),
+                ctx.allocator(),
+            ))),
+        }
+    }
+
     #[cfg(feature = "debug")]
     fn summarize(&self) -> AllocInfoSummary {
         AllocInfoSummary::Valid {
@@ -468,7 +496,7 @@ extern "C" fn __bsan_dealloc(
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
 
     if !weak && let Some(alloc_info) = NonNull::new(alloc_info) {
-        unsafe { global_ctx.deallocate_lock_location(alloc_info) };
+        unsafe { global_ctx.destroy_alloc_info(alloc_info) };
     }
 }
 
@@ -519,23 +547,11 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     alloc_id: AllocId,
     bor_tag: BorTag,
 ) -> NonNull<AllocInfo> {
-    let global_ctx = unsafe { global_ctx() };
-    let alloc_info = unsafe {
-        global_ctx
-            .allocate_lock_location(AllocInfo {
-                alloc_id,
-                base_addr: FreeListAddrUnion { base_addr },
-                size,
-                tree_lock: Mutex::new(Some(Tree::new_in(
-                    bor_tag,
-                    Size::from_bytes(size),
-                    Span::new(),
-                    global_ctx.allocator(),
-                ))),
-            })
-            .unwrap_or_else(|info| global_ctx.handle_error(info))
-    };
-    debug_bsan!("alloc", base_addr, alloc_id, bor_tag, &alloc_info);
+    let ctx = unsafe { global_ctx() };
+    let alloc_info = ctx
+        .create_alloc_info(AllocInfo::new(ctx, base_addr, size, alloc_id, bor_tag))
+        .unwrap_or_else(|info| ctx.handle_error(info));
+    debug_bsan!("alloc", base_addr, alloc_id, bor_tag, alloc_info.as_ptr());
     alloc_info
 }
 
@@ -617,24 +633,15 @@ unsafe extern "C-unwind" fn __bsan_shadow_store_vector(
 /// Reserves a stack slot for allocation metadata.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_reserve_stack_slot() -> NonNull<AllocInfo> {
-    let global_ctx = unsafe { global_ctx() };
-    unsafe {
-        global_ctx
-            .allocate_lock_location(AllocInfo {
-                alloc_id: AllocId::invalid(),
-                base_addr: FreeListAddrUnion { base_addr: ptr::null_mut() },
-                size: 0,
-                tree_lock: Mutex::new(None),
-            })
-            .unwrap_or_else(|info| global_ctx.handle_error(info))
-    }
+    let ctx = unsafe { global_ctx() };
+    ctx.create_alloc_info(AllocInfo::invalid()).unwrap_or_else(|info| ctx.handle_error(info))
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_destroy_stack_slot(slot: NonNull<AllocInfo>) {
     let global_ctx = unsafe { global_ctx() };
     unsafe {
-        global_ctx.deallocate_lock_location(slot);
+        global_ctx.destroy_alloc_info(slot);
     }
 }
 
@@ -654,21 +661,14 @@ unsafe extern "C" fn __bsan_alloc_stack(
         bor_tag,
         alloc_info.as_ptr().cast::<AllocInfo>()
     );
-    let mut alloc_info = alloc_info.cast::<MaybeUninit<AllocInfo>>();
-    let global_ctx = unsafe { global_ctx() };
-
     unsafe {
-        alloc_info.as_mut().write(AllocInfo {
-            alloc_id,
-            base_addr: FreeListAddrUnion { base_addr },
+        alloc_info.cast::<AllocInfo>().write(AllocInfo::new(
+            global_ctx(),
+            base_addr,
             size,
-            tree_lock: Mutex::new(Some(Tree::new_in(
-                bor_tag,
-                Size::from_bytes(size),
-                Span::new(),
-                global_ctx.allocator(),
-            ))),
-        });
+            alloc_id,
+            bor_tag,
+        ));
     }
 }
 
