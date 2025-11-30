@@ -1,5 +1,6 @@
 use alloc::alloc::{AllocError, Allocator, Layout};
 use core::ffi::c_void;
+use core::mem;
 use core::ptr::NonNull;
 
 use libc::off_t;
@@ -37,7 +38,12 @@ unsafe impl Allocator for BsanAllocHooks {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         unsafe {
             match layout.size() {
-                0 => Ok(NonNull::slice_from_raw_parts(layout.dangling(), 0)),
+                // Create a dangling pointer, equivalent to unstable `Layout::dangling()`.
+                // The underlying pointer for an empty slice cannot be null.
+                0 => Ok(NonNull::slice_from_raw_parts(
+                    mem::transmute::<usize, NonNull<u8>>(layout.align()),
+                    0,
+                )),
                 size => {
                     let ptr = (self.malloc)(layout.size());
                     if ptr.is_null() {

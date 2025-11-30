@@ -2,7 +2,6 @@
 #include "bsan_interface.h"
 #include "bsan_thread.h"
 #include "interception/interception.h"
-#include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_linux.h"
 
 using namespace __sanitizer;
