@@ -512,7 +512,6 @@ extern "C" fn __bsan_mark_tls() -> FramePointer {
     let fp = unsafe { ptr::read(src) };
     unsafe { ptr::write_volatile(&raw mut __BSAN_TLS_MARKER, fp!().unwind(1)) };
     fp
-
 }
 
 #[unsafe(no_mangle)]
