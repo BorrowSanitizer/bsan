@@ -86,15 +86,14 @@ impl FramePointer {
 
 macro_rules! fp {
     () => {
-        #[allow(unused_unsafe)]
-        FramePointer(unsafe {
+        FramePointer({
             let fp: usize;
 
             #[cfg(target_arch = "x86_64")]
-            core::arch::asm!("mov {0}, rbp", out(reg) fp, options(nomem, nostack, preserves_flags));
+            core::arch::asm!("mov {0}, rbp", out(reg) fp);
 
             #[cfg(target_arch = "aarch64")]
-            core::arch::asm!("mov {0}, fp", out(reg) fp, options(nomem, nostack, preserves_flags));
+            core::arch::asm!("mov {0}, fp", out(reg) fp);
 
             fp as *const usize
         })

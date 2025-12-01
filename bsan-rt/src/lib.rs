@@ -508,15 +508,18 @@ extern "C" fn __bsan_remove_protected_tags(data: *mut BorTag, len: usize) {
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_mark_tls() -> FramePointer {
-    unsafe { ptr::replace(&raw mut __BSAN_TLS_MARKER, fp!().unwind(1)) }
+    let src = &raw mut __BSAN_TLS_MARKER;
+    let fp = unsafe { ptr::read(src) };
+    unsafe { ptr::write_volatile(&raw mut __BSAN_TLS_MARKER, fp!().unwind(1)) };
+    fp
+
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_validate_param_tls(len: usize) {
-    let grandparent = fp!().unwind(2);
     unsafe {
-        if grandparent == __BSAN_TLS_MARKER {
-            __BSAN_TLS_MARKER = FramePointer::null();
+        if fp!().unwind(2) == __BSAN_TLS_MARKER {
+            ptr::write_volatile(&raw mut __BSAN_TLS_MARKER, FramePointer::null());
         } else {
             __BSAN_PARAM_TLS[0..len].fill(Provenance::wildcard());
         }
@@ -529,7 +532,7 @@ extern "C" fn __bsan_validate_retval_tls(len: usize, prev_marker: FramePointer) 
         if __BSAN_TLS_MARKER != FramePointer::null() {
             __BSAN_RETVAL_TLS[0..len].fill(Provenance::wildcard());
         }
-        __BSAN_TLS_MARKER = prev_marker;
+        ptr::write_volatile(&raw mut __BSAN_TLS_MARKER, prev_marker);
     }
 }
 
@@ -602,10 +605,8 @@ unsafe extern "C-unwind" fn __bsan_shadow_load_vector(
     info_buffer: *mut *mut AllocInfo,
 ) {
     let ctx = unsafe { global_ctx() };
-    let heap = ctx.shadow_heap();
-
     let prov_vec = ProvenanceVecView::new(len, id_buffer, tag_buffer, info_buffer);
-    heap.load_consecutive(src.addr(), len, prov_vec);
+    ctx.shadow_heap().load_consecutive(src.addr(), len, prov_vec);
 }
 
 /// Load provenance values from the shadow heap into split arrays.
@@ -633,9 +634,9 @@ unsafe extern "C" fn __bsan_reserve_stack_slot() -> NonNull<AllocInfo> {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_destroy_stack_slot(slot: NonNull<AllocInfo>) {
-    let global_ctx = unsafe { global_ctx() };
+    let ctx = unsafe { global_ctx() };
     unsafe {
-        global_ctx.destroy_alloc_info(slot);
+        ctx.destroy_alloc_info(slot);
     }
 }
 
