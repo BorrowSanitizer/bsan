@@ -678,6 +678,11 @@ unsafe extern "C" fn __bsan_alloc_stack(
             bor_tag,
         ));
     }
+
+    #[cfg(not(test))]
+    unsafe {
+        global_ctx().store_stacktrace_for_allocation(alloc_id)
+    };
 }
 
 /// Marks the borrow tag for `prov` as "exposed," allowing it to be resolved to

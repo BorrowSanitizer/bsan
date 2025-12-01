@@ -9,8 +9,11 @@ unsafe extern "C" {
     fn __bsan_printStackTrace(stackId: u32);
 
     /// Captures the current stack trace, puts it into the stack depot and returns its ID
-    fn __bsan_StackDepotPut() -> u32;
+    fn __bsan_StackDepotPut(max_depth: u32) -> u32;
 }
+
+/// Maximum depth of captured stack traces as defined in sanitizer_common/sanitizer_stacktrace.h
+const K_STACK_TRACE_MAX: u32 = 255;
 
 /// Prints the stack trace corresponding to the given stack ID or the current stack trace
 pub(crate) fn print_stack_trace(stack_id: Option<StackTraceId>) {
@@ -22,8 +25,12 @@ pub(crate) fn print_stack_trace(stack_id: Option<StackTraceId>) {
     }
 }
 
-pub(crate) fn capture_current_stack_trace() -> StackTraceId {
-    unsafe { StackTraceId(__bsan_StackDepotPut()) }
+/// Captures the current stack trace, puts it into the stack depot and returns its ID
+/// Always inlined to not add an extra frame for this function to the stack.
+#[inline(always)]
+pub(crate) fn capture_current_stack_trace(max_depth: Option<u32>) -> StackTraceId {
+    let max_depth = max_depth.unwrap_or(K_STACK_TRACE_MAX);
+    unsafe { StackTraceId(__bsan_StackDepotPut(max_depth)) }
 }
 
 #[derive(Copy, Clone)]
@@ -38,8 +45,13 @@ impl StackTraceDepot {
         Self { alloc_stacks: BHashMap::new_in(hooks) }
     }
 
-    pub(crate) fn capture_stack(&mut self, alloc_id: AllocId) -> BorsanResult<()> {
-        let stack_id = unsafe { StackTraceId(__bsan_StackDepotPut()) };
+    pub(crate) fn capture_stack(
+        &mut self,
+        alloc_id: AllocId,
+        max_depth: Option<u32>,
+    ) -> BorsanResult<()> {
+        let max_depth = max_depth.unwrap_or(K_STACK_TRACE_MAX);
+        let stack_id = unsafe { StackTraceId(__bsan_StackDepotPut(max_depth)) };
         match self.alloc_stacks.insert(alloc_id, stack_id) {
             None => Ok(()),
             Some(_) => Err(ErrorInfo::Internal(crate::errors::InternalError::Unexpected(format!(

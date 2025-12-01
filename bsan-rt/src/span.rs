@@ -28,10 +28,15 @@ impl SpanData {
 pub struct Span(pub usize);
 
 impl Span {
+    /// Always inlined to not add an extra frame for this function to the stack.
+    /// This function should therefore only be called from the __bsan_write/read/retag functions.
+    /// TODO: maybe move the implementation into SpanData(?) and move this into lib.rs.
+    #[inline(always)]
     pub fn new() -> Span {
         #[cfg(not(test))]
         {
-            let stack_id = capture_current_stack_trace();
+            let depth = 2; // only capture the caller frame (2 necessary for addititional call to LLVM wrapper)
+            let stack_id = capture_current_stack_trace(Some(depth));
             return Span(stack_id.0 as usize);
         }
         Span(0)

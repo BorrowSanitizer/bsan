@@ -92,7 +92,7 @@ impl GlobalCtx {
 
     #[cfg(not(test))]
     pub fn store_stacktrace_for_allocation(&self, alloc_id: AllocId) {
-        match self.allocation_stack_depot.lock().capture_stack(alloc_id) {
+        match self.allocation_stack_depot.lock().capture_stack(alloc_id, None) {
             Ok(()) => {}
             Err(e) => {
                 self.handle_error(e);
