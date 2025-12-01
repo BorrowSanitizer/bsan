@@ -324,7 +324,6 @@ static __BSAN_NULL_PROVENANCE: Provenance = Provenance::null();
 #[derive(Debug)]
 #[repr(C)]
 pub struct AllocInfo {
-    /// An identifier for this allocation.
     pub alloc_id: AllocId,
     pub base_addr: FreeListAddrUnion,
     pub size: usize,
@@ -461,7 +460,6 @@ unsafe extern "C-unwind" fn __bsan_write(
     debug_bsan!("write", ptr, alloc_id, bor_tag, alloc_info);
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-
     BorrowTracker::new(prov, ptr, Some(access_size))
         .and_then(|bt| {
             bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Write, Span::new()))
@@ -508,33 +506,28 @@ extern "C" fn __bsan_remove_protected_tags(data: *mut BorTag, len: usize) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_mark_tls() -> usize {
-    unsafe {
-        __BSAN_RETVAL_TLS_MARKER = FramePointer::null();
-        ptr::replace(&raw mut __BSAN_PARAM_TLS_MARKER, FramePointer::current().prev().prev()).addr()
-    }
+extern "C" fn __bsan_mark_tls() -> FramePointer {
+    unsafe { ptr::replace(&raw mut __BSAN_TLS_MARKER, FramePointer::current().prev().prev()) }
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_validate_param_tls(len: usize) {
-    let caller = FramePointer::current().prev().prev().prev();
+    let grandparent = FramePointer::current().prev().prev().prev();
     unsafe {
-        if caller != __BSAN_PARAM_TLS_MARKER {
-            __BSAN_PARAM_TLS[0..len].fill(Provenance::wildcard());
-            __BSAN_PARAM_TLS_MARKER = FramePointer::null()
+        if grandparent == __BSAN_TLS_MARKER {
+            __BSAN_TLS_MARKER = FramePointer::null();
         } else {
-            __BSAN_RETVAL_TLS_MARKER = __BSAN_PARAM_TLS_MARKER;
+            __BSAN_PARAM_TLS[0..len].fill(Provenance::wildcard());
         }
     }
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_validate_retval_tls(len: usize, ptr: FramePointer) {
-    let current = FramePointer::current().prev();
+extern "C" fn __bsan_validate_retval_tls(len: usize, prev_marker: FramePointer) {
     unsafe {
-        if current != __BSAN_RETVAL_TLS_MARKER {
+        if __BSAN_TLS_MARKER != FramePointer::null() {
             __BSAN_RETVAL_TLS[0..len].fill(Provenance::wildcard());
-            __BSAN_PARAM_TLS_MARKER = ptr
+            __BSAN_TLS_MARKER = prev_marker;
         }
     }
 }
