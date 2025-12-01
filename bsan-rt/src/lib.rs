@@ -507,12 +507,12 @@ extern "C" fn __bsan_remove_protected_tags(data: *mut BorTag, len: usize) {
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_mark_tls() -> FramePointer {
-    unsafe { ptr::replace(&raw mut __BSAN_TLS_MARKER, FramePointer::current().prev().prev()) }
+    unsafe { ptr::replace(&raw mut __BSAN_TLS_MARKER, FramePointer::unwind(2)) }
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_validate_param_tls(len: usize) {
-    let grandparent = FramePointer::current().prev().prev().prev();
+    let grandparent = FramePointer::unwind(3);
     unsafe {
         if grandparent == __BSAN_TLS_MARKER {
             __BSAN_TLS_MARKER = FramePointer::null();

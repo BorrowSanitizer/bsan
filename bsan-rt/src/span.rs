@@ -70,6 +70,14 @@ impl FramePointer {
         self.0.addr()
     }
 
+    pub fn unwind(num: usize) -> Self {
+        let mut fp = Self::current();
+        for _ in 0..num {
+            fp = fp.prev();
+        }
+        fp
+    }
+
     #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
     pub fn current() -> Self {
         let fp: usize;
