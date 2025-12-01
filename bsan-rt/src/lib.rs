@@ -28,6 +28,7 @@ use borrow_tracker::*;
 
 mod diagnostics;
 
+#[macro_use]
 mod span;
 use span::Span;
 
@@ -507,12 +508,12 @@ extern "C" fn __bsan_remove_protected_tags(data: *mut BorTag, len: usize) {
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_mark_tls() -> FramePointer {
-    unsafe { ptr::replace(&raw mut __BSAN_TLS_MARKER, FramePointer::unwind(2)) }
+    unsafe { ptr::replace(&raw mut __BSAN_TLS_MARKER, fp!().unwind(1)) }
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_validate_param_tls(len: usize) {
-    let grandparent = FramePointer::unwind(3);
+    let grandparent = fp!().unwind(2);
     unsafe {
         if grandparent == __BSAN_TLS_MARKER {
             __BSAN_TLS_MARKER = FramePointer::null();
@@ -527,8 +528,8 @@ extern "C" fn __bsan_validate_retval_tls(len: usize, prev_marker: FramePointer) 
     unsafe {
         if __BSAN_TLS_MARKER != FramePointer::null() {
             __BSAN_RETVAL_TLS[0..len].fill(Provenance::wildcard());
-            __BSAN_TLS_MARKER = prev_marker;
         }
+        __BSAN_TLS_MARKER = prev_marker;
     }
 }
 
