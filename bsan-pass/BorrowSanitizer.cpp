@@ -884,7 +884,7 @@ private:
   bool needsTLSValidation(Function *Callee) {
     return !Callee ||
            (Callee->isDeclaration() || Callee->hasExternalLinkage() ||
-            Callee->hasExternalWeakLinkage());
+            Callee->hasExternalWeakLinkage() || Callee->hasAddressTaken());
   }
 
   using InstVisitor<BorrowSanitizerVisitor>::visit;
@@ -1239,7 +1239,12 @@ private:
 
   void visitIntToPtrInst(IntToPtrInst &I) {
     // Pointers converted from integers receive a wildcard provenance value.
-    setProvenance(&I, BS.InvalidProvenance);
+    // This is overly permissive, but certain certain Rust programs that do
+    // *not* use integer to pointer casts are still compiled to use `inttoptr`.
+    // Since these conversions are not present in MIR, Miri will not report an
+    // error in strict provenance mode, but we will have false positives unless
+    // we allow all accesses through these pointers.
+    setProvenance(&I, BS.WildcardProvenance);
   }
 
   void visitExtractValueInst(ExtractValueInst &EI) {
