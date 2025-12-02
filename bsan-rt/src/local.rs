@@ -19,6 +19,20 @@ pub static mut __BSAN_RETVAL_TLS: [Provenance; TLS_SIZE] = [Provenance::wildcard
 #[unsafe(no_mangle)]
 pub static mut __BSAN_PARAM_TLS: [Provenance; TLS_SIZE] = [Provenance::wildcard(); TLS_SIZE];
 
+
+/// The frame pointer of the caller of the last instrumented function that
+/// called an uninstrumented function. When we enter an instrumented function
+/// from a possibly uninstrumented function, we check to see if our "grandparent"
+/// frame pointer matches this value. If so, we can trust that the contents of the
+/// parameter provenance array (`__BSAN_PARAM_TLS`) are correctly initialized. 
+/// Otherwise, we clear the array. We set this marker to null to indicate to the
+/// caller that they can trust the contents of return value provenance array
+/// (`__BSAN_RETVAL_TLS`). If this marker is non-null when a function returns, 
+/// then we clear the array.
+#[thread_local]
+#[unsafe(no_mangle)]
+pub static mut __BSAN_TLS_MARKER: FramePointer = FramePointer::null();
+
 /// A stack-sized chunk of memory for containing protected
 /// borrow tags. Each thread has its own tag stack, which is
 /// initialized and deallocated by the LLVM wrapper. This variable
@@ -35,16 +49,3 @@ pub static mut __BSAN_PROT_TAG_STACK: *mut BorTag = ptr::null_mut();
 #[thread_local]
 #[unsafe(no_mangle)]
 pub static mut __BSAN_CURR_THREAD: *mut ffi::c_void = ptr::null_mut();
-
-/// The frame pointer of the caller of the last instrumented function that
-/// called an uninstrumented function. When we enter an instrumented function
-/// from a possibly uninstrumented function, we check to see if our "grandparent"
-/// frame pointer matches this value. If so, we can trust that the contents
-/// of `__BSAN_PARAM_TLS` are correct and initialized. Otherwise, we wipe the
-/// contents of `__BSAN_PARAM_TLS`. We set this marker to null to indicate to the
-/// caller that they can trust the contents of `__BSAN_RETVAL_TLS`. If this marker
-/// is non-null when a function returns, then we know to wipe the contents
-/// of `__BSAN_RETVAL_TLS`.
-#[thread_local]
-#[unsafe(no_mangle)]
-pub static mut __BSAN_TLS_MARKER: FramePointer = FramePointer::null();

@@ -322,8 +322,8 @@ static __BSAN_NULL_PROVENANCE: Provenance = Provenance::null();
 /// of a pointer's provenance with the value stored in its corresponding `AllocInfo` object. If the values
 /// do not match, then the access is invalid. If they do match, then we proceed to validate the access against
 /// the tree for the allocation.
-#[derive(Debug)]
 #[repr(C)]
+#[derive(Debug)]
 pub struct AllocInfo {
     pub alloc_id: AllocId,
     pub base_addr: FreeListAddrUnion,
@@ -441,7 +441,6 @@ unsafe extern "C-unwind" fn __bsan_read(
     debug_bsan!("read", ptr, alloc_id, bor_tag, alloc_info);
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-
     BorrowTracker::new(prov, ptr, Some(access_size))
         .and_then(|bt| {
             bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Read, Span::new()))
@@ -506,17 +505,33 @@ extern "C" fn __bsan_remove_protected_tags(data: *mut BorTag, len: usize) {
     global_ctx.remove_protected_tags(tags);
 }
 
+/// When we call a possibly uninstrumented function, we store our frame
+/// pointer in a thread-local variable, marking the "boundary" between instrumented
+/// and uninstrumented code. Once we enter a function that may have been called from
+/// uninstrumented code, we check to can check to see if our caller's frame pointer
+/// matches this boundary marker to determine whether we can trust our thread-local provenance
+/// arrays. 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_mark_tls() -> FramePointer {
-    let src = &raw mut __BSAN_TLS_MARKER;
-    let fp = unsafe { ptr::read(src) };
-    unsafe { ptr::write_volatile(&raw mut __BSAN_TLS_MARKER, fp!().unwind(1)) };
-    fp
+    let marker = &raw mut __BSAN_TLS_MARKER;
+    let prev_fp = unsafe { ptr::read(marker) };
+    // This needs to be volatile, otherwise it has a tendency to 
+    // be optimized away on `aarch64` platforms. We unwind once to
+    // get the frame pointer of the function that called into this 
+    // API endpoint.
+    unsafe { ptr::write_volatile(marker, fp!().unwind(1)) };
+    prev_fp
 }
-
+/// Clears the parameter provenance array if the frame pointer of the 
+/// caller of the current function does not match the boundary marker, indicating
+/// that we crossed into uninstrumented code. If it does match the boundary marker,
+/// then we reset the boundary marker to null, signaling that when we are back within
+/// the caller, we can trust the provenance array for the return value. 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_validate_param_tls(len: usize) {
     unsafe {
+        // Unwind twice: once to get the frame pointer of the function that called
+        // into this API endpoint, and then again to get its caller.
         if fp!().unwind(2) == __BSAN_TLS_MARKER {
             ptr::write_volatile(&raw mut __BSAN_TLS_MARKER, FramePointer::null());
         } else {
@@ -525,6 +540,11 @@ extern "C" fn __bsan_validate_param_tls(len: usize) {
     }
 }
 
+/// Ensures that the provenance array for the return value is valid. 
+/// If the boundary marker is null, then we called an instrumented function, so we
+/// can trust that the contents of the array is valid. Otherwise, we need to fill it
+/// with wildcard provenance values for each pointer being returned. We also need to 
+/// restore the boundary marker to the value it had before the function that was called.
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_validate_retval_tls(len: usize, prev_marker: FramePointer) {
     unsafe {
