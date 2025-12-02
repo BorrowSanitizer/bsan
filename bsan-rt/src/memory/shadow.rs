@@ -111,6 +111,7 @@ pub struct ShadowHeap<T> {
 }
 
 unsafe impl<T> Sync for ShadowHeap<T> {}
+unsafe impl<T> Send for ShadowHeap<T> {}
 
 impl<T: Sized + Default + Copy> ShadowHeap<T> {
     pub fn new(hooks: &BsanHooks, default: *const T) -> AllocResult<Self> {
@@ -150,6 +151,12 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
                     .cast::<L2Array<T>>();
 
                 *l2_table_ptr = l2_page.as_ptr();
+
+                // Track this L1 index for cleanup during drop
+                // SAFETY: This is not thread-safe - need synchronization for concurrent access
+                let l2_blocks_ptr = &self.l2_blocks as *const Vec<usize, BsanAllocHooks>
+                    as *mut Vec<usize, BsanAllocHooks>;
+                (*l2_blocks_ptr).push(idx.l1_index);
             }
             Ok(NonNull::new_unchecked(*l2_table_ptr))
         }
@@ -262,7 +269,7 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
                     for offset in 0..num_can_write {
                         ptr::write(
                             &raw mut (*l2_table_dst.as_ptr())[dst_index.l2_index + offset],
-                            T::default(),
+                            T::default(), // FIXME: we should use *self.default here?
                         );
                     }
                 }
@@ -324,6 +331,7 @@ mod tests {
     use super::*;
     use crate::memory::hooks::DEFAULT_HOOKS;
     use crate::memory::AllocResult;
+    extern crate test;
 
     #[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
     struct TestProv {
@@ -402,11 +410,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn memcpy() -> AllocResult<()> {
-        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV)?;
-
-        let max = 40;
+    fn inner_memcpy(heap: &ShadowHeap<TestProv>, max: usize) -> AllocResult<()> {
         let halfmax = max / 2;
         let three_quarter_max = max - (max / 4);
 
@@ -438,6 +442,31 @@ mod tests {
             assert_eq!(compare_prov, TestProv::default())
         }
         Ok(())
+    }
+
+    #[bench]
+    fn memcpy_bench(b: &mut test::Bencher) {
+        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV)
+            .expect("failed to create shadow heap");
+
+        b.iter(|| {
+            inner_memcpy(&heap, 1024 * 1024).unwrap();
+        });
+    }
+
+    #[bench]
+    fn create_memcpy_destroy(b: &mut test::Bencher) {
+        b.iter(|| {
+            let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV)
+                .expect("failed to create shadow heap");
+            inner_memcpy(&heap, 1024 * 1024).unwrap();
+        });
+    }
+
+    #[test]
+    fn memcpy() -> AllocResult<()> {
+        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV)?;
+        inner_memcpy(&heap, 40)
     }
 
     #[test]
@@ -479,5 +508,60 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    fn with_threads<F: Fn(u32) -> AllocResult<()> + Send + Sync + 'static>(
+        num_threads: u32,
+        test_fn: F,
+    ) -> AllocResult<()> {
+        use std::sync::Arc;
+        use std::thread;
+
+        let mut handles = vec![];
+        let test_fn = Arc::new(test_fn);
+
+        for thread_counter in 0..num_threads {
+            let test_fn = Arc::clone(&test_fn);
+            let handle = thread::spawn(move || -> AllocResult<()> {
+                test_fn(thread_counter)?;
+                Ok(())
+            });
+            handles.push(handle);
+        }
+
+        for (i, handle) in handles.into_iter().enumerate() {
+            handle.join().unwrap_or_else(|_| panic!("Thread {} panicked", i))?;
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_l2_allocation_same_entry() -> AllocResult<()> {
+        use std::sync::Arc;
+        let test_prov = &DEFAULT_TEST_PROV as *const TestProv;
+        let heap = Arc::new(ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, test_prov)?);
+        // Use the same L1 index to maximize collision probability
+        const BASE_ADDR: usize = 0x1000_0000;
+        const NUM_THREADS: u32 = 16;
+        let barrier = Arc::new(std::sync::Barrier::new(NUM_THREADS as usize));
+
+        with_threads(NUM_THREADS, move |thread_id| -> AllocResult<()> {
+            let aligned_offset = thread_id as usize * PTR_BYTES;
+            let addr = BASE_ADDR + aligned_offset;
+            let test_value = TestProv { value: thread_id as u128 };
+
+            // increase probability of collision
+            barrier.wait();
+
+            unsafe {
+                let dest = heap.get_dest(&DEFAULT_HOOKS, addr)?;
+                *dest.as_ptr() = test_value;
+
+                let loaded: TestProv = *heap.get_src(addr);
+                assert_eq!(loaded, test_value);
+            }
+            Ok(())
+        })
     }
 }
