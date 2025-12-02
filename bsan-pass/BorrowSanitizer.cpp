@@ -198,8 +198,8 @@ public:
   }
 
 private:
-  Value *offsetPointer(IRBuilder<> &IRB, const DataLayout *DL, Value *Pointer,
-                       Value *Offset) {
+  Value *addPointer(IRBuilder<> &IRB, const DataLayout *DL, Value *Pointer,
+                    Value *Offset) {
     if (ConstantInt *CI = dyn_cast<ConstantInt>(Offset))
       if (CI->isZero())
         return Pointer;
@@ -359,6 +359,7 @@ private:
   ProvenanceScalar getAllocaProvenance(BasicBlock *BB, AllocaInst *AI) {
     if (!shouldInstrumentAlloca(*AI))
       return BS.WildcardProvenance;
+
     if (SingletonAllocaMap.contains(AI)) {
       const auto [Size, Prov] = SingletonAllocaMap[AI];
       return Prov;
@@ -619,7 +620,7 @@ private:
         Value *CurrentArrayByteOffset =
             EntryIRB.CreateMul(TotalNumProvenanceValues, BS.ProvenanceSize);
         Value *CurrentArraySlot =
-            offsetPointer(EntryIRB, BS.DL, BS.ParamTLS, CurrentArrayByteOffset);
+            addPointer(EntryIRB, BS.DL, BS.ParamTLS, CurrentArrayByteOffset);
         ProvenancePointer Ptr =
             C.getPointerToProvenance(EntryIRB, BS.PL, CurrentArraySlot);
         ArgumentProvenance[&Arg].push_back(Ptr);
@@ -660,7 +661,6 @@ private:
 
   void patchPHINodes() {
     IRBuilder<> EntryIRB(FnPrologueEnd);
-
     for (auto &[PN, Prov, Idx] : ProvPHINodes) {
       for (auto [V, IncomingBlock] :
            llvm::zip(PN->incoming_values(), PN->blocks())) {
@@ -679,7 +679,6 @@ private:
       PHINode *InfoNode = cast<PHINode>(Prov.Info);
       Worklist.push_back(InfoNode);
       for (BasicBlock *IncomingBlock : predecessors(BB)) {
-
         ProvenanceScalar IncomingProv =
             assertAllocaProvenance(IncomingBlock, AI);
         IdNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Id);
@@ -850,32 +849,35 @@ private:
     RetagVec.push_back(&CB);
     IRBuilder<> IRB(&CB);
     ProvenanceScalar Prov = assertProvenanceScalar(CB.getOperand(0));
-    Value *NewTag = newBorrowTag(IRB);
-
-    Value *ImArray = CB.getOperand(4);
-    Value *ImArrayLen = BS.Zero;
-    if (GlobalVariable *GV = dyn_cast<GlobalVariable>(ImArray)) {
-      if (ConstantDataArray *CA =
-              dyn_cast<ConstantDataArray>(GV->getInitializer())) {
-        uint64_t NumPointerSizedPairs =
-            CA->getNumElements() / (BS.DL->getTypeAllocSize(BS.IntptrTy) * 2);
-        ImArrayLen = ConstantInt::get(BS.IntptrTy, NumPointerSizedPairs);
+    if (Prov != BS.WildcardProvenance) {
+      Value *NewTag = newBorrowTag(IRB);
+      Value *ImArray = CB.getOperand(4);
+      Value *ImArrayLen = BS.Zero;
+      if (GlobalVariable *GV = dyn_cast<GlobalVariable>(ImArray)) {
+        if (ConstantDataArray *CA =
+                dyn_cast<ConstantDataArray>(GV->getInitializer())) {
+          uint64_t NumPointerSizedPairs =
+              CA->getNumElements() / (BS.DL->getTypeAllocSize(BS.IntptrTy) * 2);
+          ImArrayLen = ConstantInt::get(BS.IntptrTy, NumPointerSizedPairs);
+        }
       }
-    }
 
-    IRB.CreateCall(BS.BsanFuncRetag,
-                   {CB.getOperand(0), CB.getOperand(1), CB.getOperand(2),
-                    Prov.Id, Prov.Tag, Prov.Info, NewTag, ImArray, ImArrayLen});
-    Prov.Tag = NewTag;
+      IRB.CreateCall(BS.BsanFuncRetag,
+                     {CB.getOperand(0), CB.getOperand(1), CB.getOperand(2),
+                      Prov.Id, Prov.Tag, Prov.Info, NewTag, ImArray,
+                      ImArrayLen});
 
-    if (isFnEntryRetag(&CB)) {
-      // Offset to the next tag slot, and store the protected tag there.
-      Value *TagSize =
-          IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeAllocSize(BS.IntptrTy));
-      Value *PrevSlot = IRB.CreateLoad(BS.PtrTy, BS.TagStack, true);
-      Value *TagSlot = subtractPointer(IRB, BS.DL, PrevSlot, TagSize);
-      IRB.CreateStore(NewTag, TagSlot, true);
-      IRB.CreateStore(TagSlot, BS.TagStack, true);
+      Prov.Tag = NewTag;
+
+      if (isFnEntryRetag(&CB)) {
+        // Offset to the next tag slot, and store the protected tag there.
+        Value *TagSize = IRB.CreateTypeSize(
+            BS.IntptrTy, BS.DL->getTypeAllocSize(BS.IntptrTy));
+        Value *PrevSlot = IRB.CreateLoad(BS.PtrTy, BS.TagStack, true);
+        Value *TagSlot = subtractPointer(IRB, BS.DL, PrevSlot, TagSize);
+        IRB.CreateStore(NewTag, TagSlot, true);
+        IRB.CreateStore(TagSlot, BS.TagStack, true);
+      }
     }
 
     setProvenance(&CB, Prov);
@@ -928,7 +930,7 @@ private:
       SmallVector<ProvenanceComponent> *Components =
           getProvenanceComponents(Before, Arg->getType());
       for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
-        Value *Slot = offsetPointer(Before, BS.DL, BS.ParamTLS, ParamByteWidth);
+        Value *Slot = addPointer(Before, BS.DL, BS.ParamTLS, ParamByteWidth);
 
         Provenance ProvSrc = assertProvenance(Before, Comp, {Arg, Idx});
         ProvenancePointer Dest =
@@ -983,8 +985,7 @@ private:
       // array is populated with default values.
       Value *RetvalByteWidth = BS.Zero;
       for (const auto &[Idx, Comp] : llvm::enumerate(*ReturnComponents)) {
-        Value *Slot =
-            offsetPointer(After, BS.DL, BS.RetvalTLS, RetvalByteWidth);
+        Value *Slot = addPointer(After, BS.DL, BS.RetvalTLS, RetvalByteWidth);
 
         ProvenancePointer Ptr = Comp.getPointerToProvenance(After, BS.PL, Slot);
         setProvenance({&CB, Idx}, Provenance::load(After, BS.PL, Ptr));
@@ -1164,14 +1165,20 @@ private:
   void insertReadCheck(IRBuilder<> &IRB, Instruction *Inst, Value *Ptr,
                        Value *Size) {
     ProvenanceScalar Prov = assertProvenanceScalar(Ptr);
-    IRB.CreateCall(BS.BsanFuncRead, {Ptr, Size, Prov.Id, Prov.Tag, Prov.Info});
+    if (Prov != BS.WildcardProvenance) {
+      IRB.CreateCall(BS.BsanFuncRead,
+                     {Ptr, Size, Prov.Id, Prov.Tag, Prov.Info});
+    }
   }
 
   // Inserts a check to validate a write access.
   void insertWriteCheck(IRBuilder<> &IRB, Instruction *Inst, Value *Ptr,
                         Value *Size) {
     ProvenanceScalar Prov = assertProvenanceScalar(Ptr);
-    IRB.CreateCall(BS.BsanFuncWrite, {Ptr, Size, Prov.Id, Prov.Tag, Prov.Info});
+    if (Prov != BS.WildcardProvenance) {
+      IRB.CreateCall(BS.BsanFuncWrite,
+                     {Ptr, Size, Prov.Id, Prov.Tag, Prov.Info});
+    }
   }
 
   void visitLoadInst(LoadInst &LI) {
@@ -1188,7 +1195,7 @@ private:
     Value *Base = LI.getPointerOperand();
     for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
       ShadowFootprint Footprint = Comp.Footprint;
-      Value *ObjAddr = offsetPointer(IRB, BS.DL, Base, Footprint.ByteOffset);
+      Value *ObjAddr = addPointer(IRB, BS.DL, Base, Footprint.ByteOffset);
       Provenance Prov = loadProvenanceFromShadow(IRB, Comp, ObjAddr);
       setProvenance({&LI, Idx}, Prov);
     }
@@ -1211,7 +1218,7 @@ private:
 
     for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
       ShadowFootprint Footprint = Comp.Footprint;
-      Value *ObjAddr = offsetPointer(IRB, BS.DL, Base, Footprint.ByteOffset);
+      Value *ObjAddr = addPointer(IRB, BS.DL, Base, Footprint.ByteOffset);
 
       Provenance Prov;
       ProvenanceKey Key = {SI.getValueOperand(), Idx};
@@ -1444,7 +1451,7 @@ private:
 
       Value *RetvalByteWidth = BS.Zero;
       for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
-        Value *Slot = offsetPointer(IRB, BS.DL, BS.RetvalTLS, RetvalByteWidth);
+        Value *Slot = addPointer(IRB, BS.DL, BS.RetvalTLS, RetvalByteWidth);
 
         Provenance Prov = assertProvenance(IRB, Comp, {RetVal, Idx});
         ProvenancePointer Dest =
@@ -1467,7 +1474,7 @@ private:
 
       Value *RetvalByteWidth = BS.Zero;
       for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
-        Value *Slot = offsetPointer(IRB, BS.DL, BS.RetvalTLS, RetvalByteWidth);
+        Value *Slot = addPointer(IRB, BS.DL, BS.RetvalTLS, RetvalByteWidth);
 
         Provenance Prov = assertProvenance(IRB, Comp, {RetVal, Idx});
         ProvenancePointer Dest =
