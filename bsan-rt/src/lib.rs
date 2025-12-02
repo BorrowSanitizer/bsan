@@ -510,23 +510,23 @@ extern "C" fn __bsan_remove_protected_tags(data: *mut BorTag, len: usize) {
 /// and uninstrumented code. Once we enter a function that may have been called from
 /// uninstrumented code, we check to can check to see if our caller's frame pointer
 /// matches this boundary marker to determine whether we can trust our thread-local provenance
-/// arrays. 
+/// arrays.
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_mark_tls() -> FramePointer {
     let marker = &raw mut __BSAN_TLS_MARKER;
     let prev_fp = unsafe { ptr::read(marker) };
-    // This needs to be volatile, otherwise it has a tendency to 
+    // This needs to be volatile, otherwise it has a tendency to
     // be optimized away on `aarch64` platforms. We unwind once to
-    // get the frame pointer of the function that called into this 
+    // get the frame pointer of the function that called into this
     // API endpoint.
     unsafe { ptr::write_volatile(marker, fp!().unwind(1)) };
     prev_fp
 }
-/// Clears the parameter provenance array if the frame pointer of the 
+/// Clears the parameter provenance array if the frame pointer of the
 /// caller of the current function does not match the boundary marker, indicating
 /// that we crossed into uninstrumented code. If it does match the boundary marker,
 /// then we reset the boundary marker to null, signaling that when we are back within
-/// the caller, we can trust the provenance array for the return value. 
+/// the caller, we can trust the provenance array for the return value.
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_validate_param_tls(len: usize) {
     unsafe {
@@ -540,10 +540,10 @@ extern "C" fn __bsan_validate_param_tls(len: usize) {
     }
 }
 
-/// Ensures that the provenance array for the return value is valid. 
+/// Ensures that the provenance array for the return value is valid.
 /// If the boundary marker is null, then we called an instrumented function, so we
 /// can trust that the contents of the array is valid. Otherwise, we need to fill it
-/// with wildcard provenance values for each pointer being returned. We also need to 
+/// with wildcard provenance values for each pointer being returned. We also need to
 /// restore the boundary marker to the value it had before the function that was called.
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_validate_retval_tls(len: usize, prev_marker: FramePointer) {

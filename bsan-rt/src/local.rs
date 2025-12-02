@@ -19,15 +19,14 @@ pub static mut __BSAN_RETVAL_TLS: [Provenance; TLS_SIZE] = [Provenance::wildcard
 #[unsafe(no_mangle)]
 pub static mut __BSAN_PARAM_TLS: [Provenance; TLS_SIZE] = [Provenance::wildcard(); TLS_SIZE];
 
-
 /// The frame pointer of the caller of the last instrumented function that
 /// called an uninstrumented function. When we enter an instrumented function
 /// from a possibly uninstrumented function, we check to see if our "grandparent"
 /// frame pointer matches this value. If so, we can trust that the contents of the
-/// parameter provenance array (`__BSAN_PARAM_TLS`) are correctly initialized. 
+/// parameter provenance array (`__BSAN_PARAM_TLS`) are correctly initialized.
 /// Otherwise, we clear the array. We set this marker to null to indicate to the
 /// caller that they can trust the contents of return value provenance array
-/// (`__BSAN_RETVAL_TLS`). If this marker is non-null when a function returns, 
+/// (`__BSAN_RETVAL_TLS`). If this marker is non-null when a function returns,
 /// then we clear the array.
 #[thread_local]
 #[unsafe(no_mangle)]
