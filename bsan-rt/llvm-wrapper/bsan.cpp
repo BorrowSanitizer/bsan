@@ -94,12 +94,16 @@ __bsan_printStackTrace(u32 stackId) {
   stack.Print();
 }
 
+// Get the top frame PC address from the current PC
+// Returns the previous instruction PC (adjusted for return addresses)
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_GetTopFramePC(uptr pc) {
+  return StackTrace::GetPreviousInstructionPc(pc);
+}
+
 // FIXME: this function should only be used internally and does not need to be
 // visible in the binary. But we need to make it availabel to bsan-rt-core
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE u32
-__bsan_StackDepotPut(u32 max_depth) {
-  // Capture current stack trace
-  GET_CURRENT_PC_BP; // This macro defines 'pc' and 'bp' variables
+__bsan_StackDepotPut(uptr pc, uptr bp, u32 max_depth) {
   BufferedStackTrace stack;
   stack.Unwind(pc, bp, /*context=*/nullptr, /*request_fast=*/true,
                /*max_depth=*/max_depth);

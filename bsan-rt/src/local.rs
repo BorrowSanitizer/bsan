@@ -1,6 +1,5 @@
 use core::{ffi, ptr};
 
-use crate::span::FramePointer;
 use crate::{BorTag, Provenance};
 
 /// The number of `Provenance` values stored in the thread
@@ -44,7 +43,7 @@ pub static mut __BSAN_CURR_THREAD: *mut ffi::c_void = ptr::null_mut();
 /// overwrite it with wildcard values and set this pointer to null.
 #[thread_local]
 #[unsafe(no_mangle)]
-pub static mut __BSAN_PARAM_TLS_MARKER: FramePointer = FramePointer::null();
+pub static mut __BSAN_PARAM_TLS_MARKER: usize = 0;
 
 /// After validating the parameter TLS, we set this marker equal to the value of
 /// the parameter TLS marker. This will be the null frame pointer if we came from
@@ -55,4 +54,4 @@ pub static mut __BSAN_PARAM_TLS_MARKER: FramePointer = FramePointer::null();
 /// trusted. If not, then we overwrite the return value TLS with wildcard values.
 #[thread_local]
 #[unsafe(no_mangle)]
-pub static mut __BSAN_RETVAL_TLS_MARKER: FramePointer = FramePointer::null();
+pub static mut __BSAN_RETVAL_TLS_MARKER: usize = 0;

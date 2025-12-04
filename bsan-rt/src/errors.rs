@@ -66,16 +66,7 @@ impl Display for UBInfo {
             UBInfo::GlobalFree(..) => write!(f, "{:?}", self),
             UBInfo::StackFree(..) => write!(f, "{:?}", self),
             UBInfo::AliasingViolation(error) => {
-                if let Some(event) = error.conflicting_info.history.last_event() {
-                    let span = event.span;
-                    if let Some(_fp) = span.find_fp() {
-                        write!(f, "fp found, error: {:?}", error)
-                    } else {
-                        write!(f, "fp not found, error: {:?}", error)
-                    }
-                } else {
-                    write!(f, "no event found, error: {:?}", error)
-                }
+                write!(f, "AliasingViolation: {:?}", error)
             }
         }
     }

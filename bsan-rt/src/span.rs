@@ -3,77 +3,33 @@ use core::ptr;
 
 use cfg_if::cfg_if;
 
-#[cfg(not(test))]
-use crate::sanitizer_common_interface::capture_current_stack_trace;
+use crate::SpanData;
 
 unsafe extern "C" {
     // Symbol defined by the linker
     unsafe static __executable_start: [u8; 0];
 }
 
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub struct SpanData(usize);
-
-impl SpanData {
-    pub fn new() -> SpanData {
-        SpanData(0)
-    }
-
-    pub fn resolve_from(_span: Span) -> Self {
-        todo!()
-    }
-}
-
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub struct Span(pub usize);
+#[derive(Copy, Clone, Debug)]
+pub struct Span(SpanData);
 
 impl Span {
-    /// Always inlined to not add an extra frame for this function to the stack.
-    /// This function should therefore only be called from the __bsan_write/read/retag functions.
-    /// TODO: maybe move the implementation into SpanData(?) and move this into lib.rs.
-    #[inline(always)]
-    pub fn new() -> Span {
-        #[cfg(not(test))]
-        {
-            let depth = 2; // only capture the caller frame (2 necessary for addititional call to LLVM wrapper)
-            let stack_id = capture_current_stack_trace(Some(depth));
-            return Span(stack_id.0 as usize);
-        }
-        Span(0)
+    pub fn new(span_data: SpanData) -> Span {
+        Span(span_data)
     }
-    // Returns a DummySpanData with inner zero
-    pub fn data(self) -> Span {
-        Span::new()
+    pub fn span_data(self) -> SpanData {
+        self.0
     }
-    // Finds a frame pointer from the current call stack walking backwards
-    pub fn find_fp(&self) -> Option<FramePointer> {
-        let mut fp = FramePointer::current();
-        loop {
-            let prev = fp.prev();
-            if fp == prev {
-                break;
-            }
-            let ip = fp.ip();
-            if ip == *self {
-                return Some(fp);
-            }
-            fp = prev;
-        }
-        None
+    pub fn addr(self) -> usize {
+        self.0.ip()
+    }
+    pub fn print_stack_trace(&self) {
+        self.0.print_stack_trace();
     }
 }
 
-impl From<SpanData> for Span {
-    fn from(val: SpanData) -> Self {
-        Span(val.0)
-    }
-}
+/*
 
-impl From<Span> for SpanData {
-    fn from(val: Span) -> Self {
-        SpanData(val.0)
-    }
-}
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct FramePointer(*const usize);
@@ -138,3 +94,5 @@ impl Iterator for FramePointer {
         }
     }
 }
+
+     */

@@ -1,7 +1,7 @@
 use crate::errors::{BorsanResult, ErrorInfo};
 use crate::global::BHashMap;
 use crate::memory::hooks::BsanAllocHooks;
-use crate::AllocId;
+use crate::{span, AllocId, SpanData};
 
 unsafe extern "C" {
     fn __bsan_printCurrentStackTrace();
@@ -9,7 +9,10 @@ unsafe extern "C" {
     fn __bsan_printStackTrace(stackId: u32);
 
     /// Captures the current stack trace, puts it into the stack depot and returns its ID
-    fn __bsan_StackDepotPut(max_depth: u32) -> u32;
+    fn __bsan_StackDepotPut(pc: usize, bp: usize, max_depth: u32) -> u32;
+
+    /// Gets the top frame PC address from a stack trace ID
+    fn __bsan_GetTopFramePC(pc: usize) -> usize;
 }
 
 /// Maximum depth of captured stack traces as defined in sanitizer_common/sanitizer_stacktrace.h
@@ -26,15 +29,24 @@ pub(crate) fn print_stack_trace(stack_id: Option<StackTraceId>) {
 }
 
 /// Captures the current stack trace, puts it into the stack depot and returns its ID
-/// Always inlined to not add an extra frame for this function to the stack.
-#[inline(always)]
-pub(crate) fn capture_current_stack_trace(max_depth: Option<u32>) -> StackTraceId {
+pub(crate) fn capture_current_stack_trace(
+    pc: usize,
+    bp: usize,
+    max_depth: Option<u32>,
+) -> StackTraceId {
     let max_depth = max_depth.unwrap_or(K_STACK_TRACE_MAX);
-    unsafe { StackTraceId(__bsan_StackDepotPut(max_depth)) }
+    unsafe { StackTraceId(__bsan_StackDepotPut(pc, bp, max_depth)) }
 }
 
-#[derive(Copy, Clone)]
+/// Gets the top frame PC address from this stack trace.
+/// This is the adjusted PC address as stored by sanitizer_common.
+pub(crate) fn get_top_frame_pc(pc: usize) -> usize {
+    unsafe { __bsan_GetTopFramePC(pc) }
+}
+
+#[derive(Copy, Clone, Debug)]
 pub(crate) struct StackTraceId(pub(crate) u32);
+
 pub(crate) struct StackTraceDepot {
     /// map from allocation ID to its stack ID
     alloc_stacks: BHashMap<AllocId, StackTraceId>,
@@ -49,9 +61,11 @@ impl StackTraceDepot {
         &mut self,
         alloc_id: AllocId,
         max_depth: Option<u32>,
+        span_data: SpanData,
     ) -> BorsanResult<()> {
         let max_depth = max_depth.unwrap_or(K_STACK_TRACE_MAX);
-        let stack_id = unsafe { StackTraceId(__bsan_StackDepotPut(max_depth)) };
+        let stack_id =
+            unsafe { StackTraceId(__bsan_StackDepotPut(span_data.ip, span_data.fp.fp, max_depth)) };
         match self.alloc_stacks.insert(alloc_id, stack_id) {
             None => Ok(()),
             Some(_) => Err(ErrorInfo::Internal(crate::errors::InternalError::Unexpected(format!(

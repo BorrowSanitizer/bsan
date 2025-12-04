@@ -91,8 +91,8 @@ impl GlobalCtx {
     }
 
     #[cfg(not(test))]
-    pub fn store_stacktrace_for_allocation(&self, alloc_id: AllocId) {
-        match self.allocation_stack_depot.lock().capture_stack(alloc_id, None) {
+    pub fn store_stacktrace_for_allocation(&self, alloc_id: AllocId, span_data: SpanData) {
+        match self.allocation_stack_depot.lock().capture_stack(alloc_id, None, span_data) {
             Ok(()) => {}
             Err(e) => {
                 self.handle_error(e);
@@ -108,8 +108,6 @@ impl GlobalCtx {
         #[cfg(not(test))]
         if let ErrorInfo::UndefinedBehavior(ub_info) = info {
             crate::eprintln!("BSAN detected undefined behavior: {ub_info:?}\n\n");
-            crate::eprintln!("Caused by\n\n");
-            sanitizer_common_interface::print_stack_trace(None);
             if let Some(alloc_id) = ub_info.get_alloc_id() {
                 if let Ok(stack_id) = self.allocation_stack_depot.lock().print_trace(&alloc_id) {
                     crate::eprintln!("{:?} previously allocated here:\n", alloc_id);
@@ -123,18 +121,15 @@ impl GlobalCtx {
                 crate::eprintln!("Aliasing violation details: {:#?}\n", tree_error);
                 let history = &tree_error.conflicting_info.history;
                 let (created_span, created_perm) = history.created_at();
-                crate::eprintln!("Borrow created (with {:?}) at \n", created_perm);
-                sanitizer_common_interface::print_stack_trace(Some(
-                    sanitizer_common_interface::StackTraceId(
-                        u32::try_from(created_span.0).unwrap(),
-                    ),
-                ));
+                crate::eprintln!(
+                    "Borrow created (with {:?}) at 0x{:x}\n",
+                    created_perm,
+                    created_span.addr()
+                );
+                created_span.print_stack_trace();
                 tree_error.conflicting_info.history.events_iter().for_each(|event| {
-                    crate::eprintln!("  Stack trace for {:?}\n", event);
-                    let stack_id = sanitizer_common_interface::StackTraceId(
-                        u32::try_from(event.span.0).unwrap(),
-                    );
-                    sanitizer_common_interface::print_stack_trace(Some(stack_id));
+                    crate::eprintln!("{:?} happened at 0x{:x}\n", event, event.span.addr());
+                    event.span.print_stack_trace();
                 });
             }
         }
