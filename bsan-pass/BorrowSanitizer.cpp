@@ -971,11 +971,10 @@ private:
         return;
       }
     }
+    Value *NumProvenanceValues = BS.Zero;
+    SmallVector<std::pair<unsigned, ProvenancePointer>> ProvenancePointers;
 
     if (CB.getType()->isSized()) {
-      Value *RetvalByteWidth = BS.Zero;
-      Value *NumProvenanceValues = BS.Zero;
-      SmallVector<std::pair<unsigned, ProvenancePointer>> ProvenancePointers;
       // Unsized return types do not have provenance, so we can skip handling
       // the return array.
       SmallVector<ProvenanceComponent> *ReturnComponents =
@@ -986,7 +985,7 @@ private:
       // provenance components that we expect to be here. If the function that
       // we are calling is uninstrumented, then we need ensure that the return
       // array is populated with default values.
-
+      Value *RetvalByteWidth = BS.Zero;
       for (const auto &[Idx, Comp] : llvm::enumerate(*ReturnComponents)) {
         Value *Slot = addPointer(After, BS.DL, BS.RetvalTLS, RetvalByteWidth);
 
@@ -999,20 +998,19 @@ private:
         NumProvenanceValues =
             Before.CreateAdd(NumProvenanceValues, Comp.NumProvenanceValues);
       }
-
-      // We need to validate thread-local storage before we load provenance
-      // values from it, but we also need to know the number of provenance
-      // values associated with the return value to perform initialization.
-      if (needsTLSValidation(Callee)) {
-        Value *Prev = Before.CreateCall(BS.BsanFuncMarkTLS, {});
-        if (NumProvenanceValues != BS.Zero) {
-          After.CreateCall(BS.BsanFuncValidateRetvalTLS,
-                           {NumProvenanceValues, Prev});
-        }
+    }
+    // We need to validate thread-local storage before we load provenance
+    // values from it, but we also need to know the number of provenance
+    // values associated with the return value to perform initialization.
+    if (needsTLSValidation(Callee)) {
+      Value *Prev = Before.CreateCall(BS.BsanFuncMarkTLS, {});
+      if (NumProvenanceValues != BS.Zero) {
+        After.CreateCall(BS.BsanFuncValidateRetvalTLS,
+                         {NumProvenanceValues, Prev});
       }
-      for (auto &[Idx, Ptr] : ProvenancePointers) {
-        setProvenance({&CB, Idx}, Provenance::load(After, BS.PL, Ptr));
-      }
+    }
+    for (auto &[Idx, Ptr] : ProvenancePointers) {
+      setProvenance({&CB, Idx}, Provenance::load(After, BS.PL, Ptr));
     }
   }
 
