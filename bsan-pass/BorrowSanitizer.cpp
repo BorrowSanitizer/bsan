@@ -972,6 +972,8 @@ private:
       }
     }
     Value *NumProvenanceValues = BS.Zero;
+    SmallVector<std::pair<unsigned, ProvenancePointer>> ProvenancePointers;
+
     if (CB.getType()->isSized()) {
       // Unsized return types do not have provenance, so we can skip handling
       // the return array.
@@ -988,7 +990,7 @@ private:
         Value *Slot = addPointer(After, BS.DL, BS.RetvalTLS, RetvalByteWidth);
 
         ProvenancePointer Ptr = Comp.getPointerToProvenance(After, BS.PL, Slot);
-        setProvenance({&CB, Idx}, Provenance::load(After, BS.PL, Ptr));
+        ProvenancePointers.push_back({Idx, Ptr});
 
         Value *ByteWidth =
             Before.CreateMul(Comp.NumProvenanceValues, BS.ProvenanceSize);
@@ -997,12 +999,18 @@ private:
             Before.CreateAdd(NumProvenanceValues, Comp.NumProvenanceValues);
       }
     }
+    // We need to validate thread-local storage before we load provenance
+    // values from it, but we also need to know the number of provenance
+    // values associated with the return value to perform initialization.
     if (needsTLSValidation(Callee)) {
       Value *Prev = Before.CreateCall(BS.BsanFuncMarkTLS, {});
       if (NumProvenanceValues != BS.Zero) {
         After.CreateCall(BS.BsanFuncValidateRetvalTLS,
                          {NumProvenanceValues, Prev});
       }
+    }
+    for (auto &[Idx, Ptr] : ProvenancePointers) {
+      setProvenance({&CB, Idx}, Provenance::load(After, BS.PL, Ptr));
     }
   }
 
