@@ -4,6 +4,8 @@ use core::ops::{BitAnd, Shr};
 use core::ptr::NonNull;
 use core::{mem, ptr};
 
+use spin::RwLock;
+
 use super::hooks::{BsanAllocHooks, BsanHooks, MUnmap};
 use super::{mmap, munmap};
 use crate::memory::{AllocResult, InternalAllocKind};
@@ -53,7 +55,7 @@ pub struct TableIndex {
 }
 
 type L2Array<T> = [T; L2_LEN];
-type L1Array<T> = [*mut L2Array<T>; L1_LEN];
+type L1Array<T> = [RwLock<*mut L2Array<T>>; L1_LEN];
 
 impl TableIndex {
     fn new(address: usize) -> Self {
@@ -103,7 +105,6 @@ impl TableIndex {
 #[repr(C)]
 #[derive(Debug)]
 pub struct ShadowHeap<T> {
-    // First level table containing pointers to second level tables
     table: NonNull<L1Array<T>>,
     default: *const T,
     munmap: MUnmap,
@@ -118,8 +119,18 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
         unsafe {
             let table = {
                 let size_bytes = NonZero::new_unchecked(mem::size_of::<L1Array<T>>());
-                mmap(hooks.mmap_ptr, InternalAllocKind::ShadowHeap, size_bytes)?
-                    .cast::<L1Array<T>>()
+                let table_ptr = mmap(hooks.mmap_ptr, InternalAllocKind::ShadowHeap, size_bytes)?
+                    .cast::<L1Array<T>>();
+
+                /* TODO: Initialization might be unnecessary if we can guarantee that
+                zeroed memory is returned by mmap and interpreted as correct RwLock.
+                */
+                // Initialize all L1 entries with RwLock-wrapped null pointers
+                for i in 0..L1_LEN {
+                    ptr::write(&raw mut (*table_ptr.as_ptr())[i], RwLock::new(ptr::null_mut()));
+                }
+
+                table_ptr
             };
             Ok(Self {
                 table,
@@ -133,32 +144,39 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
     #[inline]
     fn get_l2(&self, idx: TableIndex) -> Option<NonNull<L2Array<T>>> {
         unsafe {
-            let l2_page = (*self.table.as_ptr())[idx.l1_index];
-            if l2_page.is_null() {
-                None
-            } else {
-                Some(NonNull::new_unchecked(l2_page))
-            }
+            let l1_entry = &(*self.table.as_ptr())[idx.l1_index];
+            let read_guard = l1_entry.read();
+            let l2_page_ptr = *read_guard;
+            NonNull::new(l2_page_ptr)
         }
     }
 
     fn ensure_l2(&self, hooks: &BsanHooks, idx: TableIndex) -> AllocResult<NonNull<L2Array<T>>> {
         unsafe {
-            let l2_table_ptr: *mut *mut L2Array<T> = &raw mut (*self.table.as_ptr())[idx.l1_index];
-            if (*l2_table_ptr).is_null() {
-                let size_bytes = NonZero::new_unchecked(mem::size_of::<T>() * L2_LEN);
-                let l2_page = mmap(hooks.mmap_ptr, InternalAllocKind::ShadowHeap, size_bytes)?
-                    .cast::<L2Array<T>>();
+            let l1_entry = &(*self.table.as_ptr())[idx.l1_index];
 
-                *l2_table_ptr = l2_page.as_ptr();
-
-                // Track this L1 index for cleanup during drop
-                // SAFETY: This is not thread-safe - need synchronization for concurrent access
-                let l2_blocks_ptr = &self.l2_blocks as *const Vec<usize, BsanAllocHooks>
-                    as *mut Vec<usize, BsanAllocHooks>;
-                (*l2_blocks_ptr).push(idx.l1_index);
+            // Fast path: check with read lock (non-blocking for readers)
+            let read_guard = l1_entry.upgradeable_read();
+            let l2_ptr = *read_guard;
+            if !l2_ptr.is_null() {
+                return Ok(NonNull::new_unchecked(l2_ptr));
             }
-            Ok(NonNull::new_unchecked(*l2_table_ptr))
+
+            // Slow path: upgrade to write lock for mmap allocation
+            // With an upgradable lock we don't need to double-check that l2_ptr is still null because the lock prevents other writers.
+            let mut write_guard = read_guard.upgrade();
+            let size_bytes = NonZero::new_unchecked(mem::size_of::<T>() * L2_LEN);
+            let l2_page = mmap(hooks.mmap_ptr, InternalAllocKind::ShadowHeap, size_bytes)?
+                .cast::<L2Array<T>>();
+
+            *write_guard = l2_page.as_ptr();
+
+            // Track this L1 index for cleanup during drop
+            // SAFETY: Now thread-safe with write lock protection
+            let l2_blocks_ptr = &self.l2_blocks as *const Vec<usize, BsanAllocHooks>
+                as *mut Vec<usize, BsanAllocHooks>;
+            (*l2_blocks_ptr).push(idx.l1_index);
+            Ok(NonNull::new_unchecked(*write_guard))
         }
     }
 
@@ -306,14 +324,18 @@ impl<T> Drop for ShadowHeap<T> {
         unsafe {
             // Free all L2 tables
             for i in self.l2_blocks.drain(..) {
-                let l2_table = (*self.table.as_ptr())[i];
+                let l1_entry = &(*self.table.as_ptr())[i];
+                let mut l1_entry_guard = l1_entry.write();
+                let l2_table = *l1_entry_guard;
                 if !l2_table.is_null() {
                     let l2_table_size = NonZero::new_unchecked(mem::size_of::<T>() * L2_LEN);
                     let l2_table = NonNull::new_unchecked(l2_table);
                     munmap(self.munmap, InternalAllocKind::ShadowHeap, l2_table, l2_table_size)
                         .expect("failed to unmap block");
+                    *l1_entry_guard = ptr::null_mut();
                 }
             }
+            // Free the L1 table (RwLocks will be dropped automatically)
             let size_bytes = NonZero::new_unchecked(mem::size_of::<L1Array<T>>());
             munmap::<L1Array<T>>(
                 self.munmap,
