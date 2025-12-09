@@ -5,6 +5,7 @@ use core::ptr::NonNull;
 
 use bsan_shared::ProtectorKind;
 use hashbrown::{DefaultHashBuilder, HashMap};
+use spin::MutexGuard;
 
 use crate::errors::ErrorInfo;
 use crate::memory::hooks::{BsanAllocHooks, BsanHooks};
@@ -24,8 +25,8 @@ use crate::*;
 pub struct GlobalCtx {
     /// The set of allocation and deallocation functions.
     hooks: BsanHooks,
-    pub protected_tags: Mutex<BHashMap<BorTag, ProtectorKind>>,
-    pub shadow_heap: ShadowHeap<Provenance>,
+    protected_tags: Mutex<BHashMap<BorTag, ProtectorKind>>,
+    shadow_heap: ShadowHeap<Provenance>,
     alloc_metadata_map: Heap<AllocInfo>,
 }
 
@@ -53,6 +54,10 @@ impl GlobalCtx {
         unsafe { self.alloc_metadata_map.dealloc(ptr) };
     }
 
+    pub fn shadow_heap(&self) -> &ShadowHeap<Provenance> {
+        &self.shadow_heap
+    }
+
     pub fn allocator(&self) -> BsanAllocHooks {
         self.hooks.alloc
     }
@@ -63,20 +68,17 @@ impl GlobalCtx {
         }
     }
 
+    pub fn protected_tags(&self) -> MutexGuard<'_, BHashMap<BorTag, ProtectorKind>> {
+        self.protected_tags.lock()
+    }
+
     pub fn add_protected_tag(&self, bor_tag: BorTag, protector_kind: ProtectorKind) {
-        let mut tag_map = self.protected_tags.lock();
+        let mut tag_map = self.protected_tags();
         tag_map.insert(bor_tag, protector_kind);
     }
 
-    pub fn remove_protected_tags(&self, prov: &[Provenance]) {
-        let mut tag_map = self.protected_tags.lock();
-        for p in prov {
-            tag_map.remove(&p.bor_tag);
-        }
-    }
-
     pub fn get_protector_kind(&self, bor_tag: BorTag) -> Option<ProtectorKind> {
-        let tag_map = self.protected_tags.lock();
+        let tag_map = self.protected_tags();
         tag_map.get(&bor_tag).copied()
     }
 

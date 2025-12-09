@@ -493,7 +493,7 @@ extern "C" fn __bsan_dealloc(
 extern "C" fn __bsan_remove_protected_tags(data: *mut Provenance, len: usize) {
     let global_ctx = unsafe { global_ctx() };
     let prov = unsafe { slice::from_raw_parts(data, len) };
-    let mut tags = global_ctx.protected_tags.lock();
+    let mut tags = global_ctx.protected_tags();
     for p in prov {
         tags.remove(&p.bor_tag);
     }
