@@ -1,3 +1,5 @@
+use std::path;
+
 use rustc_version::VersionMeta;
 
 use crate::arg::*;
@@ -85,15 +87,15 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
         BSANCommand::Clean => unreachable!(),
     };
 
-    let metadata = get_cargo_metadata();
+    let cargo_bsan_path = env::current_exe()
+        .expect("current executable path invalid")
+        .into_os_string()
+        .into_string()
+        .expect("current executable path is not valid UTF-8");
 
+    let metadata = get_cargo_metadata();
     let mut cmd = cargo();
     cmd.arg(&cargo_cmd);
-
-    // Set `--target-dir` to `bsan` inside the original target directory.
-    let target_dir = get_target_dir(&metadata);
-    cmd.arg("--target-dir").arg(target_dir);
-
     // In nextest we have to also forward the main `verb`.
     if cargo_cmd == "nextest" {
         cmd.arg(
@@ -105,10 +107,16 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     cmd.arg("--target");
     cmd.arg(&rustc_version.host);
 
-    if env::var_os("RUSTC_WRAPPER").is_some() {
-        println!(
-            "WARNING: Ignoring `RUSTC_WRAPPER` environment variable, BSAN does not support wrapping."
-        );
+    // Set `--target-dir` to `bsan` inside the original target directory.
+    let target_dir = get_target_dir(&metadata);
+    cmd.arg("--target-dir").arg(target_dir);
+
+    // *After* we set all the flags that need setting, forward everything else. Make sure to skip
+    // `--target-dir` (which would otherwise be set twice).
+    for arg in
+        ArgSplitFlagValue::from_string_iter(&mut args, "--target-dir").filter_map(Result::err)
+    {
+        cmd.arg(arg);
     }
     cmd.args(args);
 
@@ -117,7 +125,7 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
             "WARNING: Ignoring `RUSTC_WRAPPER` environment variable, BSAN does not support wrapping."
         );
     }
-    cmd.env("RUSTC_WRAPPER", &bsan_path);
+    cmd.env("RUSTC_WRAPPER", &cargo_bsan_path);
 
     // If both RUSTC_WORKSPACE_WRAPPER and RUSTC_WRAPPER are set,
     // then both are executed in succession. Providing an independent
@@ -128,6 +136,8 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
         );
     }
     cmd.env_remove("RUSTC_WORKSPACE_WRAPPER");
+
+    cmd.env("RUSTC", path::absolute(bsan_path).unwrap());
 
     // At this point, we've completed setup, so we have a sysroot.
     cmd.env("BSAN_SYSROOT", bsan_sysroot);

@@ -7,13 +7,13 @@ resolver = "3"
 [package]
 name = "bsan"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dev-dependencies]
-colored = "2"
-ui_test = "0.29.2"
+colored = "3"
+ui_test = "0.30.2"
 rustc_version = "0.4"
-regex = "1.11.3"
+regex = "1.12.2"
 tempfile = "3"
 
 [[test]]
