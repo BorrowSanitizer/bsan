@@ -1,7 +1,7 @@
 use core::{ffi, ptr};
 
 use crate::span::FramePointer;
-use crate::{BorTag, Provenance};
+use crate::Provenance;
 
 /// The number of `Provenance` values stored in the thread
 /// local arrays for arguments and return values.
@@ -39,7 +39,7 @@ pub static mut __BSAN_TLS_MARKER: FramePointer = FramePointer::null();
 /// updated by our instrumentation.
 #[thread_local]
 #[unsafe(no_mangle)]
-pub static mut __BSAN_PROT_TAG_STACK: *mut BorTag = ptr::null_mut();
+pub static mut __BSAN_PROV_STACK: *mut Provenance = ptr::null_mut();
 
 /// A pointer to the local state of the current thread. This is
 /// managed by the LLVM wrapper, but we define it here, since thread-local

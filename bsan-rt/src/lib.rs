@@ -36,18 +36,13 @@ mod memory;
 
 mod errors;
 
+#[allow(unused)]
+pub(crate) use libc_print::std_name::*;
+
 use crate::borrow_tracker::tree::Tree;
 use crate::errors::BorsanResult;
 use crate::memory::hooks;
 use crate::span::FramePointer;
-
-macro_rules! println {
-    ($($arg:tt)*) => {
-        libc_print::std_name::println!($($arg)*)
-    };
-}
-
-pub(crate) use println;
 
 macro_rules! handle_err {
     ($err:expr, $gtx:expr) => {{
@@ -198,11 +193,10 @@ impl fmt::Debug for BorTag {
 /// which contains all other metadata used to detect undefined behavior.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(private_interfaces)]
 pub struct Provenance {
-    pub alloc_id: AllocId,
-    pub bor_tag: BorTag,
-    pub alloc_info: *mut AllocInfo,
+    alloc_id: AllocId,
+    bor_tag: BorTag,
+    alloc_info: *mut AllocInfo,
 }
 
 unsafe impl Sync for Provenance {}
@@ -482,7 +476,6 @@ extern "C" fn __bsan_dealloc(
         if alloc_info.is_null() {
             return;
         }
-
         if alloc_id != unsafe { (*alloc_info).alloc_id } {
             return;
         }
@@ -497,10 +490,13 @@ extern "C" fn __bsan_dealloc(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_remove_protected_tags(data: *mut BorTag, len: usize) {
+extern "C" fn __bsan_remove_protected_tags(data: *mut Provenance, len: usize) {
     let global_ctx = unsafe { global_ctx() };
-    let tags = unsafe { slice::from_raw_parts(data, len) };
-    global_ctx.remove_protected_tags(tags);
+    let prov = unsafe { slice::from_raw_parts(data, len) };
+    let mut tags = global_ctx.protected_tags.lock();
+    for p in prov {
+        tags.remove(&p.bor_tag);
+    }
 }
 
 /// When we call a possibly uninstrumented function, we store our frame
@@ -664,7 +660,7 @@ unsafe extern "C" fn __bsan_alloc_stack(
     size: usize,
     alloc_id: AllocId,
     bor_tag: BorTag,
-    alloc_info: NonNull<c_void>,
+    alloc_info: NonNull<AllocInfo>,
 ) {
     debug_bsan!(
         "alloc_stack",
@@ -674,13 +670,7 @@ unsafe extern "C" fn __bsan_alloc_stack(
         alloc_info.as_ptr().cast::<AllocInfo>()
     );
     unsafe {
-        alloc_info.cast::<AllocInfo>().write(AllocInfo::new(
-            global_ctx(),
-            base_addr,
-            size,
-            alloc_id,
-            bor_tag,
-        ));
+        alloc_info.write(AllocInfo::new(global_ctx(), base_addr, size, alloc_id, bor_tag));
     }
 }
 
@@ -753,7 +743,8 @@ extern "C" fn __bsan_debug_print(alloc_id: AllocId, bor_tag: BorTag, alloc_info:
 
 #[cfg(not(test))]
 #[panic_handler]
-fn panic(_: &PanicInfo<'_>) -> ! {
+fn panic(info: &PanicInfo<'_>) -> ! {
+    eprintln!("The BorrowSanitizer runtime panicked! {:?}", info);
     loop {}
 }
 

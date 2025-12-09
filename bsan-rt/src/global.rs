@@ -24,9 +24,9 @@ use crate::*;
 pub struct GlobalCtx {
     /// The set of allocation and deallocation functions.
     hooks: BsanHooks,
-    protected_tags: Mutex<BHashMap<BorTag, ProtectorKind>>,
+    pub protected_tags: Mutex<BHashMap<BorTag, ProtectorKind>>,
+    pub shadow_heap: ShadowHeap<Provenance>,
     alloc_metadata_map: Heap<AllocInfo>,
-    shadow_heap: ShadowHeap<Provenance>,
 }
 
 impl GlobalCtx {
@@ -39,10 +39,6 @@ impl GlobalCtx {
             alloc_metadata_map: Heap::new(&hooks)?,
             shadow_heap: ShadowHeap::new(&hooks, &raw const __BSAN_WILDCARD_PROVENANCE)?,
         })
-    }
-
-    pub fn shadow_heap(&self) -> &ShadowHeap<Provenance> {
-        &self.shadow_heap
     }
 
     pub fn hooks(&self) -> &BsanHooks {
@@ -72,10 +68,10 @@ impl GlobalCtx {
         tag_map.insert(bor_tag, protector_kind);
     }
 
-    pub fn remove_protected_tags(&self, bor_tags: &[BorTag]) {
+    pub fn remove_protected_tags(&self, prov: &[Provenance]) {
         let mut tag_map = self.protected_tags.lock();
-        for tag in bor_tags {
-            tag_map.remove(tag);
+        for p in prov {
+            tag_map.remove(&p.bor_tag);
         }
     }
 

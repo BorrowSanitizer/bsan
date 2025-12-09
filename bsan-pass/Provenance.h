@@ -114,6 +114,7 @@ public:
 
   std::optional<ProvenanceVector> getVector() const;
   ProvenanceVector assertVector() const;
+  void store(IRBuilder<> &IRB, const ProvenanceLayout &PL, Value *Dest);
   void store(IRBuilder<> &IRB, const ProvenanceLayout &PL,
              ProvenancePointer Dest);
   static Provenance load(IRBuilder<> &IRB, const ProvenanceLayout &PL,

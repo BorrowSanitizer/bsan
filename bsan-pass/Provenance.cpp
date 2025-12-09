@@ -123,6 +123,12 @@ ProvenanceVector Provenance::loadVector(IRBuilder<> &IRB,
 }
 
 void Provenance::store(IRBuilder<> &IRB, const ProvenanceLayout &PL,
+                       Value *Base) {
+  this->store(IRB, PL,
+              ProvenancePointer(IRB, PL, Base, this->Elems, this->Kind));
+}
+
+void Provenance::store(IRBuilder<> &IRB, const ProvenanceLayout &PL,
                        ProvenancePointer Dest) {
 
   StoreInst *Id = IRB.CreateStore(this->Id, Dest.IdPtr, true);
