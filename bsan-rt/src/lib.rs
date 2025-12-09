@@ -413,20 +413,18 @@ unsafe extern "C-unwind" fn __bsan_retag(
     alloc_id: AllocId,
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
-    new_tag: BorTag,
     im_data: *const [usize; 2],
     im_len: usize,
-) {
+) -> BorTag {
     debug_bsan!("retag", object_addr, alloc_id, bor_tag, alloc_info);
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     let retag_info = unsafe { RetagInfo::from_raw(access_size, perm, im_data, im_len) };
-
     BorrowTracker::new(prov, object_addr, Some(access_size))
         .and_then(|opt| {
-            opt.map(|bt| bt.retag(global_ctx, retag_info, new_tag, Span::new())).transpose()
+            opt.map(|bt| bt.retag(global_ctx, retag_info, Span::new())).unwrap_or(Ok(bor_tag))
         })
-        .unwrap_or_else(|err| handle_err!(err, global_ctx));
+        .unwrap_or_else(|err| handle_err!(err, global_ctx))
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.

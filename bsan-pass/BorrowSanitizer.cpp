@@ -850,7 +850,6 @@ private:
     IRBuilder<> IRB(&CB);
     ProvenanceScalar Prov = assertProvenanceScalar(CB.getOperand(0));
     if (Prov != BS.WildcardProvenance) {
-      Value *NewTag = newBorrowTag(IRB);
       Value *ImArray = CB.getOperand(4);
       Value *ImArrayLen = BS.Zero;
       if (GlobalVariable *GV = dyn_cast<GlobalVariable>(ImArray)) {
@@ -862,12 +861,10 @@ private:
         }
       }
 
-      IRB.CreateCall(BS.BsanFuncRetag,
-                     {CB.getOperand(0), CB.getOperand(1), CB.getOperand(2),
-                      Prov.Id, Prov.Tag, Prov.Info, NewTag, ImArray,
-                      ImArrayLen});
-
-      Prov.Tag = NewTag;
+      Prov.Tag =
+          IRB.CreateCall(BS.BsanFuncRetag,
+                         {CB.getOperand(0), CB.getOperand(1), CB.getOperand(2),
+                          Prov.Id, Prov.Tag, Prov.Info, ImArray, ImArrayLen});
 
       if (isFnEntryRetag(&CB)) {
         // Offset to the next tag slot, and store the protected tag there.
@@ -875,7 +872,7 @@ private:
             BS.IntptrTy, BS.DL->getTypeAllocSize(BS.IntptrTy));
         Value *PrevSlot = IRB.CreateLoad(BS.PtrTy, BS.TagStack, true);
         Value *TagSlot = subtractPointer(IRB, BS.DL, PrevSlot, TagSize);
-        IRB.CreateStore(NewTag, TagSlot, true);
+        IRB.CreateStore(Prov.Tag, TagSlot, true);
         IRB.CreateStore(TagSlot, BS.TagStack, true);
       }
     }
@@ -1596,9 +1593,9 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   AttributeList AL;
   AL = AL.addFnAttribute(*C, Attribute::NoUnwind);
 
-  BsanFuncRetag = M.getOrInsertFunction(
-      kBsanFuncRetagName, AL, IRB.getVoidTy(), PtrTy, IntptrTy, Int64Ty,
-      IntptrTy, IntptrTy, PtrTy, IntptrTy, PtrTy, IntptrTy);
+  BsanFuncRetag = M.getOrInsertFunction(kBsanFuncRetagName, AL, IntptrTy, PtrTy,
+                                        IntptrTy, Int64Ty, IntptrTy, IntptrTy,
+                                        PtrTy, PtrTy, IntptrTy);
 
   BsanFuncRemoveProtectedTags = M.getOrInsertFunction(
       kBsanFuncRemoveProtectedTags, AL, IRB.getVoidTy(), PtrTy, IntptrTy);

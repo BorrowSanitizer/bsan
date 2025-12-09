@@ -1,5 +1,6 @@
 // Components in this library were ported from Miri and then modified by our team.
 use core::ffi::c_void;
+use core::sync::atomic::Ordering;
 
 use bsan_shared::{AccessKind, ProtectorKind, RangeMap, RetagInfo, Size};
 use spin::MutexGuard;
@@ -10,7 +11,7 @@ use crate::diagnostics::AccessCause;
 use crate::errors::{BorsanResult, UBInfo};
 use crate::memory::hooks::BsanAllocHooks;
 use crate::span::Span;
-use crate::{throw_ub, AllocId, BorTag, GlobalCtx, Provenance};
+use crate::{throw_ub, AllocId, BorTag, GlobalCtx, Provenance, __BSAN_BOR_TAG_CTR};
 
 pub mod tree;
 pub mod unimap;
@@ -87,15 +88,14 @@ impl BorrowTracker {
         &self,
         global_ctx: &GlobalCtx,
         retag_info: RetagInfo<'_>,
-        new_tag: BorTag,
         span: Span,
-    ) -> BorsanResult<()> {
+    ) -> BorsanResult<BorTag> {
         // Tree is assumed to be initialized
         let mut lock = self.lock();
         let tree = unsafe { lock.as_mut().unwrap_unchecked() };
 
         let parent_tag = self.prov.bor_tag;
-
+        let new_tag = BorTag(__BSAN_BOR_TAG_CTR.fetch_add(1, Ordering::Relaxed));
         let protected = retag_info.perm.protector.is_some();
         if let Some(protector) = retag_info.perm.protector {
             // We register the protection in two different places.
@@ -169,7 +169,7 @@ impl BorrowTracker {
         };
 
         tree.new_child(child_params);
-        Ok(())
+        Ok(new_tag)
     }
 
     pub fn access(
