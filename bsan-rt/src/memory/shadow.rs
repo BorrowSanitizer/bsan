@@ -108,13 +108,15 @@ pub struct ShadowHeap<T> {
     table: NonNull<L1Array<T>>,
     default: *const T,
     munmap: MUnmap,
-    l2_blocks: Vec<usize, BsanAllocHooks>,
+    l2_blocks: RwLock<Vec<usize, BsanAllocHooks>>,
 }
 
 unsafe impl<T> Sync for ShadowHeap<T> {}
 unsafe impl<T> Send for ShadowHeap<T> {}
 
 impl<T: Sized + Default + Copy> ShadowHeap<T> {
+    /// We assume that `new` is only called during program initialization, so only by the main thread.
+    /// So there should be no deadlock / synchronization issues.
     pub fn new(hooks: &BsanHooks, default: *const T) -> AllocResult<Self> {
         unsafe {
             let table = {
@@ -136,7 +138,7 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
                 table,
                 default,
                 munmap: hooks.munmap_ptr,
-                l2_blocks: Vec::<usize, BsanAllocHooks>::new_in(hooks.alloc),
+                l2_blocks: RwLock::new(Vec::<usize, BsanAllocHooks>::new_in(hooks.alloc)),
             })
         }
     }
@@ -170,13 +172,10 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
                 .cast::<L2Array<T>>();
 
             *write_guard = l2_page.as_ptr();
+            drop(write_guard); // release lock early and prevent deadlocks
 
-            // Track this L1 index for cleanup during drop
-            // SAFETY: Now thread-safe with write lock protection
-            let l2_blocks_ptr = &self.l2_blocks as *const Vec<usize, BsanAllocHooks>
-                as *mut Vec<usize, BsanAllocHooks>;
-            (*l2_blocks_ptr).push(idx.l1_index);
-            Ok(NonNull::new_unchecked(*write_guard))
+            self.l2_blocks.write().push(idx.l1_index);
+            Ok(l2_page)
         }
     }
 
@@ -320,10 +319,13 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
 }
 
 impl<T> Drop for ShadowHeap<T> {
+    /// We assume that `drop()` is only called during program deinit, so only by the main thread.
+    /// So there should be no deadlock / synchronization issues.
     fn drop(&mut self) {
         unsafe {
             // Free all L2 tables
-            for i in self.l2_blocks.drain(..) {
+            let mut l2_blocks_guard = self.l2_blocks.write();
+            for i in l2_blocks_guard.drain(..) {
                 let l1_entry = &(*self.table.as_ptr())[i];
                 let mut l1_entry_guard = l1_entry.write();
                 let l2_table = *l1_entry_guard;
