@@ -1,5 +1,6 @@
 // Components in this library were ported from Miri and then modified by our team.
 use core::ffi::c_void;
+use core::sync::atomic::Ordering;
 
 use bsan_shared::{AccessKind, ProtectorKind, RangeMap, RetagInfo, Size};
 use spin::MutexGuard;
@@ -10,7 +11,7 @@ use crate::diagnostics::AccessCause;
 use crate::errors::{BorsanResult, UBInfo};
 use crate::memory::hooks::BsanAllocHooks;
 use crate::span::Span;
-use crate::{throw_ub, AllocId, BorTag, GlobalCtx, Provenance};
+use crate::{throw_ub, AllocId, BorTag, GlobalCtx, Provenance, __BSAN_BOR_TAG_CTR};
 
 pub mod tree;
 pub mod unimap;
@@ -40,26 +41,40 @@ impl BorrowTracker {
         if prov.alloc_id == AllocId::wildcard() {
             Ok(None)
         } else if prov.alloc_id == AllocId::invalid() {
-            throw_ub!(UBInfo::UseAfterFree(prov.alloc_id))
+            if let Some(size) = access_size
+                && size > 0
+            {
+                throw_ub!(UBInfo::UseAfterFree(prov.alloc_id))
+            } else {
+                Ok(None)
+            }
         } else {
             // Safety:
             // Our instrumentation pass guarantees that if a pointer's
             // provenance is non-null and not wildcard, then it will contain
             // valid allocation info pointer.
             debug_assert!(!prov.alloc_info.is_null());
-            let root_alloc_id = unsafe { (*prov.alloc_info).alloc_id };
-
-            if prov.alloc_id != root_alloc_id {
-                throw_ub!(UBInfo::UseAfterFree(prov.alloc_id))
-            }
 
             let (alloc_size, base_addr) =
                 unsafe { ((*prov.alloc_info).size, (*prov.alloc_info).base_addr.base_addr) };
-
             let access_size = access_size.unwrap_or(alloc_size);
             let relative_offset = start.addr().wrapping_sub(base_addr.addr());
+            let root_alloc_id = unsafe { (*prov.alloc_info).alloc_id };
+
+            if prov.alloc_id != root_alloc_id {
+                if access_size != 0 {
+                    throw_ub!(UBInfo::UseAfterFree(prov.alloc_id))
+                } else {
+                    return Ok(None);
+                }
+            }
+
             if start.addr() < base_addr.addr() || (relative_offset + access_size > alloc_size) {
-                throw_ub!(UBInfo::AccessOutOfBounds(prov, access_size, alloc_size))
+                if access_size != 0 {
+                    throw_ub!(UBInfo::AccessOutOfBounds(prov, access_size, alloc_size))
+                } else {
+                    return Ok(None);
+                }
             }
 
             let start = Size::from_bytes(relative_offset);
@@ -73,15 +88,14 @@ impl BorrowTracker {
         &self,
         global_ctx: &GlobalCtx,
         retag_info: RetagInfo<'_>,
-        new_tag: BorTag,
         span: Span,
-    ) -> BorsanResult<()> {
+    ) -> BorsanResult<BorTag> {
         // Tree is assumed to be initialized
         let mut lock = self.lock();
         let tree = unsafe { lock.as_mut().unwrap_unchecked() };
 
         let parent_tag = self.prov.bor_tag;
-
+        let new_tag = BorTag(__BSAN_BOR_TAG_CTR.fetch_add(1, Ordering::Relaxed));
         let protected = retag_info.perm.protector.is_some();
         if let Some(protector) = retag_info.perm.protector {
             // We register the protection in two different places.
@@ -155,7 +169,7 @@ impl BorrowTracker {
         };
 
         tree.new_child(child_params);
-        Ok(())
+        Ok(new_tag)
     }
 
     pub fn access(
