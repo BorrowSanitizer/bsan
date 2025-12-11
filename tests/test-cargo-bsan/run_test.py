@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 
+import argparse
 import difflib
 import os
 import re
 import subprocess
 import sys
-import argparse
 
 CARGO_EXTRA_FLAGS = os.environ.get("CARGO_EXTRA_FLAGS", "").split()
+
 
 def fail(msg):
     print(f"\nTEST FAIL: {msg}")
     sys.exit(1)
+
 
 def cargo_bsan(cmd, quiet=True):
     args = ["cargo", "bsan", cmd] + CARGO_EXTRA_FLAGS
@@ -19,15 +21,19 @@ def cargo_bsan(cmd, quiet=True):
         args += ["-q"]
     return args
 
+
 def normalize_stdout(val):
-    val = val.replace("src\\", "src/") # normalize paths across platforms
-    val = re.sub("\\b\\d+\\.\\d+s\\b", "$TIME", val) # the time keeps changing, obviously
+    val = val.replace("src\\", "src/")  # normalize paths across platforms
+    val = re.sub(
+        "\\b\\d+\\.\\d+s\\b", "$TIME", val
+    )  # the time keeps changing, obviously
     return val
+
 
 def check_output(actual, path, regex, name):
     if ARGS.bless:
         # Write the output only if bless is set
-        open(path, mode='w').write(actual)
+        open(path, mode="w").write(actual)
         return True
 
     expected = ""
@@ -45,8 +51,17 @@ def check_output(actual, path, regex, name):
     print(f"--- END diff {name} ---")
     return False
 
-def test(name, cmd, stdout_ref=None, stderr_ref=None, stdin=b'',
-         stdout_regex=False, stderr_regex=False, env=None):
+
+def test(
+    name,
+    cmd,
+    stdout_ref=None,
+    stderr_ref=None,
+    stdin=b"",
+    stdout_regex=False,
+    stderr_regex=False,
+    env=None,
+):
     if env is None:
         env = {}
     print(f"Testing {name}...")
@@ -59,6 +74,7 @@ def test(name, cmd, stdout_ref=None, stderr_ref=None, stdin=b'',
         return
     fail(f"exit code was {returncode}")
 
+
 def execute(cmd, env=None):
     p_env = os.environ.copy()
     if env is not None:
@@ -70,9 +86,10 @@ def execute(cmd, env=None):
         env=p_env,
     )
     (stdout, stderr) = p.communicate()
-    stdout = stdout.decode("UTF-8")
+    stdout = normalize_stdout(stdout.decode("UTF-8"))
     stderr = stderr.decode("UTF-8")
     return (stdout, stderr, p.returncode)
+
 
 def test_no_rebuild(name, cmd, env=None):
     if env is None:
@@ -90,6 +107,7 @@ def test_no_rebuild(name, cmd, env=None):
         print(stderr, end="")
         print("--- END stderr ---")
         fail("Something was being rebuilt when it should not be (or we got no output)")
+
 
 def test_cargo_bsan_setup():
     if "BSAN_SYSROOT" not in os.environ:
@@ -114,29 +132,38 @@ def test_cargo_bsan_setup():
         fail(f"""The sysroot dir `{sysroot_dir}` does not match the
               value provided by `BSAN_SYSROOT`: `{intended_sysroot}`.""")
 
-    test("`cargo bsan setup` (no rebuild)",
+    test(
+        "`cargo bsan setup` (no rebuild)",
         cargo_bsan("setup", quiet=False),
         stderr_ref="setup.again.stderr.ref",
-        stderr_regex=True
+        stderr_regex=True,
     )
 
+
 def test_cargo_bsan_run():
-    test("`cargo bsan run`",
+    test(
+        "`cargo bsan run`",
         cargo_bsan("run"),
         stdout_ref="run.stdout.ref",
     )
-    test_no_rebuild("`cargo bsan run` (no rebuild)",
+    test_no_rebuild(
+        "`cargo bsan run` (no rebuild)",
         cargo_bsan("run", quiet=False),
     )
 
+
 def test_cargo_bsan_test():
-    test("`cargo bsan test`",
+    test(
+        "`cargo bsan test`",
         cargo_bsan("test"),
         stdout_ref="test.stdout.ref",
     )
 
-args_parser = argparse.ArgumentParser(description='`cargo bsan` testing')
-args_parser.add_argument('--bless', help='bless the reference files', action='store_true')
+
+args_parser = argparse.ArgumentParser(description="`cargo bsan` testing")
+args_parser.add_argument(
+    "--bless", help="bless the reference files", action="store_true"
+)
 
 ARGS = args_parser.parse_args()
 
