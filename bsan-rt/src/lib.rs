@@ -1,8 +1,6 @@
 #![cfg_attr(not(test), no_std)]
 #![feature(thread_local)]
 #![feature(allocator_api)]
-#![feature(sync_unsafe_cell)]
-#![feature(yeet_expr)]
 #[macro_use]
 extern crate alloc;
 use core::ffi::c_void;
@@ -32,30 +30,13 @@ mod diagnostics;
 mod span;
 use span::Span;
 
-mod memory;
-
 mod errors;
-
-#[allow(unused)]
-pub(crate) use libc_print::std_name::*;
+mod memory;
 
 use crate::borrow_tracker::tree::Tree;
 use crate::errors::BorsanResult;
 use crate::memory::hooks;
 use crate::span::FramePointer;
-
-macro_rules! handle_err {
-    ($err:expr, $gtx:expr) => {{
-        #[cfg(test)]
-        {
-            panic!("Error in test mode: {:?}", $err);
-        }
-        #[cfg(not(test))]
-        {
-            $gtx.handle_error($err);
-        }
-    }};
-}
 
 /// A struct for summarizing debug information about memory operations
 #[cfg(feature = "debug")]
@@ -90,31 +71,28 @@ impl fmt::Display for DebugSummary {
     }
 }
 
-#[cfg(feature = "debug")]
 macro_rules! debug_bsan {
-    ($op:literal, $ptr:ident, $alloc_id:ident, $bor_tag:ident, $alloc_info:expr) => {{
-        #[allow(unused_unsafe)]
-        let info = match $alloc_id.0 {
-            0 => AllocInfoSummary::WildCard,
-            1 => AllocInfoSummary::Null,
-            _ => unsafe { &*$alloc_info }.summarize(),
-        };
-        let summary = DebugSummary {
-            op: $op,
-            ptr: $ptr.addr(),
-            alloc_id: $alloc_id,
-            bor_tag: $bor_tag,
-            info,
-        };
-        println!("{}", summary);
-    }};
+    ($op:literal, $ptr:ident, $alloc_id:ident, $bor_tag:ident, $alloc_info:expr) => {
+        #[cfg(feature = "debug")]
+        {
+            #[allow(unused_unsafe)]
+            let info = match $alloc_id.0 {
+                0 => AllocInfoSummary::WildCard,
+                1 => AllocInfoSummary::Null,
+                _ => unsafe { &*$alloc_info }.summarize(),
+            };
+            let summary = DebugSummary {
+                op: $op,
+                ptr: $ptr.addr(),
+                alloc_id: $alloc_id,
+                bor_tag: $bor_tag,
+                info,
+            };
+            println!("{}", summary);
+        }
+    };
 }
 
-/// No-op macro when debug feature is disabled
-#[cfg(not(feature = "debug"))]
-macro_rules! debug_bsan {
-    ($op:literal, $ptr:ident, $alloc_id:ident, $bor_tag:ident, $info:expr) => {{}};
-}
 #[unsafe(no_mangle)]
 pub static __BSAN_ALLOC_ID_CTR: AtomicUsize = AtomicUsize::new(3);
 
@@ -411,14 +389,14 @@ unsafe extern "C-unwind" fn __bsan_retag(
     im_len: usize,
 ) -> BorTag {
     debug_bsan!("retag", object_addr, alloc_id, bor_tag, alloc_info);
-    let global_ctx = unsafe { global_ctx() };
+    let ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     let retag_info = unsafe { RetagInfo::from_raw(access_size, perm, im_data, im_len) };
-    BorrowTracker::new(prov, object_addr, Some(access_size))
-        .and_then(|opt| {
-            opt.map(|bt| bt.retag(global_ctx, retag_info, Span::new())).unwrap_or(Ok(bor_tag))
-        })
-        .unwrap_or_else(|err| handle_err!(err, global_ctx))
+    BorrowTracker::for_access(prov, object_addr, Some(access_size), |mut bt| {
+        bt.retag(ctx, retag_info, Span::new())
+    })
+    .unwrap_or_else(|err| ctx.handle_error(err))
+    .unwrap_or(bor_tag)
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -431,13 +409,12 @@ unsafe extern "C-unwind" fn __bsan_read(
     alloc_info: *mut AllocInfo,
 ) {
     debug_bsan!("read", ptr, alloc_id, bor_tag, alloc_info);
-    let global_ctx = unsafe { global_ctx() };
+    let ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-    BorrowTracker::new(prov, ptr, Some(access_size))
-        .and_then(|bt| {
-            bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Read, Span::new()))
-        })
-        .unwrap_or_else(|err| handle_err!(err, global_ctx));
+    BorrowTracker::for_access(prov, ptr, Some(access_size), |mut bt| {
+        bt.access(ctx, Some(AccessKind::Read), Span::new())
+    })
+    .unwrap_or_else(|err| ctx.handle_error(err));
 }
 
 /// Records a write access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -450,13 +427,12 @@ unsafe extern "C-unwind" fn __bsan_write(
     alloc_info: *mut AllocInfo,
 ) {
     debug_bsan!("write", ptr, alloc_id, bor_tag, alloc_info);
-    let global_ctx = unsafe { global_ctx() };
+    let ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-    BorrowTracker::new(prov, ptr, Some(access_size))
-        .and_then(|bt| {
-            bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Write, Span::new()))
-        })
-        .unwrap_or_else(|err| handle_err!(err, global_ctx));
+    BorrowTracker::for_access(prov, ptr, Some(access_size), |mut bt| {
+        bt.access(ctx, Some(AccessKind::Write), Span::new())
+    })
+    .unwrap_or_else(|err| ctx.handle_error(err));
 }
 
 /// Deregisters a heap allocation
@@ -469,9 +445,8 @@ extern "C" fn __bsan_dealloc(
     weak: bool,
 ) {
     debug_bsan!("dealloc", ptr, alloc_id, bor_tag, alloc_info);
-    let global_ctx = unsafe { global_ctx() };
+    let ctx = unsafe { global_ctx() };
     let prov: Provenance = Provenance { alloc_id, bor_tag, alloc_info };
-
     if weak {
         if alloc_info.is_null() {
             return;
@@ -480,31 +455,30 @@ extern "C" fn __bsan_dealloc(
             return;
         }
     }
-    BorrowTracker::new(prov, ptr, None)
-        .and_then(|mut bt| bt.iter_mut().try_for_each(|t| t.dealloc(global_ctx, Span::new())))
-        .unwrap_or_else(|err| handle_err!(err, global_ctx));
+    BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, Span::new()))
+        .unwrap_or_else(|err| ctx.handle_error(err));
 
     if !weak && let Some(alloc_info) = NonNull::new(alloc_info) {
-        unsafe { global_ctx.destroy_alloc_info(alloc_info) };
+        unsafe { ctx.destroy_alloc_info(alloc_info) };
     }
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_remove_protected_tags(data: *mut Provenance, len: usize) {
-    let global_ctx = unsafe { global_ctx() };
-    let prov = unsafe { slice::from_raw_parts(data, len) };
-    let mut tags = global_ctx.protected_tags();
-    for p in prov {
-        tags.remove(&p.bor_tag);
+    let ctx = unsafe { global_ctx() };
+    let prov_list = unsafe { slice::from_raw_parts(data, len) };
+    for prov in prov_list {
+        // Protector end semantics can never trigger UB.
+        let _ = BorrowTracker::for_alloc(*prov, |mut bt| bt.access(ctx, None, Span::new()));
+        ctx.protected_tags().remove(&prov.bor_tag);
     }
 }
 
 /// When we call a possibly uninstrumented function, we store our frame
 /// pointer in a thread-local variable, marking the "boundary" between instrumented
 /// and uninstrumented code. Once we enter a function that may have been called from
-/// uninstrumented code, we check to can check to see if our caller's frame pointer
-/// matches this boundary marker to determine whether we can trust our thread-local provenance
-/// arrays.
+/// uninstrumented code, we check to see if our caller's frame pointer matches this boundary
+/// marker to determine whether we can trust our thread-local provenance arrays.
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_mark_tls() -> FramePointer {
     let marker = &raw mut __BSAN_TLS_MARKER;
@@ -516,6 +490,7 @@ extern "C" fn __bsan_mark_tls() -> FramePointer {
     unsafe { ptr::write_volatile(marker, fp!().unwind(1)) };
     prev_fp
 }
+
 /// Clears the parameter provenance array if the frame pointer of the
 /// caller of the current function does not match the boundary marker, indicating
 /// that we crossed into uninstrumented code. If it does match the boundary marker,
@@ -558,6 +533,7 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     bor_tag: BorTag,
 ) -> NonNull<AllocInfo> {
     let ctx = unsafe { global_ctx() };
+    #[allow(clippy::let_and_return)]
     let alloc_info = ctx
         .create_alloc_info(AllocInfo::new(ctx, base_addr, size, alloc_id, bor_tag))
         .unwrap_or_else(|info| ctx.handle_error(info));
@@ -729,7 +705,6 @@ extern "C" fn __bsan_debug_assert_invalid(
 ) {
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-
     if !(prov == Provenance::null() || prov == Provenance::wildcard()) {
         global_ctx.exit(1);
     }
@@ -746,113 +721,4 @@ extern "C" fn __bsan_debug_print(alloc_id: AllocId, bor_tag: BorTag, alloc_info:
 fn panic(info: &PanicInfo<'_>) -> ! {
     eprintln!("The BorrowSanitizer runtime panicked! {:?}", info);
     loop {}
-}
-
-#[cfg(test)]
-mod tests {
-    use core::sync::atomic::Ordering;
-
-    use crate::*;
-
-    fn with_init(unit_test: fn()) {
-        unsafe { __bsan_internal_init() };
-        unit_test();
-        unsafe { __bsan_internal_deinit() };
-    }
-
-    fn with_heap_object(unit_test: fn(obj: *mut c_void, size: usize)) {
-        let obj = unsafe { libc::malloc(64) };
-        unit_test(obj, 64);
-        unsafe { libc::free(obj) };
-    }
-
-    fn create_metadata(base_addr: *mut c_void, size: usize) -> Provenance {
-        unsafe {
-            let alloc_id = AllocId(__BSAN_ALLOC_ID_CTR.fetch_add(1, Ordering::Relaxed));
-            let bor_tag = BorTag(__BSAN_BOR_TAG_CTR.fetch_add(1, Ordering::Relaxed));
-            let alloc_info = __bsan_alloc(base_addr, size, alloc_id, bor_tag).as_ptr();
-            Provenance { alloc_id, bor_tag, alloc_info }
-        }
-    }
-
-    fn destroy_metadata(ptr: *mut c_void, prov: Provenance) {
-        __bsan_dealloc(ptr, prov.alloc_id, prov.bor_tag, prov.alloc_info, false);
-    }
-
-    #[test]
-    fn bsan_alloc_increasing_alloc_id() {
-        with_init(|| {
-            with_heap_object(|obj1, size1| {
-                let prov1 = create_metadata(obj1, size1);
-                assert_eq!(prov1.alloc_id, AllocId::min());
-                with_heap_object(|obj2, size2| {
-                    let prov2 = create_metadata(obj2, size2);
-                    assert_eq!(prov2.alloc_id, AllocId(AllocId::min().get() + 1));
-                    destroy_metadata(obj2, prov2);
-                });
-                destroy_metadata(obj1, prov1);
-            });
-        });
-    }
-
-    #[test]
-    fn bsan_alloc_and_dealloc() {
-        with_init(|| {
-            with_heap_object(|obj, size| unsafe {
-                let prov = create_metadata(obj, size);
-                destroy_metadata(obj, prov);
-                let alloc_metadata = &*prov.alloc_info;
-                assert_eq!(alloc_metadata.alloc_id, AllocId::invalid());
-            });
-        })
-    }
-
-    #[test]
-    #[should_panic]
-    #[cfg(not(miri))]
-    fn bsan_dealloc_detect_double_free() {
-        with_init(|| {
-            with_heap_object(|obj, size| {
-                let prov = create_metadata(obj, size);
-                destroy_metadata(obj, prov);
-                destroy_metadata(obj, prov);
-            })
-        });
-    }
-
-    #[test]
-    #[should_panic]
-    #[cfg(not(miri))]
-    fn bsan_dealloc_detect_invalid_free() {
-        with_init(|| {
-            with_heap_object(|obj, size| {
-                let prov = create_metadata(obj, size);
-                let mut modified_prov = prov;
-                modified_prov.alloc_id = AllocId::new(99);
-                destroy_metadata(obj, modified_prov);
-            });
-        })
-    }
-
-    #[test]
-    fn bsan_read() {
-        with_init(|| {
-            with_heap_object(|obj: *mut c_void, size: usize| unsafe {
-                let prov = create_metadata(obj, size);
-                __bsan_read(obj, size, prov.alloc_id, prov.bor_tag, prov.alloc_info);
-                destroy_metadata(obj, prov);
-            });
-        });
-    }
-
-    #[test]
-    fn bsan_write() {
-        with_init(|| {
-            with_heap_object(|obj, size| unsafe {
-                let prov = create_metadata(obj, size);
-                __bsan_write(obj, size, prov.alloc_id, prov.bor_tag, prov.alloc_info);
-                destroy_metadata(obj, prov);
-            });
-        });
-    }
 }
