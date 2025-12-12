@@ -1,4 +1,4 @@
-use core::cell::SyncUnsafeCell;
+use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
@@ -134,8 +134,12 @@ mod global_alloc {
     static GLOBAL_ALLOCATOR: DummyAllocator = DummyAllocator;
 }
 
-pub static GLOBAL_CTX: SyncUnsafeCell<MaybeUninit<GlobalCtx>> =
-    SyncUnsafeCell::new(MaybeUninit::uninit());
+struct GlobalCtxWrapper(UnsafeCell<MaybeUninit<GlobalCtx>>);
+
+unsafe impl Send for GlobalCtxWrapper {}
+unsafe impl Sync for GlobalCtxWrapper {}
+
+static GLOBAL_CTX: GlobalCtxWrapper = GlobalCtxWrapper(UnsafeCell::new(MaybeUninit::uninit()));
 
 /// Initializes the global context object.
 ///
@@ -147,7 +151,7 @@ pub static GLOBAL_CTX: SyncUnsafeCell<MaybeUninit<GlobalCtx>> =
 #[inline]
 pub unsafe fn init_global_ctx(hooks: BsanHooks) {
     unsafe {
-        (*GLOBAL_CTX.get())
+        (*GLOBAL_CTX.0.get())
             .write(GlobalCtx::new(hooks).expect("failed to allocate global context"));
     }
 }
@@ -159,7 +163,7 @@ pub unsafe fn init_global_ctx(hooks: BsanHooks) {
 /// on the assumption that this function has not been called yet.
 #[inline]
 pub unsafe fn deinit_global_ctx() {
-    unsafe { drop(ptr::replace(GLOBAL_CTX.get(), MaybeUninit::uninit()).assume_init()) };
+    unsafe { drop(ptr::replace(GLOBAL_CTX.0.get(), MaybeUninit::uninit()).assume_init()) };
 }
 
 /// # Safety
@@ -167,6 +171,6 @@ pub unsafe fn deinit_global_ctx() {
 /// has been called and `bsan_deinit` has not yet been called.
 #[inline]
 pub unsafe fn global_ctx<'a>() -> &'a GlobalCtx {
-    let ctx = GLOBAL_CTX.get();
+    let ctx = GLOBAL_CTX.0.get();
     unsafe { &*ctx.cast::<global::GlobalCtx>() }
 }

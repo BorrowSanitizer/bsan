@@ -69,13 +69,6 @@ impl Display for UBInfo {
     }
 }
 
-#[macro_export]
-macro_rules! throw_ub {
-    ($($tt:tt)*) => {
-        do yeet $crate::errors::ErrorInfo::UndefinedBehavior($($tt)*)
-    };
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum TransitionError {
     /// This access is not allowed because some parent tag has insufficient permissions.
