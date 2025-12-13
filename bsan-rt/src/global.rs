@@ -4,7 +4,7 @@ use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 
 use bsan_shared::ProtectorKind;
-use hashbrown::{DefaultHashBuilder, HashMap};
+use hashbrown::{DefaultHashBuilder, HashMap, HashSet};
 use spin::MutexGuard;
 
 use crate::errors::ErrorInfo;
@@ -23,11 +23,11 @@ use crate::*;
 /// of unsafety throughout the library.
 #[derive(Debug)]
 pub struct GlobalCtx {
-    /// The set of allocation and deallocation functions.
     hooks: BsanHooks,
     protected_tags: Mutex<BHashMap<BorTag, ProtectorKind>>,
     shadow_heap: ShadowHeap<Provenance>,
     alloc_metadata_map: Heap<AllocInfo>,
+    heap_provenance: Mutex<HashSet<NonNull<Provenance>>>,
 }
 
 impl GlobalCtx {
@@ -39,6 +39,7 @@ impl GlobalCtx {
             protected_tags: Mutex::new(BHashMap::new_in(hooks.alloc)),
             alloc_metadata_map: Heap::new(&hooks)?,
             shadow_heap: ShadowHeap::new(&hooks, &raw const __BSAN_WILDCARD_PROVENANCE)?,
+            heap_provenance: Mutex::new(HashSet::new()),
         })
     }
 
@@ -51,7 +52,7 @@ impl GlobalCtx {
     }
 
     pub(crate) unsafe fn destroy_alloc_info(&self, ptr: NonNull<AllocInfo>) {
-        unsafe { self.alloc_metadata_map.dealloc(ptr) };
+        unsafe { self.alloc_metadata_map.dealloc(ptr) }
     }
 
     pub fn shadow_heap(&self) -> &ShadowHeap<Provenance> {
@@ -85,6 +86,11 @@ impl GlobalCtx {
     pub fn handle_error(&self, info: ErrorInfo) -> ! {
         crate::eprintln!("An error occurred: {info:?}\n\n");
         self.exit(1)
+    }
+
+    pub fn record_protected_provenance(&self, provenance: NonNull<Provenance>) {
+        let mut provenance_set = self.heap_provenance.lock();
+        provenance_set.insert(provenance);
     }
 }
 
