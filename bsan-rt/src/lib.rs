@@ -1,6 +1,8 @@
 #![cfg_attr(not(test), no_std)]
 #![feature(thread_local)]
 #![feature(allocator_api)]
+#![allow(internal_features)]
+#![feature(core_intrinsics)]
 #[macro_use]
 extern crate alloc;
 use core::ffi::c_void;
@@ -422,10 +424,6 @@ unsafe extern "C-unwind" fn __bsan_internal_deinit() {
     }
 }
 
-unsafe extern "C-unwind" fn __bsan_push_frame() {}
-
-unsafe extern "C-unwind" fn __bsan_pop_frame() {}
-
 /// Creates a new borrow tag for the given provenance object.
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_retag(
@@ -628,12 +626,9 @@ unsafe extern "C-unwind" fn __bsan_shadow_src(addr: *mut c_void) -> *const Prove
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_shadow_dest(ptr: *mut c_void) -> NonNull<Provenance> {
     let ctx = unsafe { global_ctx() };
-    let prov_ptr = ctx
-        .shadow_heap()
+    ctx.shadow_heap()
         .get_dest(ctx.hooks(), ptr.addr())
-        .unwrap_or_else(|info| ctx.handle_error(info.into()));
-    ctx.record_protected_provenance(prov_ptr);
-    prov_ptr
+        .unwrap_or_else(|info| ctx.handle_error(info.into()))
 }
 
 /// Copy provenance values from split arrays into the shadow heap.
@@ -772,5 +767,5 @@ extern "C" fn __bsan_debug_print(alloc_id: AllocId, bor_tag: BorTag, alloc_info:
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
     eprintln!("The BorrowSanitizer runtime panicked! {:?}", info);
-    loop {}
+    core::intrinsics::abort()
 }

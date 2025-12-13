@@ -1,10 +1,10 @@
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
-use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 
 use bsan_shared::ProtectorKind;
-use hashbrown::{DefaultHashBuilder, HashMap, HashSet};
+use hashbrown::HashMap;
+use rustc_hash::FxBuildHasher;
 use spin::MutexGuard;
 
 use crate::errors::ErrorInfo;
@@ -24,10 +24,9 @@ use crate::*;
 #[derive(Debug)]
 pub struct GlobalCtx {
     hooks: BsanHooks,
-    protected_tags: Mutex<BHashMap<BorTag, ProtectorKind>>,
+    protected_tags: Mutex<HashMap<BorTag, ProtectorKind, FxBuildHasher>>,
     shadow_heap: ShadowHeap<Provenance>,
     alloc_metadata_map: Heap<AllocInfo>,
-    heap_provenance: Mutex<HashSet<NonNull<Provenance>>>,
 }
 
 impl GlobalCtx {
@@ -36,10 +35,9 @@ impl GlobalCtx {
     fn new(hooks: BsanHooks) -> Result<Self, AllocError> {
         Ok(Self {
             hooks,
-            protected_tags: Mutex::new(BHashMap::new_in(hooks.alloc)),
+            protected_tags: Mutex::new(HashMap::with_hasher(FxBuildHasher)),
             alloc_metadata_map: Heap::new(&hooks)?,
             shadow_heap: ShadowHeap::new(&hooks, &raw const __BSAN_WILDCARD_PROVENANCE)?,
-            heap_provenance: Mutex::new(HashSet::new()),
         })
     }
 
@@ -69,7 +67,7 @@ impl GlobalCtx {
         }
     }
 
-    pub fn protected_tags(&self) -> MutexGuard<'_, BHashMap<BorTag, ProtectorKind>> {
+    pub fn protected_tags(&self) -> MutexGuard<'_, HashMap<BorTag, ProtectorKind, FxBuildHasher>> {
         self.protected_tags.lock()
     }
 
@@ -86,34 +84,6 @@ impl GlobalCtx {
     pub fn handle_error(&self, info: ErrorInfo) -> ! {
         crate::eprintln!("An error occurred: {info:?}\n\n");
         self.exit(1)
-    }
-
-    pub fn record_protected_provenance(&self, provenance: NonNull<Provenance>) {
-        let mut provenance_set = self.heap_provenance.lock();
-        provenance_set.insert(provenance);
-    }
-}
-
-/// A thin wrapper around `HashMap` that uses `GlobalCtx` as its allocator
-#[derive(Debug, Clone)]
-pub struct BHashMap<K, V>(HashMap<K, V, DefaultHashBuilder, BsanAllocHooks>);
-
-impl<K, V> Deref for BHashMap<K, V> {
-    type Target = HashMap<K, V, DefaultHashBuilder, BsanAllocHooks>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<K, V> DerefMut for BHashMap<K, V> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl<K, V> BHashMap<K, V> {
-    fn new_in(hooks: BsanAllocHooks) -> Self {
-        Self(HashMap::with_hasher_in(foldhash::fast::RandomState::default(), hooks))
     }
 }
 
