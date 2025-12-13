@@ -8,6 +8,7 @@ extern crate rustc_session;
 mod callbacks;
 use std::env;
 use std::path::PathBuf;
+use std::process::exit;
 
 pub use callbacks::BSanCallBacks;
 
@@ -47,13 +48,16 @@ pub struct Config {
 impl Config {
     pub fn new(raw_args: Vec<String>) -> Self {
         let (mut args, target_crate) = {
+            if env::var("PRINT_RUSTFLAGS").is_ok() {
+                println!("{}", Self::bsan_rustflags().join(" "));
+                exit(0);
+            }
             // If the `BSAN_BE_RUSTC` environment variable is set, we are being invoked as
             // rustc to build a crate for either the "target" architecture, or the "host"
             // architecture. In this case, "target" and "host" are the same platform, since we do not
             // support cross-compilation. However, "target" also indicates that the program needs
             // to be instrumented, while "host" indicates that it is a build script or procedural
             // macro, which we can skip.
-
             if let Ok(crate_kind) = env::var("BSAN_BE_RUSTC") {
                 let is_target = match crate_kind.as_str() {
                     "host" => false,
@@ -82,19 +86,21 @@ impl Config {
             }
         };
         if target_crate {
-            let rt = assert_env_file("BSAN_RT", BSAN_RT_EXPECTED);
-            let rt = rt.parent().unwrap().to_path_buf();
-
-            let plugin = assert_env_file("BSAN_PLUGIN", BSAN_PLUGIN_EXPECTED);
-
-            let mut additional_args =
-                BSAN_DEFAULT_ARGS.iter().map(ToString::to_string).collect::<Vec<_>>();
-            additional_args.push(format!("-Zllvm-plugins={}", plugin.display()));
-            additional_args.push(format!("-L{}", rt.display()));
-            additional_args.push("-lstatic=bsan_rt".to_string());
-            args.splice(1..1, additional_args);
+            args.splice(1..1, Self::bsan_rustflags());
         }
         Self { args, callbacks: BSanCallBacks {} }
+    }
+
+    fn bsan_rustflags() -> Vec<String> {
+        let rt = assert_env_file("BSAN_RT", BSAN_RT_EXPECTED);
+        let rt = rt.parent().unwrap().to_path_buf();
+        let plugin = assert_env_file("BSAN_PLUGIN", BSAN_PLUGIN_EXPECTED);
+        let mut additional_args =
+            BSAN_DEFAULT_ARGS.iter().map(ToString::to_string).collect::<Vec<_>>();
+        additional_args.push(format!("-Zllvm-plugins={}", plugin.display()));
+        additional_args.push(format!("-L{}", rt.display()));
+        additional_args.push("-lstatic=bsan_rt".to_string());
+        additional_args
     }
 }
 
@@ -105,11 +111,11 @@ fn assert_env_file(key: &str, expected_file_name: &str) -> PathBuf {
     }
     let rt = PathBuf::from(rt_var.unwrap());
     if !rt.exists() {
-        show_error!("The path specified in `BSAN_RT` does not exist: {}.", rt.display());
+        show_error!("The path specified in `{key}` does not exist: {}.", rt.display());
     }
     if !rt.is_file() || !rt.file_name().unwrap().eq(expected_file_name) {
         show_error!(
-            "Expected `BSAN_RT` to be the path to `{expected_file_name}`, but found: {}",
+            "Expected `{key}` to be the path to `{expected_file_name}`, but found: {}",
             rt.display()
         );
     }
