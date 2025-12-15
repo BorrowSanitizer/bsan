@@ -1,6 +1,8 @@
 #![cfg_attr(not(test), no_std)]
 #![feature(thread_local)]
 #![feature(allocator_api)]
+#![allow(internal_features)]
+#![feature(core_intrinsics)]
 #[macro_use]
 extern crate alloc;
 use core::ffi::c_void;
@@ -9,7 +11,7 @@ use core::fmt::Debug;
 use core::panic::PanicInfo;
 use core::ptr::NonNull;
 use core::sync::atomic::AtomicUsize;
-use core::{fmt, ptr, slice};
+use core::{ffi, fmt, ptr, slice};
 
 use bsan_shared::{AccessKind, RetagInfo, Size};
 use libc_print::std_name::*;
@@ -17,9 +19,6 @@ use spin::Mutex;
 
 mod global;
 pub use global::*;
-
-mod local;
-pub use local::*;
 
 pub mod borrow_tracker;
 use borrow_tracker::*;
@@ -37,6 +36,55 @@ use crate::borrow_tracker::tree::Tree;
 use crate::errors::BorsanResult;
 use crate::memory::hooks;
 use crate::span::FramePointer;
+
+/// The number of `Provenance` values stored in the thread
+/// local arrays for arguments and return values.
+static TLS_SIZE: usize = 100;
+
+/// A thread local array containing the provenance of pointers
+/// passed as arguments to a function.
+#[thread_local]
+#[unsafe(no_mangle)]
+pub static mut __BSAN_RETVAL_TLS: [Provenance; TLS_SIZE] = [Provenance::wildcard(); TLS_SIZE];
+
+/// A thread local array containing the provenance of pointers
+/// returned from a function.
+#[thread_local]
+#[unsafe(no_mangle)]
+pub static mut __BSAN_PARAM_TLS: [Provenance; TLS_SIZE] = [Provenance::wildcard(); TLS_SIZE];
+
+#[unsafe(no_mangle)]
+pub static mut __BSAN_ACTIVE_THREADS: AtomicUsize = AtomicUsize::new(0);
+
+/// The frame pointer of the caller of the last instrumented function that
+/// called an uninstrumented function. When we enter an instrumented function
+/// from a possibly uninstrumented function, we check to see if our "grandparent"
+/// frame pointer matches this value. If so, we can trust that the contents of the
+/// parameter provenance array (`__BSAN_PARAM_TLS`) are correctly initialized.
+/// Otherwise, we clear the array. We set this marker to null to indicate to the
+/// caller that they can trust the contents of return value provenance array
+/// (`__BSAN_RETVAL_TLS`). If this marker is non-null when a function returns,
+/// then we clear the array.
+#[thread_local]
+#[unsafe(no_mangle)]
+pub static mut __BSAN_TLS_MARKER: FramePointer = FramePointer::null();
+
+/// A stack-sized chunk of memory for containing protected
+/// borrow tags. Each thread has its own tag stack, which is
+/// initialized and deallocated by the LLVM wrapper. This variable
+/// stores the current value of the tag stack pointer, which is
+/// updated by our instrumentation.
+#[thread_local]
+#[unsafe(no_mangle)]
+pub static mut __BSAN_PROV_STACK: *mut Provenance = ptr::null_mut();
+
+/// A pointer to the local state of the current thread. This is
+/// managed by the LLVM wrapper, but we define it here, since thread-local
+/// symbols declared in a compiler-rt library do not appear to be relocatable,
+/// even when compilation is configured that way.
+#[thread_local]
+#[unsafe(no_mangle)]
+pub static mut __BSAN_CURR_THREAD: *mut ffi::c_void = ptr::null_mut();
 
 /// A struct for summarizing debug information about memory operations
 #[cfg(feature = "debug")]
@@ -88,7 +136,7 @@ macro_rules! debug_bsan {
                 bor_tag: $bor_tag,
                 info,
             };
-            println!("{}", summary);
+            libc_print::std_name::println!("{}", summary);
         }
     };
 }
@@ -545,7 +593,11 @@ unsafe extern "C-unwind" fn __bsan_alloc(
 /// to the address `dst_addr`. This function will silently fail, so it should only be called in conjunction with
 /// `bsan_read` and `bsan_write` or as part of an interceptor.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_shadow_copy(src: *mut u8, dst: *mut u8, access_size: usize) {
+unsafe extern "C-unwind" fn __bsan_shadow_copy(
+    src: *mut c_void,
+    dst: *mut c_void,
+    access_size: usize,
+) {
     let ctx = unsafe { global_ctx() };
     let heap = ctx.shadow_heap();
     heap.memcpy(ctx.hooks(), src.addr(), dst.addr(), access_size)
@@ -555,39 +607,34 @@ unsafe extern "C-unwind" fn __bsan_shadow_copy(src: *mut u8, dst: *mut u8, acces
 /// Clears the provenance stored in the range `[dst_addr, dst_addr + access_size)` within the
 /// shadow heap.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_shadow_clear(dst: *mut u8, access_size: usize) {
+unsafe extern "C-unwind" fn __bsan_shadow_clear(dst: *mut c_void, access_size: usize) {
     let ctx = unsafe { global_ctx() };
-    let heap = ctx.shadow_heap();
-    heap.clear(ctx.hooks(), dst.addr(), access_size, __BSAN_NULL_PROVENANCE)
+    ctx.shadow_heap()
+        .clear(ctx.hooks(), dst.addr(), access_size, __BSAN_WILDCARD_PROVENANCE)
         .unwrap_or_else(|info| ctx.handle_error(info.into()))
 }
 
 /// Loads the provenance of a given address from shadow memory and stores
 /// the result in the return pointer.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_shadow_src(addr: *mut u8) -> *const Provenance {
+unsafe extern "C-unwind" fn __bsan_shadow_src(addr: *mut c_void) -> *const Provenance {
     let ctx = unsafe { global_ctx() };
-    let heap = ctx.shadow_heap();
-    heap.get_src(addr.addr())
+    ctx.shadow_heap().get_src(addr.addr())
 }
 
 /// Stores the given provenance value into shadow memory at the location for the given address.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_shadow_dest(addr: *mut u8) -> *mut Provenance {
+unsafe extern "C-unwind" fn __bsan_shadow_dest(ptr: *mut c_void) -> NonNull<Provenance> {
     let ctx = unsafe { global_ctx() };
-    bsan_shadow_dest(ctx, addr).unwrap_or_else(|info| ctx.handle_error(info))
-}
-
-#[inline]
-fn bsan_shadow_dest(ctx: &GlobalCtx, addr: *mut u8) -> BorsanResult<*mut Provenance> {
-    let heap = ctx.shadow_heap();
-    Ok(heap.get_dest(ctx.hooks(), addr.addr())?)
+    ctx.shadow_heap()
+        .get_dest(ctx.hooks(), ptr.addr())
+        .unwrap_or_else(|info| ctx.handle_error(info.into()))
 }
 
 /// Copy provenance values from split arrays into the shadow heap.
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_shadow_load_vector(
-    src: *mut u8,
+    src: *mut c_void,
     len: usize,
     id_buffer: *mut AllocId,
     tag_buffer: *mut BorTag,
@@ -601,7 +648,7 @@ unsafe extern "C-unwind" fn __bsan_shadow_load_vector(
 /// Load provenance values from the shadow heap into split arrays.
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_shadow_store_vector(
-    dst: *mut u8,
+    dst: *mut c_void,
     len: usize,
     id_buffer: *mut AllocId,
     tag_buffer: *mut BorTag,
@@ -720,5 +767,5 @@ extern "C" fn __bsan_debug_print(alloc_id: AllocId, bor_tag: BorTag, alloc_info:
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
     eprintln!("The BorrowSanitizer runtime panicked! {:?}", info);
-    loop {}
+    core::intrinsics::abort()
 }

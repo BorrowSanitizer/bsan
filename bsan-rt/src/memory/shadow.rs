@@ -284,11 +284,12 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
         }
     }
 
-    pub fn get_dest(&self, hooks: &BsanHooks, addr: usize) -> AllocResult<*mut T> {
+    pub fn get_dest(&self, hooks: &BsanHooks, addr: usize) -> AllocResult<NonNull<T>> {
         let idx = TableIndex::new(addr);
         unsafe {
             let l2_page = self.ensure_l2(hooks, idx)?;
-            Ok(&raw mut (*l2_page.as_ptr())[idx.l2_index])
+            let ptr = &raw mut (*l2_page.as_ptr())[idx.l2_index];
+            Ok(NonNull::new_unchecked(ptr))
         }
     }
 }
@@ -367,7 +368,7 @@ mod tests {
         let addr = 0x1234_5678_1234_5678;
         unsafe {
             let dest = heap.get_dest(&DEFAULT_HOOKS, addr)?;
-            *dest = test_prov;
+            *dest.as_ptr() = test_prov;
         }
         unsafe {
             let loaded_prov = *heap.get_src(addr);
@@ -388,7 +389,7 @@ mod tests {
             let offset_bytes = offset * PTR_BYTES;
             unsafe {
                 let dest = heap.get_dest(&DEFAULT_HOOKS, src_address + offset_bytes)?;
-                *dest = prov;
+                *dest.as_ptr() = prov;
             }
         }
 
@@ -418,7 +419,7 @@ mod tests {
         for offset in 0..three_quarter_max {
             let offset_bytes = offset * PTR_BYTES;
             unsafe {
-                *heap.get_dest(&DEFAULT_HOOKS, src_address + offset_bytes)? = prov;
+                *heap.get_dest(&DEFAULT_HOOKS, src_address + offset_bytes)?.as_ptr() = prov;
             }
             let compare_prov = unsafe { *heap.get_src(src_address + offset_bytes) };
             assert_eq!(prov, compare_prov)
@@ -465,7 +466,7 @@ mod tests {
         unsafe {
             for (i, test_value) in test_values.iter().enumerate().take(NUM_OPERATIONS) {
                 let addr = BASE_ADDR + (i * 8);
-                *heap.get_dest(&DEFAULT_HOOKS, addr)? = *test_value;
+                *heap.get_dest(&DEFAULT_HOOKS, addr)?.as_ptr() = *test_value;
                 let prov = *heap.get_src(addr);
                 assert_eq!(prov.value, test_value.value);
             }
@@ -474,7 +475,7 @@ mod tests {
                 let addr = BASE_ADDR + (i * 8);
                 let prov = *heap.get_src(addr);
                 assert_eq!(prov.value, test_value.value);
-                *heap.get_dest(&DEFAULT_HOOKS, addr)? = *test_value;
+                *heap.get_dest(&DEFAULT_HOOKS, addr)?.as_ptr() = *test_value;
             }
         }
         Ok(())

@@ -100,7 +100,7 @@ impl<'b> BorrowTracker<'b> {
                         alloc_size,
                     )))
                 } else {
-                    return Ok(None);
+                    Ok(None)
                 };
             }
             let start = Size::from_bytes(relative_offset);
