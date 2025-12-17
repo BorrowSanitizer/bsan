@@ -4,6 +4,7 @@
 #include "sanitizer_common/sanitizer_flags.h"
 #include "sanitizer_common/sanitizer_stackdepot.h"
 #include "sanitizer_common/sanitizer_stacktrace.h"
+#include "sanitizer_common/sanitizer_symbolizer.h"
 
 using namespace __sanitizer;
 using namespace __bsan;
@@ -108,4 +109,31 @@ __bsan_StackDepotPut(uptr pc, uptr bp, u32 max_depth) {
   stack.Unwind(pc, bp, /*context=*/nullptr, /*request_fast=*/true,
                /*max_depth=*/max_depth);
   return StackDepotPut(stack);
+}
+
+// Symbolize a single PC into file:line:column, writing the file path into
+// the provided buffer. Returns 1 on success, 0 otherwise.
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE u32 __bsan_symbolizePC(
+    uptr pc, char *file_buf, uptr file_buf_len, u32 *line, u32 *column) {
+  __sanitizer::Symbolizer *sym = __sanitizer::Symbolizer::GetOrInit();
+  if (!sym) {
+    return 0;
+  }
+  __sanitizer::SymbolizedStack *res = sym->SymbolizePC(pc);
+  if (!res) {
+    return 0;
+  }
+  const char *fname = res->info.file;
+  if (!fname) {
+    res->ClearAll();
+    return 0;
+  }
+
+  __sanitizer::internal_strlcpy(file_buf, fname, file_buf_len);
+  if (line)
+    *line = res->info.line;
+  if (column)
+    *column = res->info.column;
+  res->ClearAll();
+  return 1;
 }

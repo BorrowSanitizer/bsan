@@ -6,6 +6,7 @@
 #![feature(link_llvm_intrinsics)]
 #[macro_use]
 extern crate alloc;
+use alloc::string::String;
 use core::ffi::c_void;
 use core::fmt::Debug;
 #[cfg(not(test))]
@@ -142,6 +143,19 @@ macro_rules! handle_err {
     }};
 }
 
+#[derive(Clone, Debug)]
+pub struct SrcLoc {
+    pub file: String,
+    pub line: u32,
+    pub col: u32,
+}
+
+impl fmt::Display for SrcLoc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "file {} at line {}, column {}", self.file, self.line, self.col)
+    }
+}
+
 #[derive(Copy, Clone)]
 pub(crate) struct SpanData {
     fp: frame_pointer_utils::FramePointer,
@@ -174,6 +188,18 @@ impl SpanData {
     pub fn print_stack_trace(&self) {
         #[cfg(not(test))]
         crate::sanitizer_common_interface::print_stack_trace(Some(self.stack_trace_id));
+    }
+
+    /// Try to obtain a `SrcLoc` for this span's ip.
+    pub fn source_location(&self) -> Option<SrcLoc> {
+        #[cfg(not(test))]
+        {
+            crate::sanitizer_common_interface::symbolize_pc_into(self.ip)
+        }
+        #[cfg(test)]
+        {
+            None
+        }
     }
 }
 

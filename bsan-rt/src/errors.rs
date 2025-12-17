@@ -66,7 +66,53 @@ impl Display for UBInfo {
             UBInfo::GlobalFree(..) => write!(f, "{:?}", self),
             UBInfo::StackFree(..) => write!(f, "{:?}", self),
             UBInfo::AliasingViolation(error) => {
-                write!(f, "AliasingViolation: {:?}", error)
+                if let Some(access_event) = error.accessed_info.history.last_event() {
+                    if let Some(conflict_event) = error.conflicting_info.history.last_event() {
+                        let a_loc = access_event.span.span_data().source_location();
+                        let c_loc = conflict_event.span.span_data().source_location();
+                        match (a_loc, c_loc) {
+                            (Some(a), Some(c)) => {
+                                write!(f, "Access at {}\nConflict at {}", a, c)
+                            }
+                            (Some(a), None) => {
+                                write!(
+                                    f,
+                                    "Access at {}\nConflict at ip 0x{:x}",
+                                    a,
+                                    conflict_event.span.addr()
+                                )
+                            }
+                            (None, Some(c)) => {
+                                write!(
+                                    f,
+                                    "Access at ip 0x{:x}\nConflict at {}",
+                                    access_event.span.addr(),
+                                    c
+                                )
+                            }
+                            (None, None) => {
+                                write!(
+                                    f,
+                                    "Access at ip 0x{:x}\nConflict at ip 0x{:x}",
+                                    access_event.span.addr(),
+                                    conflict_event.span.addr()
+                                )
+                            }
+                        }
+                    } else {
+                        if let Some(a) = access_event.span.span_data().source_location() {
+                            write!(f, "Access at {}\nConflict event not found", a)
+                        } else {
+                            write!(
+                                f,
+                                "Access at ip 0x{:x}\nConflict event not found",
+                                access_event.span.addr()
+                            )
+                        }
+                    }
+                } else {
+                    write!(f, "AliasingViolation: {:?}", error)
+                }
             }
         }
     }

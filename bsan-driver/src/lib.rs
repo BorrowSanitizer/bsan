@@ -34,6 +34,7 @@ pub const BSAN_DEFAULT_ARGS: &[&str] = &[
     "-Zinline-llvm=no",
     "-Zinline-mir=no",
     "-Cembed-bitcode=yes",
+    "-Cdebuginfo=2",
 ];
 
 static BSAN_RT_EXPECTED: &str = "libbsan_rt.a";

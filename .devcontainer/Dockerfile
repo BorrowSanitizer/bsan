@@ -24,6 +24,7 @@ FROM base AS build-image-dev
 RUN mkdir /build-xb
 COPY bsan-script /build-xb/bsan-script
 COPY config.toml /build-xb/
+COPY llvm-sparse /build-xb/
 COPY xb /build-xb/
 WORKDIR /build-xb
 RUN ./xb --skip setup

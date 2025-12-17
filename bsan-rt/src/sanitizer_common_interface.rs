@@ -1,7 +1,8 @@
+use crate::alloc::string::{String, ToString};
 use crate::errors::{BorsanResult, ErrorInfo};
 use crate::global::BHashMap;
 use crate::memory::hooks::BsanAllocHooks;
-use crate::{span, AllocId, SpanData};
+use crate::{span, AllocId, SpanData, SrcLoc};
 
 unsafe extern "C" {
     fn __bsan_printCurrentStackTrace();
@@ -13,6 +14,15 @@ unsafe extern "C" {
 
     /// Gets the top frame PC address from a stack trace ID
     fn __bsan_GetTopFramePC(pc: usize) -> usize;
+
+    /// Symbolize a single PC into file:line:column and returns 1 on success.
+    fn __bsan_symbolizePC(
+        pc: usize,
+        file_buf: *mut u8,
+        file_buf_len: usize,
+        line: *mut u32,
+        column: *mut u32,
+    ) -> i32;
 }
 
 /// Maximum depth of captured stack traces as defined in sanitizer_common/sanitizer_stacktrace.h
@@ -42,6 +52,21 @@ pub(crate) fn capture_current_stack_trace(
 /// This is the adjusted PC address as stored by sanitizer_common.
 pub(crate) fn get_top_frame_pc(pc: usize) -> usize {
     unsafe { __bsan_GetTopFramePC(pc) }
+}
+
+/// Symbolize a single PC and return a `SrcLoc` (file, line, column) on success
+pub(crate) fn symbolize_pc_into(pc: usize) -> Option<SrcLoc> {
+    let mut buf = [0u8; 512];
+    let mut line: u32 = 0;
+    let mut column: u32 = 0;
+    let ok = unsafe { __bsan_symbolizePC(pc, buf.as_mut_ptr(), buf.len(), &mut line, &mut column) };
+    if ok == 1 {
+        let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        if let Ok(s) = core::str::from_utf8(&buf[..end]) {
+            return Some(SrcLoc { file: s.to_string(), line, col: column });
+        }
+    }
+    None
 }
 
 #[derive(Copy, Clone, Debug)]
