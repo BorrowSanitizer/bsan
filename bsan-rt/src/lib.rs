@@ -3,6 +3,7 @@
 #![feature(allocator_api)]
 #![allow(internal_features)]
 #![feature(core_intrinsics)]
+#![feature(test)]
 #[macro_use]
 extern crate alloc;
 use core::ffi::c_void;
