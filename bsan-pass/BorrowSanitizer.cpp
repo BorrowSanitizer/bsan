@@ -807,6 +807,8 @@ private:
       Callee = BS.BsanFuncAssertProvenanceWildcard;
     } else if (Name == kBsanFuncDebugPrint) {
       Callee = BS.BsanFuncDebugPrint;
+    } else if (Name == kBsanFuncDebugPrintBorrowState) {
+      Callee = BS.BsanFuncDebugPrintBorrowState;
     } else {
       report_fatal_error("Unknown debug function: " + Twine(Name) + "\n");
     }
@@ -1670,6 +1672,10 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   BsanFuncDebugPrint = M.getOrInsertFunction(
       kBsanFuncDebugPrint, AL, IRB.getVoidTy(), IntptrTy, IntptrTy, PtrTy);
+
+  BsanFuncDebugPrintBorrowState =
+      M.getOrInsertFunction(kBsanFuncDebugPrintBorrowState, AL, IRB.getVoidTy(),
+                            IntptrTy, IntptrTy, PtrTy);
 
   BsanFuncDebugParamTLS = M.getOrInsertFunction(kBsanFuncDebugParamTLS, AL,
                                                 IRB.getVoidTy(), IntptrTy);
