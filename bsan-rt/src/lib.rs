@@ -34,6 +34,7 @@ mod errors;
 mod memory;
 
 use crate::borrow_tracker::tree::Tree;
+use crate::diagnostics::*;
 use crate::errors::BorsanResult;
 use crate::memory::hooks;
 use crate::span::FramePointer;
@@ -560,7 +561,7 @@ extern "C" fn __bsan_validate_param_tls(len: usize) {
 
 /// Ensures that the provenance array for the return value is valid.
 /// If the boundary marker is null, then we called an instrumented function, so we
-/// can trust that the contents of the array is valid. Otherwise, we need to fill it
+// can trust that the contents of the array is valid. Otherwise, we need to fill it
 /// with wildcard provenance values for each pointer being returned. We also need to
 /// restore the boundary marker to the value it had before the function that was called.
 #[unsafe(no_mangle)]
@@ -762,6 +763,22 @@ extern "C" fn __bsan_debug_assert_invalid(
 extern "C" fn __bsan_debug_print(alloc_id: AllocId, bor_tag: BorTag, alloc_info: *mut AllocInfo) {
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     crate::println!("{prov:?}");
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_debug_print_borrow_state(
+    alloc_id: AllocId,
+    bor_tag: BorTag,
+    alloc_info: *mut AllocInfo,
+) {
+    let alloc_info = unsafe { &*alloc_info };
+    let global_ctx = unsafe { global_ctx() };
+
+    let tree_lock = alloc_info.tree_lock.lock();
+    if let Some(tree) = &*tree_lock {
+        let protected_tags = Default::default();
+        tree.print_tree(&protected_tags, true).unwrap_or_else(|err| handle_err!(err, global_ctx));
+    }
 }
 
 #[cfg(not(test))]
