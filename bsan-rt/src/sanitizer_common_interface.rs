@@ -1,8 +1,8 @@
 use crate::alloc::string::ToString;
-use crate::errors::{BorsanResult, ErrorInfo};
-use crate::memory::hooks::BsanAllocHooks;
+use crate::errors::{BorsanResult};
 use crate::span::SrcLoc;
-use crate::{AllocId, BHashMap, Span};
+use crate::{AllocId, Span};
+use crate::helpers::FxHashMap;
 
 unsafe extern "C" {
     fn __bsan_printCurrentStackTrace();
@@ -72,16 +72,13 @@ pub(crate) fn symbolize_pc_into(pc: usize) -> Option<SrcLoc> {
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub(crate) struct StackTraceId(pub(crate) u32);
 
+#[derive(Default)]
 pub(crate) struct StackTraceDepot {
     /// map from allocation ID to its stack ID
-    alloc_stacks: BHashMap<AllocId, StackTraceId>,
+    alloc_stacks: FxHashMap<AllocId, StackTraceId>,
 }
 
 impl StackTraceDepot {
-    pub(crate) fn new_in(hooks: BsanAllocHooks) -> Self {
-        Self { alloc_stacks: BHashMap::new_in(hooks) }
-    }
-
     pub(crate) fn capture_stack(
         &mut self,
         alloc_id: AllocId,
@@ -92,23 +89,17 @@ impl StackTraceDepot {
         let stack_id = unsafe {
             StackTraceId(__bsan_StackDepotPut(span_data.ip(), span_data.fp().addr(), max_depth))
         };
-        match self.alloc_stacks.insert(alloc_id, stack_id) {
-            None => Ok(()),
-            Some(_) => Err(ErrorInfo::Internal(crate::errors::InternalError::Unexpected(format!(
-                "Stack trace for allocation ID {:?} already exists",
-                alloc_id
-            )))),
+        if self.alloc_stacks.insert(alloc_id, stack_id).is_some() {
+            panic!("Stack trace for allocation ID {:?} already exists", alloc_id);
         }
+        Ok(())
     }
 
     pub(crate) fn print_trace(&self, alloc_id: &AllocId) -> BorsanResult<StackTraceId> {
         let stack_id = self.alloc_stacks.get(alloc_id);
         match stack_id {
             Some(id) => Ok(*id),
-            None => Err(ErrorInfo::Internal(crate::errors::InternalError::Unexpected(format!(
-                "No stack trace found for allocation ID {:?}",
-                alloc_id
-            )))),
+            None => panic!("No stack trace found for allocation ID {:?}", alloc_id),
         }
     }
 }

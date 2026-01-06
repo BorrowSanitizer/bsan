@@ -750,7 +750,7 @@ pub trait PrintTree {
         &self,
         protected_tags: &HashMap<BorTag, ProtectorKind>,
         show_unnamed: bool,
-    ) -> BorsanResult<()>;
+    );
 }
 
 impl<A: Allocator> PrintTree for Tree<A> {
@@ -759,7 +759,7 @@ impl<A: Allocator> PrintTree for Tree<A> {
         &self,
         protected_tags: &HashMap<BorTag, ProtectorKind>,
         show_unnamed: bool,
-    ) -> BorsanResult<()> {
+    ) {
         let mut indenter = DisplayIndent::new();
         let ranges = self.rperms.iter_all().map(|(range, _perms)| range).collect::<Vec<_>>();
         if let Some(repr) = DisplayRepr::from(self, show_unnamed) {
@@ -771,7 +771,6 @@ impl<A: Allocator> PrintTree for Tree<A> {
                 /* print warning message about tags not shown */ !show_unnamed,
             );
         }
-        Ok(())
     }
 }
 

@@ -4,16 +4,66 @@ use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 
 use bsan_shared::ProtectorKind;
-use hashbrown::{DefaultHashBuilder, HashMap};
-use rustc_hash::FxBuildHasher;
-use spin::MutexGuard;
+use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[cfg(not(test))]
 use crate::diagnostics::History;
-use crate::errors::ErrorInfo;
+#[cfg(not(test))]
+use crate::sanitizer_common_interface::{StackTraceDepot};
+
+use crate::errors::UBInfo;
+use crate::helpers::FxHashMap;
+use crate::local::{deinit_local_ctx, init_local_ctx, local_ctx, local_ctx_mut, LocalCtx};
 use crate::memory::hooks::{BsanAllocHooks, BsanHooks};
-use crate::memory::{AllocError, Heap, ShadowHeap};
+use crate::memory::{Heap, ShadowHeap};
 use crate::*;
+
+#[derive(Default)]
+pub struct ProtectedTags(FxHashMap<BorTag, ProtectorKind>);
+
+impl ProtectedTags {
+    pub fn get_protector_kind(&self, tag: BorTag) -> Option<ProtectorKind> {
+        self.0.get(&tag).copied()
+    }
+
+    pub fn is_protected(&self, tag: BorTag) -> bool {
+        self.0.contains_key(&tag)
+    }
+
+    pub fn add_protector(&mut self, tag: BorTag, kind: ProtectorKind) {
+        self.0.insert(tag, kind);
+    }
+
+    pub fn remove_protector(&mut self, tag: BorTag) {
+        self.0.remove(&tag);
+    }
+}
+
+pub struct ProtectedTagsRefMut<'a>(RwLockWriteGuard<'a, ProtectedTags>);
+
+impl<'a> Deref for ProtectedTagsRefMut<'a> {
+    type Target = ProtectedTags;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'a> DerefMut for ProtectedTagsRefMut<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+pub struct ProtectedTagsRef<'a>(RwLockReadGuard<'a, ProtectedTags>);
+
+impl<'a> Deref for ProtectedTagsRef<'a> {
+    type Target = ProtectedTags;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 /// Every action that requires a heap allocation must be performed through a globally
 /// accessible, singleton instance of `GlobalCtx`. Initializing or obtaining
@@ -24,12 +74,12 @@ use crate::*;
 /// that these invariants hold. This design pattern requires us to pass the `GlobalCtx` instance
 /// around explicitly, but it prevents us from relying on implicit global state and limits the spread
 /// of unsafety throughout the library.
-#[derive(Debug)]
 pub struct GlobalCtx {
     hooks: BsanHooks,
-    protected_tags: Mutex<HashMap<BorTag, ProtectorKind, FxBuildHasher>>,
+    protected_tags: RwLock<ProtectedTags>,
     shadow_heap: ShadowHeap<Provenance>,
     alloc_metadata_map: Heap<AllocInfo>,
+    threads: RwLock<FxHashMap<ThreadId, NonNull<LocalCtx>>>,
     #[cfg(not(test))]
     allocation_stack_depot: Mutex<crate::sanitizer_common_interface::StackTraceDepot>,
 }
@@ -37,17 +87,17 @@ pub struct GlobalCtx {
 impl GlobalCtx {
     /// Creates a new instance of `GlobalCtx` using the given `BsanHooks`.
     /// This function will also initialize our shadow heap
-    fn new(hooks: BsanHooks) -> Result<Self, AllocError> {
-        Ok(Self {
+    fn new(hooks: BsanHooks) -> Self {
+        Self {
             hooks,
-            protected_tags: Mutex::new(HashMap::with_hasher(FxBuildHasher)),
-            alloc_metadata_map: Heap::new(&hooks)?,
-            shadow_heap: ShadowHeap::new(&hooks, &raw const __BSAN_WILDCARD_PROVENANCE)?,
+            protected_tags: RwLock::new(ProtectedTags::default()),
+            alloc_metadata_map: Heap::new(),
+            shadow_heap: ShadowHeap::new(&raw const __BSAN_WILDCARD_PROVENANCE),
+            threads: RwLock::new(FxHashMap::default()),
             #[cfg(not(test))]
-            allocation_stack_depot: Mutex::new(
-                crate::sanitizer_common_interface::StackTraceDepot::new_in(hooks.alloc),
+            allocation_stack_depot: Mutex::new(StackTraceDepot::default(),
             ),
-        })
+        }
     }
 
     pub fn hooks(&self) -> &BsanHooks {
@@ -55,7 +105,8 @@ impl GlobalCtx {
     }
 
     pub(crate) fn create_alloc_info(&self, info: AllocInfo) -> BorsanResult<NonNull<AllocInfo>> {
-        Ok(self.alloc_metadata_map.alloc(info)?)
+        let info = self.alloc_metadata_map.alloc(info);
+        Ok(info)
     }
 
     pub(crate) unsafe fn destroy_alloc_info(&self, ptr: NonNull<AllocInfo>) {
@@ -76,18 +127,49 @@ impl GlobalCtx {
         }
     }
 
-    pub fn protected_tags(&self) -> MutexGuard<'_, HashMap<BorTag, ProtectorKind, FxBuildHasher>> {
-        self.protected_tags.lock()
+    #[allow(unused)]
+    pub fn local_ctx_mut<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut LocalCtx) -> R,
+    {
+        self.threads.read();
+        let local_ctx = unsafe { local_ctx_mut() };
+        f(local_ctx)
     }
 
-    pub fn add_protected_tag(&self, bor_tag: BorTag, protector_kind: ProtectorKind) {
-        let mut tag_map = self.protected_tags();
-        tag_map.insert(bor_tag, protector_kind);
+    #[allow(unused)]
+    pub fn local_ctx<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&LocalCtx) -> R,
+    {
+        let local_ctx = unsafe { local_ctx() };
+        f(local_ctx)
     }
 
-    pub fn get_protector_kind(&self, bor_tag: BorTag) -> Option<ProtectorKind> {
-        let tag_map = self.protected_tags();
-        tag_map.get(&bor_tag).copied()
+    pub fn protected_tags<'a>(&'a self) -> ProtectedTagsRef<'a> {
+        ProtectedTagsRef(self.protected_tags.read())
+    }
+
+    pub fn protected_tags_mut<'a>(&'a self) -> ProtectedTagsRefMut<'a> {
+        ProtectedTagsRefMut(self.protected_tags.write())
+    }
+
+    pub fn init_local_ctx(&self) -> BorsanResult<()> {
+        let tid = ThreadId::default();
+        unsafe { __BSAN_THREAD_ID = tid };
+        let local_ctx = unsafe { init_local_ctx(tid.is_main()) };
+        self.threads.write().insert(tid, local_ctx);
+        Ok(())
+    }
+
+    /// # Safety
+    /// This function must only be called once.
+    pub unsafe fn deinit_local_ctx(&self) {
+        unsafe {
+            let tid = __BSAN_THREAD_ID;
+            self.threads.write().remove(&tid);
+            deinit_local_ctx();
+        }
     }
 
     #[cfg(not(test))]
@@ -102,12 +184,11 @@ impl GlobalCtx {
 
     #[inline(never)] // never inline to have specific break point for debugging with GDB
     #[allow(clippy::collapsible_if)]
-    pub fn handle_error(&self, info: ErrorInfo) -> ! {
-        crate::eprintln!("An error occurred: {info:?}");
+    pub fn handle_error(&self, ub_info: UBInfo) -> ! {
+        crate::eprintln!("An error occurred: {ub_info:?}");
 
-        // code below uses sanitizer common interface to print stack traces and detailed error info
         #[cfg(not(test))]
-        if let ErrorInfo::UndefinedBehavior(ub_info) = info {
+        {
             if let Some(alloc_id) = ub_info.get_alloc_id()
                 && let Ok(stack_id) = self.allocation_stack_depot.lock().print_trace(&alloc_id)
             {
@@ -126,9 +207,6 @@ impl GlobalCtx {
 
                     print_traces(&tree_error.accessed_info.history);
                     print_traces(&tree_error.conflicting_info.history);
-
-                    // #[cfg(feature = "debug")]
-                    // crate::eprintln!("[DEBUG] Full TreeError: {:#?}", tree_error);
                 }
                 errors::UBInfo::AccessOutOfBounds(prov, _, _) => {
                     if let Some(alloc_info) = unsafe { prov.alloc_info.as_ref() } {
@@ -143,31 +221,8 @@ impl GlobalCtx {
                 _ => (),
             }
         }
+
         self.exit(1)
-    }
-}
-
-/// A thin wrapper around `HashMap` that uses `GlobalCtx` as its allocator
-#[derive(Debug, Clone)]
-pub struct BHashMap<K, V>(HashMap<K, V, DefaultHashBuilder, BsanAllocHooks>);
-
-impl<K, V> Deref for BHashMap<K, V> {
-    type Target = HashMap<K, V, DefaultHashBuilder, BsanAllocHooks>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<K, V> DerefMut for BHashMap<K, V> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-#[cfg(not(test))]
-impl<K, V> BHashMap<K, V> {
-    pub(crate) fn new_in(hooks: BsanAllocHooks) -> Self {
-        Self(HashMap::with_hasher_in(foldhash::fast::RandomState::default(), hooks))
     }
 }
 
@@ -211,8 +266,7 @@ static GLOBAL_CTX: GlobalCtxWrapper = GlobalCtxWrapper(UnsafeCell::new(MaybeUnin
 #[inline]
 pub unsafe fn init_global_ctx(hooks: BsanHooks) {
     unsafe {
-        (*GLOBAL_CTX.0.get())
-            .write(GlobalCtx::new(hooks).expect("failed to allocate global context"));
+        (*GLOBAL_CTX.0.get()).write(GlobalCtx::new(hooks));
     }
 }
 

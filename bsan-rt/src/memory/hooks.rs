@@ -3,8 +3,6 @@ use core::ffi::c_void;
 use core::mem;
 use core::ptr::NonNull;
 
-use libc::off_t;
-
 pub static BSAN_PROT_FLAGS: i32 = libc::PROT_READ | libc::PROT_WRITE;
 #[cfg(not(miri))]
 pub static BSAN_MAP_FLAGS: i32 =
@@ -12,8 +10,6 @@ pub static BSAN_MAP_FLAGS: i32 =
 #[cfg(miri)]
 pub static BSAN_MAP_FLAGS: i32 = libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_ANON;
 
-pub type MMap = unsafe extern "C" fn(*mut c_void, usize, i32, i32, i32, off_t) -> *mut c_void;
-pub type MUnmap = unsafe extern "C" fn(*mut c_void, usize) -> i32;
 pub type Malloc = unsafe extern "C" fn(usize) -> *mut c_void;
 pub type Free = unsafe extern "C" fn(*mut c_void);
 pub type Exit = unsafe extern "C" fn(i32) -> !;
@@ -22,8 +18,6 @@ pub type Exit = unsafe extern "C" fn(i32) -> !;
 #[derive(Debug, Copy, Clone)]
 pub struct BsanHooks {
     pub alloc: BsanAllocHooks,
-    pub mmap_ptr: MMap,
-    pub munmap_ptr: MUnmap,
     pub exit: Exit,
 }
 
@@ -70,7 +64,5 @@ unsafe extern "C" fn default_exit(code: i32) -> ! {
 
 pub static DEFAULT_HOOKS: BsanHooks = BsanHooks {
     alloc: BsanAllocHooks { malloc: libc::malloc, free: libc::free },
-    mmap_ptr: libc::mmap,
-    munmap_ptr: libc::munmap,
     exit: default_exit,
 };

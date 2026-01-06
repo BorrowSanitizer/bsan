@@ -1,8 +1,12 @@
 #include "bsan_thread.h"
-#include "bsan.h"
 
 using namespace __sanitizer;
 using namespace __bsan;
+
+extern "C" {
+void __bsan_local_init();
+void __bsan_local_deinit();
+}
 
 BsanThread *BsanThread::Create(thread_callback_t start_routine, void *arg) {
   uptr PageSize = GetPageSizeCached();
@@ -14,12 +18,7 @@ BsanThread *BsanThread::Create(thread_callback_t start_routine, void *arg) {
   return thread;
 }
 
-void BsanThread::Init() {
-  GetThreadStackTopAndBottom(IsMainThread(), &stack_top_, &stack_bottom_);
-  this->stack_size = stack_top_ - stack_bottom_;
-  this->stack_alloc = (u8 *)MmapOrDie(this->stack_size, __func__);
-  __BSAN_PROV_STACK = (uptr *)(this->stack_alloc + this->stack_size);
-}
+void BsanThread::Init() { __bsan_local_init(); }
 
 void BsanThread::TSDDtor(void *tsd) {
   BsanThread *t = (BsanThread *)tsd;
@@ -27,7 +26,7 @@ void BsanThread::TSDDtor(void *tsd) {
 }
 
 void BsanThread::Destroy() {
-  UnmapOrDie(this->stack_alloc, this->stack_size);
+  __bsan_local_deinit();
   uptr size = RoundUpTo(sizeof(BsanThread), GetPageSizeCached());
   UnmapOrDie(this, size);
 }

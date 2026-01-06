@@ -1,6 +1,5 @@
 // Components in this library were ported from Miri and then modified by our team.
 use core::ffi::c_void;
-use core::sync::atomic::Ordering;
 
 use bsan_shared::{AccessKind, ProtectorKind, RangeMap, RetagInfo, Size};
 use spin::MutexGuard;
@@ -8,10 +7,10 @@ use tree::{AllocRange, Tree};
 
 use crate::borrow_tracker::tree::{ChildParams, LocationState};
 use crate::diagnostics::AccessCause;
-use crate::errors::{BorsanResult, ErrorInfo, UBInfo};
+use crate::errors::{BorsanResult, UBInfo};
 use crate::memory::hooks::BsanAllocHooks;
 use crate::span::Span;
-use crate::{AllocId, BorTag, GlobalCtx, Provenance, __BSAN_BOR_TAG_CTR};
+use crate::{AllocId, BorTag, GlobalCtx, Provenance};
 
 pub mod tree;
 pub mod unimap;
@@ -35,7 +34,7 @@ impl<'b> BorrowTracker<'b> {
         if prov.alloc_id == AllocId::wildcard() {
             Ok(None)
         } else if prov.alloc_id == AllocId::invalid() {
-            Err(ErrorInfo::UndefinedBehavior(UBInfo::UseAfterFree(prov.alloc_id)))
+            Err(UBInfo::UseAfterFree(prov.alloc_id))
         } else {
             // Safety:
             // Our instrumentation pass guarantees that if a pointer's
@@ -44,7 +43,7 @@ impl<'b> BorrowTracker<'b> {
             debug_assert!(!prov.alloc_info.is_null());
             let root_alloc_id = unsafe { (*prov.alloc_info).alloc_id };
             if prov.alloc_id != root_alloc_id {
-                return Err(ErrorInfo::UndefinedBehavior(UBInfo::UseAfterFree(prov.alloc_id)));
+                return Err(UBInfo::UseAfterFree(prov.alloc_id));
             }
             let size = Size::from_bytes(unsafe { (*prov.alloc_info).size });
             let range = AllocRange { start: Size::ZERO, size };
@@ -70,7 +69,7 @@ impl<'b> BorrowTracker<'b> {
             if let Some(size) = access_size
                 && size > 0
             {
-                Err(ErrorInfo::UndefinedBehavior(UBInfo::UseAfterFree(prov.alloc_id)))
+                Err(UBInfo::UseAfterFree(prov.alloc_id))
             } else {
                 Ok(None)
             }
@@ -86,7 +85,7 @@ impl<'b> BorrowTracker<'b> {
             let access_size = access_size.unwrap_or(alloc_size);
             if prov.alloc_id != root_alloc_id {
                 return if access_size != 0 {
-                    Err(ErrorInfo::UndefinedBehavior(UBInfo::UseAfterFree(prov.alloc_id)))
+                    Err(UBInfo::UseAfterFree(prov.alloc_id))
                 } else {
                     Ok(None)
                 };
@@ -94,11 +93,11 @@ impl<'b> BorrowTracker<'b> {
             let relative_offset = start.addr().wrapping_sub(base_addr.addr());
             if start.addr() < base_addr.addr() || (relative_offset + access_size > alloc_size) {
                 return if access_size != 0 {
-                    Err(ErrorInfo::UndefinedBehavior(UBInfo::AccessOutOfBounds(
+                    Err(UBInfo::AccessOutOfBounds(
                         prov,
                         access_size,
                         alloc_size,
-                    )))
+                    ))
                 } else {
                     Ok(None)
                 };
@@ -112,6 +111,19 @@ impl<'b> BorrowTracker<'b> {
     }
 
     pub fn retag(
+        global_ctx: &GlobalCtx,
+        prov: Provenance,
+        start: *mut c_void,
+        access_size: Option<usize>,
+        retag_info: RetagInfo<'_>,
+        span: Span,
+    ) -> BorsanResult<BorTag> {
+        Self::for_access(prov, start, access_size, |mut bt| {
+            bt.retag_inner(global_ctx, retag_info, span)
+        })
+        .map(|opt| opt.unwrap_or(prov.bor_tag))
+    }
+    pub fn retag_inner(
         &mut self,
         global_ctx: &GlobalCtx,
         retag_info: RetagInfo<'_>,
@@ -119,13 +131,14 @@ impl<'b> BorrowTracker<'b> {
     ) -> BorsanResult<BorTag> {
         let alloc_id = self.prov.alloc_id;
         let parent_tag = self.prov.bor_tag;
-        let new_tag = BorTag(__BSAN_BOR_TAG_CTR.fetch_add(1, Ordering::Relaxed));
+        let new_tag = BorTag::default();
+
         let protected = retag_info.perm.protector.is_some();
         if let Some(protector) = retag_info.perm.protector {
             // We register the protection in two different places.
             // This makes creating a protector slower, but checking whether a tag
             // is protected faster.
-            global_ctx.add_protected_tag(new_tag, protector);
+            global_ctx.protected_tags_mut().add_protector(new_tag, protector);
         }
 
         // Compute initial "inside" permissions.
@@ -169,13 +182,10 @@ impl<'b> BorrowTracker<'b> {
                 // Perform the access (update the Tree Borrows FSM)
                 self.tree_mut().perform_access(
                     parent_tag,
-                    // TODO: Validate the Range
                     Some((range_in_alloc, AccessKind::Read, AccessCause::Reborrow)),
-                    global_ctx,
+                    &global_ctx.protected_tags(),
                     alloc_id,
-                    // TODO: Replace with actual span
                     span,
-                    // Passing in allocator explicitly to stay consistent with API
                     global_ctx.allocator(),
                 )?;
             }
@@ -193,24 +203,36 @@ impl<'b> BorrowTracker<'b> {
         };
 
         self.tree_mut().new_child(child_params);
+
         Ok(new_tag)
+    }
+
+    pub fn protector_end(&mut self, global_ctx: &GlobalCtx, span: Span) -> BorsanResult<()> {
+        let (bor_tag, alloc_id) = (self.prov.bor_tag, self.prov.alloc_id);
+        self.tree_mut().perform_access(
+            bor_tag,
+            None,
+            &global_ctx.protected_tags(),
+            alloc_id,
+            span,
+            global_ctx.allocator(),
+        )?;
+        Ok(())
     }
 
     pub fn access(
         &mut self,
         global_ctx: &GlobalCtx,
-        access_kind: Option<AccessKind>,
+        access_kind: AccessKind,
         span: Span,
     ) -> BorsanResult<()> {
         let (range, bor_tag, alloc_id) = (self.range, self.prov.bor_tag, self.prov.alloc_id);
-        // Perform the access (update the Tree Borrows FSM)
         self.tree_mut().perform_access(
             bor_tag,
-            access_kind.map(|kind| (range, kind, AccessCause::Explicit(kind))),
-            global_ctx,
+            Some((range, access_kind, AccessCause::Explicit(access_kind))),
+            &global_ctx.protected_tags(),
             alloc_id,
             span,
-            // Passing in allocator explicitly to stay consistent with API
             global_ctx.allocator(),
         )?;
         Ok(())
@@ -220,7 +242,14 @@ impl<'b> BorrowTracker<'b> {
         let prov = self.prov;
         let range = self.range;
         let mut tree = self.tree.take().unwrap();
-        tree.dealloc(prov.bor_tag, range, global_ctx, prov.alloc_id, span, global_ctx.allocator())?;
+        tree.dealloc(
+            prov.bor_tag,
+            range,
+            &global_ctx.protected_tags(),
+            prov.alloc_id,
+            span,
+            global_ctx.allocator(),
+        )?;
         let info = unsafe { &mut *self.prov.alloc_info };
         info.alloc_id = AllocId::invalid();
         Ok(())

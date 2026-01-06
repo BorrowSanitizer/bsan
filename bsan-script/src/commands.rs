@@ -13,8 +13,14 @@ use crate::utils::install_git_hooks;
 use crate::Command;
 
 impl Command {
-    pub fn exec(self, quiet: bool, skip: bool, toolchain_dir: Option<String>) -> Result<()> {
-        let mut env = BsanEnv::new(quiet, skip, toolchain_dir)?;
+    pub fn exec(
+        self,
+        quiet: bool,
+        skip: bool,
+        toolchain_dir: Option<PathBuf>,
+        install_from: Option<PathBuf>,
+    ) -> Result<()> {
+        let mut env = BsanEnv::new(quiet, skip, toolchain_dir, install_from)?;
         let env = &mut env;
         match self {
             Command::Setup => Self::setup(env),
@@ -125,34 +131,35 @@ impl Command {
     }
 
     fn inst(env: &mut BsanEnv, file: String, debug: bool, args: &[String]) -> Result<()> {
-        let plugin = env.build_artifact(BsanPass, &[])?;
+        env.in_mode(Mode::Release, |env| {
+            let plugin = env.build_artifact(BsanPass, &[])?;
 
-        let runtime = if debug {
-            env.build_artifact(BsanRt, &["--features".to_string(), "debug".to_string()])?
-        } else {
-            env.build_artifact(BsanRt, &[])?
-        };
+            let runtime = if debug {
+                env.build_artifact(BsanRt, &["--features".to_string(), "debug".to_string()])?
+            } else {
+                env.build_artifact(BsanRt, &[])?
+            };
 
-        let driver = env.build_artifact(BsanDriver, &[])?;
-        let cargo_bsan = env.build_artifact(CargoBsan, &[])?;
+            let driver = env.build_artifact(BsanDriver, &[])?;
+            let cargo_bsan = env.build_artifact(CargoBsan, &[])?;
 
-        let sysroot_dir = path!(&env.build_dir / "sysroot");
+            let sysroot_dir = path!(&env.build_dir / "sysroot");
 
-        env.sh.set_var("BSAN_PLUGIN", plugin);
-        env.sh.set_var("BSAN_DRIVER", &driver);
-        env.sh.set_var("BSAN_RT", runtime);
-        env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
+            env.sh.set_var("BSAN_PLUGIN", plugin);
+            env.sh.set_var("BSAN_DRIVER", &driver);
+            env.sh.set_var("BSAN_RT", runtime);
+            env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
 
-        cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
+            cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
 
-        cmd!(env.sh, "{driver} {file}")
-            .env("BSAN_BE_RUSTC", "target")
-            .args(args)
-            .arg(format!("--sysroot={}", sysroot_dir.display()))
-            .quiet()
-            .run()?;
+            cmd!(env.sh, "{driver} {file}")
+                .env("BSAN_BE_RUSTC", "target")
+                .args(args)
+                .arg(format!("--sysroot={}", sysroot_dir.display()))
+                .run()?;
 
-        Ok(())
+            Ok(())
+        })
     }
 }
 
@@ -261,7 +268,7 @@ macro_rules! impl_component {
                 if $should_install {
                     env.install(self.artifact(env), args)
                 } else {
-                    Ok(()) // Or `Err(anyhow!("Installation not supported"))` if you want it to fail
+                    Ok(())
                 }
             }
 
@@ -423,13 +430,7 @@ impl Buildable for BsanRtCore {
     }
 
     fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        /*let tsan_extended_rustflags = RT_FLAGS
-        .iter()
-        .cloned()
-        .chain(["-Zsanitizer=thread -Cunsafe-allow-abi-mismatch=sanitizer"].iter().cloned())
-        .collect::<Vec<&str>>();*/
-        let tsan_extended_rustflags = RT_FLAGS;
-        env.with_flags("RUSTFLAGS", &tsan_extended_rustflags, |env| env.test("bsan-rt", args))
+        env.with_flags("RUSTFLAGS", &RT_FLAGS, |env| env.test("bsan-rt", args))
     }
 
     fn clippy(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
