@@ -583,6 +583,9 @@ where
         err_builder: impl Fn(ErrHandlerArgs<'_>) -> UBInfo,
         allocator: A,
     ) -> UBResult<()> {
+        if !self.tag_mapping.contains_key(&start) {
+            panic!("Unable to find mapping for tag {:?}", start);
+        }
         let start_idx = self.tag_mapping.get(&start).unwrap();
         let mut stack =
             TreeVisitorStack::new(start_idx, f_continue, f_propagate, err_builder, allocator);

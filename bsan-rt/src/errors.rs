@@ -6,33 +6,19 @@ use core::fmt::{Debug, Display};
 use bsan_shared::Permission;
 
 use crate::diagnostics::{AccessCause, NodeDebugInfo};
-use crate::memory::{self, AllocError};
 use crate::span::Span;
 use crate::{AllocId, Provenance};
 
 pub type BorsanResult<T> = Result<T, ErrorInfo>;
 pub type TreeTransitionResult<T> = core::result::Result<T, TransitionError>;
 
-#[derive(Debug)]
-pub enum InternalError {
-    Alloc(memory::AllocError),
-}
-
-impl From<AllocError> for ErrorInfo {
-    fn from(err: AllocError) -> ErrorInfo {
-        ErrorInfo::Internal(InternalError::Alloc(err))
-    }
-}
-
 pub enum ErrorInfo {
-    Internal(InternalError),
     UndefinedBehavior(UBInfo),
 }
 
 impl Debug for ErrorInfo {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            ErrorInfo::Internal(e) => write!(f, "{:?}", e),
             ErrorInfo::UndefinedBehavior(e) => write!(f, "UndefinedBehavior({})", e),
         }
     }

@@ -178,6 +178,7 @@ name = "bsan_rt"
 version = "0.1.0"
 dependencies = [
  "addr2line",
+ "backtrace",
  "bsan-shared",
  "cfg-if",
  "foldhash",

@@ -22,8 +22,6 @@ public:
 private:
   thread_callback_t start_routine_;
   void *arg_;
-  uptr stack_size;
-  u8 *stack_alloc;
 };
 
 BsanThread *GetCurrentThread();

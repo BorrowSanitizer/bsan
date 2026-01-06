@@ -9,16 +9,89 @@ use hooks::*;
 mod heap;
 pub use heap::Heap;
 use heap::Heapable;
+use libc::{pthread_attr_destroy, pthread_attr_init, pthread_attr_t, rlimit, _SC_PAGESIZE};
 
 mod shadow;
 use core::ffi::c_void;
-use core::mem;
+use core::mem::{self, MaybeUninit};
 use core::num::NonZero;
 use core::ptr::{self, NonNull};
 
 pub use shadow::ShadowHeap;
 
 use crate::{AllocInfo, BorTag};
+
+#[derive(Debug, Copy, Clone)]
+pub struct StackSize(NonZero<usize>);
+
+#[allow(clippy::from_over_into)]
+impl Into<NonZero<usize>> for StackSize {
+    fn into(self) -> NonZero<usize> {
+        self.0
+    }
+}
+
+impl StackSize {
+    pub fn bytes(&self) -> NonZero<usize> {
+        self.0
+    }
+
+    pub fn bytes_usize(&self) -> usize {
+        self.0.get()
+    }
+
+    pub fn from_rlimit() -> Self {
+        let mut limits = MaybeUninit::<rlimit>::uninit();
+
+        let exit_code = unsafe { libc::getrlimit(libc::RLIMIT_STACK, limits.as_mut_ptr()) };
+        assert!(exit_code == 0, "`getrlimit` with `RLIMIT_STACK failed: {exit_code}");
+
+        let size = unsafe { limits.assume_init() }.rlim_cur as usize;
+        unsafe { StackSize(NonZero::new_unchecked(size)) }
+    }
+
+    pub fn from_pthread() -> Self {
+        let mut attr = MaybeUninit::<pthread_attr_t>::uninit();
+
+        let attr_init = unsafe { pthread_attr_init(attr.as_mut_ptr()) };
+        assert!(attr_init == 0, "`pthread_attr_init` failed: {attr_init}");
+
+        let mut size = MaybeUninit::<libc::size_t>::uninit();
+        let size_init =
+            unsafe { libc::pthread_attr_getstacksize(attr.as_mut_ptr(), size.as_mut_ptr()) };
+        assert!(size_init == 0, "`pthread_attr_getstacksize` failed: {size_init}");
+
+        let attr_destroy = unsafe { pthread_attr_destroy(attr.as_mut_ptr()) };
+        assert!(attr_destroy == 0, "`pthread_attr_destroy` failed: {attr_destroy}");
+
+        let size = unsafe { NonZero::new_unchecked(size.assume_init()) };
+        StackSize(size)
+    }
+}
+
+static mut PAGE_SIZE_CACHED: Option<NonZero<usize>> = None;
+
+#[derive(Debug, Copy, Clone)]
+struct PageSize;
+
+impl PageSize {
+    fn get_cached() -> NonZero<usize> {
+        let cached_size = unsafe { PAGE_SIZE_CACHED };
+        cached_size.unwrap_or_else(|| {
+            let size = Self::get();
+            unsafe { PAGE_SIZE_CACHED = Some(size) };
+            size
+        })
+    }
+
+    fn get() -> NonZero<usize> {
+        let page_size = unsafe { libc::sysconf(_SC_PAGESIZE) };
+        debug_assert!(page_size > 0);
+        let size = unsafe { NonZero::new_unchecked(page_size as usize) };
+        unsafe { PAGE_SIZE_CACHED = Some(size) };
+        size
+    }
+}
 
 /// # Safety
 /// Values must be aligned to the word size of the current platform.
@@ -43,32 +116,6 @@ unsafe impl Heapable for AllocInfo {
     }
 }
 
-/// All of our custom allocators depend on `mmap` and `munmap`. We propagate
-/// any nonzero exit-codes from these functions to the user as errors.
-#[derive(Clone, Copy, Debug)]
-pub enum AllocError {
-    InvalidStackSize,
-    InvalidPageSize,
-    StackOverflow,
-    MMapFailed(InternalAllocKind, i32),
-    MUnmapFailed(InternalAllocKind, i32),
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum InternalAllocKind {
-    Heap,
-    Stack,
-    ShadowHeap,
-}
-
-pub(crate) type AllocResult<T> = Result<T, AllocError>;
-
-#[cold]
-#[inline(never)]
-pub(crate) fn unmap_failed<T>() -> T {
-    panic!("failed to unmap allocation")
-}
-
 /// Credit: bumpalo
 /// Like `round_up_to` but turns overflow into undefined behavior rather than
 /// returning `None`.
@@ -90,48 +137,53 @@ pub(crate) unsafe fn round_mut_ptr_up_to_unchecked(ptr: *mut u8, divisor: usize)
 
 /// A wrapper around `mmap` that converts non-zero exit codes into errors.
 #[inline]
-pub unsafe fn mmap(
-    mmap: hooks::MMap,
-    kind: InternalAllocKind,
-    size_bytes: NonZero<usize>,
-) -> AllocResult<NonNull<u8>> {
+pub fn mmap(size_bytes: NonZero<usize>) -> NonNull<u8> {
     let size_bytes = size_bytes.get();
     unsafe {
-        let ptr = (mmap)(ptr::null_mut(), size_bytes, BSAN_PROT_FLAGS, BSAN_MAP_FLAGS, -1, 0);
+        let ptr = libc::mmap(ptr::null_mut(), size_bytes, BSAN_PROT_FLAGS, BSAN_MAP_FLAGS, -1, 0);
         if ptr.is_null() || ptr == libc::MAP_FAILED {
             let errno = *libc::__errno_location();
-            Err(AllocError::MMapFailed(kind, errno))
-        } else {
-            Ok(NonNull::new_unchecked(ptr.cast()))
+            libc_failed("mmap", errno);
         }
+        NonNull::new_unchecked(ptr.cast())
     }
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn libc_failed(name: &str, exit_code: libc::c_int) -> ! {
+    panic!("`{name}` failed with exit code: {exit_code}")
 }
 
 /// A wrapper around `munmap` that converts non-zero exit codes into errors.
 #[inline]
-pub unsafe fn munmap<T>(
-    munmap: MUnmap,
-    kind: InternalAllocKind,
-    ptr: NonNull<T>,
-    size_bytes: NonZero<usize>,
-) -> AllocResult<()> {
-    let size_bytes = size_bytes.get();
+pub unsafe fn munmap<T>(ptr: NonNull<T>, size_bytes: impl Into<NonZero<usize>>) {
+    let size_bytes = size_bytes.into().get();
     unsafe {
         let ptr = ptr.as_ptr();
         let ptr = ptr.cast::<c_void>();
-        let res = (munmap)(ptr, size_bytes);
+        let res = libc::munmap(ptr, size_bytes);
         if res == -1 {
             let errno = *libc::__errno_location();
-            Err(AllocError::MUnmapFailed(kind, errno))
-        } else {
-            Ok(())
+            libc_failed("munmap", errno)
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::memory::next_greater_multiple_unchecked;
+
+    use crate::memory::{next_greater_multiple_unchecked, StackSize};
+
+    #[test]
+    fn stack_size() {
+        StackSize::from_rlimit();
+        std::thread::spawn(move || {
+            StackSize::from_pthread();
+        })
+        .join()
+        .unwrap();
+    }
 
     #[test]
     fn rounding() {
