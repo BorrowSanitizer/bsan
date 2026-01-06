@@ -217,6 +217,8 @@ public:
       }
     }
 
+    patchPHINodes();
+
     for (CallBase *CB : ExposeTagVec) {
       CB->eraseFromParent();
     }
@@ -226,10 +228,6 @@ public:
       CB->eraseFromParent();
     }
 
-    patchPHINodes();
-    if (F.getName().contains("AtomicIsize") && F.getName().contains("store")) {
-      F.print(llvm::outs());
-    }
     return true;
   }
 
@@ -669,8 +667,8 @@ private:
         std::pair<Value *, Value *> Incoming = ProvenanceOffset[Pred];
         Normal->setIncomingValueForBlock(Pred, Incoming.first);
         Protected->setIncomingValueForBlock(Pred, Incoming.second);
-        Worklist.push_back(Normal);
-        Worklist.push_back(Protected);
+        // Worklist.push_back(Normal);
+        // Worklist.push_back(Protected);
       }
     }
 

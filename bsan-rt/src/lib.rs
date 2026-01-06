@@ -518,20 +518,11 @@ unsafe extern "C-unwind" fn __bsan_retag(
         Span::new(),
     )
     .unwrap_or_else(|err| ctx.handle_error(err));
-    crate::println!(
-        "at slot {:?}, new tag {:?}, protected = {:?}, with im: {:?}",
-        slot,
-        tag,
-        retag_info.perm.protector.is_some(),
-        retag_info.im_layout
-    );
-
     tag
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_push_frame() -> NonNull<Provenance> {
-    crate::println!("{:?}", backtrace::Backtrace::new());
     let global = unsafe { global_ctx() };
     global.local_ctx_mut(|local| local.push_frame())
 }
@@ -544,16 +535,13 @@ extern "C" fn __bsan_pop_frame(protected: usize) {
         let provenance = cursor.provenance();
         debug_assert!(provenance.len() >= protected);
         for prov in &provenance[provenance.len() - protected..] {
-            crate::println!("removing protector for {:?}", prov);
             let _ = BorrowTracker::for_alloc(*prov, |mut bt| bt.protector_end(global, Span::new()));
             global.protected_tags().remove(&prov.bor_tag);
         }
-        crate::println!("pop [protected {protected:?}] [slots {:?}]\n", cursor.provenance().len());
     });
     global.local_ctx_mut(|local| {
         unsafe { local.pop_frame() };
     });
-    crate::println!("{:?}", backtrace::Backtrace::new());
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -864,11 +852,10 @@ extern "C" fn __bsan_debug_print(alloc_id: AllocId, bor_tag: BorTag, alloc_info:
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     crate::println!("{prov:?}");
 }
-/*
+
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
     eprintln!("The BorrowSanitizer runtime panicked! {:?}", info);
     core::intrinsics::abort()
 }
-*/
