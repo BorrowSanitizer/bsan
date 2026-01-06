@@ -217,17 +217,12 @@ public:
       }
     }
 
-    patchPHINodes();
+    patchShadowPHINodes();
+    patchAllocaPHINodes();
 
-    for (CallBase *CB : ExposeTagVec) {
-      CB->eraseFromParent();
-    }
+    removeRetagIntrinsics();
 
-    for (CallBase *CB : RetagVec) {
-      CB->replaceAllUsesWith(CB->getOperand(0));
-      CB->eraseFromParent();
-    }
-
+    patchProvenanceSlotPHINodes();
     return true;
   }
 
@@ -649,7 +644,7 @@ private:
     LifetimeInfo->run();
   }
 
-  void patchPHINodes() {
+  void patchShadowPHINodes() {
     IRBuilder<> EntryIRB(FnPrologueEnd);
     for (auto &[PN, Prov, Idx] : ProvPHINodes) {
       for (auto [V, IncomingBlock] :
@@ -659,19 +654,10 @@ private:
         Prov.addIncoming(IncomingBlock, IncomingProv);
       }
     }
+  }
 
+  void patchAllocaPHINodes() {
     SmallVector<PHINode *> Worklist;
-    for (auto &[Normal, Protected] : ProvenanceSlotPHINodes) {
-      BasicBlock *Parent = Normal->getParent();
-      for (BasicBlock *Pred : predecessors(Parent)) {
-        std::pair<Value *, Value *> Incoming = ProvenanceOffset[Pred];
-        Normal->setIncomingValueForBlock(Pred, Incoming.first);
-        Protected->setIncomingValueForBlock(Pred, Incoming.second);
-        // Worklist.push_back(Normal);
-        // Worklist.push_back(Protected);
-      }
-    }
-
     for (const auto &[BB, AI, Prov] : AllocaProvPHINodes) {
       PHINode *IdNode = cast<PHINode>(Prov.Id);
       Worklist.push_back(IdNode);
@@ -688,7 +674,21 @@ private:
         InfoNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Info);
       }
     }
+    eliminatePHINodes(Worklist);
+  }
 
+  void patchProvenanceSlotPHINodes() {
+    SmallVector<PHINode *> Worklist;
+    for (auto &[Normal, Protected] : ProvenanceSlotPHINodes) {
+      BasicBlock *Parent = Normal->getParent();
+      for (BasicBlock *Pred : predecessors(Parent)) {
+        std::pair<Value *, Value *> Incoming = ProvenanceOffset[Pred];
+        Normal->setIncomingValueForBlock(Pred, Incoming.first);
+        Protected->setIncomingValueForBlock(Pred, Incoming.second);
+        Worklist.push_back(Normal);
+        Worklist.push_back(Protected);
+      }
+    }
     eliminatePHINodes(Worklist);
   }
 
@@ -710,6 +710,16 @@ private:
       }
       Worklist = std::move(PendingWorklist);
     } while (!PHIToDelete.empty());
+  }
+
+  void removeRetagIntrinsics() {
+    for (CallBase *CB : ExposeTagVec) {
+      CB->eraseFromParent();
+    }
+    for (CallBase *CB : RetagVec) {
+      CB->replaceAllUsesWith(CB->getOperand(0));
+      CB->eraseFromParent();
+    }
   }
 
   Value *newAllocId(IRBuilder<> &IRB) {
