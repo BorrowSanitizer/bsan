@@ -596,7 +596,7 @@ impl DisplayRepr {
         assert!(v.is_empty());
         return Some(root);
     }
-    
+
     fn print(
         &self,
         fmt: &DisplayFmt,
