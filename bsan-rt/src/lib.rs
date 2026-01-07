@@ -17,6 +17,27 @@ use bsan_shared::{AccessKind, RetagInfo, Size};
 use libc_print::std_name::*;
 use spin::Mutex;
 
+macro_rules! println {
+    ($($arg:tt)*) => {
+        libc_print::std_name::println!($($arg)*)
+    };
+}
+
+pub(crate) use println;
+
+macro_rules! handle_err {
+    ($err:expr, $gtx:expr) => {{
+        #[cfg(test)]
+        {
+            panic!("Error in test mode: {:?}", $err);
+        }
+        #[cfg(not(test))]
+        {
+            $gtx.handle_error($err);
+        }
+    }};
+}
+
 mod global;
 pub use global::*;
 
@@ -41,27 +62,6 @@ use crate::diagnostics::*;
 use crate::errors::BorsanResult;
 use crate::memory::hooks;
 use crate::span::FramePointer;
-
-macro_rules! println {
-    ($($arg:tt)*) => {
-        libc_print::std_name::println!($($arg)*)
-    };
-}
-
-pub(crate) use println;
-
-macro_rules! handle_err {
-    ($err:expr, $gtx:expr) => {{
-        #[cfg(test)]
-        {
-            panic!("Error in test mode: {:?}", $err);
-        }
-        #[cfg(not(test))]
-        {
-            $gtx.handle_error($err);
-        }
-    }};
-}
 
 /// A struct for summarizing debug information about memory operations
 #[cfg(feature = "debug")]
@@ -760,6 +760,10 @@ extern "C" fn __bsan_debug_print_borrow_state(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) {
+    if alloc_info.is_null() {
+        crate::println!("(null alloc_info)");
+        return;
+    }
     let alloc_info = unsafe { &*alloc_info };
     let global_ctx = unsafe { global_ctx() };
 
@@ -767,6 +771,34 @@ extern "C" fn __bsan_debug_print_borrow_state(
     if let Some(tree) = &*tree_lock {
         let protected_tags = Default::default();
         tree.print_tree(&protected_tags, true).unwrap_or_else(|err| handle_err!(err, global_ctx));
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_debug_gc(alloc_id: AllocId, bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+    if alloc_info.is_null() {
+        return;
+    }
+    // TODO: Implement GC
+    let _ = (alloc_id, bor_tag, alloc_info);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_debug_tree_size(
+    alloc_id: AllocId,
+    bor_tag: BorTag,
+    alloc_info: *mut AllocInfo,
+) {
+    if alloc_info.is_null() {
+        crate::println!("Tree size: (null alloc_info)");
+        return;
+    }
+    let alloc_info = unsafe { &*alloc_info };
+    let global_ctx = unsafe { global_ctx() };
+
+    let tree_lock = alloc_info.tree_lock.lock();
+    if let Some(tree) = &*tree_lock {
+        crate::println!("Tree size: {}", tree.tag_mapping.len());
     }
 }
 

@@ -11,7 +11,7 @@ extern "C" {
 fn main() {
     let mut v: Vec<i64> = Vec::new();
 
-    let p: *mut i64 = &raw mut *v;
+    let p: *mut i64 = v.as_mut_ptr();
     let pv: *mut u8 = p as *mut u8;
 
     unsafe { __bsan_debug_print_borrow_state(pv) };
