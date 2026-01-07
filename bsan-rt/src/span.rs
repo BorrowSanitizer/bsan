@@ -1,7 +1,5 @@
 use core::ptr;
 
-use cfg_if::cfg_if;
-
 unsafe extern "C" {
     // Symbol defined by the linker
     unsafe static __executable_start: [u8; 0];
@@ -58,14 +56,16 @@ impl FramePointer {
     }
 
     pub fn ip(&self) -> Span {
-        cfg_if! {
-            if #[cfg(feature = "pic")] {
-                let ip = unsafe { ptr::read(self.0.add(1)) };
-                let base = unsafe { __executable_start.as_ptr() as usize };
-                Span(ip - base)
-            }else{
-                Span(unsafe { ptr::read(self.0.add(1)) })
-            }
+        #[cfg(feature = "pic")]
+        {
+            let ip = unsafe { ptr::read(self.0.add(1)) };
+            let base = unsafe { __executable_start.as_ptr() as usize };
+            Span(ip - base)
+        }
+
+        #[cfg(not(feature = "pic"))]
+        {
+            Span(unsafe { ptr::read(self.0.add(1)) })
         }
     }
 

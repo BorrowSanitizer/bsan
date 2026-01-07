@@ -10,10 +10,6 @@ rustc-hash = { version = "2.1.1", default-features = false }
 libc-print = { version = "0.1.23" }
 bsan-shared = { path = "../bsan-shared" }
 spin = "0.10.0"
-thiserror-no-std = "2.0.2"
-foldhash = { version = "0.1.5", default-features = false }
-cfg-if = "1.0.4"
-addr2line = { version = "0.25.1", default-features = false, features = ["rustc-demangle", "cpp_demangle"]}
 
 [lib]
 name = "bsan_rt_core"
