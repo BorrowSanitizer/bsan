@@ -122,8 +122,7 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
             // TODO: enforce this using an unsafe trait.
             let table = {
                 let size_bytes = NonZero::new_unchecked(mem::size_of::<L1Array<T>>());
-                let table_ptr = mmap(size_bytes).cast::<L1Array<T>>();
-                table_ptr
+                mmap(size_bytes).cast::<L1Array<T>>()
             };
             Self {
                 table,

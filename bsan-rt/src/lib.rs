@@ -498,23 +498,14 @@ unsafe extern "C-unwind" fn __bsan_retag(
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     let retag_info = unsafe { RetagInfo::from_raw(access_size, perm, im_data, im_len) };
-    let tag = BorrowTracker::retag(
-        ctx,
-        prov,
-        object_addr,
-        Some(access_size),
-        retag_info,
-        slot,
-        Span::new(),
-    )
-    .unwrap_or_else(|err| ctx.handle_error(err));
-    tag
+    BorrowTracker::retag(ctx, prov, object_addr, Some(access_size), retag_info, slot, Span::new())
+        .unwrap_or_else(|err| ctx.handle_error(err))
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_pop_frame(frame_start: ProvenanceSlot, protected: usize) {
     let global = unsafe { global_ctx() };
-    if global.local_ctx(|local| local.provenance_from(frame_start).len() == 0) {
+    if global.local_ctx(|local| local.provenance_from(frame_start).is_empty()) {
         return;
     }
     global.local_ctx(|local| {
