@@ -155,7 +155,7 @@ impl BsanEnv {
             }
             // Enable rustc-specific lints (ignored without `-Zunstable-options`).
             flags.push(
-                " -Zunstable-options -Zdylib-lto -Wrustc::internal -Wrust_2018_idioms -Wunused_lifetimes",
+                " -Zunstable-options -Wrustc::internal -Wrust_2018_idioms -Wunused_lifetimes",
             );
             // Add user-defined flags.
             if let Some(value) = std::env::var_os("RUSTFLAGS") {
@@ -255,6 +255,15 @@ impl BsanEnv {
         }
     }
 
+    pub fn host_binary(&self, binary_name: &str) -> PathBuf {
+        if !self.config.dependencies.contains(&binary_name.to_string()) {
+            show_error!(
+                "`{binary_name}` is not available as a host dependency. Try adding it to `config.toml`. "
+            );
+        } else {
+            PathBuf::from(binary_name)
+        }
+    }
     pub fn target_binary(&self, binary_name: &str) -> PathBuf {
         let target_bindir = &self.target_bindir;
         let binary = path!(target_bindir / binary_name);
