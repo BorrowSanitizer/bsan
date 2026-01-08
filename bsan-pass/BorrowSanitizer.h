@@ -86,7 +86,6 @@ public:
   FunctionCallee BsanFuncGetShadowSrc;
   FunctionCallee BsanFuncGetShadowDest;
 
-  FunctionCallee BsanFuncPushFrame;
   FunctionCallee BsanFuncPopFrame;
 
   FunctionCallee BsanFuncReserveStackSlot;

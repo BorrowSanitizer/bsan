@@ -118,7 +118,6 @@ impl GlobalCtx {
     where
         F: FnOnce(&LocalCtx) -> R,
     {
-        self.threads.read();
         let local_ctx = unsafe { local_ctx() };
         f(local_ctx)
     }

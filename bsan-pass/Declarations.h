@@ -52,7 +52,6 @@ const char kBsanFuncShadowStoreVectorName[] = BSAN_FN("shadow_store_vector");
 const char kBsanFuncRetagName[] = BSAN_FN("retag");
 const char kBsanFuncAllocName[] = BSAN_FN("alloc");
 
-const char kBsanFuncPushFrame[] = BSAN_FN("push_frame");
 const char kBsanFuncPopFrame[] = BSAN_FN("pop_frame");
 
 const char kBsanFuncReserveStackSlotName[] = BSAN_FN("reserve_stack_slot");

@@ -1,5 +1,5 @@
 use core::cmp::min;
-use core::mem::{self, MaybeUninit};
+use core::mem::MaybeUninit;
 use core::ops::Deref;
 use core::ptr::NonNull;
 use core::{ptr, slice};
@@ -10,8 +10,13 @@ use crate::Provenance;
 #[thread_local]
 static mut LOCAL_CTX: MaybeUninit<LocalCtx> = MaybeUninit::uninit();
 
+/// A stack-sized chunk of memory for containing provenance values.
+/// Each thread has its own provenance stack. This variable
+/// stores the current value of the tag stack pointer, which is
+/// updated by our instrumentation.
 #[thread_local]
-static mut __BSAN_PROV_STACK: *mut Provenance = core::ptr::null_mut();
+#[unsafe(no_mangle)]
+pub static mut __BSAN_PROV_STACK: *mut Provenance = core::ptr::null_mut();
 
 /// # Safety
 /// `LOCAL_CTX` must be initialialied. This should not be used, since
@@ -68,7 +73,6 @@ impl Deref for ProvenanceSlot {
 }
 
 pub struct LocalCtx {
-    fp: NonNull<usize>,
     stack_bottom: NonNull<u8>,
     stack_size: StackSize,
 }
@@ -81,30 +85,14 @@ impl LocalCtx {
         let stack_top = unsafe { stack_bottom.add(stack_size.bytes_usize()) };
         let stack_top = stack_top.cast::<Provenance>();
         unsafe { __BSAN_PROV_STACK = stack_top.as_ptr() };
-        Self { fp: Self::next_frame(None), stack_bottom, stack_size }
-    }
-
-    pub fn push_frame(&mut self) -> NonNull<Provenance> {
-        self.fp = Self::next_frame(Some(self.fp));
-        unsafe { NonNull::new_unchecked(__BSAN_PROV_STACK) }
+        Self { stack_bottom, stack_size }
     }
 
     /// # Safety
     /// A frame must have been pushed before being popped.
-    pub unsafe fn pop_frame(&mut self) {
+    pub unsafe fn pop_frame(&mut self, slot: ProvenanceSlot) {
         unsafe {
-            __BSAN_PROV_STACK = self.fp.add(1).cast::<Provenance>().as_ptr();
-            self.fp = mem::transmute::<usize, NonNull<usize>>(self.fp.read())
-        }
-    }
-
-    #[inline]
-    fn next_frame(fp: Option<NonNull<usize>>) -> NonNull<usize> {
-        unsafe {
-            let next_fp = __BSAN_PROV_STACK.cast::<Option<NonNull<usize>>>().sub(1);
-            next_fp.write(fp);
-            __BSAN_PROV_STACK = next_fp.cast::<Provenance>();
-            NonNull::new_unchecked(next_fp).cast::<usize>()
+            __BSAN_PROV_STACK = slot.0.as_ptr();
         }
     }
 
@@ -115,37 +103,15 @@ impl LocalCtx {
         }
     }
 
-    pub fn frame_cursor(&self) -> FrameCursor {
-        FrameCursor { frame_top: unsafe { NonNull::new_unchecked(__BSAN_PROV_STACK) }, fp: self.fp }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct FrameCursor {
-    frame_top: NonNull<Provenance>,
-    fp: NonNull<usize>,
-}
-
-impl FrameCursor {
     pub fn provenance(&self) -> &[Provenance] {
-        unsafe {
-            let len = self.fp.cast::<Provenance>().offset_from_unsigned(self.frame_top);
-            slice::from_raw_parts(self.frame_top.as_ptr(), len)
-        }
+        self.provenance_from(ProvenanceSlot(self.stack_bottom.cast::<Provenance>()))
     }
-}
 
-impl Iterator for FrameCursor {
-    type Item = Self;
-    fn next(&mut self) -> Option<Self::Item> {
+    pub fn provenance_from(&self, slot: ProvenanceSlot) -> &[Provenance] {
         unsafe {
-            let next_fp = self.fp.read();
-            let next_fp = mem::transmute::<usize, Option<NonNull<usize>>>(next_fp);
-            next_fp.map(|fp| {
-                let frame_top = self.fp.add(1).cast::<Provenance>();
-                *self = FrameCursor { frame_top, fp };
-                *self
-            })
+            let data = __BSAN_PROV_STACK;
+            let len = slot.0.as_ptr().offset_from_unsigned(data);
+            slice::from_raw_parts(data, len)
         }
     }
 }
@@ -153,74 +119,5 @@ impl Iterator for FrameCursor {
 impl Drop for LocalCtx {
     fn drop(&mut self) {
         unsafe { munmap(self.stack_bottom, self.stack_size) }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{LocalCtx, ProvenanceSlot};
-    use crate::Provenance;
-    fn with_local<F>(f: F)
-    where
-        F: FnOnce(&mut LocalCtx),
-    {
-        f(&mut LocalCtx::new(true));
-    }
-
-    #[test]
-    fn push_frame() {
-        with_local(|local| {
-            local.push_frame();
-        })
-    }
-
-    #[test]
-    fn pop_frame() {
-        with_local(|local| {
-            local.push_frame();
-            unsafe {
-                local.pop_frame();
-            }
-        })
-    }
-
-    #[test]
-    fn empty_frame() {
-        with_local(|local| {
-            let mut frame = local.frame_cursor();
-            assert!(frame.next().is_none());
-            assert!(frame.provenance().is_empty());
-        })
-    }
-
-    #[test]
-    fn store_provenance() {
-        with_local(|local| {
-            let base = local.push_frame();
-            unsafe {
-                local.store_provenance(Provenance::wildcard(), ProvenanceSlot(base.sub(1)));
-            }
-            assert!(local.frame_cursor().provenance().len() == 1);
-            unsafe { local.pop_frame() };
-        })
-    }
-
-    #[test]
-    fn iter_frames() {
-        with_local(|local| {
-            const N: usize = 5;
-            let mut fp_list = vec![];
-            for _ in 0..N {
-                fp_list.push(local.fp);
-                let prov = local.push_frame();
-                unsafe {
-                    let slot = prov.sub(1);
-                    local.store_provenance(Provenance::wildcard(), ProvenanceSlot(slot));
-                }
-            }
-            for (i, cursor) in local.frame_cursor().enumerate() {
-                assert!(cursor.fp == fp_list[N - i - 1]);
-            }
-        })
     }
 }

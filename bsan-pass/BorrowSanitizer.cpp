@@ -621,7 +621,7 @@ private:
     }
 
     if (RetagVec.size() > 0) {
-      FrameTop = EntryIRB.CreateCall(BS.BsanFuncPushFrame, {});
+      FrameTop = EntryIRB.CreateLoad(BS.PtrTy, BS.ProvStack, true);
     }
 
     if (StaticAllocaVec.size() > 0) {
@@ -1379,7 +1379,9 @@ private:
   void popFrame(IRBuilder<> &IRB, Instruction &I) {
     Value *NumProtected = ProvenanceOffset[CurrentBlock].second;
     if (RetagVec.size() > 0) {
-      IRB.CreateCall(BS.BsanFuncPopFrame, {NumProtected});
+      if (ProvenanceOffset[CurrentBlock].first != FrameTop) {
+        IRB.CreateCall(BS.BsanFuncPopFrame, {FrameTop, NumProtected});
+      }
     }
 
     if (StaticAllocaVec.size() > 0) {
@@ -1631,11 +1633,8 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncMarkTLS = M.getOrInsertFunction(
       kBsanFuncMarkTLSName, FunctionType::get(PtrTy, /*isVarArg=*/false), AL);
 
-  BsanFuncPushFrame = M.getOrInsertFunction(
-      kBsanFuncPushFrame, FunctionType::get(PtrTy, /*isVarArg=*/false), AL);
-
-  BsanFuncPopFrame =
-      M.getOrInsertFunction(kBsanFuncPopFrame, AL, IRB.getVoidTy(), IntptrTy);
+  BsanFuncPopFrame = M.getOrInsertFunction(kBsanFuncPopFrame, AL,
+                                           IRB.getVoidTy(), PtrTy, IntptrTy);
 
   EHPersonality Pers = getDefaultEHPersonality(TargetTriple);
   DefaultPersonalityFn =
@@ -1653,6 +1652,8 @@ void BorrowSanitizer::createUserspaceApi(Module &M,
                                    ArrayType::get(ProvenanceTy, kTLSSize));
   ParamTLS = getOrInsertTLSGlobal(M, kBsanParamTLSName,
                                   ArrayType::get(ProvenanceTy, kTLSSize));
+  ProvStack = getOrInsertTLSGlobal(M, kBsanProvStackName,
+                                   ArrayType::get(ProvenanceTy, kTLSSize));
   AllocIdCounter = getOrInsertGlobal(M, kBsanAllocIdCounterName, IntptrTy);
   BorTagCounter = getOrInsertGlobal(M, kBsanBorTagCounterName, IntptrTy);
 }

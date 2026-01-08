@@ -72,15 +72,6 @@ pub static mut __BSAN_ACTIVE_THREADS: AtomicUsize = AtomicUsize::new(0);
 #[unsafe(no_mangle)]
 pub static mut __BSAN_TLS_MARKER: FramePointer = FramePointer::null();
 
-/// A stack-sized chunk of memory for containing protected
-/// borrow tags. Each thread has its own tag stack, which is
-/// initialized and deallocated by the LLVM wrapper. This variable
-/// stores the current value of the tag stack pointer, which is
-/// updated by our instrumentation.
-#[thread_local]
-#[unsafe(no_mangle)]
-pub static mut __BSAN_PROV_STACK: *mut Provenance = ptr::null_mut();
-
 /// A pointer to the local state of the current thread. This is
 /// managed by the LLVM wrapper, but we define it here, since thread-local
 /// symbols declared in a compiler-rt library do not appear to be relocatable,
@@ -507,7 +498,6 @@ unsafe extern "C-unwind" fn __bsan_retag(
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     let retag_info = unsafe { RetagInfo::from_raw(access_size, perm, im_data, im_len) };
-
     let tag = BorrowTracker::retag(
         ctx,
         prov,
@@ -522,25 +512,20 @@ unsafe extern "C-unwind" fn __bsan_retag(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_push_frame() -> NonNull<Provenance> {
+extern "C" fn __bsan_pop_frame(frame_start: ProvenanceSlot, protected: usize) {
     let global = unsafe { global_ctx() };
-    global.local_ctx_mut(|local| local.push_frame())
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn __bsan_pop_frame(protected: usize) {
-    let global = unsafe { global_ctx() };
+    if global.local_ctx(|local| local.provenance_from(frame_start).len() == 0) {
+        return;
+    }
     global.local_ctx(|local| {
-        let cursor = local.frame_cursor();
-        let provenance = cursor.provenance();
-        debug_assert!(provenance.len() >= protected);
+        let provenance = local.provenance_from(frame_start);
         for prov in &provenance[provenance.len() - protected..] {
             let _ = BorrowTracker::for_alloc(*prov, |mut bt| bt.protector_end(global, Span::new()));
             global.protected_tags().remove(&prov.bor_tag);
         }
     });
     global.local_ctx_mut(|local| {
-        unsafe { local.pop_frame() };
+        unsafe { local.pop_frame(frame_start) };
     });
 }
 
