@@ -118,18 +118,11 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
     /// So there should be no deadlock / synchronization issues.
     pub fn new(default: *const T) -> Self {
         unsafe {
+            // RwLock is safe to assume initialized, since the pages returned by mmap are zeroed.
+            // TODO: enforce this using an unsafe trait.
             let table = {
                 let size_bytes = NonZero::new_unchecked(mem::size_of::<L1Array<T>>());
                 let table_ptr = mmap(size_bytes).cast::<L1Array<T>>();
-
-                /* TODO: Initialization might be unnecessary if we can guarantee that
-                zeroed memory is returned by mmap and interpreted as correct RwLock.
-                */
-                // Initialize all L1 entries with RwLock-wrapped null pointers
-                for i in 0..L1_LEN {
-                    ptr::write(&raw mut (*table_ptr.as_ptr())[i], RwLock::new(ptr::null_mut()));
-                }
-
                 table_ptr
             };
             Self {
