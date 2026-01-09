@@ -152,7 +152,7 @@ pub struct SrcLoc {
 
 impl fmt::Display for SrcLoc {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "file {} at line {}, column {}", self.file, self.line, self.col)
+        write!(f, "file {}: line {}, column {}", self.file, self.line, self.col)
     }
 }
 

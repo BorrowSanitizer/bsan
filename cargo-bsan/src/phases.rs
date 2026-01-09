@@ -58,6 +58,14 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
         env::set_var("BSAN_RT", runtime_dir);
     }
 
+    // FIXME: Ensure symbolizer is available to the runtime for source locations
+    let symbolizer_path = host_sysroot.join("bin").join("llvm-symbolizer");
+    if symbolizer_path.exists() {
+        unsafe {
+            env::set_var("BSAN_SYMBOLIZER_PATH", symbolizer_path);
+        }
+    }
+
     let targets = get_arg_flag_values("--target").collect::<Vec<_>>();
 
     // We only allow specifying the host as a target.

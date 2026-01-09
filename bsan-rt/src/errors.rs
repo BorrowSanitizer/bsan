@@ -5,10 +5,11 @@ use core::fmt::{Debug, Display};
 
 use bsan_shared::Permission;
 
+use crate::alloc::string::ToString;
 use crate::diagnostics::{AccessCause, NodeDebugInfo};
 use crate::memory::{self, AllocError};
 use crate::span::Span;
-use crate::{AllocId, Provenance};
+use crate::{AllocId, Provenance, SpanData};
 
 pub type BorsanResult<T> = Result<T, ErrorInfo>;
 pub type TreeTransitionResult<T> = core::result::Result<T, TransitionError>;
@@ -65,54 +66,50 @@ impl Display for UBInfo {
             UBInfo::UseAfterFree(..) => write!(f, "{:?}", self),
             UBInfo::GlobalFree(..) => write!(f, "{:?}", self),
             UBInfo::StackFree(..) => write!(f, "{:?}", self),
-            UBInfo::AliasingViolation(error) => {
-                if let Some(access_event) = error.accessed_info.history.last_event() {
-                    if let Some(conflict_event) = error.conflicting_info.history.last_event() {
-                        let a_loc = access_event.span.span_data().source_location();
-                        let c_loc = conflict_event.span.span_data().source_location();
-                        match (a_loc, c_loc) {
-                            (Some(a), Some(c)) => {
-                                write!(f, "Access at {}\nConflict at {}", a, c)
-                            }
-                            (Some(a), None) => {
-                                write!(
-                                    f,
-                                    "Access at {}\nConflict at ip 0x{:x}",
-                                    a,
-                                    conflict_event.span.addr()
-                                )
-                            }
-                            (None, Some(c)) => {
-                                write!(
-                                    f,
-                                    "Access at ip 0x{:x}\nConflict at {}",
-                                    access_event.span.addr(),
-                                    c
-                                )
-                            }
-                            (None, None) => {
-                                write!(
-                                    f,
-                                    "Access at ip 0x{:x}\nConflict at ip 0x{:x}",
-                                    access_event.span.addr(),
-                                    conflict_event.span.addr()
-                                )
-                            }
-                        }
-                    } else {
-                        if let Some(a) = access_event.span.span_data().source_location() {
-                            write!(f, "Access at {}\nConflict event not found", a)
-                        } else {
-                            write!(
-                                f,
-                                "Access at ip 0x{:x}\nConflict event not found",
-                                access_event.span.addr()
-                            )
-                        }
+            UBInfo::AliasingViolation(e) => {
+                // If it can be resolved to a src location, print it
+                // Otherwise, print ip
+                let fmt_loc = |span_data: SpanData| -> String {
+                    match span_data.source_location() {
+                        Some(loc) => loc.to_string(),
+                        None => format!("ip 0x{:x}", span_data.ip()),
                     }
-                } else {
-                    write!(f, "AliasingViolation: {:?}", error)
+                };
+
+                let access_created = e.accessed_info.history.created_at().0.span_data();
+                let conflict_created = e.conflicting_info.history.created_at().0.span_data();
+                let acc_create_loc = fmt_loc(access_created);
+                let conf_create_loc = fmt_loc(conflict_created);
+                let last_acc_loc = e
+                    .accessed_info
+                    .history
+                    .last_event()
+                    .map(|event| fmt_loc(event.span.span_data()));
+                let last_conf_loc = e
+                    .conflicting_info
+                    .history
+                    .last_event()
+                    .map(|event| fmt_loc(event.span.span_data()));
+
+                // Report violating locations, avoiding duplicates
+                write!(f, "AliasingViolation: Access created at {}", acc_create_loc)?;
+                if conflict_created.ip() != access_created.ip() {
+                    write!(f, "\nConflict created at {}", conf_create_loc)?;
                 }
+
+                // Write last_event locations (if they exist, and avoiding dupes)
+                if let Some(loc) = &last_acc_loc {
+                    if loc != &acc_create_loc {
+                        write!(f, "\nLast access at {}", loc)?;
+                    }
+                }
+                if let Some(loc) = &last_conf_loc {
+                    if loc != &conf_create_loc && Some(loc) != last_acc_loc.as_ref() {
+                        write!(f, "\nLast conflict at {}", loc)?;
+                    }
+                }
+
+                Ok(())
             }
         }
     }

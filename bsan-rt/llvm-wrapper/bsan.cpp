@@ -37,7 +37,12 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_init() {
   {
     CommonFlags cf;
     cf.CopyFrom(*common_flags());
-    cf.external_symbolizer_path = GetEnv("BSAN_SYMBOLIZER_PATH");
+    const char *symbolizer_path = GetEnv("BSAN_SYMBOLIZER_PATH");
+    // FIXME: symbolizer path from phases.rs not showing up in env vars
+    if (!symbolizer_path || symbolizer_path[0] == '\0') {
+      symbolizer_path = "/root/.rustup/toolchains/bsan/bin/llvm-symbolizer";
+    }
+    cf.external_symbolizer_path = symbolizer_path;
     OverrideCommonFlags(cf);
   }
 
