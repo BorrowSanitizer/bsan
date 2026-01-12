@@ -5,11 +5,10 @@ use core::fmt::{Debug, Display};
 
 use bsan_shared::Permission;
 
-use crate::alloc::string::ToString;
 use crate::diagnostics::{AccessCause, NodeDebugInfo};
 use crate::memory::{self, AllocError};
 use crate::span::Span;
-use crate::{AllocId, Provenance, SpanData};
+use crate::{AllocId, Provenance};
 
 pub type BorsanResult<T> = Result<T, ErrorInfo>;
 pub type TreeTransitionResult<T> = core::result::Result<T, TransitionError>;
@@ -35,7 +34,7 @@ impl Debug for ErrorInfo {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             ErrorInfo::Internal(e) => write!(f, "{:?}", e),
-            ErrorInfo::UndefinedBehavior(e) => write!(f, "UndefinedBehavior({})", e),
+            ErrorInfo::UndefinedBehavior(e) => write!(f, "UndefinedBehavior {}", e),
         }
     }
 }
@@ -61,53 +60,50 @@ impl From<UBInfo> for ErrorInfo {
 impl Display for UBInfo {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            UBInfo::InvalidProvenance => write!(f, "{:?}", self),
-            UBInfo::AccessOutOfBounds(..) => write!(f, "{:?}", self),
-            UBInfo::UseAfterFree(..) => write!(f, "{:?}", self),
-            UBInfo::GlobalFree(..) => write!(f, "{:?}", self),
-            UBInfo::StackFree(..) => write!(f, "{:?}", self),
+            UBInfo::InvalidProvenance => write!(f, "({:?})", self),
+            UBInfo::AccessOutOfBounds(..) => write!(f, "({:?})", self),
+            UBInfo::UseAfterFree(..) => write!(f, "({:?})", self),
+            UBInfo::GlobalFree(..) => write!(f, "({:?})", self),
+            UBInfo::StackFree(..) => write!(f, "({:?})", self),
             UBInfo::AliasingViolation(e) => {
-                // If it can be resolved to a src location, print it
-                // Otherwise, print ip
-                let fmt_loc = |span_data: SpanData| -> String {
-                    match span_data.source_location() {
-                        Some(loc) => loc.to_string(),
-                        None => format!("ip 0x{:x}", span_data.ip()),
-                    }
-                };
+                let (access_created, access_perm) = e.accessed_info.history.created_at();
+                let (conflict_created, conflict_perm) = e.conflicting_info.history.created_at();
+                let last_access = e.accessed_info.history.last_event().map(|event| event.span);
+                let last_conflict = e.conflicting_info.history.last_event().map(|event| event.span);
 
-                let access_created = e.accessed_info.history.created_at().0.span_data();
-                let conflict_created = e.conflicting_info.history.created_at().0.span_data();
-                let acc_create_loc = fmt_loc(access_created);
-                let conf_create_loc = fmt_loc(conflict_created);
-                let last_acc_loc = e
-                    .accessed_info
-                    .history
-                    .last_event()
-                    .map(|event| fmt_loc(event.span.span_data()));
-                let last_conf_loc = e
-                    .conflicting_info
-                    .history
-                    .last_event()
-                    .map(|event| fmt_loc(event.span.span_data()));
-
-                // Report violating locations, avoiding duplicates
-                write!(f, "AliasingViolation: Access created at {}", acc_create_loc)?;
-                if conflict_created.ip() != access_created.ip() {
-                    write!(f, "\nConflict created at {}", conf_create_loc)?;
+                // Write violating locations, avoiding duplicate locs
+                write!(
+                    f,
+                    "(AliasingViolation)\nAccess created with {} permissions at {}\n",
+                    access_perm,
+                    access_created.span_data()
+                )?;
+                if conflict_created.addr() != access_created.addr() {
+                    write!(
+                        f,
+                        "Conflict created with {} permissions at {}\n",
+                        conflict_perm,
+                        conflict_created.span_data()
+                    )?;
                 }
 
                 // Write last_event locations (if they exist, and avoiding dupes)
-                if let Some(loc) = &last_acc_loc {
-                    if loc != &acc_create_loc {
-                        write!(f, "\nLast access at {}", loc)?;
+                if let Some(loc) = last_access {
+                    if loc != access_created {
+                        write!(f, "Last access at {}\n", loc.span_data())?;
                     }
                 }
-                if let Some(loc) = &last_conf_loc {
-                    if loc != &conf_create_loc && Some(loc) != last_acc_loc.as_ref() {
-                        write!(f, "\nLast conflict at {}", loc)?;
+                if let Some(loc) = last_conflict {
+                    if loc != conflict_created && Some(loc) != last_access {
+                        write!(f, "Last conflict at {}\n", loc.span_data())?;
                     }
                 }
+
+                #[cfg(not(feature = "debug"))]
+                write!(
+                    f,
+                    "\nRun with `debug` feature (inst --debug) to view full error and stack trace"
+                )?;
 
                 Ok(())
             }

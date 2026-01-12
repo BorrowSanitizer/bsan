@@ -1,7 +1,7 @@
-use core::arch::asm;
-use core::ptr;
+// use core::arch::asm;
+// use core::ptr;
 
-use cfg_if::cfg_if;
+// use cfg_if::cfg_if;
 
 use crate::SpanData;
 
@@ -10,7 +10,7 @@ unsafe extern "C" {
     unsafe static __executable_start: [u8; 0];
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Span(SpanData);
 
 impl Span {

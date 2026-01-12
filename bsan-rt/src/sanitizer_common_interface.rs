@@ -1,8 +1,8 @@
-use crate::alloc::string::{String, ToString};
+use crate::alloc::string::ToString;
 use crate::errors::{BorsanResult, ErrorInfo};
 use crate::global::BHashMap;
 use crate::memory::hooks::BsanAllocHooks;
-use crate::{span, AllocId, SpanData, SrcLoc};
+use crate::{AllocId, SpanData, SrcLoc};
 
 unsafe extern "C" {
     fn __bsan_printCurrentStackTrace();
@@ -69,7 +69,7 @@ pub(crate) fn symbolize_pc_into(pc: usize) -> Option<SrcLoc> {
     None
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub(crate) struct StackTraceId(pub(crate) u32);
 
 pub(crate) struct StackTraceDepot {

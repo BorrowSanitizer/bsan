@@ -6,6 +6,8 @@ use core::ptr::NonNull;
 use bsan_shared::ProtectorKind;
 use hashbrown::{DefaultHashBuilder, HashMap};
 
+#[cfg(feature = "debug")]
+use crate::diagnostics::History;
 use crate::errors::ErrorInfo;
 use crate::memory::hooks::{BsanAllocHooks, BsanHooks};
 use crate::memory::{AllocError, Heap, ShadowHeap};
@@ -102,35 +104,31 @@ impl GlobalCtx {
 
     #[inline(never)] // never inline to have specific break point for debugging with GDB
     pub fn handle_error(&self, info: ErrorInfo) -> ! {
-        crate::eprintln!("An error occurred: {info:?}\n\n");
+        crate::eprintln!("An error occurred: {info:?}\n");
 
         // code below uses sanitizer common interface to print stack traces and detailed error info
         #[cfg(not(test))]
         if let ErrorInfo::UndefinedBehavior(ub_info) = info {
-            crate::eprintln!("BSAN detected undefined behavior: {ub_info:?}\n\n");
             if let Some(alloc_id) = ub_info.get_alloc_id() {
                 if let Ok(stack_id) = self.allocation_stack_depot.lock().print_trace(&alloc_id) {
                     crate::eprintln!("{:?} previously allocated here:\n", alloc_id);
                     sanitizer_common_interface::print_stack_trace(Some(stack_id));
-                } else {
-                    crate::eprintln!("No stack trace found for allocation {:?}", alloc_id);
                 }
             }
 
+            #[cfg(feature = "debug")]
             if let errors::UBInfo::AliasingViolation(tree_error) = ub_info {
-                crate::eprintln!("Aliasing violation details: {:#?}\n", tree_error);
-                let history = &tree_error.conflicting_info.history;
-                let (created_span, created_perm) = history.created_at();
-                crate::eprintln!(
-                    "Borrow created (with {:?}) at 0x{:x}\n",
-                    created_perm,
-                    created_span.addr()
-                );
-                created_span.print_stack_trace();
-                tree_error.conflicting_info.history.events_iter().for_each(|event| {
-                    crate::eprintln!("{:?} happened at 0x{:x}\n", event, event.span.addr());
-                    event.span.print_stack_trace();
-                });
+                crate::eprintln!("[DEBUG] Full TreeError: {:#?}", tree_error);
+
+                let print_traces = |history: &History| {
+                    history.created_at().0.print_stack_trace();
+                    history.events_iter().for_each(|event| {
+                        event.span.print_stack_trace();
+                    });
+                };
+
+                print_traces(&tree_error.accessed_info.history);
+                print_traces(&tree_error.conflicting_info.history);
             }
         }
         self.exit(1)

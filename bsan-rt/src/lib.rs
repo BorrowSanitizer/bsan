@@ -8,7 +8,7 @@
 extern crate alloc;
 use alloc::string::String;
 use core::ffi::c_void;
-use core::fmt::Debug;
+use core::fmt::{Debug, Display};
 #[cfg(not(test))]
 use core::panic::PanicInfo;
 use core::ptr::NonNull;
@@ -152,12 +152,12 @@ pub struct SrcLoc {
 
 impl fmt::Display for SrcLoc {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "file {}: line {}, column {}", self.file, self.line, self.col)
+        write!(f, "{}: line {}, column {}", self.file, self.line, self.col)
     }
 }
 
-#[derive(Copy, Clone)]
-pub(crate) struct SpanData {
+#[derive(Copy, Clone, PartialEq)]
+pub struct SpanData {
     fp: frame_pointer_utils::FramePointer,
     /// The adjusted PC address as retrieved from sanitizer_common's stack depot.
     /// This points to the call instruction rather than the return address.
@@ -209,6 +209,15 @@ impl Debug for SpanData {
     }
 }
 
+impl Display for SpanData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.source_location() {
+            Some(loc) => write!(f, "{}", loc),
+            None => write!(f, "ip 0x{:x}", self.ip),
+        }
+    }
+}
+
 /// A struct for summarizing debug information about memory operations
 #[cfg(feature = "debug")]
 struct DebugSummary {
@@ -222,22 +231,13 @@ struct DebugSummary {
 #[cfg(feature = "debug")]
 impl fmt::Display for DebugSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[{}] 0x{:x} @({:?}, {:?}) -> ", self.op, self.ptr, self.alloc_id, self.bor_tag)?;
         match self.info {
-            AllocInfoSummary::WildCard => write!(
-                f,
-                "[{}] 0x{:x} @({:?}, {:?}) -> (wildcard)",
-                self.op, self.ptr, self.alloc_id, self.bor_tag
-            ),
-            AllocInfoSummary::Null => write!(
-                f,
-                "[{}] 0x{:x} @({:?}, {:?}) -> (null)",
-                self.op, self.ptr, self.alloc_id, self.bor_tag
-            ),
-            AllocInfoSummary::Valid { alloc_id, base_addr, size } => write!(
-                f,
-                "[{}] 0x{:x} @({:?}, {:?}) -> ({:?}, {:?}, {:?})",
-                self.op, self.ptr, self.alloc_id, self.bor_tag, alloc_id, base_addr, size
-            ),
+            AllocInfoSummary::WildCard => write!(f, "(wildcard)"),
+            AllocInfoSummary::Null => write!(f, "(null)"),
+            AllocInfoSummary::Valid { alloc_id, base_addr, size } => {
+                write!(f, "({:?}, {:?}, {:?})", alloc_id, base_addr, size)
+            }
         }
     }
 }
@@ -267,6 +267,7 @@ macro_rules! debug_bsan {
 macro_rules! debug_bsan {
     ($op:literal, $ptr:ident, $alloc_id:ident, $bor_tag:ident, $info:expr) => {{}};
 }
+
 #[unsafe(no_mangle)]
 pub static __BSAN_ALLOC_ID_CTR: AtomicUsize = AtomicUsize::new(3);
 
