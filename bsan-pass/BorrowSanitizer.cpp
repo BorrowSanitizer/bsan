@@ -812,6 +812,10 @@ private:
       Callee = BS.BsanFuncDebugGC;
     } else if (Name == kBsanFuncDebugTreeSize) {
       Callee = BS.BsanFuncDebugTreeSize;
+    } else if (Name == kBsanFuncDebugSnapshot) {
+      Callee = BS.BsanFuncDebugSnapshot;
+    } else if (Name == kBsanFuncDebugPrintDiff) {
+      Callee = BS.BsanFuncDebugPrintDiff;
     } else {
       report_fatal_error("Unknown debug function: " + Twine(Name) + "\n");
     }
@@ -1717,6 +1721,12 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   BsanFuncDebugTreeSize = M.getOrInsertFunction(
       kBsanFuncDebugTreeSize, AL, IRB.getVoidTy(), IntptrTy, IntptrTy, PtrTy);
+
+  BsanFuncDebugSnapshot = M.getOrInsertFunction(
+      kBsanFuncDebugSnapshot, AL, IRB.getVoidTy(), IntptrTy, IntptrTy, PtrTy);
+
+  BsanFuncDebugPrintDiff = M.getOrInsertFunction(
+      kBsanFuncDebugPrintDiff, AL, IRB.getVoidTy(), IntptrTy, IntptrTy, PtrTy);
 
   BsanFuncDebugParamTLS = M.getOrInsertFunction(kBsanFuncDebugParamTLS, AL,
                                                 IRB.getVoidTy(), IntptrTy);

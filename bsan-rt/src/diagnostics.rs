@@ -767,3 +767,62 @@ impl<A: Allocator> PrintTree for Tree<A> {
         Ok(())
     }
 }
+
+pub fn print_tree_diff<A: Allocator + Clone>(
+    new_tree: &Tree<A>,
+    old_tree: &Tree<A>,
+    _protected_tags: &HashMap<BorTag, ProtectorKind>,
+) -> BorsanResult<()> {
+    let mut new_tags = Vec::new();
+    let mut changed_tags = Vec::new();
+
+    let mut all_tags: Vec<BorTag> = new_tree.tag_mapping.mapping.keys().copied().collect();
+    all_tags.sort();
+
+    for tag in all_tags {
+        let new_idx = new_tree.tag_mapping.get(&tag).unwrap();
+
+        if let Some(old_idx) = old_tree.tag_mapping.get(&tag) {
+            let mut diffs = Vec::new();
+            for (range, map) in new_tree.rperms.iter_all() {
+                let new_perm = map.get(new_idx).copied();
+                
+                // Find permission in old_tree for this range (sampling at start)
+                let old_perm_at_start = if let Some((_, old_map)) = old_tree.rperms.iter(bsan_shared::Size::from_bytes(range.start), bsan_shared::Size::from_bytes(1)).next() {
+                     old_map.get(old_idx).copied()
+                } else {
+                     None
+                };
+
+                if new_perm != old_perm_at_start {
+                     diffs.push((range, old_perm_at_start, new_perm));
+                }
+            }
+            if !diffs.is_empty() {
+                changed_tags.push((tag, diffs));
+            }
+        } else {
+            new_tags.push(tag);
+        }
+    }
+
+    if !new_tags.is_empty() {
+        crate::println!("New Tags:");
+        for tag in new_tags {
+             crate::println!("  {:?}", tag);
+        }
+    }
+
+    if !changed_tags.is_empty() {
+        crate::println!("Permission Changes:");
+        for (tag, diffs) in changed_tags {
+            crate::println!("  {:?}:", tag);
+            for (range, old, new) in diffs {
+                 let old_s = old.map(|p| p.to_string()).unwrap_or("None".to_string());
+                 let new_s = new.map(|p| p.to_string()).unwrap_or("None".to_string());
+                 crate::println!("    [{}..{}): {} -> {}", range.start, range.end, old_s, new_s);
+            }
+        }
+    }
+    Ok(())
+}

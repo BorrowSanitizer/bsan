@@ -372,6 +372,7 @@ pub struct AllocInfo {
     pub base_addr: FreeListAddrUnion,
     pub size: usize,
     pub tree_lock: Mutex<Option<tree::Tree<hooks::BsanAllocHooks>>>,
+    pub snapshot: Mutex<Option<tree::Tree<hooks::BsanAllocHooks>>>,
 }
 
 impl AllocInfo {
@@ -381,6 +382,7 @@ impl AllocInfo {
             base_addr: FreeListAddrUnion { base_addr: ptr::null_mut() },
             size: 0,
             tree_lock: Mutex::new(None),
+            snapshot: Mutex::new(None),
         }
     }
 
@@ -401,6 +403,7 @@ impl AllocInfo {
                 Span::new(),
                 ctx.allocator(),
             ))),
+            snapshot: Mutex::new(None),
         }
     }
 
@@ -831,6 +834,40 @@ extern "C" fn __bsan_debug_tree_size(
     let tree_lock = alloc_info.tree_lock.lock();
     if let Some(tree) = &*tree_lock {
         crate::println!("Tree size: {}", tree.tag_mapping.len());
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_debug_snapshot(alloc_id: AllocId, bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+    if alloc_info.is_null() {
+        return;
+    }
+    let alloc_info = unsafe { &*alloc_info };
+    let global_ctx = unsafe { global_ctx() };
+
+    let tree_lock = alloc_info.tree_lock.lock();
+    if let Some(tree) = &*tree_lock {
+        let mut snapshot = alloc_info.snapshot.lock();
+        *snapshot = Some(tree.clone());
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_debug_print_diff(alloc_id: AllocId, bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+    if alloc_info.is_null() {
+        return;
+    }
+    let alloc_info = unsafe { &*alloc_info };
+    let global_ctx = unsafe { global_ctx() };
+
+    let tree_lock = alloc_info.tree_lock.lock();
+    let snapshot_lock = alloc_info.snapshot.lock();
+
+    if let (Some(tree), Some(snapshot)) = (&*tree_lock, &*snapshot_lock) {
+        let protected_tags = Default::default();
+        diagnostics::print_tree_diff(tree, snapshot, &protected_tags).unwrap_or_else(|err| handle_err!(err, global_ctx));
+    } else {
+        crate::println!("(no snapshot or tree available)");
     }
 }
 

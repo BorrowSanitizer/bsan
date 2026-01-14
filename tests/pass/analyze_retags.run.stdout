@@ -1,0 +1,49 @@
+--- Initial ---
+--- After &mut x ---
+New Tags:
+  <TAG>(unprotected)
+--- After scope 1 ---
+Permission Changes:
+  <TAG>(unprotected):
+    [0..4): Reserved -> Disabled
+  <TAG>(unprotected):
+    [0..4): Reserved -> Active
+--- After second &mut x ---
+New Tags:
+  <TAG>(unprotected)
+Permission Changes:
+  <TAG>(unprotected):
+    [0..4): Active -> Frozen
+--- After scope 2 ---
+Permission Changes:
+  <TAG>(unprotected):
+    [0..4): Frozen -> Disabled
+  <TAG>(unprotected):
+    [0..4): Reserved -> Active
+--- Inside foo ---
+New Tags:
+  <TAG>(unprotected)
+  <TAG>(unprotected)
+  <TAG>(StrongProtector)
+Permission Changes:
+  <TAG>(unprotected):
+    [0..4): Active -> Frozen
+--- After foo ---
+--- Inside bar (start) ---
+New Tags:
+  <TAG>(unprotected)
+  <TAG>(unprotected)
+  <TAG>(StrongProtector)
+Permission Changes:
+  <TAG>(unprotected):
+    [0..4): Reserved -> Reserved
+  <TAG>(unprotected):
+    [0..4): Reserved -> Reserved
+  <TAG>(unprotected):
+    [0..4): Reserved -> Reserved
+--- Inside foo ---
+New Tags:
+  <TAG>(unprotected)
+  <TAG>(StrongProtector)
+--- Inside bar (end) ---
+--- After bar ---
