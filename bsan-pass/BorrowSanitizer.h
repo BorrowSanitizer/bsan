@@ -108,6 +108,8 @@ public:
   FunctionCallee BsanFuncDebugPrintBorrowState;
   FunctionCallee BsanFuncDebugGC;
   FunctionCallee BsanFuncDebugTreeSize;
+  FunctionCallee BsanFuncDebugSnapshot;
+  FunctionCallee BsanFuncDebugPrintDiff;
 
   FunctionCallee BsanFuncDebugParamTLS;
   FunctionCallee BsanFuncDebugRetvalTLS;
