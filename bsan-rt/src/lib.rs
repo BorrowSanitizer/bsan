@@ -838,7 +838,11 @@ extern "C" fn __bsan_debug_tree_size(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_debug_snapshot(alloc_id: AllocId, bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+extern "C" fn __bsan_debug_snapshot(
+    alloc_id: AllocId,
+    bor_tag: BorTag,
+    alloc_info: *mut AllocInfo,
+) {
     if alloc_info.is_null() {
         return;
     }
@@ -853,7 +857,11 @@ extern "C" fn __bsan_debug_snapshot(alloc_id: AllocId, bor_tag: BorTag, alloc_in
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_debug_print_diff(alloc_id: AllocId, bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+extern "C" fn __bsan_debug_print_diff(
+    alloc_id: AllocId,
+    bor_tag: BorTag,
+    alloc_info: *mut AllocInfo,
+) {
     if alloc_info.is_null() {
         return;
     }
@@ -865,7 +873,8 @@ extern "C" fn __bsan_debug_print_diff(alloc_id: AllocId, bor_tag: BorTag, alloc_
 
     if let (Some(tree), Some(snapshot)) = (&*tree_lock, &*snapshot_lock) {
         let protected_tags = Default::default();
-        diagnostics::print_tree_diff(tree, snapshot, &protected_tags).unwrap_or_else(|err| handle_err!(err, global_ctx));
+        diagnostics::print_tree_diff(tree, snapshot, &protected_tags)
+            .unwrap_or_else(|err| handle_err!(err, global_ctx));
     } else {
         crate::println!("(no snapshot or tree available)");
     }
