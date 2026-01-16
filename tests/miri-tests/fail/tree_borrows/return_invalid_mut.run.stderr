@@ -1,3 +1,8 @@
-An error occurred: UndefinedBehavior(fp not found, error: TreeError { error_kind: ChildAccessForbidden(Permission { inner: Frozen }), alloc_id: ALLOC, error_offset: 4, conflicting_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(0), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: Active }, access_cause: Explicit(Write), is_foreign: false, access_range: Some(AllocRange { start: size4, size: size4 }), transition_range: 4..8, span: Span(0) }, Event { transition: PermTransition { from: Active, to: Frozen }, access_cause: Explicit(Read), is_foreign: true, access_range: Some(AllocRange { start: size4, size: size4 }), transition_range: 4..8, span: Span(0) }] } }, access_cause: Explicit(Write), accessed_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(0), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: Active }, access_cause: Explicit(Write), is_foreign: false, access_range: Some(AllocRange { start: size4, size: size4 }), transition_range: 4..8, span: Span(0) }] } } })
+An error occurred: UndefinedBehavior (AliasingViolation)
+Access created with Reserved permissions at /workspaces/bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs: line 20, column 15
+Conflict created with Reserved permissions at /workspaces/bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs: line 12, column 24
+Last access at /workspaces/bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs: line 21, column 5
+Last conflict at /workspaces/bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs: line 14, column 25
 
+Run with `debug` feature (inst --debug) to view full error and stack traces
 

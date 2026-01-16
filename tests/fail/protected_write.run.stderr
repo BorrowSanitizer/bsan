@@ -3,5 +3,5 @@ Access created with Reserved permissions at /workspaces/bsan/tests/fail/protecte
 Conflict created with Reserved permissions at /workspaces/bsan/tests/fail/protected_write.rs: line 9, column 8
 Last access at /workspaces/bsan/tests/fail/protected_write.rs: line 10, column 14
 
-Run with `debug` feature (inst --debug) to view full error and stack trace
+Run with `debug` feature (inst --debug) to view full error and stack traces
 

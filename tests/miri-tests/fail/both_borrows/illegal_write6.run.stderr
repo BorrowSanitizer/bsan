@@ -1,3 +1,7 @@
-An error occurred: UndefinedBehavior(fp not found, error: TreeError { error_kind: ProtectedDisabled(Permission { inner: Active }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>(StrongProtector), name: None, history: History { tag: <TAG>(StrongProtector), created: (Span(0), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: Active }, access_cause: Explicit(Write), is_foreign: false, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(0) }] } }, access_cause: Explicit(Write), accessed_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(0), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: Active }, access_cause: Explicit(Write), is_foreign: false, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(0) }] } } })
+An error occurred: UndefinedBehavior (AliasingViolation)
+Access created with Reserved permissions at /workspaces/bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs: line 4, column 13
+Conflict created with Reserved permissions at /workspaces/bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs: line 9, column 8
+Last access at /workspaces/bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs: line 10, column 5
 
+Run with `debug` feature (inst --debug) to view full error and stack traces
 

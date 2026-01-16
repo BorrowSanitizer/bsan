@@ -1,4 +1,5 @@
 use std::env;
+use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -6,19 +7,18 @@ use std::sync::OnceLock;
 use colored::*;
 use regex::bytes::Regex;
 use rustc_version::VersionMeta;
-use ui_test::color_eyre::eyre::{self, Context, Result};
+use ui_test::color_eyre::eyre::{Context, Result};
 use ui_test::custom_flags::edition::Edition;
 use ui_test::dependencies::DependencyBuilder;
 use ui_test::spanned::Spanned;
-use ui_test::{ignore_output_conflict, status_emitter, CommandBuilder, Config, Format, Match};
+use ui_test::status_emitter::StatusEmitter;
+use ui_test::{CommandBuilder, Config, Match};
 
-#[allow(unused)]
 #[derive(Copy, Clone, Debug)]
 enum Mode {
     Pass,
     /// Requires annotations
     Fail,
-    Panic,
 }
 
 pub fn flagsplit(flags: &str) -> Vec<String> {
@@ -30,28 +30,29 @@ struct WithDependencies {
     bless: bool,
 }
 
-/// Does *not* set any args or env vars, since it is shared between the test runner and
-/// run_dep_mode.
 fn bsan_config(
-    meta: &VersionMeta,
+    target: &VersionMeta,
     path: &str,
     mode: Mode,
     with_dependencies: Option<WithDependencies>,
 ) -> Config {
+    // The BorrowSanitizer driver is rustc-like, so we create a default builder for rustc and modify it
     let mut program = CommandBuilder::rustc();
     program.program = bsan_path();
+
     let mut config = Config {
-        host: Some(meta.host.to_owned()),
-        target: Some(meta.host.to_owned()),
+        target: Some(target.host.to_owned()),
         program,
         out_dir: PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("bsan_ui"),
+        threads: std::env::var("BSAN_TEST_THREADS")
+            .ok()
+            .map(|threads| NonZero::new(threads.parse().unwrap()).unwrap()),
         ..Config::rustc(path)
     };
 
     config.comment_defaults.base().exit_status = match mode {
         Mode::Pass => Some(0),
         Mode::Fail => Some(1),
-        Mode::Panic => Some(101),
     }
     .map(Spanned::dummy)
     .into();
@@ -67,22 +68,18 @@ fn bsan_config(
     config.comment_defaults.base().add_custom("edition", Edition("2021".into()));
 
     if let Some(WithDependencies { bless }) = with_dependencies {
-        let sysroot =
-            env::var("BSAN_SYSROOT").expect("BSAN_SYSROOT must be set to run the ui test suite");
-
         config.comment_defaults.base().set_custom(
             "dependencies",
             DependencyBuilder {
                 program: CommandBuilder {
-                    // Set the `cargo-miri` binary, which we expect to be in the same folder as the `miri` binary.
+                    // Set the `cargo-bsan` binary, which we expect to be in the same folder as the `bsan-driver` binary.
                     // (It's a separate crate, so we don't get an env var from cargo.)
                     program: bsan_path()
                         .with_file_name(format!("cargo-bsan{}", env::consts::EXE_SUFFIX)),
+                    // There is no `cargo bsan build` so we just use `cargo bsan run`.
                     args: ["bsan", "run"].into_iter().map(Into::into).collect(),
-                    envs: vec![
-                        ("RUSTFLAGS".into(), None),
-                        ("BSAN_SYSROOT".into(), Some(sysroot.as_str().into())),
-                    ],
+                    // Reset `RUSTFLAGS` to work around <https://github.com/rust-lang/rust/pull/119574#issuecomment-1876878344>.
+                    envs: vec![("RUSTFLAGS".into(), None)],
                     ..CommandBuilder::cargo()
                 },
                 crate_manifest_path: Path::new("tests/deps").join("Cargo.toml"),
@@ -97,9 +94,9 @@ fn bsan_config(
 fn run_tests(
     mode: Mode,
     path: &str,
-    meta: &VersionMeta,
+    target: &VersionMeta,
     with_dependencies: bool,
-    _tmpdir: &Path,
+    tmpdir: &Path,
 ) -> Result<()> {
     // Handle command-line arguments.
     let mut args = ui_test::Args::test()?;
@@ -107,21 +104,19 @@ fn run_tests(
 
     let with_dependencies = with_dependencies.then_some(WithDependencies { bless: args.bless });
 
-    let mut config = bsan_config(meta, path, mode, with_dependencies);
+    let mut config = bsan_config(target, path, mode, with_dependencies);
     config.with_args(&args);
-    config.bless_command = Some("./xb ui --bless".into());
+    config.bless_command = Some("./xb test --bless".into());
 
-    if env::var_os("BSAN_SKIP_UI_CHECKS").is_some() {
-        assert!(!args.bless, "cannot use RUSTC_BLESS and MIRI_SKIP_UI_CHECKS at the same time");
-        config.output_conflict_handling = ignore_output_conflict;
-    }
+    // Let the tests know where to store temp files (they might run for a different target, which can make this hard to find).
+    config.program.envs.push(("BSAN_TEMP".into(), Some(tmpdir.to_owned().into())));
     // If a test ICEs, we want to see a backtrace.
     config.program.envs.push(("RUST_BACKTRACE".into(), Some("1".into())));
     config.program.envs.push(("BSAN_BE_RUSTC".into(), Some("target".into())));
+    config.program.envs.push(("BSAN_LLVM_SYMBOLIZER".into(), Some("target".into())));
 
     // Add some flags we always want.
-    config.program.args.insert(
-        0,
+    config.program.args.push(
         format!(
             "--sysroot={}",
             env::var("BSAN_SYSROOT").expect("BSAN_SYSROOT must be set to run the ui test suite")
@@ -131,11 +126,7 @@ fn run_tests(
     config.program.args.push("-Dwarnings".into());
     config.program.args.push("-Dunused".into());
     config.program.args.push("-Ainternal_features".into());
-    if let Ok(extra_flags) = env::var("BSANFLAGS") {
-        for flag in extra_flags.split_whitespace() {
-            config.program.args.push(flag.into());
-        }
-    }
+
     config.program.args.push("-Zui-testing".into());
 
     eprintln!("   Compiler: {}", config.program.display());
@@ -148,10 +139,7 @@ fn run_tests(
         // This could be used to overwrite the `Config` on a per-test basis.
         |_, _| {},
         // No GHA output as that would also show in the main rustc repo.
-        match args.format {
-            Format::Terse => status_emitter::Text::quiet(),
-            Format::Pretty => status_emitter::Text::verbose(),
-        },
+        Box::<dyn StatusEmitter>::from(args.format),
     )
 }
 
@@ -222,23 +210,19 @@ use Dependencies::*;
 fn ui(
     mode: Mode,
     path: &str,
-    meta: &VersionMeta,
+    target: &VersionMeta,
     with_dependencies: Dependencies,
     tmpdir: &Path,
 ) -> Result<()> {
-    // check if path exists
-    if !Path::new(path).exists() {
-        return Err(eyre::eyre!("UI test path {path} does not exist"));
-    }
-    let msg = format!("## Running ui tests in {path}.");
+    let msg = format!("## Running ui tests in {path} for {}", target.host);
     eprintln!("{}", msg.green().bold());
 
     let with_dependencies = match with_dependencies {
         WithDependencies => true,
         WithoutDependencies => false,
     };
-    run_tests(mode, path, meta, with_dependencies, tmpdir)
-        .with_context(|| format!("ui tests in {path} failed"))
+    run_tests(mode, path, target, with_dependencies, tmpdir)
+        .with_context(|| format!("ui tests in {path} for {} failed", target.host))
 }
 
 fn bsan_path() -> PathBuf {
@@ -254,20 +238,14 @@ fn get_version_info() -> VersionMeta {
 
 fn main() -> Result<()> {
     ui_test::color_eyre::install()?;
+    let target = get_version_info();
     let tmpdir = tempfile::Builder::new().prefix("bsan-uitest-").tempdir()?;
-    let meta = get_version_info();
 
-    ui(Mode::Pass, "tests/pass", &meta, WithoutDependencies, tmpdir.path())?;
-    ui(Mode::Fail, "tests/fail", &meta, WithoutDependencies, tmpdir.path())?;
-    ui(Mode::Fail, "tests/miri-tests/fail", &meta, WithoutDependencies, tmpdir.path())?;
-    ui(Mode::Pass, "tests/miri-tests/pass", &meta, WithoutDependencies, tmpdir.path())?;
+    ui(Mode::Pass, "tests/pass", &target, WithoutDependencies, tmpdir.path())?;
+    ui(Mode::Pass, "tests/pass-dep", &target, WithDependencies, tmpdir.path())?;
+    ui(Mode::Fail, "tests/fail", &target, WithoutDependencies, tmpdir.path())?;
 
-    // FIXME: BSAN does not behave as expected for those tests.
-    //ui(Mode::Fail, "tests/miri-tests/should_fail", &meta, WithoutDependencies, tmpdir.path())?;
-    //ui(Mode::Pass, "tests/miri-tests/should_pass", &meta, WithoutDependencies, tmpdir.path())?;
-    //ui(Mode::Fail, "tests/miri-tests/multithreading", &meta, WithoutDependencies, tmpdir.path())?;
-    //FIXME: needs test utils implementation
-    //ui(Mode::Fail, "miri-tests/with-miri-utils", &meta, WithoutDependencies, tmpdir.path())?;
-
+    ui(Mode::Fail, "tests/miri-tests/fail", &target, WithoutDependencies, tmpdir.path())?;
+    ui(Mode::Fail, "tests/miri-tests/pass", &target, WithoutDependencies, tmpdir.path())?;
     Ok(())
 }

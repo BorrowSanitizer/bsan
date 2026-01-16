@@ -1,3 +1,5 @@
-An error occurred: UndefinedBehavior(no event found, error: TreeError { error_kind: ChildAccessForbidden(Permission { inner: Frozen }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(0), Permission { inner: Frozen }), events: [] } }, access_cause: Explicit(Write), accessed_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(0), Permission { inner: Frozen }), events: [] } } })
+An error occurred: UndefinedBehavior (AliasingViolation)
+Access created with Frozen permissions at /workspaces/bsan/tests/miri-tests/fail/both_borrows/illegal_write1.rs: line 7, column 16
 
+Run with `debug` feature (inst --debug) to view full error and stack traces
 

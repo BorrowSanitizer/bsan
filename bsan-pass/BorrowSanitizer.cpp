@@ -15,6 +15,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -198,8 +199,8 @@ public:
   }
 
 private:
-  Value *offsetPointer(IRBuilder<> &IRB, const DataLayout *DL, Value *Pointer,
-                       Value *Offset) {
+  Value *addPointer(IRBuilder<> &IRB, const DataLayout *DL, Value *Pointer,
+                    Value *Offset) {
     if (ConstantInt *CI = dyn_cast<ConstantInt>(Offset))
       if (CI->isZero())
         return Pointer;
@@ -359,6 +360,7 @@ private:
   ProvenanceScalar getAllocaProvenance(BasicBlock *BB, AllocaInst *AI) {
     if (!shouldInstrumentAlloca(*AI))
       return BS.WildcardProvenance;
+
     if (SingletonAllocaMap.contains(AI)) {
       const auto [Size, Prov] = SingletonAllocaMap[AI];
       return Prov;
@@ -509,7 +511,7 @@ private:
   // Stores a provenance value into shadow memory, starting at the given object
   // address.
   void storeProvenanceToShadow(IRBuilder<> &IRB, Value *ObjAddr,
-                               Provenance Prov) {
+                               Provenance Prov, AtomicOrdering Ordering) {
     ProvenancePointer ProvPtr;
     if (Prov.isVector()) {
       Value *IdDest, *TagDest, *InfoDest;
@@ -518,8 +520,7 @@ private:
 
       ProvenancePointer ProvPtr = ProvenancePointer(
           IdDest, TagDest, InfoDest, Prov.Elems, ProvenanceKind::Vector);
-      Prov.store(IRB, BS.PL, ProvPtr);
-
+      Prov.store(IRB, BS.PL, ProvPtr, Ordering);
       Value *ElemCount = IRB.CreateElementCount(BS.IntptrTy, Prov.Elems);
       IRB.CreateCall(BS.BsanFuncShadowStoreVector,
                      {ObjAddr, ElemCount, IdDest, TagDest, InfoDest});
@@ -528,15 +529,15 @@ private:
           IRB.CreateCall(BS.BsanFuncGetShadowDest, {ObjAddr});
       ProvenancePointer Dest =
           ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
-      Prov.store(IRB, BS.PL, Dest);
+      Prov.store(IRB, BS.PL, Dest, Ordering);
     }
   }
 
   // Loads a provenance value into shadow memory starting at the given object
   // address.
   Provenance loadProvenanceFromShadow(IRBuilder<> &IRB,
-                                      ProvenanceComponent &Comp,
-                                      Value *ObjAddr) {
+                                      ProvenanceComponent &Comp, Value *ObjAddr,
+                                      AtomicOrdering Ordering) {
     ProvenancePointer ProvPtr;
     if (Comp.isVector()) {
       // We're dealing with a scalable vector of pointers.
@@ -562,7 +563,7 @@ private:
       Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncGetShadowSrc, {ObjAddr});
       ProvPtr = ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
     }
-    return Provenance::load(IRB, BS.PL, ProvPtr);
+    return Provenance::load(IRB, BS.PL, ProvPtr, Ordering);
   }
 
   // Allocates vectors of each provenance component for a vector provenance
@@ -619,7 +620,7 @@ private:
         Value *CurrentArrayByteOffset =
             EntryIRB.CreateMul(TotalNumProvenanceValues, BS.ProvenanceSize);
         Value *CurrentArraySlot =
-            offsetPointer(EntryIRB, BS.DL, BS.ParamTLS, CurrentArrayByteOffset);
+            addPointer(EntryIRB, BS.DL, BS.ParamTLS, CurrentArrayByteOffset);
         ProvenancePointer Ptr =
             C.getPointerToProvenance(EntryIRB, BS.PL, CurrentArraySlot);
         ArgumentProvenance[&Arg].push_back(Ptr);
@@ -634,7 +635,7 @@ private:
     }
 
     if (NumFnEntryRetags > 0) {
-      FrameTop = EntryIRB.CreateLoad(BS.PtrTy, BS.TagStack);
+      FrameTop = EntryIRB.CreateLoad(BS.PtrTy, BS.ProvStack);
     }
 
     if (StaticAllocaVec.size() > 0) {
@@ -651,7 +652,6 @@ private:
         }
       }
     }
-
     FnPrologueEnd = EntryIRB.CreateIntrinsic(Intrinsic::donothing, {});
     LifetimeInfo = std::make_unique<StackLifetime>(
         F, StaticAllocaVec, StackLifetime::LivenessType::May);
@@ -660,7 +660,6 @@ private:
 
   void patchPHINodes() {
     IRBuilder<> EntryIRB(FnPrologueEnd);
-
     for (auto &[PN, Prov, Idx] : ProvPHINodes) {
       for (auto [V, IncomingBlock] :
            llvm::zip(PN->incoming_values(), PN->blocks())) {
@@ -679,7 +678,6 @@ private:
       PHINode *InfoNode = cast<PHINode>(Prov.Info);
       Worklist.push_back(InfoNode);
       for (BasicBlock *IncomingBlock : predecessors(BB)) {
-
         ProvenanceScalar IncomingProv =
             assertAllocaProvenance(IncomingBlock, AI);
         IdNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Id);
@@ -850,32 +848,30 @@ private:
     RetagVec.push_back(&CB);
     IRBuilder<> IRB(&CB);
     ProvenanceScalar Prov = assertProvenanceScalar(CB.getOperand(0));
-    Value *NewTag = newBorrowTag(IRB);
-
-    Value *ImArray = CB.getOperand(4);
-    Value *ImArrayLen = BS.Zero;
-    if (GlobalVariable *GV = dyn_cast<GlobalVariable>(ImArray)) {
-      if (ConstantDataArray *CA =
-              dyn_cast<ConstantDataArray>(GV->getInitializer())) {
-        uint64_t NumPointerSizedPairs =
-            CA->getNumElements() / (BS.DL->getTypeAllocSize(BS.IntptrTy) * 2);
-        ImArrayLen = ConstantInt::get(BS.IntptrTy, NumPointerSizedPairs);
+    if (Prov != BS.WildcardProvenance) {
+      Value *ImArray = CB.getOperand(4);
+      Value *ImArrayLen = BS.Zero;
+      if (GlobalVariable *GV = dyn_cast<GlobalVariable>(ImArray)) {
+        if (ConstantDataArray *CA =
+                dyn_cast<ConstantDataArray>(GV->getInitializer())) {
+          uint64_t NumPointerSizedPairs =
+              CA->getNumElements() / (BS.DL->getTypeAllocSize(BS.IntptrTy) * 2);
+          ImArrayLen = ConstantInt::get(BS.IntptrTy, NumPointerSizedPairs);
+        }
       }
-    }
 
-    IRB.CreateCall(BS.BsanFuncRetag,
-                   {CB.getOperand(0), CB.getOperand(1), CB.getOperand(2),
-                    Prov.Id, Prov.Tag, Prov.Info, NewTag, ImArray, ImArrayLen});
-    Prov.Tag = NewTag;
+      Prov.Tag =
+          IRB.CreateCall(BS.BsanFuncRetag,
+                         {CB.getOperand(0), CB.getOperand(1), CB.getOperand(2),
+                          Prov.Id, Prov.Tag, Prov.Info, ImArray, ImArrayLen});
 
-    if (isFnEntryRetag(&CB)) {
-      // Offset to the next tag slot, and store the protected tag there.
-      Value *TagSize =
-          IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeAllocSize(BS.IntptrTy));
-      Value *PrevSlot = IRB.CreateLoad(BS.PtrTy, BS.TagStack, true);
-      Value *TagSlot = subtractPointer(IRB, BS.DL, PrevSlot, TagSize);
-      IRB.CreateStore(NewTag, TagSlot, true);
-      IRB.CreateStore(TagSlot, BS.TagStack, true);
+      if (isFnEntryRetag(&CB)) {
+        Value *PrevSlot = IRB.CreateLoad(BS.PtrTy, BS.ProvStack, true);
+        Value *NextProvSlot =
+            subtractPointer(IRB, BS.DL, PrevSlot, BS.ProvenanceSize);
+        Prov.store(IRB, BS.PL, NextProvSlot);
+        IRB.CreateStore(NextProvSlot, BS.ProvStack, true);
+      }
     }
 
     setProvenance(&CB, Prov);
@@ -884,7 +880,7 @@ private:
   bool needsTLSValidation(Function *Callee) {
     return !Callee ||
            (Callee->isDeclaration() || Callee->hasExternalLinkage() ||
-            Callee->hasExternalWeakLinkage());
+            Callee->hasExternalWeakLinkage() || Callee->hasAddressTaken());
   }
 
   using InstVisitor<BorrowSanitizerVisitor>::visit;
@@ -928,7 +924,7 @@ private:
       SmallVector<ProvenanceComponent> *Components =
           getProvenanceComponents(Before, Arg->getType());
       for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
-        Value *Slot = offsetPointer(Before, BS.DL, BS.ParamTLS, ParamByteWidth);
+        Value *Slot = addPointer(Before, BS.DL, BS.ParamTLS, ParamByteWidth);
 
         Provenance ProvSrc = assertProvenance(Before, Comp, {Arg, Idx});
         ProvenancePointer Dest =
@@ -970,6 +966,8 @@ private:
       }
     }
     Value *NumProvenanceValues = BS.Zero;
+    SmallVector<std::pair<unsigned, ProvenancePointer>> ProvenancePointers;
+
     if (CB.getType()->isSized()) {
       // Unsized return types do not have provenance, so we can skip handling
       // the return array.
@@ -983,11 +981,10 @@ private:
       // array is populated with default values.
       Value *RetvalByteWidth = BS.Zero;
       for (const auto &[Idx, Comp] : llvm::enumerate(*ReturnComponents)) {
-        Value *Slot =
-            offsetPointer(After, BS.DL, BS.RetvalTLS, RetvalByteWidth);
+        Value *Slot = addPointer(After, BS.DL, BS.RetvalTLS, RetvalByteWidth);
 
         ProvenancePointer Ptr = Comp.getPointerToProvenance(After, BS.PL, Slot);
-        setProvenance({&CB, Idx}, Provenance::load(After, BS.PL, Ptr));
+        ProvenancePointers.push_back({Idx, Ptr});
 
         Value *ByteWidth =
             Before.CreateMul(Comp.NumProvenanceValues, BS.ProvenanceSize);
@@ -996,12 +993,18 @@ private:
             Before.CreateAdd(NumProvenanceValues, Comp.NumProvenanceValues);
       }
     }
+    // We need to validate thread-local storage before we load provenance
+    // values from it, but we also need to know the number of provenance
+    // values associated with the return value to perform initialization.
     if (needsTLSValidation(Callee)) {
       Value *Prev = Before.CreateCall(BS.BsanFuncMarkTLS, {});
       if (NumProvenanceValues != BS.Zero) {
         After.CreateCall(BS.BsanFuncValidateRetvalTLS,
                          {NumProvenanceValues, Prev});
       }
+    }
+    for (auto &[Idx, Ptr] : ProvenancePointers) {
+      setProvenance({&CB, Idx}, Provenance::load(After, BS.PL, Ptr));
     }
   }
 
@@ -1164,14 +1167,54 @@ private:
   void insertReadCheck(IRBuilder<> &IRB, Instruction *Inst, Value *Ptr,
                        Value *Size) {
     ProvenanceScalar Prov = assertProvenanceScalar(Ptr);
-    IRB.CreateCall(BS.BsanFuncRead, {Ptr, Size, Prov.Id, Prov.Tag, Prov.Info});
+    if (Prov != BS.WildcardProvenance) {
+      IRB.CreateCall(BS.BsanFuncRead,
+                     {Ptr, Size, Prov.Id, Prov.Tag, Prov.Info});
+    }
   }
 
   // Inserts a check to validate a write access.
   void insertWriteCheck(IRBuilder<> &IRB, Instruction *Inst, Value *Ptr,
                         Value *Size) {
     ProvenanceScalar Prov = assertProvenanceScalar(Ptr);
-    IRB.CreateCall(BS.BsanFuncWrite, {Ptr, Size, Prov.Id, Prov.Tag, Prov.Info});
+    if (Prov != BS.WildcardProvenance) {
+      IRB.CreateCall(BS.BsanFuncWrite,
+                     {Ptr, Size, Prov.Id, Prov.Tag, Prov.Info});
+    }
+  }
+
+  AtomicOrdering addReleaseOrdering(AtomicOrdering AT) {
+    switch (AT) {
+    case AtomicOrdering::NotAtomic:
+      return AtomicOrdering::NotAtomic;
+    case AtomicOrdering::Unordered:
+    case AtomicOrdering::Monotonic:
+    case AtomicOrdering::Release:
+      return AtomicOrdering::Release;
+    case AtomicOrdering::Acquire:
+    case AtomicOrdering::AcquireRelease:
+      return AtomicOrdering::AcquireRelease;
+    case AtomicOrdering::SequentiallyConsistent:
+      return AtomicOrdering::SequentiallyConsistent;
+    }
+    llvm_unreachable("Unknown ordering");
+  }
+
+  AtomicOrdering addAcquireOrdering(AtomicOrdering AT) {
+    switch (AT) {
+    case AtomicOrdering::NotAtomic:
+      return AtomicOrdering::NotAtomic;
+    case AtomicOrdering::Unordered:
+    case AtomicOrdering::Monotonic:
+    case AtomicOrdering::Acquire:
+      return AtomicOrdering::Acquire;
+    case AtomicOrdering::Release:
+    case AtomicOrdering::AcquireRelease:
+      return AtomicOrdering::AcquireRelease;
+    case AtomicOrdering::SequentiallyConsistent:
+      return AtomicOrdering::SequentiallyConsistent;
+    }
+    llvm_unreachable("Unknown ordering");
   }
 
   void visitLoadInst(LoadInst &LI) {
@@ -1180,18 +1223,18 @@ private:
 
     Value *Size =
         IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeAllocSize(LI.getType()));
-    insertReadCheck(IRB, &LI, Ptr, Size);
-
     // Load provenance for the value from shadow memory.
     SmallVector<ProvenanceComponent> *Components =
         getProvenanceComponents(IRB, LI.getType());
     Value *Base = LI.getPointerOperand();
     for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
       ShadowFootprint Footprint = Comp.Footprint;
-      Value *ObjAddr = offsetPointer(IRB, BS.DL, Base, Footprint.ByteOffset);
-      Provenance Prov = loadProvenanceFromShadow(IRB, Comp, ObjAddr);
+      Value *ObjAddr = addPointer(IRB, BS.DL, Base, Footprint.ByteOffset);
+      Provenance Prov = loadProvenanceFromShadow(
+          IRB, Comp, ObjAddr, addAcquireOrdering(LI.getOrdering()));
       setProvenance({&LI, Idx}, Prov);
     }
+    insertReadCheck(IRB, &LI, Ptr, Size);
   }
 
   void visitStoreInst(StoreInst &SI) {
@@ -1204,23 +1247,25 @@ private:
                                      BS.DL->getTypeAllocSize(Val->getType()));
     insertWriteCheck(IRB, &SI, Ptr, Size);
 
+    IRBuilder<> NextIRB(SI.getNextNode());
     // Store provenance for the value into shadow memory.
     Value *Base = SI.getPointerOperand();
     SmallVector<ProvenanceComponent> *Components =
-        getProvenanceComponents(IRB, Val->getType());
+        getProvenanceComponents(NextIRB, Val->getType());
 
     for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
       ShadowFootprint Footprint = Comp.Footprint;
-      Value *ObjAddr = offsetPointer(IRB, BS.DL, Base, Footprint.ByteOffset);
+      Value *ObjAddr = addPointer(NextIRB, BS.DL, Base, Footprint.ByteOffset);
 
       Provenance Prov;
       ProvenanceKey Key = {SI.getValueOperand(), Idx};
       if (Comp.isVector()) {
-        Prov = assertProvenanceVector(IRB, Key, Comp.Elems);
+        Prov = assertProvenanceVector(NextIRB, Key, Comp.Elems);
       } else {
         Prov = assertProvenanceScalar(Key);
       }
-      storeProvenanceToShadow(IRB, ObjAddr, Prov);
+      storeProvenanceToShadow(NextIRB, ObjAddr, Prov,
+                              addReleaseOrdering(SI.getOrdering()));
     }
   }
 
@@ -1239,7 +1284,12 @@ private:
 
   void visitIntToPtrInst(IntToPtrInst &I) {
     // Pointers converted from integers receive a wildcard provenance value.
-    setProvenance(&I, BS.InvalidProvenance);
+    // This is overly permissive, but certain certain Rust programs that do
+    // *not* use integer to pointer casts are still compiled to use `inttoptr`.
+    // Since these conversions are not present in MIR, Miri will not report an
+    // error in strict provenance mode, but we will have false positives unless
+    // we allow all accesses through these pointers.
+    setProvenance(&I, BS.WildcardProvenance);
   }
 
   void visitExtractValueInst(ExtractValueInst &EI) {
@@ -1424,10 +1474,11 @@ private:
     }
 
     if (NumFnEntryRetags > 0) {
-      Value *FrameBottom = IRB.CreateLoad(BS.PtrTy, BS.TagStack, true);
-      Value *FrameLen = IRB.CreatePtrDiff(BS.PtrTy, FrameTop, FrameBottom);
+      Value *FrameBottom = IRB.CreateLoad(BS.PtrTy, BS.ProvStack, true);
+      Value *FrameLen =
+          IRB.CreatePtrDiff(BS.ProvenanceTy, FrameTop, FrameBottom);
       IRB.CreateCall(BS.BsanFuncRemoveProtectedTags, {FrameBottom, FrameLen});
-      IRB.CreateStore(FrameTop, BS.TagStack, true);
+      IRB.CreateStore(FrameTop, BS.ProvStack, true);
     }
   }
 
@@ -1439,7 +1490,7 @@ private:
 
       Value *RetvalByteWidth = BS.Zero;
       for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
-        Value *Slot = offsetPointer(IRB, BS.DL, BS.RetvalTLS, RetvalByteWidth);
+        Value *Slot = addPointer(IRB, BS.DL, BS.RetvalTLS, RetvalByteWidth);
 
         Provenance Prov = assertProvenance(IRB, Comp, {RetVal, Idx});
         ProvenancePointer Dest =
@@ -1462,7 +1513,7 @@ private:
 
       Value *RetvalByteWidth = BS.Zero;
       for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
-        Value *Slot = offsetPointer(IRB, BS.DL, BS.RetvalTLS, RetvalByteWidth);
+        Value *Slot = addPointer(IRB, BS.DL, BS.RetvalTLS, RetvalByteWidth);
 
         Provenance Prov = assertProvenance(IRB, Comp, {RetVal, Idx});
         ProvenancePointer Dest =
@@ -1576,9 +1627,9 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   AttributeList AL;
   AL = AL.addFnAttribute(*C, Attribute::NoUnwind);
 
-  BsanFuncRetag = M.getOrInsertFunction(
-      kBsanFuncRetagName, AL, IRB.getVoidTy(), PtrTy, IntptrTy, Int64Ty,
-      IntptrTy, IntptrTy, PtrTy, IntptrTy, PtrTy, IntptrTy);
+  BsanFuncRetag = M.getOrInsertFunction(kBsanFuncRetagName, AL, IntptrTy, PtrTy,
+                                        IntptrTy, Int64Ty, IntptrTy, IntptrTy,
+                                        PtrTy, PtrTy, IntptrTy);
 
   BsanFuncRemoveProtectedTags = M.getOrInsertFunction(
       kBsanFuncRemoveProtectedTags, AL, IRB.getVoidTy(), PtrTy, IntptrTy);
@@ -1684,7 +1735,7 @@ void BorrowSanitizer::createUserspaceApi(Module &M,
   ParamTLS = getOrInsertTLSGlobal(M, kBsanParamTLSName,
                                   ArrayType::get(ProvenanceTy, kTLSSize));
 
-  TagStack = getOrInsertTLSGlobal(M, kBsanTagStackName, IRB.getPtrTy());
+  ProvStack = getOrInsertTLSGlobal(M, kBsanProvStackName, IRB.getPtrTy());
 
   AllocIdCounter = getOrInsertGlobal(M, kBsanAllocIdCounterName, IntptrTy);
   BorTagCounter = getOrInsertGlobal(M, kBsanBorTagCounterName, IntptrTy);

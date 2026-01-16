@@ -1,3 +1,8 @@
-An error occurred: UndefinedBehavior(fp not found, error: TreeError { error_kind: ProtectedDisabled(Permission { inner: ReservedFrz { conflicted: true } }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>(StrongProtector), name: None, history: History { tag: <TAG>(StrongProtector), created: (Span(0), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: ReservedFrz { conflicted: true } }, access_cause: Reborrow, is_foreign: true, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(0) }] } }, access_cause: Dealloc, accessed_info: NodeDebugInfo { tag: <TAG>(WeakProtector), name: None, history: History { tag: <TAG>(WeakProtector), created: (Span(0), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: Active }, access_cause: Dealloc, is_foreign: false, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(0) }] } } })
+An error occurred: UndefinedBehavior (AliasingViolation)
+Access created with Reserved permissions at RUSTLIB/core/src/mem/mod.rs: line 964, column 22
+Conflict created with Reserved permissions at /workspaces/bsan/tests/miri-tests/fail/both_borrows/newtype_retagging.rs: line 6, column 26
+Last access at RUSTLIB/std/src/sys/alloc/PLATFORM.rs: line 48, column 18
+Last conflict at RUSTLIB/alloc/src/boxed.rs: line 1372, column 9
 
+Run with `debug` feature (inst --debug) to view full error and stack traces
 

@@ -100,7 +100,7 @@ impl Display for UBInfo {
                 #[cfg(not(feature = "debug"))]
                 write!(
                     f,
-                    "\nRun with `debug` feature (inst --debug) to view full error and stack trace"
+                    "\nRun with `debug` feature (inst --debug) to view full error and stack traces"
                 )?;
 
                 Ok(())

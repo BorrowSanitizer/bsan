@@ -1,10 +1,12 @@
-use core::cell::SyncUnsafeCell;
+use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 
 use bsan_shared::ProtectorKind;
 use hashbrown::{DefaultHashBuilder, HashMap};
+use rustc_hash::FxBuildHasher;
+use spin::MutexGuard;
 
 #[cfg(feature = "debug")]
 use crate::diagnostics::History;
@@ -24,13 +26,12 @@ use crate::*;
 /// of unsafety throughout the library.
 #[derive(Debug)]
 pub struct GlobalCtx {
-    /// The set of allocation and deallocation functions.
     hooks: BsanHooks,
-    protected_tags: Mutex<BHashMap<BorTag, ProtectorKind>>,
-    alloc_metadata_map: Heap<AllocInfo>,
+    protected_tags: Mutex<HashMap<BorTag, ProtectorKind, FxBuildHasher>>,
     shadow_heap: ShadowHeap<Provenance>,
-    // #[cfg(not(test))]
-    //allocation_stack_depot: Mutex<crate::sanitizer_common_interface::StackTraceDepot>,
+    alloc_metadata_map: Heap<AllocInfo>,
+    #[cfg(not(test))]
+    allocation_stack_depot: Mutex<crate::sanitizer_common_interface::StackTraceDepot>,
 }
 
 impl GlobalCtx {
@@ -39,18 +40,14 @@ impl GlobalCtx {
     fn new(hooks: BsanHooks) -> Result<Self, AllocError> {
         Ok(Self {
             hooks,
-            protected_tags: Mutex::new(BHashMap::new_in(hooks.alloc)),
+            protected_tags: Mutex::new(HashMap::with_hasher(FxBuildHasher)),
             alloc_metadata_map: Heap::new(&hooks)?,
             shadow_heap: ShadowHeap::new(&hooks, &raw const __BSAN_WILDCARD_PROVENANCE)?,
-            // #[cfg(not(test))]
-            // allocation_stack_depot: Mutex::new(
-            //     crate::sanitizer_common_interface::StackTraceDepot::new_in(hooks.alloc),
-            // ),
+            #[cfg(not(test))]
+            allocation_stack_depot: Mutex::new(
+                crate::sanitizer_common_interface::StackTraceDepot::new_in(hooks.alloc),
+            ),
         })
-    }
-
-    pub fn shadow_heap(&self) -> &ShadowHeap<Provenance> {
-        &self.shadow_heap
     }
 
     pub fn hooks(&self) -> &BsanHooks {
@@ -62,7 +59,11 @@ impl GlobalCtx {
     }
 
     pub(crate) unsafe fn destroy_alloc_info(&self, ptr: NonNull<AllocInfo>) {
-        unsafe { self.alloc_metadata_map.dealloc(ptr) };
+        unsafe { self.alloc_metadata_map.dealloc(ptr) }
+    }
+
+    pub fn shadow_heap(&self) -> &ShadowHeap<Provenance> {
+        &self.shadow_heap
     }
 
     pub fn allocator(&self) -> BsanAllocHooks {
@@ -75,62 +76,59 @@ impl GlobalCtx {
         }
     }
 
+    pub fn protected_tags(&self) -> MutexGuard<'_, HashMap<BorTag, ProtectorKind, FxBuildHasher>> {
+        self.protected_tags.lock()
+    }
+
     pub fn add_protected_tag(&self, bor_tag: BorTag, protector_kind: ProtectorKind) {
-        let mut tag_map = self.protected_tags.lock();
+        let mut tag_map = self.protected_tags();
         tag_map.insert(bor_tag, protector_kind);
     }
 
-    pub fn remove_protected_tags(&self, bor_tags: &[BorTag]) {
-        let mut tag_map = self.protected_tags.lock();
-        for tag in bor_tags {
-            tag_map.remove(tag);
-        }
-    }
-
     pub fn get_protector_kind(&self, bor_tag: BorTag) -> Option<ProtectorKind> {
-        let tag_map = self.protected_tags.lock();
+        let tag_map = self.protected_tags();
         tag_map.get(&bor_tag).copied()
     }
 
-    // #[cfg(not(test))]
-    // pub fn store_stacktrace_for_allocation(&self, alloc_id: AllocId, span_data: Span) {
-    //     match self.allocation_stack_depot.lock().capture_stack(alloc_id, None, span_data) {
-    //         Ok(()) => {}
-    //         Err(e) => {
-    //             self.handle_error(e);
-    //         }
-    //     }
-    // }
+    #[cfg(not(test))]
+    pub fn store_stacktrace_for_allocation(&self, alloc_id: AllocId, span_data: Span) {
+        match self.allocation_stack_depot.lock().capture_stack(alloc_id, None, span_data) {
+            Ok(()) => {}
+            Err(e) => {
+                self.handle_error(e);
+            }
+        }
+    }
 
     #[inline(never)] // never inline to have specific break point for debugging with GDB
     pub fn handle_error(&self, info: ErrorInfo) -> ! {
         crate::eprintln!("An error occurred: {info:?}\n");
 
         // code below uses sanitizer common interface to print stack traces and detailed error info
-        // #[cfg(not(test))]
-        // if let ErrorInfo::UndefinedBehavior(ub_info) = info {
-        //     if let Some(alloc_id) = ub_info.get_alloc_id() {
-        //         if let Ok(stack_id) = self.allocation_stack_depot.lock().print_trace(&alloc_id) {
-        //             crate::eprintln!("{:?} previously allocated here:\n", alloc_id);
-        //             sanitizer_common_interface::print_stack_trace(Some(stack_id));
-        //         }
-        //     }
+        #[cfg(not(test))]
+        if let ErrorInfo::UndefinedBehavior(ub_info) = info {
+            if let Some(alloc_id) = ub_info.get_alloc_id() {
+                if let Ok(stack_id) = self.allocation_stack_depot.lock().print_trace(&alloc_id) {
+                    crate::eprintln!("{:?} previously allocated here:\n", alloc_id);
+                    sanitizer_common_interface::print_stack_trace(Some(stack_id));
+                }
+            }
 
-        //     #[cfg(feature = "debug")]
-        //     if let errors::UBInfo::AliasingViolation(tree_error) = ub_info {
-        //         crate::eprintln!("[DEBUG] Full TreeError: {:#?}", tree_error);
+            #[cfg(feature = "debug")]
+            if let errors::UBInfo::AliasingViolation(tree_error) = ub_info {
+                crate::eprintln!("[DEBUG] Full TreeError: {:#?}", tree_error);
 
-        //         let print_traces = |history: &History| {
-        //             history.created_at().0.print_stack_trace();
-        //             history.events_iter().for_each(|event| {
-        //                 event.span.print_stack_trace();
-        //             });
-        //         };
+                let print_traces = |history: &History| {
+                    history.created_at().0.print_stack_trace();
+                    history.events_iter().for_each(|event| {
+                        event.span.print_stack_trace();
+                    });
+                };
 
-        //         print_traces(&tree_error.accessed_info.history);
-        //         print_traces(&tree_error.conflicting_info.history);
-        //     }
-        // }
+                print_traces(&tree_error.accessed_info.history);
+                print_traces(&tree_error.conflicting_info.history);
+            }
+        }
         self.exit(1)
     }
 }
@@ -152,6 +150,7 @@ impl<K, V> DerefMut for BHashMap<K, V> {
     }
 }
 
+#[cfg(not(test))]
 impl<K, V> BHashMap<K, V> {
     pub(crate) fn new_in(hooks: BsanAllocHooks) -> Self {
         Self(HashMap::with_hasher_in(foldhash::fast::RandomState::default(), hooks))
@@ -181,8 +180,12 @@ mod global_alloc {
     static GLOBAL_ALLOCATOR: DummyAllocator = DummyAllocator;
 }
 
-pub static GLOBAL_CTX: SyncUnsafeCell<MaybeUninit<GlobalCtx>> =
-    SyncUnsafeCell::new(MaybeUninit::uninit());
+struct GlobalCtxWrapper(UnsafeCell<MaybeUninit<GlobalCtx>>);
+
+unsafe impl Send for GlobalCtxWrapper {}
+unsafe impl Sync for GlobalCtxWrapper {}
+
+static GLOBAL_CTX: GlobalCtxWrapper = GlobalCtxWrapper(UnsafeCell::new(MaybeUninit::uninit()));
 
 /// Initializes the global context object.
 ///
@@ -194,7 +197,7 @@ pub static GLOBAL_CTX: SyncUnsafeCell<MaybeUninit<GlobalCtx>> =
 #[inline]
 pub unsafe fn init_global_ctx(hooks: BsanHooks) {
     unsafe {
-        (*GLOBAL_CTX.get())
+        (*GLOBAL_CTX.0.get())
             .write(GlobalCtx::new(hooks).expect("failed to allocate global context"));
     }
 }
@@ -206,7 +209,7 @@ pub unsafe fn init_global_ctx(hooks: BsanHooks) {
 /// on the assumption that this function has not been called yet.
 #[inline]
 pub unsafe fn deinit_global_ctx() {
-    unsafe { drop(ptr::replace(GLOBAL_CTX.get(), MaybeUninit::uninit()).assume_init()) };
+    unsafe { drop(ptr::replace(GLOBAL_CTX.0.get(), MaybeUninit::uninit()).assume_init()) };
 }
 
 /// # Safety
@@ -214,6 +217,6 @@ pub unsafe fn deinit_global_ctx() {
 /// has been called and `bsan_deinit` has not yet been called.
 #[inline]
 pub unsafe fn global_ctx<'a>() -> &'a GlobalCtx {
-    let ctx = GLOBAL_CTX.get();
+    let ctx = GLOBAL_CTX.0.get();
     unsafe { &*ctx.cast::<global::GlobalCtx>() }
 }

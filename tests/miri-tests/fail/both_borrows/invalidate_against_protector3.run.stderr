@@ -1,3 +1,6 @@
-An error occurred: UndefinedBehavior(no event found, error: TreeError { error_kind: ProtectedDisabled(Permission { inner: Frozen }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>(StrongProtector), name: None, history: History { tag: <TAG>(StrongProtector), created: (Span(0), Permission { inner: Frozen }), events: [] } }, access_cause: Explicit(Write), accessed_info: NodeDebugInfo { tag: <TAG>(unprotected), name: Some("root of the allocation"), history: History { tag: <TAG>(unprotected), created: (Span(0), Permission { inner: Disabled }), events: [] } } })
+An error occurred: UndefinedBehavior (AliasingViolation)
+Access created with Disabled permissions at RUSTLIB/std/src/sys/alloc/PLATFORM.rs: line 13, column 9
+Conflict created with Frozen permissions at /workspaces/bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector3.rs: line 5, column 23
 
+Run with `debug` feature (inst --debug) to view full error and stack traces
 

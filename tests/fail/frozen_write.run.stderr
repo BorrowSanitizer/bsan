@@ -1,5 +1,5 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
 Access created with Frozen permissions at /workspaces/bsan/tests/fail/frozen_write.rs: line 4, column 14
 
-Run with `debug` feature (inst --debug) to view full error and stack trace
+Run with `debug` feature (inst --debug) to view full error and stack traces
 

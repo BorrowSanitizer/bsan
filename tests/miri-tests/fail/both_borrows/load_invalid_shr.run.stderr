@@ -1,3 +1,6 @@
-An error occurred: UndefinedBehavior(fp not found, error: TreeError { error_kind: ChildAccessForbidden(Permission { inner: Disabled }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(0), Permission { inner: Frozen }), events: [Event { transition: PermTransition { from: Frozen, to: Disabled }, access_cause: Explicit(Write), is_foreign: true, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(0) }] } }, access_cause: Reborrow, accessed_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(0), Permission { inner: Frozen }), events: [Event { transition: PermTransition { from: Frozen, to: Disabled }, access_cause: Explicit(Write), is_foreign: true, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(0) }] } } })
+An error occurred: UndefinedBehavior (AliasingViolation)
+Access created with Frozen permissions at RUSTLIB/alloc/src/boxed.rs: line 265, column 16
+Last access at /workspaces/bsan/tests/miri-tests/fail/both_borrows/load_invalid_shr.rs: line 9, column 14
 
+Run with `debug` feature (inst --debug) to view full error and stack traces
 

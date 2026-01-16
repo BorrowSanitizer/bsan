@@ -76,11 +76,13 @@ impl Command {
             let cargo_bsan = env.build_artifact(CargoBsan, args)?;
             let runtime = env.build_artifact(BsanRt, args)?;
             let plugin = env.build_artifact(BsanPass, args)?;
+            let symbolizer = env.build_artifact(BsanPass, args)?;
 
             env.sh.set_var("BSAN_PLUGIN", plugin);
             env.sh.set_var("BSAN_DRIVER", driver);
             env.sh.set_var("BSAN_RT", runtime);
             env.sh.set_var("BSAN_SYSROOT", path!(&env.build_dir / "sysroot"));
+            env.sh.set_var("BSAN_LLVM_SYMBOLIZER", symbolizer);
 
             cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
             let add_bless = if bless { "--bless" } else { "" };
@@ -306,24 +308,30 @@ impl Buildable for BsanRt {
 
     fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
         let llvm_ar = env.target_binary("llvm-ar");
-        // Use system-wide clang for partial linking; we only invoke the linker driver
-        // to create a relocatable object from existing archives.
-        let clang = "clang"; // rely on PATH
+        let clang = "clang";
+
         let llvm_wrapper = env.build_artifact(CompilerRt, &[])?;
         let rust_runtime = env.build_artifact(BsanRtCore, args)?;
 
         let dest_archive = path!(env.artifact_dir() / self.artifact(env));
         let tmp_dir = env.sh.create_temp_dir()?;
-        let merged_obj = path!(tmp_dir.path() / "bsan_rt_merged.o");
 
         env.cd(tmp_dir.path(), |env| {
-            // Avoid pulling all objects from core (which contains duplicate symbol definitions)
-            // by only whole-archiving compiler-rt and letting the linker select needed objects
-            // from the core archive. This prevents multiple definition errors for __bsan_*.
-            cmd!(env.sh, "{clang} -Wl,--whole-archive {llvm_wrapper} -Wl,--no-whole-archive {rust_runtime} -r -o {merged_obj}")
-                .quiet()
+            let merged_obj = path!(tmp_dir.path() / "bsan_rt_merged.o");
+            // Use system-wide clang to invoke the linker driver
+            // to create a relocatable object from existing archives.
+            cmd!(env.sh, "{clang}")
+                .arg(format!("-Wl,--whole-archive"))
+                .arg(&rust_runtime)
+                .arg(&llvm_wrapper)
+                .arg("-r")
+                .arg("-o")
+                .arg(&merged_obj)
                 .run()?;
-            cmd!(env.sh, "rm -f {dest_archive}").quiet().run()?;
+
+            env.sh.remove_path(&dest_archive)?;
+
+            // Create a new archive with the merged object file.
             cmd!(env.sh, "{llvm_ar} rcs {dest_archive} {merged_obj}").quiet().run()?;
             Ok(())
         })?;
@@ -404,22 +412,22 @@ impl Buildable for BsanRtCore {
     }
 
     fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
-        let llvm_objcopy = env.target_binary("llvm-objcopy");
         let rust_runtime = env.with_flags("RUSTFLAGS", RT_FLAGS, |env| {
             env.build("bsan-rt", args)?;
             Ok(env.assert_artifact(&self.artifact(env)))
         })?;
 
-        cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_* -G __BSAN_*")
-            .arg(&rust_runtime)
-            .quiet()
-            .run()?;
-
         Ok(Some(rust_runtime))
     }
 
     fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.test("bsan-rt", args))
+        /*let tsan_extended_rustflags = RT_FLAGS
+        .iter()
+        .cloned()
+        .chain(["-Zsanitizer=thread -Cunsafe-allow-abi-mismatch=sanitizer"].iter().cloned())
+        .collect::<Vec<&str>>();*/
+        let tsan_extended_rustflags = RT_FLAGS;
+        env.with_flags("RUSTFLAGS", &tsan_extended_rustflags, |env| env.test("bsan-rt", args))
     }
 
     fn clippy(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {

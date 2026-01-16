@@ -18,7 +18,7 @@ void BsanThread::Init() {
   GetThreadStackTopAndBottom(IsMainThread(), &stack_top_, &stack_bottom_);
   this->stack_size = stack_top_ - stack_bottom_;
   this->stack_alloc = (u8 *)MmapOrDie(this->stack_size, __func__);
-  __BSAN_PROT_TAG_STACK = (uptr *)(this->stack_alloc + this->stack_size);
+  __BSAN_PROV_STACK = (uptr *)(this->stack_alloc + this->stack_size);
 }
 
 void BsanThread::TSDDtor(void *tsd) {

@@ -2,6 +2,9 @@ use alloc::string::String;
 use core::fmt::{self, Debug, Display};
 use core::ptr;
 
+#[cfg(not(test))]
+use crate::sanitizer_common_interface;
+
 unsafe extern "C" {
     // Symbol defined by the linker
     unsafe static __executable_start: [u8; 0];
@@ -26,11 +29,22 @@ pub struct Span {
     /// The adjusted PC address as retrieved from sanitizer_common's stack depot.
     /// This points to the call instruction rather than the return address.
     ip: usize,
+    #[cfg(not(test))]
+    stack_trace_id: crate::sanitizer_common_interface::StackTraceId,
 }
 
 impl Span {
     pub fn new(fp: usize, ip: usize) -> Self {
-        Self { fp: FramePointer(fp as *const usize), ip }
+        #[cfg(not(test))]
+        {
+            let stack_trace_id =
+                sanitizer_common_interface::capture_current_stack_trace(ip, fp, Some(3)); // TODO make max depth user-configurable
+            Self { fp: FramePointer(fp as *const usize), ip, stack_trace_id }
+        }
+        #[cfg(test)]
+        {
+            Self { fp: FramePointer(fp as *const usize), ip }
+        }
     }
 
     pub fn ip(&self) -> usize {
@@ -39,6 +53,11 @@ impl Span {
 
     pub fn fp(&self) -> FramePointer {
         self.fp
+    }
+
+    pub fn print_stack_trace(&self) {
+        #[cfg(not(test))]
+        crate::sanitizer_common_interface::print_stack_trace(Some(self.stack_trace_id));
     }
 
     /// Try to obtain a `SrcLoc` for this span's ip.

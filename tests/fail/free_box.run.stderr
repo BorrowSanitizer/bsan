@@ -1,1 +1,2 @@
-malloc(): unaligned tcache chunk detected
+An error occurred: UndefinedBehavior (UseAfterFree(ALLOC))
+
