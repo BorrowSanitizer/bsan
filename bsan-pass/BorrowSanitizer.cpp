@@ -714,6 +714,7 @@ private:
 
   void removeRetagIntrinsics() {
     for (CallBase *CB : ExposeTagVec) {
+      CB->replaceAllUsesWith(CB->getOperand(0));
       CB->eraseFromParent();
     }
     for (CallBase *CB : RetagVec) {
@@ -778,19 +779,13 @@ private:
   }
 
   bool isFnEntryRetag(CallBase *CB) {
-    if (Function *Callee = CB->getCalledFunction()) {
-      if (Callee->getName() == kBsanRustIntrinsicRetag) {
-        std::optional<Value *> LastOperand = std::nullopt;
-        LastOperand = CB->getOperand(3);
-        if (LastOperand.has_value()) {
-          if (ConstantInt *CI = dyn_cast<ConstantInt>(LastOperand.value())) {
-            return !CI->isZero();
-          }
-          report_fatal_error("Invalid parameters to retag");
-        }
-      }
-    }
-    return false;
+    return isRetag(CB) && hasMetadataAnnotation(CB, "fn_entry");
+  }
+
+  bool hasMetadataAnnotation(Instruction *Inst, StringRef Name) {
+    return Inst && Inst->hasMetadata(LLVMContext::MD_annotation) &&
+           any_of(Inst->getMetadata(LLVMContext::MD_annotation)->operands(),
+                  [Name](const MDOperand &Op) { return Op.equalsStr(Name); });
   }
 
   void handleDebugFunction(CallBase &CB, Function *F) {
@@ -852,7 +847,7 @@ private:
     IRBuilder<> IRB(&CB);
     ProvenanceScalar Prov = assertProvenanceScalar(CB.getOperand(0));
     if (Prov != BS.WildcardProvenance) {
-      Value *ImArray = CB.getOperand(4);
+      Value *ImArray = CB.getOperand(1);
       Value *ImArrayLen = BS.Zero;
       if (GlobalVariable *GV = dyn_cast<GlobalVariable>(ImArray)) {
         if (ConstantDataArray *CA =
@@ -864,8 +859,8 @@ private:
       }
       Value *Slot = getProvenanceSlot(IRB, CurrentBlock, isFnEntryRetag(&CB));
       Prov.Tag = IRB.CreateCall(BS.BsanFuncRetag,
-                                {CB.getOperand(0), CB.getOperand(1),
-                                 CB.getOperand(2), Prov.Id, Prov.Tag, Prov.Info,
+                                {CB.getOperand(0), CB.getOperand(2),
+                                 CB.getOperand(3), Prov.Id, Prov.Tag, Prov.Info,
                                  ImArray, ImArrayLen, Slot});
     }
 

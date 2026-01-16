@@ -27,13 +27,11 @@ pub const BSAN_DEFAULT_ARGS: &[&str] = &[
     "-Copt-level=0",
     "-Zmir-opt-level=0",
     "-Cpasses=bsan",
-    "-Zmir-emit-retag",
     "-Zcodegen-emit-retag",
     "-Cforce-frame-pointers=yes",
     "-Zmir-preserve-ub",
-    "-Zemit-lifetime-markers",
+    "-Zllvm-emit-lifetime-markers",
     "-Zinline-llvm=no",
-    "-Zinline-mir=no",
     "-Cembed-bitcode=yes",
 ];
 

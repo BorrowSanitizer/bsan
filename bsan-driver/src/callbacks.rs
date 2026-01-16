@@ -1,7 +1,7 @@
 use bsan_shared::{AccessKind, NewPermission, Permission, ProtectorKind};
 use rustc_interface::Config;
 use rustc_middle::mir::RetagKind;
-use rustc_middle::ty::{Mutability, Ty, TyCtxt, TypingEnv};
+use rustc_middle::ty::{self, Mutability, Ty, TyCtxt, TypingEnv};
 use rustc_middle::util::Providers;
 use rustc_session::Session;
 
@@ -13,15 +13,16 @@ impl rustc_driver::Callbacks for BSanCallBacks {
 }
 
 fn override_queries(_sess: &Session, providers: &mut Providers) {
-    providers.retag_perm = retag_perm;
+    providers.queries.retag_perm = retag_perm;
 }
 
 fn retag_perm<'tcx>(
     tcx: TyCtxt<'tcx>,
-    key: (TypingEnv<'tcx>, Ty<'tcx>, Option<Mutability>, RetagKind),
+    key: (TypingEnv<'tcx>, Ty<'tcx>, Ty<'tcx>, RetagKind),
 ) -> Option<u64> {
-    let (env, pointee_ty, ref_mutability, kind) = key;
-
+    let (env, target_ty, pointee_ty, kind) = key;
+    let ref_mutability =
+        if let ty::Ref(_, _, mutability) = target_ty.kind() { Some(*mutability) } else { None };
     let ty_is_unpin = pointee_ty.is_unpin(tcx, env);
     let ty_is_freeze = pointee_ty.is_freeze(tcx, env);
     let is_protected = kind == RetagKind::FnEntry;
