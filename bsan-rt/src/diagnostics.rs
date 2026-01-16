@@ -99,8 +99,7 @@ pub struct History<A: Allocator = Global> {
 
 /// History formatted for use by `src/diagnostics.rs`.
 ///
-/// NOTE: needs to be `Send` because of a bound on `MachineStopType`, hence
-/// the use of `SpanData` rather than `Span`.
+/// NOTE: needs to be `Send` because of a bound on `MachineStopType`
 #[derive(Debug, Clone)]
 pub struct HistoryData<A: Allocator = Global> {
     pub events: Vec<(Option<Span>, String), A>, // includes creation

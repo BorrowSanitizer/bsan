@@ -2,7 +2,8 @@ use crate::alloc::string::ToString;
 use crate::errors::{BorsanResult, ErrorInfo};
 use crate::global::BHashMap;
 use crate::memory::hooks::BsanAllocHooks;
-use crate::{AllocId, SpanData, SrcLoc};
+use crate::span::SrcLoc;
+use crate::{AllocId, Span};
 
 unsafe extern "C" {
     fn __bsan_printCurrentStackTrace();
@@ -86,11 +87,12 @@ impl StackTraceDepot {
         &mut self,
         alloc_id: AllocId,
         max_depth: Option<u32>,
-        span_data: SpanData,
+        span_data: Span,
     ) -> BorsanResult<()> {
         let max_depth = max_depth.unwrap_or(K_STACK_TRACE_MAX);
-        let stack_id =
-            unsafe { StackTraceId(__bsan_StackDepotPut(span_data.ip, span_data.fp.fp, max_depth)) };
+        let stack_id = unsafe {
+            StackTraceId(__bsan_StackDepotPut(span_data.ip(), span_data.fp().addr(), max_depth))
+        };
         match self.alloc_stacks.insert(alloc_id, stack_id) {
             None => Ok(()),
             Some(_) => Err(ErrorInfo::Internal(crate::errors::InternalError::Unexpected(format!(

@@ -75,27 +75,25 @@ impl Display for UBInfo {
                 write!(
                     f,
                     "(AliasingViolation)\nAccess created with {} permissions at {}\n",
-                    access_perm,
-                    access_created.span_data()
+                    access_perm, access_created
                 )?;
-                if conflict_created.addr() != access_created.addr() {
+                if conflict_created.ip() != access_created.ip() {
                     write!(
                         f,
                         "Conflict created with {} permissions at {}\n",
-                        conflict_perm,
-                        conflict_created.span_data()
+                        conflict_perm, conflict_created
                     )?;
                 }
 
                 // Write last_event locations (if they exist, and avoiding dupes)
                 if let Some(loc) = last_access {
                     if loc != access_created {
-                        write!(f, "Last access at {}\n", loc.span_data())?;
+                        write!(f, "Last access at {}\n", loc)?;
                     }
                 }
                 if let Some(loc) = last_conflict {
                     if loc != conflict_created && Some(loc) != last_access {
-                        write!(f, "Last conflict at {}\n", loc.span_data())?;
+                        write!(f, "Last conflict at {}\n", loc)?;
                     }
                 }
 

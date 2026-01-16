@@ -3,12 +3,11 @@
 #![feature(allocator_api)]
 #![feature(sync_unsafe_cell)]
 #![feature(yeet_expr)]
-#![feature(link_llvm_intrinsics)]
+
 #[macro_use]
 extern crate alloc;
-use alloc::string::String;
 use core::ffi::c_void;
-use core::fmt::{Debug, Display};
+use core::fmt::Debug;
 #[cfg(not(test))]
 use core::panic::PanicInfo;
 use core::ptr::NonNull;
@@ -31,13 +30,12 @@ use borrow_tracker::*;
 mod diagnostics;
 
 mod span;
-use span::Span;
+use span::{FramePointer, Span};
 
 mod memory;
 
 mod errors;
 
-#[cfg(not(test))]
 mod sanitizer_common_interface;
 
 use crate::borrow_tracker::tree::Tree;
@@ -57,77 +55,32 @@ pub(crate) use println;
 /// because they capture the frame pointer of the caller and thus should not be used
 /// in internal functions (because we only want to unwind to the caller of the __bsan_* functions).
 mod frame_pointer_utils {
-    use core::ptr;
 
-    #[repr(transparent)]
-    #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
-    pub struct FramePointer {
-        pub fp: usize,
-    }
-
-    impl FramePointer {
-        pub fn prev(self) -> Self {
-            if self.fp == 0 {
-                self
-            } else {
-                let prev_fp = unsafe { ptr::read(self.fp as *const usize) };
-                Self { fp: prev_fp }
-            }
-        }
-    }
-
-    /*impl Iterator for FramePointer {
-    type Item = Span; // return address
-
-    fn next(&mut self) -> Option<Span> {
-        let prev = self.prev();
-        if *self != prev {
-            let ret_addr = self.ip();
-            *self = prev;
-            Some(ret_addr)
-        } else {
-            None
-        }
-    }
-    }
-    */
-
-    macro_rules! get_caller_pc {
+    macro_rules! current_fp {
         () => {{
-            unsafe extern "C" {
-                #[link_name = "llvm.returnaddress"]
-                fn llvm_returnaddress(level: i32) -> *const u8;
-            }
-            let pc: usize = unsafe { llvm_returnaddress(0) as usize };
-            assert!(pc != 0);
-            pc
-        }};
-    }
-
-    macro_rules! current_frame_pointer {
-        () => {{
-            let fp: usize;
-            #[cfg(target_arch = "x86_64")]
-            unsafe {
-                core::arch::asm!("mov {0}, rbp", out(reg) fp, options(nomem, nostack, preserves_flags));
-            }
-            #[cfg(target_arch = "aarch64")]
-            unsafe {
-                core::arch::asm!("mov {0}, fp", out(reg) fp, options(nomem, nostack, preserves_flags));
-            }
-            fp
+            FramePointer({
+                let fp: usize;
+                #[cfg(target_arch = "x86_64")]
+                unsafe {
+                    core::arch::asm!("mov {0}, rbp", out(reg) fp, options(nomem, nostack, preserves_flags));
+                }
+                #[cfg(target_arch = "aarch64")]
+                unsafe {
+                    core::arch::asm!("mov {0}, fp", out(reg) fp, options(nomem, nostack, preserves_flags));
+                }
+                fp as *const usize
+            })
         }};
     }
 
     macro_rules! create_span_data {
         () => {{
-            let fp = $crate::frame_pointer_utils::current_frame_pointer!();
-            let ip = $crate::frame_pointer_utils::get_caller_pc!();
-            SpanData::new(fp, ip)
+            let fp = $crate::frame_pointer_utils::current_fp!();
+            Span::new(fp.addr(), fp.ip())
         }};
     }
 
-    pub(crate) use {create_span_data, current_frame_pointer, get_caller_pc};
+    pub(crate) use {create_span_data, current_fp};
 }
 
 macro_rules! handle_err {
@@ -141,81 +94,6 @@ macro_rules! handle_err {
             $gtx.handle_error($err);
         }
     }};
-}
-
-#[derive(Clone, Debug)]
-pub struct SrcLoc {
-    pub file: String,
-    pub line: u32,
-    pub col: u32,
-}
-
-impl fmt::Display for SrcLoc {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: line {}, column {}", self.file, self.line, self.col)
-    }
-}
-
-#[derive(Copy, Clone, PartialEq)]
-pub struct SpanData {
-    fp: frame_pointer_utils::FramePointer,
-    /// The adjusted PC address as retrieved from sanitizer_common's stack depot.
-    /// This points to the call instruction rather than the return address.
-    ip: usize,
-    #[cfg(not(test))]
-    stack_trace_id: crate::sanitizer_common_interface::StackTraceId,
-}
-
-impl SpanData {
-    pub fn new(fp: usize, ip: usize) -> Self {
-        #[cfg(not(test))]
-        {
-            let stack_trace_id =
-                sanitizer_common_interface::capture_current_stack_trace(ip, fp, Some(3)); // TODO make max depth user-configurable
-            let adjusted_ip = sanitizer_common_interface::get_top_frame_pc(ip);
-            Self { fp: frame_pointer_utils::FramePointer { fp }, ip: adjusted_ip, stack_trace_id }
-        }
-        #[cfg(test)]
-        {
-            Self { fp: frame_pointer_utils::FramePointer { fp }, ip }
-        }
-    }
-
-    pub fn ip(&self) -> usize {
-        self.ip
-    }
-
-    pub fn print_stack_trace(&self) {
-        #[cfg(not(test))]
-        crate::sanitizer_common_interface::print_stack_trace(Some(self.stack_trace_id));
-    }
-
-    /// Try to obtain a `SrcLoc` for this span's ip.
-    pub fn source_location(&self) -> Option<SrcLoc> {
-        #[cfg(not(test))]
-        {
-            crate::sanitizer_common_interface::symbolize_pc_into(self.ip)
-        }
-        #[cfg(test)]
-        {
-            None
-        }
-    }
-}
-
-impl Debug for SpanData {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "SpanData {{ ip: 0x{:x}, fp: 0x{:x} }}", self.ip, self.fp.fp)
-    }
-}
-
-impl Display for SpanData {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.source_location() {
-            Some(loc) => write!(f, "{}", loc),
-            None => write!(f, "ip 0x{:x}", self.ip),
-        }
-    }
 }
 
 /// A struct for summarizing debug information about memory operations
@@ -574,8 +452,7 @@ unsafe extern "C-unwind" fn __bsan_retag(
     let span_data = frame_pointer_utils::create_span_data!();
     BorrowTracker::new(prov, object_addr, Some(access_size))
         .and_then(|opt| {
-            opt.map(|bt| bt.retag(global_ctx, retag_info, new_tag, Span::new(span_data)))
-                .transpose()
+            opt.map(|bt| bt.retag(global_ctx, retag_info, new_tag, span_data)).transpose()
         })
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
 }
@@ -596,7 +473,7 @@ unsafe extern "C-unwind" fn __bsan_read(
 
     BorrowTracker::new(prov, ptr, Some(access_size))
         .and_then(|bt| {
-            bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Read, Span::new(span_data)))
+            bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Read, span_data))
         })
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
 }
@@ -617,8 +494,7 @@ unsafe extern "C-unwind" fn __bsan_write(
 
     BorrowTracker::new(prov, ptr, Some(access_size))
         .and_then(|bt| {
-            bt.iter()
-                .try_for_each(|t| t.access(global_ctx, AccessKind::Write, Span::new(span_data)))
+            bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Write, span_data))
         })
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
 }
@@ -647,9 +523,7 @@ extern "C" fn __bsan_dealloc(
     }
     let span_data = frame_pointer_utils::create_span_data!();
     BorrowTracker::new(prov, ptr, None)
-        .and_then(|mut bt| {
-            bt.iter_mut().try_for_each(|t| t.dealloc(global_ctx, Span::new(span_data)))
-        })
+        .and_then(|mut bt| bt.iter_mut().try_for_each(|t| t.dealloc(global_ctx, span_data)))
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
 
     if !weak && let Some(alloc_info) = NonNull::new(alloc_info) {
@@ -668,14 +542,14 @@ extern "C" fn __bsan_remove_protected_tags(data: *mut BorTag, len: usize) {
 extern "C" fn __bsan_mark_tls() -> usize {
     //__BSAN_RETVAL_TLS_MARKER = 0;
     let span = frame_pointer_utils::create_span_data!();
-    unsafe { ptr::replace(&raw mut __BSAN_PARAM_TLS_MARKER, span.fp.prev().prev().fp) }
+    unsafe { ptr::replace(&raw mut __BSAN_PARAM_TLS_MARKER, span.fp().prev().prev().addr()) }
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_validate_param_tls(len: usize) {
     let span_data = frame_pointer_utils::create_span_data!();
     unsafe {
-        let caller = span_data.fp.prev().fp;
+        let caller = span_data.fp().prev().addr();
         if caller != __BSAN_PARAM_TLS_MARKER {
             __BSAN_PARAM_TLS[0..len].fill(Provenance::wildcard());
             __BSAN_PARAM_TLS_MARKER = 0;
@@ -686,13 +560,13 @@ extern "C" fn __bsan_validate_param_tls(len: usize) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_validate_retval_tls(len: usize, ptr: frame_pointer_utils::FramePointer) {
+extern "C" fn __bsan_validate_retval_tls(len: usize, ptr: FramePointer) {
     let span_data = frame_pointer_utils::create_span_data!();
     unsafe {
-        let current = span_data.fp.fp;
+        let current = span_data.fp().addr();
         if current != __BSAN_RETVAL_TLS_MARKER {
             __BSAN_RETVAL_TLS[0..len].fill(Provenance::wildcard());
-            __BSAN_PARAM_TLS_MARKER = ptr.fp
+            __BSAN_PARAM_TLS_MARKER = ptr.addr();
         }
     }
 }
@@ -708,14 +582,7 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     let ctx = unsafe { global_ctx() };
     let span_data = frame_pointer_utils::create_span_data!();
     let alloc_info = ctx
-        .create_alloc_info(AllocInfo::new(
-            ctx,
-            base_addr,
-            size,
-            alloc_id,
-            bor_tag,
-            Span::new(span_data),
-        ))
+        .create_alloc_info(AllocInfo::new(ctx, base_addr, size, alloc_id, bor_tag, span_data))
         .unwrap_or_else(|info| ctx.handle_error(info));
     debug_bsan!("alloc", base_addr, alloc_id, bor_tag, alloc_info.as_ptr());
     // TODO: this needs to be inserted whereever we need to track allocations
@@ -840,7 +707,7 @@ unsafe extern "C" fn __bsan_alloc_stack(
             size,
             alloc_id,
             bor_tag,
-            Span::new(span_data),
+            span_data,
         ));
     }
 

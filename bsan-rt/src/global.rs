@@ -29,8 +29,8 @@ pub struct GlobalCtx {
     protected_tags: Mutex<BHashMap<BorTag, ProtectorKind>>,
     alloc_metadata_map: Heap<AllocInfo>,
     shadow_heap: ShadowHeap<Provenance>,
-    #[cfg(not(test))]
-    allocation_stack_depot: Mutex<crate::sanitizer_common_interface::StackTraceDepot>,
+    // #[cfg(not(test))]
+    //allocation_stack_depot: Mutex<crate::sanitizer_common_interface::StackTraceDepot>,
 }
 
 impl GlobalCtx {
@@ -42,10 +42,10 @@ impl GlobalCtx {
             protected_tags: Mutex::new(BHashMap::new_in(hooks.alloc)),
             alloc_metadata_map: Heap::new(&hooks)?,
             shadow_heap: ShadowHeap::new(&hooks, &raw const __BSAN_WILDCARD_PROVENANCE)?,
-            #[cfg(not(test))]
-            allocation_stack_depot: Mutex::new(
-                crate::sanitizer_common_interface::StackTraceDepot::new_in(hooks.alloc),
-            ),
+            // #[cfg(not(test))]
+            // allocation_stack_depot: Mutex::new(
+            //     crate::sanitizer_common_interface::StackTraceDepot::new_in(hooks.alloc),
+            // ),
         })
     }
 
@@ -92,45 +92,45 @@ impl GlobalCtx {
         tag_map.get(&bor_tag).copied()
     }
 
-    #[cfg(not(test))]
-    pub fn store_stacktrace_for_allocation(&self, alloc_id: AllocId, span_data: SpanData) {
-        match self.allocation_stack_depot.lock().capture_stack(alloc_id, None, span_data) {
-            Ok(()) => {}
-            Err(e) => {
-                self.handle_error(e);
-            }
-        }
-    }
+    // #[cfg(not(test))]
+    // pub fn store_stacktrace_for_allocation(&self, alloc_id: AllocId, span_data: Span) {
+    //     match self.allocation_stack_depot.lock().capture_stack(alloc_id, None, span_data) {
+    //         Ok(()) => {}
+    //         Err(e) => {
+    //             self.handle_error(e);
+    //         }
+    //     }
+    // }
 
     #[inline(never)] // never inline to have specific break point for debugging with GDB
     pub fn handle_error(&self, info: ErrorInfo) -> ! {
         crate::eprintln!("An error occurred: {info:?}\n");
 
         // code below uses sanitizer common interface to print stack traces and detailed error info
-        #[cfg(not(test))]
-        if let ErrorInfo::UndefinedBehavior(ub_info) = info {
-            if let Some(alloc_id) = ub_info.get_alloc_id() {
-                if let Ok(stack_id) = self.allocation_stack_depot.lock().print_trace(&alloc_id) {
-                    crate::eprintln!("{:?} previously allocated here:\n", alloc_id);
-                    sanitizer_common_interface::print_stack_trace(Some(stack_id));
-                }
-            }
+        // #[cfg(not(test))]
+        // if let ErrorInfo::UndefinedBehavior(ub_info) = info {
+        //     if let Some(alloc_id) = ub_info.get_alloc_id() {
+        //         if let Ok(stack_id) = self.allocation_stack_depot.lock().print_trace(&alloc_id) {
+        //             crate::eprintln!("{:?} previously allocated here:\n", alloc_id);
+        //             sanitizer_common_interface::print_stack_trace(Some(stack_id));
+        //         }
+        //     }
 
-            #[cfg(feature = "debug")]
-            if let errors::UBInfo::AliasingViolation(tree_error) = ub_info {
-                crate::eprintln!("[DEBUG] Full TreeError: {:#?}", tree_error);
+        //     #[cfg(feature = "debug")]
+        //     if let errors::UBInfo::AliasingViolation(tree_error) = ub_info {
+        //         crate::eprintln!("[DEBUG] Full TreeError: {:#?}", tree_error);
 
-                let print_traces = |history: &History| {
-                    history.created_at().0.print_stack_trace();
-                    history.events_iter().for_each(|event| {
-                        event.span.print_stack_trace();
-                    });
-                };
+        //         let print_traces = |history: &History| {
+        //             history.created_at().0.print_stack_trace();
+        //             history.events_iter().for_each(|event| {
+        //                 event.span.print_stack_trace();
+        //             });
+        //         };
 
-                print_traces(&tree_error.accessed_info.history);
-                print_traces(&tree_error.conflicting_info.history);
-            }
-        }
+        //         print_traces(&tree_error.accessed_info.history);
+        //         print_traces(&tree_error.conflicting_info.history);
+        //     }
+        // }
         self.exit(1)
     }
 }
