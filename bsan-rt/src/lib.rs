@@ -542,14 +542,14 @@ extern "C" fn __bsan_remove_protected_tags(data: *mut BorTag, len: usize) {
 extern "C" fn __bsan_mark_tls() -> usize {
     //__BSAN_RETVAL_TLS_MARKER = 0;
     let span = frame_pointer_utils::create_span_data!();
-    unsafe { ptr::replace(&raw mut __BSAN_PARAM_TLS_MARKER, span.fp().prev().prev().addr()) }
+    unsafe { ptr::replace(&raw mut __BSAN_PARAM_TLS_MARKER, span.fp().prev().addr()) }
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_validate_param_tls(len: usize) {
     let span_data = frame_pointer_utils::create_span_data!();
     unsafe {
-        let caller = span_data.fp().prev().addr();
+        let caller = span_data.fp().prev().prev().addr();
         if caller != __BSAN_PARAM_TLS_MARKER {
             __BSAN_PARAM_TLS[0..len].fill(Provenance::wildcard());
             __BSAN_PARAM_TLS_MARKER = 0;
