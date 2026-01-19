@@ -60,11 +60,6 @@ impl From<UBInfo> for ErrorInfo {
 impl Display for UBInfo {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            UBInfo::InvalidProvenance => write!(f, "({:?})", self),
-            UBInfo::AccessOutOfBounds(..) => write!(f, "({:?})", self),
-            UBInfo::UseAfterFree(..) => write!(f, "({:?})", self),
-            UBInfo::GlobalFree(..) => write!(f, "({:?})", self),
-            UBInfo::StackFree(..) => write!(f, "({:?})", self),
             UBInfo::AliasingViolation(e) => {
                 let (access_created, access_perm) = e.accessed_info.history.created_at();
                 let (conflict_created, conflict_perm) = e.conflicting_info.history.created_at();
@@ -105,6 +100,7 @@ impl Display for UBInfo {
 
                 Ok(())
             }
+            _ => write!(f, "({:?})", self),
         }
     }
 }

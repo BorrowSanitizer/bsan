@@ -153,7 +153,6 @@ impl fmt::Display for DebugSummary {
     }
 }
 
-#[cfg(feature = "debug")]
 macro_rules! debug_bsan {
     ($op:literal, $ptr:ident, $alloc_id:ident, $bor_tag:ident, $alloc_info:expr) => {
         #[cfg(feature = "debug")]
@@ -383,8 +382,8 @@ static __BSAN_NULL_PROVENANCE: Provenance = Provenance::null();
 /// of a pointer's provenance with the value stored in its corresponding `AllocInfo` object. If the values
 /// do not match, then the access is invalid. If they do match, then we proceed to validate the access against
 /// the tree for the allocation.
-#[derive(Debug)]
 #[repr(C)]
+#[derive(Debug)]
 pub struct AllocInfo {
     pub alloc_id: AllocId,
     pub base_addr: FreeListAddrUnion,
