@@ -1,6 +1,6 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Frozen permissions at /workspaces/bsan/tests/miri-tests/fail/both_borrows/mut_exclusive_violation1.rs: line 21, column 19
-Last access at /workspaces/bsan/tests/miri-tests/fail/both_borrows/mut_exclusive_violation1.rs: line 8, column 5
+Access created with Frozen permissions at bsan/tests/miri-tests/fail/both_borrows/mut_exclusive_violation1.rs: line 21, column 19
+Last access at bsan/tests/miri-tests/fail/both_borrows/mut_exclusive_violation1.rs: line 8, column 5
 
 Run with `debug` feature (inst --debug) to view full error and stack traces
 

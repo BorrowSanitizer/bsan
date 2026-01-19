@@ -1,6 +1,6 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Reserved permissions at /workspaces/bsan/tests/miri-tests/fail/tree_borrows/error-range.rs: line 12, column 20
-Last access at /workspaces/bsan/tests/miri-tests/fail/tree_borrows/error-range.rs: line 22, column 9
+Access created with Reserved permissions at bsan/tests/miri-tests/fail/tree_borrows/error-range.rs: line 12, column 20
+Last access at bsan/tests/miri-tests/fail/tree_borrows/error-range.rs: line 22, column 9
 
 Run with `debug` feature (inst --debug) to view full error and stack traces
 

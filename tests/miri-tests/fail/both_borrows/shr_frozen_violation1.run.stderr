@@ -1,5 +1,5 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Frozen permissions at /workspaces/bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs: line 15, column 17
+Access created with Frozen permissions at bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs: line 15, column 17
 
 Run with `debug` feature (inst --debug) to view full error and stack traces
 

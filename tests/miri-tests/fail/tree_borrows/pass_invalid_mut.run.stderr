@@ -1,8 +1,8 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Reserved permissions at /workspaces/bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs: line 9, column 8
-Conflict created with Reserved permissions at /workspaces/bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs: line 16, column 25
-Last access at /workspaces/bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs: line 10, column 5
-Last conflict at /workspaces/bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs: line 18, column 25
+Access created with Reserved permissions at bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs: line 9, column 8
+Conflict created with Reserved permissions at bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs: line 16, column 25
+Last access at bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs: line 10, column 5
+Last conflict at bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs: line 18, column 25
 
 Run with `debug` feature (inst --debug) to view full error and stack traces
 

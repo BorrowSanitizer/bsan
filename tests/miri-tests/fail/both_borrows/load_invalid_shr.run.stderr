@@ -1,6 +1,6 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
 Access created with Frozen permissions at RUSTLIB/alloc/src/boxed.rs: line 265, column 16
-Last access at /workspaces/bsan/tests/miri-tests/fail/both_borrows/load_invalid_shr.rs: line 9, column 14
+Last access at bsan/tests/miri-tests/fail/both_borrows/load_invalid_shr.rs: line 9, column 14
 
 Run with `debug` feature (inst --debug) to view full error and stack traces
 

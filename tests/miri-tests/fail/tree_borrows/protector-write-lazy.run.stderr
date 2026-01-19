@@ -1,6 +1,6 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Reserved permissions at /workspaces/bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs: line 17, column 18
-Last access at /workspaces/bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs: line 22, column 2
+Access created with Reserved permissions at bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs: line 17, column 18
+Last access at bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs: line 22, column 2
 
 Run with `debug` feature (inst --debug) to view full error and stack traces
 

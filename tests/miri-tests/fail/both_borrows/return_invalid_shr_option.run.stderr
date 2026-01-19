@@ -1,6 +1,6 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Frozen permissions at /workspaces/bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs: line 0, column 14
-Last access at /workspaces/bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs: line 7, column 14
+Access created with Frozen permissions at bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs: line 0, column 14
+Last access at bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs: line 7, column 14
 
 Run with `debug` feature (inst --debug) to view full error and stack traces
 

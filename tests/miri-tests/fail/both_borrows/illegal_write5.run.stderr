@@ -1,6 +1,6 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Reserved permissions at /workspaces/bsan/tests/miri-tests/fail/both_borrows/illegal_write5.rs: line 9, column 25
-Last access at /workspaces/bsan/tests/miri-tests/fail/both_borrows/illegal_write5.rs: line 18, column 14
+Access created with Reserved permissions at bsan/tests/miri-tests/fail/both_borrows/illegal_write5.rs: line 9, column 25
+Last access at bsan/tests/miri-tests/fail/both_borrows/illegal_write5.rs: line 18, column 14
 
 Run with `debug` feature (inst --debug) to view full error and stack traces
 

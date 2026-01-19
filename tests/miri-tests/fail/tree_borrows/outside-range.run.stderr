@@ -1,8 +1,8 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
 Access created with Reserved permissions at RUSTLIB/core/src/slice/mod.rs: line 756, column 29
-Conflict created with Reserved permissions at /workspaces/bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs: line 13, column 17
-Last access at /workspaces/bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs: line 21, column 5
-Last conflict at /workspaces/bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs: line 16, column 5
+Conflict created with Reserved permissions at bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs: line 13, column 17
+Last access at bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs: line 21, column 5
+Last conflict at bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs: line 16, column 5
 
 Run with `debug` feature (inst --debug) to view full error and stack traces
 

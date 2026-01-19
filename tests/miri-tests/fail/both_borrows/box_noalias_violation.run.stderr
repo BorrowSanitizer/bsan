@@ -1,7 +1,7 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Reserved permissions at /workspaces/bsan/tests/miri-tests/fail/both_borrows/box_noalias_violation.rs: line 15, column 19
-Conflict created with Reserved permissions at /workspaces/bsan/tests/miri-tests/fail/both_borrows/box_noalias_violation.rs: line 3, column 16
-Last access at /workspaces/bsan/tests/miri-tests/fail/both_borrows/box_noalias_violation.rs: line 5, column 5
+Access created with Reserved permissions at bsan/tests/miri-tests/fail/both_borrows/box_noalias_violation.rs: line 15, column 19
+Conflict created with Reserved permissions at bsan/tests/miri-tests/fail/both_borrows/box_noalias_violation.rs: line 3, column 16
+Last access at bsan/tests/miri-tests/fail/both_borrows/box_noalias_violation.rs: line 5, column 5
 
 Run with `debug` feature (inst --debug) to view full error and stack traces
 

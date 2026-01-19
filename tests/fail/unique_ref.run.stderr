@@ -1,6 +1,6 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Reserved permissions at /workspaces/bsan/tests/fail/unique_ref.rs: line 4, column 14
-Last access at /workspaces/bsan/tests/fail/unique_ref.rs: line 7, column 5
+Access created with Reserved permissions at bsan/tests/fail/unique_ref.rs: line 4, column 14
+Last access at bsan/tests/fail/unique_ref.rs: line 7, column 5
 
 Run with `debug` feature (inst --debug) to view full error and stack traces
 

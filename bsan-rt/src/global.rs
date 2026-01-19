@@ -107,11 +107,11 @@ impl GlobalCtx {
         // code below uses sanitizer common interface to print stack traces and detailed error info
         #[cfg(not(test))]
         if let ErrorInfo::UndefinedBehavior(ub_info) = info {
-            if let Some(alloc_id) = ub_info.get_alloc_id() {
-                if let Ok(stack_id) = self.allocation_stack_depot.lock().print_trace(&alloc_id) {
-                    crate::eprintln!("{:?} previously allocated here:\n", alloc_id);
-                    sanitizer_common_interface::print_stack_trace(Some(stack_id));
-                }
+            if let Some(alloc_id) = ub_info.get_alloc_id()
+                && let Ok(stack_id) = self.allocation_stack_depot.lock().print_trace(&alloc_id)
+            {
+                crate::eprintln!("{:?} previously allocated here:\n", alloc_id);
+                sanitizer_common_interface::print_stack_trace(Some(stack_id));
             }
 
             #[cfg(feature = "debug")]

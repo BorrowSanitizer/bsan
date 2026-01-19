@@ -1,6 +1,6 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Reserved permissions at /workspaces/bsan/tests/fail/forbidden_child_access.rs: line 5, column 23
-Last access at /workspaces/bsan/tests/fail/forbidden_child_access.rs: line 7, column 5
+Access created with Reserved permissions at bsan/tests/fail/forbidden_child_access.rs: line 5, column 23
+Last access at bsan/tests/fail/forbidden_child_access.rs: line 7, column 5
 
 Run with `debug` feature (inst --debug) to view full error and stack traces
 

@@ -1,7 +1,7 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Reserved permissions at /workspaces/bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector2.rs: line 14, column 16
-Conflict created with Frozen permissions at /workspaces/bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector2.rs: line 3, column 23
-Last access at /workspaces/bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector2.rs: line 7, column 14
+Access created with Reserved permissions at bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector2.rs: line 14, column 16
+Conflict created with Frozen permissions at bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector2.rs: line 3, column 23
+Last access at bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector2.rs: line 7, column 14
 
 Run with `debug` feature (inst --debug) to view full error and stack traces
 

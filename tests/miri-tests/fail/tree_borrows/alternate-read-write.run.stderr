@@ -1,6 +1,6 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Reserved permissions at /workspaces/bsan/tests/miri-tests/fail/tree_borrows/alternate-read-write.rs: line 7, column 22
-Last access at /workspaces/bsan/tests/miri-tests/fail/tree_borrows/alternate-read-write.rs: line 14, column 16
+Access created with Reserved permissions at bsan/tests/miri-tests/fail/tree_borrows/alternate-read-write.rs: line 7, column 22
+Last access at bsan/tests/miri-tests/fail/tree_borrows/alternate-read-write.rs: line 14, column 16
 
 Run with `debug` feature (inst --debug) to view full error and stack traces
 

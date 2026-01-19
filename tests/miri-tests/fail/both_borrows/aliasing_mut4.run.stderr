@@ -1,6 +1,6 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
 Access created with Reserved permissions at RUSTLIB/core/src/mem/mod.rs: line 878, column 25
-Conflict created with Frozen permissions at /workspaces/bsan/tests/miri-tests/fail/both_borrows/aliasing_mut4.rs: line 6, column 9
+Conflict created with Frozen permissions at bsan/tests/miri-tests/fail/both_borrows/aliasing_mut4.rs: line 6, column 9
 Last access at RUSTLIB/core/src/mem/mod.rs: line 893, column 9
 
 Run with `debug` feature (inst --debug) to view full error and stack traces
