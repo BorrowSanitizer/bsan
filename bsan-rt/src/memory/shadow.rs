@@ -19,34 +19,34 @@ use crate::memory::{AllocResult, InternalAllocKind};
 /// Armv8-A spec allows addressing 52 or 56 bits as well. No processors
 /// implement this yet, though, so we can use target_pointer_width.
 #[cfg(target_pointer_width = "64")]
-static VA_BITS: u32 = 48;
+const VA_BITS: u32 = 48;
 
 #[cfg(target_pointer_width = "32")]
-static VA_BITS: u32 = 32;
+const VA_BITS: u32 = 32;
 
 #[cfg(target_pointer_width = "16")]
-static VA_BITS: u32 = 16;
+const VA_BITS: u32 = 16;
 
 // The power of the number of bytes in a pointer
-static PTR_BYTES: usize = mem::size_of::<usize>();
-static PTR_BYTES_POWER: u32 = PTR_BYTES.ilog2();
+const PTR_BYTES: usize = mem::size_of::<usize>();
+const PTR_BYTES_POWER: u32 = PTR_BYTES.ilog2();
 
 // The number of addressable, word-aligned, pointer-sized chunks
-static NUM_ADDR_CHUNKS: u32 = VA_BITS - PTR_BYTES_POWER;
+const NUM_ADDR_CHUNKS: u32 = VA_BITS - PTR_BYTES_POWER;
 
 // We have 2^L2_POWER entries in the second level of the page table
 // Adding 1 ensures that we have more second-level entries than first
 // level entries if the number of addressable chunks is odd.
-static L2_POWER: u32 = NUM_ADDR_CHUNKS.strict_add(1).strict_div(2);
+const L2_POWER: u32 = NUM_ADDR_CHUNKS.strict_add(1).strict_div(2);
 
 // We have 2^L1_POWER entries in the first level of the page table
-static L1_POWER: u32 = NUM_ADDR_CHUNKS.strict_div(2);
+const L1_POWER: u32 = NUM_ADDR_CHUNKS.strict_div(2);
 
 // The number of entries in the second level of the page table
-static L2_LEN: usize = 2_usize.pow(L2_POWER);
+const L2_LEN: usize = 2_usize.pow(L2_POWER);
 
 // The number of entries in the first level of the page table
-static L1_LEN: usize = 2_usize.pow(L1_POWER);
+const L1_LEN: usize = 2_usize.pow(L1_POWER);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TableIndex {
