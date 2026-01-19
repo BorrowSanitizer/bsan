@@ -50,7 +50,7 @@ pub(crate) fn capture_current_stack_trace(
 
 /// Gets the top frame PC address from this stack trace.
 /// This is the adjusted PC address as stored by sanitizer_common.
-pub(crate) fn get_top_frame_pc(pc: usize) -> usize {
+pub(crate) fn _get_top_frame_pc(pc: usize) -> usize {
     unsafe { __bsan_GetTopFramePC(pc) }
 }
 

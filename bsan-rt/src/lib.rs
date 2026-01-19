@@ -153,26 +153,24 @@ impl fmt::Display for DebugSummary {
     }
 }
 
+#[cfg(feature = "debug")]
 macro_rules! debug_bsan {
-    ($op:literal, $ptr:ident, $alloc_id:ident, $bor_tag:ident, $alloc_info:expr) => {
-        #[cfg(feature = "debug")]
-        {
-            #[allow(unused_unsafe)]
-            let info = match $alloc_id.0 {
-                0 => AllocInfoSummary::WildCard,
-                1 => AllocInfoSummary::Null,
-                _ => unsafe { &*$alloc_info }.summarize(),
-            };
-            let summary = DebugSummary {
-                op: $op,
-                ptr: $ptr.addr(),
-                alloc_id: $alloc_id,
-                bor_tag: $bor_tag,
-                info,
-            };
-            libc_print::std_name::println!("{}", summary);
-        }
-    };
+    ($op:literal, $ptr:ident, $alloc_id:ident, $bor_tag:ident, $alloc_info:expr) => {{
+        #[allow(unused_unsafe)]
+        let info = match $alloc_id.0 {
+            0 => AllocInfoSummary::WildCard,
+            1 => AllocInfoSummary::Null,
+            _ => unsafe { &*$alloc_info }.summarize(),
+        };
+        let summary = DebugSummary {
+            op: $op,
+            ptr: $ptr.addr(),
+            alloc_id: $alloc_id,
+            bor_tag: $bor_tag,
+            info,
+        };
+        libc_print::std_name::println!("{}", summary);
+    }};
 }
 
 /// No-op macro when debug feature is disabled

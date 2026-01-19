@@ -67,29 +67,30 @@ impl Display for UBInfo {
                 let last_conflict = e.conflicting_info.history.last_event().map(|event| event.span);
 
                 // Write violating locations, avoiding duplicate locs
-                write!(
+                writeln!(
                     f,
-                    "(AliasingViolation)\nAccess created with {} permissions at {}\n",
+                    "(AliasingViolation)\nAccess created with {} permissions at {}",
                     access_perm, access_created
                 )?;
                 if conflict_created.ip() != access_created.ip() {
-                    write!(
+                    writeln!(
                         f,
-                        "Conflict created with {} permissions at {}\n",
+                        "Conflict created with {} permissions at {}",
                         conflict_perm, conflict_created
                     )?;
                 }
 
                 // Write last_event locations (if they exist, and avoiding dupes)
-                if let Some(loc) = last_access {
-                    if loc != access_created {
-                        write!(f, "Last access at {}\n", loc)?;
-                    }
+                if let Some(loc) = last_access
+                    && loc != access_created
+                {
+                    writeln!(f, "Last access at {}", loc)?;
                 }
-                if let Some(loc) = last_conflict {
-                    if loc != conflict_created && Some(loc) != last_access {
-                        write!(f, "Last conflict at {}\n", loc)?;
-                    }
+                if let Some(loc) = last_conflict
+                    && loc != conflict_created
+                    && Some(loc) != last_access
+                {
+                    writeln!(f, "Last conflict at {}", loc)?;
                 }
 
                 #[cfg(not(feature = "debug"))]

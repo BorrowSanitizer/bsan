@@ -120,7 +120,7 @@ where
     }
 
     pub fn created_at(&self) -> (Span, Permission) {
-        self.created.clone()
+        self.created
     }
 
     pub fn events_iter(&self) -> core::slice::Iter<'_, Event> {
