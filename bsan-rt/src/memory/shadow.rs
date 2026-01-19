@@ -54,8 +54,17 @@ pub struct TableIndex {
     l2_index: usize,
 }
 
-type L2Array<T> = [T; L2_LEN];
-type L1Array<T> = [RwLock<*mut L2Array<T>>; L1_LEN];
+type L1Entry<T> = RwLock<Option<NonNull<L2Array<T>>>>;
+type L2Entry<T> = T;
+type L2Array<T> = [L2Entry<T>; L2_LEN];
+type L1Array<T> = [L1Entry<T>; L1_LEN];
+
+// Prevent that we increase the size of L1Entry during refactoring
+type OldL1Entry<T> = RwLock<*mut L2Array<T>>;
+// We have a RwLock<T> containing a AtomicUsize pointer (8 bytes on 64-bit systems) + UnsafeCell<T> where T is a pointer (8 bytes on 64-bit systems).
+use crate::Provenance;
+const _: () = assert!(size_of::<OldL1Entry<Provenance>>() == 16);
+const _: () = assert!(size_of::<L1Entry<Provenance>>() <= size_of::<OldL1Entry<Provenance>>());
 
 impl TableIndex {
     fn new(address: usize) -> Self {
@@ -129,7 +138,7 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
                 */
                 // Initialize all L1 entries with RwLock-wrapped null pointers
                 for i in 0..L1_LEN {
-                    ptr::write(&raw mut (*table_ptr.as_ptr())[i], RwLock::new(ptr::null_mut()));
+                    ptr::write(&raw mut (*table_ptr.as_ptr())[i], RwLock::new(None));
                 }
 
                 table_ptr
@@ -149,7 +158,7 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
             let l1_entry = &(*self.table.as_ptr())[idx.l1_index];
             let read_guard = l1_entry.read();
             let l2_page_ptr = *read_guard;
-            NonNull::new(l2_page_ptr)
+            l2_page_ptr
         }
     }
 
@@ -160,18 +169,18 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
             // Fast path: check with read lock (non-blocking for readers)
             let read_guard = l1_entry.upgradeable_read();
             let l2_ptr = *read_guard;
-            if !l2_ptr.is_null() {
-                return Ok(NonNull::new_unchecked(l2_ptr));
+            if let Some(l2_ptr) = l2_ptr {
+                return Ok(l2_ptr);
             }
 
             // Slow path: upgrade to write lock for mmap allocation
-            // With an upgradable lock we don't need to double-check that l2_ptr is still null because the lock prevents other writers.
+            // With an upgradeable lock we don't need to double-check that l2_ptr is still None because the lock prevents other writers.
             let mut write_guard = read_guard.upgrade();
             let size_bytes = NonZero::new_unchecked(mem::size_of::<T>() * L2_LEN);
             let l2_page = mmap(hooks.mmap_ptr, InternalAllocKind::ShadowHeap, size_bytes)?
                 .cast::<L2Array<T>>();
 
-            *write_guard = l2_page.as_ptr();
+            *write_guard = Some(l2_page);
             drop(write_guard); // release lock early and prevent deadlocks
 
             self.l2_blocks.write().push(idx.l1_index);
@@ -329,12 +338,11 @@ impl<T> Drop for ShadowHeap<T> {
                 let l1_entry = &(*self.table.as_ptr())[i];
                 let mut l1_entry_guard = l1_entry.write();
                 let l2_table = *l1_entry_guard;
-                if !l2_table.is_null() {
+                if let Some(l2_table) = l2_table {
                     let l2_table_size = NonZero::new_unchecked(mem::size_of::<T>() * L2_LEN);
-                    let l2_table = NonNull::new_unchecked(l2_table);
                     munmap(self.munmap, InternalAllocKind::ShadowHeap, l2_table, l2_table_size)
                         .expect("failed to unmap block");
-                    *l1_entry_guard = ptr::null_mut();
+                    *l1_entry_guard = None;
                 }
             }
             // Free the L1 table (RwLocks will be dropped automatically)
