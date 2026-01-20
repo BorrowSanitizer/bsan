@@ -54,7 +54,13 @@ pub struct TableIndex {
     l2_index: usize,
 }
 
-type L1Entry<T> = RwLock<Option<NonNull<L2Array<T>>>>;
+use bytemuck::Zeroable;
+struct ZeroableRwLock<T: Zeroable> {
+    pub inner: RwLock<T>,
+}
+unsafe impl<T: Zeroable> Zeroable for ZeroableRwLock<T> {}
+
+type L1Entry<T> = ZeroableRwLock<Option<NonNull<L2Array<T>>>>;
 type L2Entry<T> = T;
 type L2Array<T> = [L2Entry<T>; L2_LEN];
 type L1Array<T> = [L1Entry<T>; L1_LEN];
@@ -134,28 +140,19 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
     /// We assume that `new` is only called during program initialization, so only by the main thread.
     /// So there should be no deadlock / synchronization issues.
     pub fn new(hooks: &BsanHooks, default: *const T) -> AllocResult<Self> {
-        unsafe {
-            let table = {
-                let table_ptr = mmap(hooks.mmap_ptr, InternalAllocKind::ShadowHeap, Self::L1_SIZE)?
-                    .cast::<L1Array<T>>();
+        let table = unsafe {
+            mmap(hooks.mmap_ptr, InternalAllocKind::ShadowHeap, Self::L1_SIZE)?.cast::<L1Array<T>>()
+        };
 
-                /* TODO: Initialization might be unnecessary if we can guarantee that
-                zeroed memory is returned by mmap and interpreted as correct RwLock.
-                */
-                // Initialize all L1 entries with RwLock-wrapped null pointers
-                for i in 0..L1_LEN {
-                    ptr::write(&raw mut (*table_ptr.as_ptr())[i], RwLock::new(None));
-                }
+        // We can skip initialzation of each L1Entry because mmap returns a zeroed page and
+        // we use ZeroableRwLock which is zero-initialized as RwLock::new(None)
 
-                table_ptr
-            };
-            Ok(Self {
-                table,
-                default,
-                munmap: hooks.munmap_ptr,
-                l2_blocks: RwLock::new(Vec::<usize, BsanAllocHooks>::new_in(hooks.alloc)),
-            })
-        }
+        Ok(Self {
+            table,
+            default,
+            munmap: hooks.munmap_ptr,
+            l2_blocks: RwLock::new(Vec::<usize, BsanAllocHooks>::new_in(hooks.alloc)),
+        })
     }
 
     #[inline]
@@ -163,9 +160,8 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
         // SAFETY: `self.table` should always be a valid pointer to an mmap'd L1Array
         let l1_entry = unsafe { &(*self.table.as_ptr())[idx.l1_index] };
 
-        let read_guard = l1_entry.read();
-        let l2_page_ptr = *read_guard;
-        l2_page_ptr
+        let read_guard = l1_entry.inner.read();
+        *read_guard
     }
 
     fn ensure_l2(&self, hooks: &BsanHooks, idx: TableIndex) -> AllocResult<NonNull<L2Array<T>>> {
@@ -173,7 +169,7 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
         let l1_entry = unsafe { &(*self.table.as_ptr())[idx.l1_index] };
 
         // Fast path: check with read lock (non-blocking for readers)
-        let read_guard = l1_entry.upgradeable_read();
+        let read_guard = l1_entry.inner.upgradeable_read();
         let l2_ptr = *read_guard;
         if let Some(l2_ptr) = l2_ptr {
             return Ok(l2_ptr);
@@ -341,7 +337,7 @@ impl<T> Drop for ShadowHeap<T> {
         for i in l2_blocks_guard.drain(..) {
             // SAFETY: `self.table` should always be a valid pointer to an mmap'd L1Array
             let l1_entry = unsafe { &(*self.table.as_ptr())[i] };
-            let mut l1_entry_guard = l1_entry.write();
+            let mut l1_entry_guard = l1_entry.inner.write();
             let l2_table = *l1_entry_guard;
             if let Some(l2_table) = l2_table {
                 unsafe {
@@ -377,6 +373,29 @@ mod tests {
     }
 
     static DEFAULT_TEST_PROV: TestProv = TestProv { value: 0 };
+
+    #[test]
+    fn assert_rwlock_zero_init_valid() {
+        use core::mem;
+        let zeroed: L1Entry<crate::Provenance> = unsafe { mem::zeroed() };
+        let explicit: L1Entry<crate::Provenance> = ZeroableRwLock { inner: RwLock::new(None) };
+
+        // Compare byte representation
+        let zeroed_bytes = unsafe {
+            core::slice::from_raw_parts(&zeroed as *const _ as *const u8, mem::size_of_val(&zeroed))
+        };
+        let explicit_bytes = unsafe {
+            core::slice::from_raw_parts(
+                &explicit as *const _ as *const u8,
+                mem::size_of_val(&explicit),
+            )
+        };
+
+        assert_eq!(
+            zeroed_bytes, explicit_bytes,
+            "Zero-initialized RwLock<Option<NonNull<T>>> must equal RwLock::new(None)"
+        );
+    }
 
     #[test]
     fn test_indices() {
