@@ -87,9 +87,8 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // then `ProvenanceMap[std::make_pair(V, 2)]` would return the third
   // provenance value within `V`.
   ProvenanceMap BaseProvMap;
-
-  DenseMap<BasicBlock *, std::pair<Value *, Value *>> ProvenanceOffset;
-  SmallVector<std::pair<PHINode *, PHINode *>> ProvenanceSlotPHINodes;
+  DenseMap<BasicBlock *, Value *> ProvenanceOffset;
+  SmallVector<PHINode *> ProvenanceSlotPHINodes;
 
   // Most allocations have a single `lifetime.start`. We assign a single
   // provenance value to these allocations starting from the entry block. It is
@@ -105,7 +104,6 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // by more than one `lifetime.start`.
   DenseMap<BasicBlock *, DenseMap<AllocaInst *, ProvenanceScalar>>
       AllocaProvMap;
-
   // Sometimes, a GEP is issued for an alloca before its `lifetime.start`. The
   // Rust-view of `lifetime.start` indicates that the result of this GEP should
   // be invalid, but the LLVM view seems to permit this. For now, we defer
@@ -139,9 +137,14 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   SmallVector<std::tuple<BasicBlock *, AllocaInst *, ProvenanceScalar>>
       AllocaProvPHINodes;
 
-  // Retag intrinsics (`__rust_retag`), which need to be replaced with their
-  // first argument (the pointer being retagged).
-  SmallVector<CallBase *> RetagVec;
+  // Operand retag intrinsics (`__rust_retag_operand`), which need
+  // to be replaced with their first argument (the pointer being retagged).
+  SmallVector<CallBase *> RetagOperandVec;
+
+  // Place retag intrinsics (`__rust_retag_place`), which update the shadow
+  // provenance value for their first argument, which is a place containing
+  // the pointer receiving the retag.
+  SmallVector<CallBase *> RetagPlaceVec;
 
   // Expose tag intrinsics (`__expose_tag`), which are deleted entirely.
   SmallVector<CallBase *> ExposeTagVec;
@@ -155,6 +158,8 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // every exit point.
   std::unique_ptr<StackLifetime> LifetimeInfo;
 
+  unsigned NumFnEntryRetags = 0;
+
 public:
   BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
                          const TargetLibraryInfo &TLI, DominatorTree &DT)
@@ -163,34 +168,32 @@ public:
     removeUnreachableBlocks(F);
   }
 
-  void switchToBlock(BasicBlock *BB) {
-    CurrentBlock = BB;
-    if (RetagVec.size() > 0) {
-      if (BB->isEntryBlock()) {
-        ProvenanceOffset[BB] = {FrameTop, BS.Zero};
-      } else if (BasicBlock *Pred = BB->getSinglePredecessor()) {
-        ProvenanceOffset[BB].first = ProvenanceOffset[Pred].first;
-        ProvenanceOffset[BB].second = ProvenanceOffset[Pred].second;
-      } else {
-        IRBuilder<> IRB(&(BB->front()));
-
-        PHINode *NormalNode =
-            IRB.CreatePHI(BS.PtrTy, pred_size(BB), "_bsphi_slot");
-        NormalNode->dropDbgRecords();
-
-        PHINode *ProtectedNode =
-            IRB.CreatePHI(BS.IntptrTy, pred_size(BB), "_bsphi_slot_prot");
-        ProtectedNode->dropDbgRecords();
-
-        for (BasicBlock *Pred : predecessors(BB)) {
-          NormalNode->addIncoming(FrameTop, Pred);
-          ProtectedNode->addIncoming(BS.Zero, Pred);
-        }
-
-        ProvenanceOffset[BB] = {NormalNode, ProtectedNode};
-        ProvenanceSlotPHINodes.push_back({NormalNode, ProtectedNode});
-      }
+  Value *getProvenanceOffset(BasicBlock *BB) {
+    if (ProvenanceOffset.contains(BB)) {
+      return ProvenanceOffset[BB];
     }
+    if (BB->isEntryBlock()) {
+      ProvenanceOffset[BB] = FrameTop;
+      return ProvenanceOffset[BB];
+    }
+
+    if (BasicBlock *Pred = BB->getSinglePredecessor()) {
+      ProvenanceOffset[BB] = getProvenanceOffset(Pred);
+      return ProvenanceOffset[BB];
+    }
+
+    IRBuilder<> IRB(&BB->front());
+    PHINode *NormalNode = IRB.CreatePHI(BS.PtrTy, pred_size(BB), "_bsphi_slot");
+    NormalNode->dropDbgRecords();
+
+    ProvenanceOffset[BB] = NormalNode;
+    for (BasicBlock *Pred : predecessors(BB)) {
+      NormalNode->addIncoming(FrameTop, Pred);
+      getProvenanceOffset(Pred);
+    }
+
+    ProvenanceSlotPHINodes.push_back(NormalNode);
+    return ProvenanceOffset[BB];
   }
 
   bool run() {
@@ -207,11 +210,10 @@ public:
     IRBuilder<> EntryIRB(EntryBlock, EntryBlock->getFirstNonPHIIt());
 
     populateBlocks(EntryIRB);
-
     initStack(EntryIRB);
 
     for (auto const &[BB, Insts] : Instructions) {
-      switchToBlock(BB);
+      CurrentBlock = BB;
       for (Instruction *I : Insts) {
         InstVisitor<BorrowSanitizerVisitor>::visit(*I);
       }
@@ -219,9 +221,7 @@ public:
 
     patchShadowPHINodes();
     patchAllocaPHINodes();
-
     removeRetagIntrinsics();
-
     patchProvenanceSlotPHINodes();
     return true;
   }
@@ -385,14 +385,11 @@ private:
     report_fatal_error("Unable to resolve incoming provenance.");
   }
 
-  Value *getProvenanceSlot(IRBuilder<> &IRB, BasicBlock *BB, bool IsProtected) {
-    std::pair<Value *, Value *> Slots = ProvenanceOffset[BB];
-    if (IsProtected) {
-      ProvenanceOffset[BB].second = IRB.CreateAdd(Slots.second, BS.One);
-    }
-    ProvenanceOffset[BB].first =
-        subtractPointer(IRB, BS.DL, Slots.first, BS.PL.ProvenanceSize);
-    return ProvenanceOffset[BB].first;
+  Value *getProvenanceSlot(IRBuilder<> &IRB, BasicBlock *BB) {
+    Value *Offset = getProvenanceOffset(CurrentBlock);
+    Value *Slot = subtractPointer(IRB, BS.DL, Offset, BS.ProvenanceSize);
+    ProvenanceOffset[BB] = Slot;
+    return Slot;
   }
 
   ProvenanceScalar getAllocaProvenance(BasicBlock *BB, AllocaInst *AI) {
@@ -578,8 +575,16 @@ private:
         }
 
         if (CallBase *CB = dyn_cast<CallBase>(&I)) {
-          if (isRetag(CB))
-            RetagVec.push_back(CB);
+          if (isRetag(CB)) {
+            if (isFnEntryRetag(CB)) {
+              NumFnEntryRetags += 1;
+            }
+            if (CB->getType() == BS.PtrTy) {
+              RetagOperandVec.push_back(CB);
+            } else {
+              RetagPlaceVec.push_back(CB);
+            }
+          }
           if (IntrinsicInst *I = dyn_cast<IntrinsicInst>(CB)) {
             if (CB->getIntrinsicID() == Intrinsic::lifetime_start) {
               AllocaInst *AI = findAllocaForValue(I->getArgOperand(1), true);
@@ -620,9 +625,7 @@ private:
                           {TotalNumProvenanceValues});
     }
 
-    if (RetagVec.size() > 0) {
-      FrameTop = EntryIRB.CreateLoad(BS.PtrTy, BS.ProvStack, true);
-    }
+    FrameTop = EntryIRB.CreateLoad(BS.PtrTy, BS.ProvStack, true);
 
     if (StaticAllocaVec.size() > 0) {
       for (AllocaInst *AI : StaticAllocaVec) {
@@ -679,14 +682,10 @@ private:
 
   void patchProvenanceSlotPHINodes() {
     SmallVector<PHINode *> Worklist;
-    for (auto &[Normal, Protected] : ProvenanceSlotPHINodes) {
-      BasicBlock *Parent = Normal->getParent();
-      for (BasicBlock *Pred : predecessors(Parent)) {
-        std::pair<Value *, Value *> Incoming = ProvenanceOffset[Pred];
-        Normal->setIncomingValueForBlock(Pred, Incoming.first);
-        Protected->setIncomingValueForBlock(Pred, Incoming.second);
-        Worklist.push_back(Normal);
-        Worklist.push_back(Protected);
+    for (const auto &PN : ProvenanceSlotPHINodes) {
+      for (BasicBlock *Pred : predecessors(PN->getParent())) {
+        IRBuilder<> IRB(&Pred->front());
+        PN->setIncomingValueForBlock(Pred, ProvenanceOffset[Pred]);
       }
     }
     eliminatePHINodes(Worklist);
@@ -717,8 +716,11 @@ private:
       CB->replaceAllUsesWith(CB->getOperand(0));
       CB->eraseFromParent();
     }
-    for (CallBase *CB : RetagVec) {
+    for (CallBase *CB : RetagOperandVec) {
       CB->replaceAllUsesWith(CB->getOperand(0));
+      CB->eraseFromParent();
+    }
+    for (CallBase *CB : RetagPlaceVec) {
       CB->eraseFromParent();
     }
   }
@@ -775,7 +777,8 @@ private:
 
   bool isRetag(CallBase *CB) {
     Function *Callee = CB->getCalledFunction();
-    return Callee && Callee->getName() == kBsanRustIntrinsicRetag;
+    return Callee &&
+           Callee->getName().starts_with(kBsanRustIntrinsicRetagPrefix);
   }
 
   bool isFnEntryRetag(CallBase *CB) {
@@ -843,10 +846,30 @@ private:
 
   void instrumentExposeTag(CallBase &CB) { ExposeTagVec.push_back(&CB); }
 
-  void instrumentRetag(CallBase &CB) {
+  void instrumentRetagPlace(CallBase &CB) {
+    IRBuilder<> IRB(&CB);
+    Value *Operand = CB.getOperand(0);
+    Value *SrcAddr = IRB.CreateLoad(BS.PtrTy, Operand, true);
+    Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncGetShadowDest, {Operand});
+    ProvenancePointerScalar ProvPtr =
+        ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
+    ProvenanceScalar SrcProv =
+        Provenance::loadScalar(IRB, BS.PL, ProvPtr, AtomicOrdering::NotAtomic);
+    ProvenanceScalar RetaggedProv = instrumentRetag(IRB, CB, SrcAddr, SrcProv);
+    RetaggedProv.store(IRB, BS.PL, ProvPtr);
+  }
+
+  void instrumentRetagOperand(CallBase &CB) {
     IRBuilder<> IRB(&CB);
     ProvenanceScalar Prov = assertProvenanceScalar(CB.getOperand(0));
-    if (Prov != BS.WildcardProvenance) {
+    ProvenanceScalar Retagged =
+        instrumentRetag(IRB, CB, CB.getOperand(0), Prov);
+    setProvenance(&CB, Retagged);
+  }
+
+  ProvenanceScalar instrumentRetag(IRBuilder<> &IRB, CallBase &CB,
+                                   Value *Target, ProvenanceScalar TargetProv) {
+    if (TargetProv != BS.WildcardProvenance) {
       Value *ImArray = CB.getOperand(1);
       Value *ImArrayLen = BS.Zero;
       if (GlobalVariable *GV = dyn_cast<GlobalVariable>(ImArray)) {
@@ -857,14 +880,21 @@ private:
           ImArrayLen = ConstantInt::get(BS.IntptrTy, NumPointerSizedPairs);
         }
       }
-      Value *Slot = getProvenanceSlot(IRB, CurrentBlock, isFnEntryRetag(&CB));
-      Prov.Tag = IRB.CreateCall(BS.BsanFuncRetag,
-                                {CB.getOperand(0), CB.getOperand(2),
-                                 CB.getOperand(3), Prov.Id, Prov.Tag, Prov.Info,
-                                 ImArray, ImArrayLen, Slot});
-    }
 
-    setProvenance(&CB, Prov);
+      TargetProv.Tag = IRB.CreateCall(
+          BS.BsanFuncRetag,
+          {Target, CB.getOperand(2), CB.getOperand(3), TargetProv.Id,
+           TargetProv.Tag, TargetProv.Info, ImArray, ImArrayLen});
+
+      if (isFnEntryRetag(&CB)) {
+        Value *PrevSlot = IRB.CreateLoad(BS.PtrTy, BS.ProvStack, true);
+        Value *NextProvSlot =
+            subtractPointer(IRB, BS.DL, PrevSlot, BS.ProvenanceSize);
+        TargetProv.store(IRB, BS.PL, NextProvSlot);
+        IRB.CreateStore(NextProvSlot, BS.ProvStack, true);
+      }
+    }
+    return TargetProv;
   }
 
   bool needsTLSValidation(Function *Callee) {
@@ -887,8 +917,11 @@ private:
       if (Callee->getName().starts_with(kBsanPrefix)) {
         return;
       }
-      if (Callee->getName() == kBsanRustIntrinsicRetag) {
-        return instrumentRetag(CB);
+      if (isRetag(&CB)) {
+        if (CB.getType() == BS.PtrTy) {
+          return instrumentRetagOperand(CB);
+        }
+        return instrumentRetagPlace(CB);
       }
       if (Callee->getName() == kBsanRustIntrinsicExposeTag) {
         return instrumentExposeTag(CB);
@@ -1209,8 +1242,6 @@ private:
 
   void visitLoadInst(LoadInst &LI) {
     IRBuilder<> IRB(&LI);
-    if (LI.isAtomic())
-      return;
 
     Value *Ptr = LI.getPointerOperand();
 
@@ -1232,8 +1263,6 @@ private:
 
   void visitStoreInst(StoreInst &SI) {
     IRBuilder<> IRB(&SI);
-    if (SI.isAtomic())
-      return;
 
     Value *Ptr, *Val;
     Ptr = SI.getPointerOperand();
@@ -1372,11 +1401,12 @@ private:
   }
 
   void popFrame(IRBuilder<> &IRB, Instruction &I) {
-    Value *NumProtected = ProvenanceOffset[CurrentBlock].second;
-    if (RetagVec.size() > 0) {
-      if (ProvenanceOffset[CurrentBlock].first != FrameTop) {
-        IRB.CreateCall(BS.BsanFuncPopFrame, {FrameTop, NumProtected});
-      }
+    if (NumFnEntryRetags) {
+      Value *FrameBottom = IRB.CreateLoad(BS.PtrTy, BS.ProvStack, true);
+      Value *FrameLen =
+          IRB.CreatePtrDiff(BS.ProvenanceTy, FrameTop, FrameBottom);
+      IRB.CreateCall(BS.BsanFuncPopFrame, {FrameBottom, FrameLen});
+      IRB.CreateStore(FrameTop, BS.ProvStack, true);
     }
 
     if (StaticAllocaVec.size() > 0) {
@@ -1451,7 +1481,7 @@ private:
     }
     BasicBlock *Pred = CurrentBlock;
     CurrentBlock = NextInst->getParent();
-    ProvenanceOffset[CurrentBlock] = ProvenanceOffset[Pred];
+    // ProvenanceOffset[CurrentBlock] = ProvenanceOffset[Pred];
     return IRBuilder<>(NextInst);
   }
 };
@@ -1540,7 +1570,7 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   BsanFuncRetag = M.getOrInsertFunction(kBsanFuncRetagName, AL, IntptrTy, PtrTy,
                                         IntptrTy, Int64Ty, IntptrTy, IntptrTy,
-                                        PtrTy, PtrTy, IntptrTy, PtrTy);
+                                        PtrTy, PtrTy, IntptrTy);
 
   BsanFuncRemoveProtectedTags = M.getOrInsertFunction(
       kBsanFuncRemoveProtectedTags, AL, IRB.getVoidTy(), PtrTy, IntptrTy);
@@ -1647,8 +1677,7 @@ void BorrowSanitizer::createUserspaceApi(Module &M,
                                    ArrayType::get(ProvenanceTy, kTLSSize));
   ParamTLS = getOrInsertTLSGlobal(M, kBsanParamTLSName,
                                   ArrayType::get(ProvenanceTy, kTLSSize));
-  ProvStack = getOrInsertTLSGlobal(M, kBsanProvStackName,
-                                   ArrayType::get(ProvenanceTy, kTLSSize));
+  ProvStack = getOrInsertTLSGlobal(M, kBsanProvStackName, PtrTy);
   AllocIdCounter = getOrInsertGlobal(M, kBsanAllocIdCounterName, IntptrTy);
   BorTagCounter = getOrInsertGlobal(M, kBsanBorTagCounterName, IntptrTy);
 }
@@ -1665,7 +1694,7 @@ bool BorrowSanitizer::instrumentFunction(Function &F,
     return false;
   }
 
-  if (F.getName() == kBsanRustIntrinsicRetag ||
+  if (F.getName() == kBsanRustIntrinsicRetagOperand ||
       F.getName() == kBsanRustIntrinsicExposeTag) {
     return false;
   }

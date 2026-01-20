@@ -33,6 +33,7 @@ pub const BSAN_DEFAULT_ARGS: &[&str] = &[
     "-Zllvm-emit-lifetime-markers",
     "-Zinline-llvm=no",
     "-Cembed-bitcode=yes",
+    "-Zverify-llvm-ir",
 ];
 
 static BSAN_RT_EXPECTED: &str = "libbsan_rt.a";

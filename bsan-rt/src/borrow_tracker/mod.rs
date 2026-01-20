@@ -117,25 +117,18 @@ impl<'b> BorrowTracker<'b> {
         start: *mut c_void,
         access_size: Option<usize>,
         retag_info: RetagInfo<'_>,
-        slot: ProvenanceSlot,
         span: Span,
     ) -> BorsanResult<BorTag> {
         let tag = Self::for_access(prov, start, access_size, |mut bt| {
-            bt.retag_inner(global_ctx, retag_info, slot, span)
+            bt.retag_inner(global_ctx, retag_info, span)
         })?
-        .unwrap_or_else(|| {
-            global_ctx.local_ctx_mut(|local| {
-                local.store_provenance(prov, slot);
-            });
-            prov.bor_tag
-        });
+        .unwrap_or_else(|| prov.bor_tag);
         Ok(tag)
     }
     pub fn retag_inner(
         &mut self,
         global_ctx: &GlobalCtx,
         retag_info: RetagInfo<'_>,
-        slot: ProvenanceSlot,
         span: Span,
     ) -> BorsanResult<BorTag> {
         let alloc_id = self.prov.alloc_id;
@@ -213,7 +206,6 @@ impl<'b> BorrowTracker<'b> {
 
         global_ctx.local_ctx_mut(|local| {
             self.tree_mut().new_child(child_params);
-            local.store_provenance(Provenance { bor_tag: new_tag, ..self.prov }, slot);
         });
 
         Ok(new_tag)

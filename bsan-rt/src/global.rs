@@ -83,28 +83,6 @@ impl GlobalCtx {
         self.protected_tags.lock()
     }
 
-    pub fn run_gc(&self) {
-        /*
-        let threads = self.threads.write();
-        let mut tags = HashSet::new();
-        for local_ctx in threads.values() {
-            unsafe {
-                (*local_ctx.as_ptr()).visit_tags(&mut tags);
-            }
-        }
-        self.shadow_heap().visit_tags(&mut tags);
-
-        for alloc in self.allocations.lock().iter() {
-            unsafe {
-                let tree_lock = &raw mut (*alloc.as_ptr()).tree_lock;
-                let tree = (*tree_lock).get_mut();
-                if let Some(tree) = tree {
-                    tree.remove_unreachable_tags(&tags, self.allocator());
-                }
-            }
-        }*/
-    }
-
     pub fn local_ctx_mut<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut LocalCtx) -> R,
@@ -152,6 +130,7 @@ impl GlobalCtx {
 
     pub fn handle_error(&self, info: ErrorInfo) -> ! {
         crate::eprintln!("An error occurred: {info:?}\n\n");
+        crate::eprintln!("{:?}", backtrace::Backtrace::new());
         self.exit(1)
     }
 }

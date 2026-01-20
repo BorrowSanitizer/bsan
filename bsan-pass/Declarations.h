@@ -12,17 +12,10 @@
 #define RUST_FN(name) RUST_PREFIX name
 #define RUST_RDL_FN(name) RUST_RDL_PREFIX name
 
-// @__rust_retag(ptr, i64, i64, i8, ptr)
-const char kBsanRustIntrinsicRetag[] = RUST_FN("retag");
-// Arguments are:
-// 1. The pointer being retagged
-// 2. The size of the retag
-// 3. The permission applied by the retag
-// 4. If nonzero, then this is a function-entry retag
-// 5. A pointer to a constant array of pairs of integers.
-//    For each pair, the first integer is an offset from the pointer,
-//    and the seocnd is a size in bytes. Together, they indicate a range
-//    within the width of the retag that should be treated as interior mutable.
+// @__rust_retag(ptr, ptr, i64, i64)
+const char kBsanRustIntrinsicRetagPrefix[] = RUST_FN("retag");
+const char kBsanRustIntrinsicRetagOperand[] = RUST_FN("retag_operand");
+const char kBsanRustIntrinsicRetagPlace[] = RUST_FN("retag_place");
 
 // @__rust_expose_tag(ptr)
 // Indicates that this pointer is a reference being cast into a raw pointer.

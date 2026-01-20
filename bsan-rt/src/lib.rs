@@ -12,7 +12,7 @@ use core::fmt::Debug;
 use core::panic::PanicInfo;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use core::{ffi, fmt, ptr, slice};
+use core::{ffi, fmt, ptr};
 
 use bsan_shared::{AccessKind, RetagInfo, Size};
 use libc_print::std_name::*;
@@ -121,20 +121,22 @@ macro_rules! debug_bsan {
     ($op:literal, $ptr:ident, $alloc_id:ident, $bor_tag:ident, $alloc_info:expr) => {
         #[cfg(feature = "debug")]
         {
-            #[allow(unused_unsafe)]
-            let info = match $alloc_id.0 {
-                0 => AllocInfoSummary::WildCard,
-                1 => AllocInfoSummary::Null,
-                _ => unsafe { &*$alloc_info }.summarize(),
-            };
-            let summary = DebugSummary {
-                op: $op,
-                ptr: $ptr.addr(),
-                alloc_id: $alloc_id,
-                bor_tag: $bor_tag,
-                info,
-            };
-            libc_print::std_name::println!("{}", summary);
+            if $alloc_id == AllocId(15) {
+                #[allow(unused_unsafe)]
+                let info = match $alloc_id.0 {
+                    0 => AllocInfoSummary::WildCard,
+                    1 => AllocInfoSummary::Null,
+                    _ => unsafe { &*$alloc_info }.summarize(),
+                };
+                let summary = DebugSummary {
+                    op: $op,
+                    ptr: $ptr.addr(),
+                    alloc_id: $alloc_id,
+                    bor_tag: $bor_tag,
+                    info,
+                };
+                libc_print::std_name::println!("{}", summary);
+            }
         }
     };
 }
@@ -492,13 +494,12 @@ unsafe extern "C-unwind" fn __bsan_retag(
     alloc_info: *mut AllocInfo,
     im_data: *const [usize; 2],
     im_len: usize,
-    slot: ProvenanceSlot,
 ) -> BorTag {
     debug_bsan!("retag", object_addr, alloc_id, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     let retag_info = unsafe { RetagInfo::from_raw(access_size, perm, im_data, im_len) };
-    BorrowTracker::retag(ctx, prov, object_addr, Some(access_size), retag_info, slot, Span::new())
+    BorrowTracker::retag(ctx, prov, object_addr, Some(access_size), retag_info, Span::new())
         .unwrap_or_else(|err| ctx.handle_error(err))
 }
 
@@ -581,17 +582,6 @@ extern "C" fn __bsan_dealloc(
 
     if !weak && let Some(alloc_info) = NonNull::new(alloc_info) {
         unsafe { ctx.destroy_alloc_info(alloc_info) };
-    }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn __bsan_remove_protected_tags(data: *mut Provenance, len: usize) {
-    let ctx = unsafe { global_ctx() };
-    let prov_list = unsafe { slice::from_raw_parts(data, len) };
-    for prov in prov_list {
-        // Protector end semantics can never trigger UB.
-        let _ = BorrowTracker::for_alloc(*prov, |mut bt| bt.protector_end(ctx, Span::new()));
-        ctx.protected_tags().remove(&prov.bor_tag);
     }
 }
 
@@ -828,10 +818,11 @@ extern "C" fn __bsan_debug_print(alloc_id: AllocId, bor_tag: BorTag, alloc_info:
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     crate::println!("{prov:?}");
 }
-
+/*
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
     eprintln!("The BorrowSanitizer runtime panicked! {:?}", info);
     core::intrinsics::abort()
 }
+*/
