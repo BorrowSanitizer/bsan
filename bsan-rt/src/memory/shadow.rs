@@ -123,14 +123,20 @@ pub struct ShadowHeap<T> {
 unsafe impl<T> Sync for ShadowHeap<T> {}
 unsafe impl<T> Send for ShadowHeap<T> {}
 
+impl<T: Sized> ShadowHeap<T> {
+    // Size of L1 and L2 tables in bytes
+    // The check for non-zero is done at compile time, hence the unwrap is safe.
+    const L1_SIZE: NonZero<usize> = NonZero::new(mem::size_of::<L1Array<T>>()).unwrap();
+    const L2_SIZE: NonZero<usize> = NonZero::new(mem::size_of::<T>() * L2_LEN).unwrap();
+}
+
 impl<T: Sized + Default + Copy> ShadowHeap<T> {
     /// We assume that `new` is only called during program initialization, so only by the main thread.
     /// So there should be no deadlock / synchronization issues.
     pub fn new(hooks: &BsanHooks, default: *const T) -> AllocResult<Self> {
         unsafe {
             let table = {
-                let size_bytes = NonZero::new_unchecked(mem::size_of::<L1Array<T>>());
-                let table_ptr = mmap(hooks.mmap_ptr, InternalAllocKind::ShadowHeap, size_bytes)?
+                let table_ptr = mmap(hooks.mmap_ptr, InternalAllocKind::ShadowHeap, Self::L1_SIZE)?
                     .cast::<L1Array<T>>();
 
                 /* TODO: Initialization might be unnecessary if we can guarantee that
@@ -154,38 +160,37 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
 
     #[inline]
     fn get_l2(&self, idx: TableIndex) -> Option<NonNull<L2Array<T>>> {
-        unsafe {
-            let l1_entry = &(*self.table.as_ptr())[idx.l1_index];
-            let read_guard = l1_entry.read();
-            let l2_page_ptr = *read_guard;
-            l2_page_ptr
-        }
+        // SAFETY: `self.table` should always be a valid pointer to an mmap'd L1Array
+        let l1_entry = unsafe { &(*self.table.as_ptr())[idx.l1_index] };
+
+        let read_guard = l1_entry.read();
+        let l2_page_ptr = *read_guard;
+        l2_page_ptr
     }
 
     fn ensure_l2(&self, hooks: &BsanHooks, idx: TableIndex) -> AllocResult<NonNull<L2Array<T>>> {
-        unsafe {
-            let l1_entry = &(*self.table.as_ptr())[idx.l1_index];
+        // SAFETY: `self.table` should always be a valid pointer to an mmap'd L1Array
+        let l1_entry = unsafe { &(*self.table.as_ptr())[idx.l1_index] };
 
-            // Fast path: check with read lock (non-blocking for readers)
-            let read_guard = l1_entry.upgradeable_read();
-            let l2_ptr = *read_guard;
-            if let Some(l2_ptr) = l2_ptr {
-                return Ok(l2_ptr);
-            }
-
-            // Slow path: upgrade to write lock for mmap allocation
-            // With an upgradeable lock we don't need to double-check that l2_ptr is still None because the lock prevents other writers.
-            let mut write_guard = read_guard.upgrade();
-            let size_bytes = NonZero::new_unchecked(mem::size_of::<T>() * L2_LEN);
-            let l2_page = mmap(hooks.mmap_ptr, InternalAllocKind::ShadowHeap, size_bytes)?
-                .cast::<L2Array<T>>();
-
-            *write_guard = Some(l2_page);
-            drop(write_guard); // release lock early and prevent deadlocks
-
-            self.l2_blocks.write().push(idx.l1_index);
-            Ok(l2_page)
+        // Fast path: check with read lock (non-blocking for readers)
+        let read_guard = l1_entry.upgradeable_read();
+        let l2_ptr = *read_guard;
+        if let Some(l2_ptr) = l2_ptr {
+            return Ok(l2_ptr);
         }
+
+        // Slow path: upgrade to write lock for mmap allocation
+        // With an upgradeable lock we don't need to double-check that l2_ptr is still None because the lock prevents other writers.
+        let mut write_guard = read_guard.upgrade();
+        let l2_page = unsafe {
+            mmap(hooks.mmap_ptr, InternalAllocKind::ShadowHeap, Self::L2_SIZE)?.cast::<L2Array<T>>()
+        };
+
+        *write_guard = Some(l2_page);
+        drop(write_guard); // release lock early and prevent deadlocks
+
+        self.l2_blocks.write().push(idx.l1_index);
+        Ok(l2_page)
     }
 
     pub fn clear(
@@ -331,27 +336,28 @@ impl<T> Drop for ShadowHeap<T> {
     /// We assume that `drop()` is only called during program deinit, so only by the main thread.
     /// So there should be no deadlock / synchronization issues.
     fn drop(&mut self) {
-        unsafe {
-            // Free all L2 tables
-            let mut l2_blocks_guard = self.l2_blocks.write();
-            for i in l2_blocks_guard.drain(..) {
-                let l1_entry = &(*self.table.as_ptr())[i];
-                let mut l1_entry_guard = l1_entry.write();
-                let l2_table = *l1_entry_guard;
-                if let Some(l2_table) = l2_table {
-                    let l2_table_size = NonZero::new_unchecked(mem::size_of::<T>() * L2_LEN);
-                    munmap(self.munmap, InternalAllocKind::ShadowHeap, l2_table, l2_table_size)
-                        .expect("failed to unmap block");
-                    *l1_entry_guard = None;
+        // Free all L2 tables
+        let mut l2_blocks_guard = self.l2_blocks.write();
+        for i in l2_blocks_guard.drain(..) {
+            // SAFETY: `self.table` should always be a valid pointer to an mmap'd L1Array
+            let l1_entry = unsafe { &(*self.table.as_ptr())[i] };
+            let mut l1_entry_guard = l1_entry.write();
+            let l2_table = *l1_entry_guard;
+            if let Some(l2_table) = l2_table {
+                unsafe {
+                    munmap(self.munmap, InternalAllocKind::ShadowHeap, l2_table, Self::L2_SIZE)
                 }
+                .expect("failed to unmap block");
+                *l1_entry_guard = None;
             }
-            // Free the L1 table (RwLocks will be dropped automatically)
-            let size_bytes = NonZero::new_unchecked(mem::size_of::<L1Array<T>>());
+        }
+        // Free the L1 table (RwLocks will be dropped automatically)
+        unsafe {
             munmap::<L1Array<T>>(
                 self.munmap,
                 InternalAllocKind::ShadowHeap,
                 self.table,
-                size_bytes,
+                Self::L1_SIZE,
             )
             .expect("failed to unmap block");
         }
