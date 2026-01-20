@@ -188,7 +188,7 @@ regexes! {
     // erase thread caller ids
     r"call [0-9]+"                  => "call ID",
     // erase platform module paths
-    r"\bsys::([a-z_]+)::[a-z]+::"   => "sys::$1::PLATFORM::",
+    // r"\bsys::([a-z_]+)::[a-z]+::"   => "sys::$1::PLATFORM::",
     // Windows file paths
     r"\\"                           => "/",
     // erase Rust stdlib path
