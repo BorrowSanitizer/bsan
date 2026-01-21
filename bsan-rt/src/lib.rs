@@ -251,7 +251,7 @@ impl Default for BorTag {
 impl fmt::Debug for BorTag {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let global = unsafe { global_ctx() };
-        let protector = match global.get_protector_kind(*self) {
+        let protector = match global.protected_tags().get_protector_kind(*self) {
             Some(kind) => &format!("{:?}", kind),
             None => "unprotected",
         };
@@ -506,7 +506,7 @@ extern "C" fn __bsan_pop_frame(frame_start: *const Provenance, protected: usize)
     let provenance = unsafe { slice::from_raw_parts(frame_start, protected) };
     for prov in provenance {
         let _ = BorrowTracker::for_alloc(*prov, |mut bt| bt.protector_end(global, Span::new()));
-        global.protected_tags().remove(&prov.bor_tag);
+        global.protected_tags_mut().remove_protector(prov.bor_tag);
     }
 }
 

@@ -1,11 +1,12 @@
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
+use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 
 use bsan_shared::ProtectorKind;
 use hashbrown::{HashMap, HashSet};
 use rustc_hash::FxBuildHasher;
-use spin::{MutexGuard, RwLock};
+use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::errors::ErrorInfo;
 use crate::local::{deinit_local_ctx, init_local_ctx, local_ctx, local_ctx_mut, LocalCtx};
@@ -17,6 +18,53 @@ pub trait VisitProvenance {
     fn visit_provenance(&self, tags: &mut HashSet<BorTag>);
 }
 
+#[derive(Default)]
+pub struct ProtectedTags(HashMap<BorTag, ProtectorKind, FxBuildHasher>);
+
+impl ProtectedTags {
+    pub fn get_protector_kind(&self, tag: BorTag) -> Option<ProtectorKind> {
+        self.0.get(&tag).copied()
+    }
+
+    pub fn is_protected(&self, tag: BorTag) -> bool {
+        self.0.contains_key(&tag)
+    }
+
+    pub fn add_protector(&mut self, tag: BorTag, kind: ProtectorKind) {
+        self.0.insert(tag, kind);
+    }
+
+    pub fn remove_protector(&mut self, tag: BorTag) {
+        self.0.remove(&tag);
+    }
+}
+
+pub struct ProtectedTagsRefMut<'a>(RwLockWriteGuard<'a, ProtectedTags>);
+
+impl<'a> Deref for ProtectedTagsRefMut<'a> {
+    type Target = ProtectedTags;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'a> DerefMut for ProtectedTagsRefMut<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+pub struct ProtectedTagsRef<'a>(RwLockReadGuard<'a, ProtectedTags>);
+
+impl<'a> Deref for ProtectedTagsRef<'a> {
+    type Target = ProtectedTags;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// Every action that requires a heap allocation must be performed through a globally
 /// accessible, singleton instance of `GlobalCtx`. Initializing or obtaining
 /// a reference to this instance is unsafe, since it requires having been initialized
@@ -26,10 +74,9 @@ pub trait VisitProvenance {
 /// that these invariants hold. This design pattern requires us to pass the `GlobalCtx` instance
 /// around explicitly, but it prevents us from relying on implicit global state and limits the spread
 /// of unsafety throughout the library.
-#[derive(Debug)]
 pub struct GlobalCtx {
     hooks: BsanHooks,
-    protected_tags: Mutex<HashMap<BorTag, ProtectorKind, FxBuildHasher>>,
+    protected_tags: RwLock<ProtectedTags>,
     shadow_heap: ShadowHeap<Provenance>,
     allocations: Mutex<HashSet<NonNull<AllocInfo>>>,
     alloc_metadata_map: Heap<AllocInfo>,
@@ -42,7 +89,7 @@ impl GlobalCtx {
     fn new(hooks: BsanHooks) -> Self {
         Self {
             hooks,
-            protected_tags: Mutex::new(HashMap::with_hasher(FxBuildHasher)),
+            protected_tags: RwLock::new(ProtectedTags::default()),
             alloc_metadata_map: Heap::new(),
             shadow_heap: ShadowHeap::new(&raw const __BSAN_WILDCARD_PROVENANCE),
             threads: RwLock::new(HashMap::with_hasher(FxBuildHasher)),
@@ -79,10 +126,6 @@ impl GlobalCtx {
         }
     }
 
-    pub fn protected_tags(&self) -> MutexGuard<'_, HashMap<BorTag, ProtectorKind, FxBuildHasher>> {
-        self.protected_tags.lock()
-    }
-
     pub fn local_ctx_mut<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut LocalCtx) -> R,
@@ -100,14 +143,12 @@ impl GlobalCtx {
         f(local_ctx)
     }
 
-    pub fn add_protected_tag(&self, bor_tag: BorTag, protector_kind: ProtectorKind) {
-        let mut tag_map = self.protected_tags();
-        tag_map.insert(bor_tag, protector_kind);
+    pub fn protected_tags<'a>(&'a self) -> ProtectedTagsRef<'a> {
+        ProtectedTagsRef(self.protected_tags.read())
     }
 
-    pub fn get_protector_kind(&self, bor_tag: BorTag) -> Option<ProtectorKind> {
-        let tag_map = self.protected_tags();
-        tag_map.get(&bor_tag).copied()
+    pub fn protected_tags_mut<'a>(&'a self) -> ProtectedTagsRefMut<'a> {
+        ProtectedTagsRefMut(self.protected_tags.write())
     }
 
     pub fn init_local_ctx(&self) -> BorsanResult<()> {

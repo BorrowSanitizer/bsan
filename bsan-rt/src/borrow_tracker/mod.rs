@@ -118,11 +118,10 @@ impl<'b> BorrowTracker<'b> {
         retag_info: RetagInfo<'_>,
         span: Span,
     ) -> BorsanResult<BorTag> {
-        let tag = Self::for_access(prov, start, access_size, |mut bt| {
+        Self::for_access(prov, start, access_size, |mut bt| {
             bt.retag_inner(global_ctx, retag_info, span)
-        })?
-        .unwrap_or_else(|| prov.bor_tag);
-        Ok(tag)
+        })
+        .map(|opt| opt.unwrap_or(prov.bor_tag))
     }
     pub fn retag_inner(
         &mut self,
@@ -139,7 +138,7 @@ impl<'b> BorrowTracker<'b> {
             // We register the protection in two different places.
             // This makes creating a protector slower, but checking whether a tag
             // is protected faster.
-            global_ctx.add_protected_tag(new_tag, protector);
+            global_ctx.protected_tags_mut().add_protector(new_tag, protector);
         }
 
         // Compute initial "inside" permissions.
@@ -184,7 +183,7 @@ impl<'b> BorrowTracker<'b> {
                 self.tree_mut().perform_access(
                     parent_tag,
                     Some((range_in_alloc, AccessKind::Read, AccessCause::Reborrow)),
-                    global_ctx,
+                    &global_ctx.protected_tags(),
                     alloc_id,
                     span,
                     global_ctx.allocator(),
@@ -213,7 +212,7 @@ impl<'b> BorrowTracker<'b> {
         self.tree_mut().perform_access(
             bor_tag,
             None,
-            global_ctx,
+            &global_ctx.protected_tags(),
             alloc_id,
             span,
             global_ctx.allocator(),
@@ -231,7 +230,7 @@ impl<'b> BorrowTracker<'b> {
         self.tree_mut().perform_access(
             bor_tag,
             Some((range, access_kind, AccessCause::Explicit(access_kind))),
-            global_ctx,
+            &global_ctx.protected_tags(),
             alloc_id,
             span,
             global_ctx.allocator(),
@@ -243,7 +242,14 @@ impl<'b> BorrowTracker<'b> {
         let prov = self.prov;
         let range = self.range;
         let mut tree = self.tree.take().unwrap();
-        tree.dealloc(prov.bor_tag, range, global_ctx, prov.alloc_id, span, global_ctx.allocator())?;
+        tree.dealloc(
+            prov.bor_tag,
+            range,
+            &global_ctx.protected_tags(),
+            prov.alloc_id,
+            span,
+            global_ctx.allocator(),
+        )?;
         let info = unsafe { &mut *self.prov.alloc_info };
         info.alloc_id = AllocId::invalid();
         Ok(())

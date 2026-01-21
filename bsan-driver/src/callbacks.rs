@@ -33,7 +33,7 @@ impl RetagTarget {
 
 fn get_target<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> RetagTarget {
     if ty.is_box_global(tcx) {
-        return RetagTarget::Box;
+        RetagTarget::Box
     } else if let ty::Ref(_, _, mutability) = ty.kind() {
         RetagTarget::Ref(*mutability)
     } else if ty.is_raw_ptr() {

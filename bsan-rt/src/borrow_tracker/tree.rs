@@ -19,7 +19,7 @@ use super::*;
 use crate::diagnostics::{AccessCause, Event, NodeDebugInfo};
 use crate::errors::{TransitionError, TreeError, TreeTransitionResult, UBResult};
 use crate::memory::hooks::BsanAllocHooks;
-use crate::{AllocId, BorTag, GlobalCtx};
+use crate::{AllocId, BorTag, ProtectedTags};
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct AllocRange {
@@ -813,7 +813,7 @@ where
         &mut self,
         tag: BorTag,
         access_range: AllocRange,
-        global: &GlobalCtx,
+        protected_tags: &ProtectedTags,
         alloc_id: AllocId, // diagnostics
         span: Span,        // diagnostics
         allocator: A,
@@ -821,7 +821,7 @@ where
         self.perform_access(
             tag,
             Some((access_range, AccessKind::Write, AccessCause::Dealloc)),
-            global,
+            protected_tags,
             alloc_id,
             span,
             allocator,
@@ -837,7 +837,7 @@ where
                         let NodeAppArgs { node, perm, .. } = args;
                         let perm =
                             perm.get().copied().unwrap_or_else(|| node.default_location_state());
-                        if global.get_protector_kind(node.tag)
+                        if protected_tags.get_protector_kind(node.tag)
                             == Some(ProtectorKind::StrongProtector)
                             && !perm.permission().is_cell()
                             && perm.is_accessed()
@@ -887,7 +887,7 @@ where
         &mut self,
         tag: BorTag,
         access_range_and_kind: Option<(AllocRange, AccessKind, AccessCause)>,
-        global: &GlobalCtx,
+        protected_tags: &ProtectedTags,
         alloc_id: AllocId, // diagnostics
         span: Span,        // diagnostics
         allocator: A,
@@ -923,7 +923,7 @@ where
             // `traverse_this_parents_children_other`.
             old_state.record_new_access(access_kind, rel_pos);
 
-            let protected = global.get_protector_kind(node.tag).is_some();
+            let protected = protected_tags.get_protector_kind(node.tag).is_some();
 
             let transition = old_state.perform_access(access_kind, rel_pos, protected)?;
             // Record the event as part of the history
