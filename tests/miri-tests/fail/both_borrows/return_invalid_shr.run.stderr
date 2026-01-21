@@ -1,3 +1,30 @@
-An error occurred: UndefinedBehavior(AliasingViolation(TreeError { error_kind: ChildAccessForbidden(Permission { inner: Disabled }), alloc_id: ALLOC, error_offset: 4, conflicting_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(0), Permission { inner: Frozen }), events: [Event { transition: PermTransition { from: Frozen, to: Disabled }, access_cause: Explicit(Write), is_foreign: true, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(0) }, Event { transition: PermTransition { from: Frozen, to: Disabled }, access_cause: Explicit(Write), is_foreign: true, access_range: Some(AllocRange { start: size4, size: size4 }), transition_range: 4..8, span: Span(0) }] } }, access_cause: Reborrow, accessed_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(0), Permission { inner: Frozen }), events: [Event { transition: PermTransition { from: Frozen, to: Disabled }, access_cause: Explicit(Write), is_foreign: true, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(0) }, Event { transition: PermTransition { from: Frozen, to: Disabled }, access_cause: Explicit(Write), is_foreign: true, access_range: Some(AllocRange { start: size4, size: size4 }), transition_range: 4..8, span: Span(0) }] } } }))
+An error occurred: UndefinedBehavior (AliasingViolation)
+Access created with permissions Frozen at bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs: line 6, column 24
+Last access at bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs: line 7, column 14
 
+Run with `debug` feature (inst --debug) to view full TreeError
+
+    #0 $HEX in return_invalid_shr::foo::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #1 $HEX in return_invalid_shr::main::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in return_invalid_shr::foo::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #1 $HEX in return_invalid_shr::main::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in return_invalid_shr::foo::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #1 $HEX in return_invalid_shr::main::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in return_invalid_shr::foo::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #1 $HEX in return_invalid_shr::main::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in return_invalid_shr::foo::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #1 $HEX in return_invalid_shr::main::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in return_invalid_shr::foo::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #1 $HEX in return_invalid_shr::main::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 

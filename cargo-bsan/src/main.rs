@@ -74,6 +74,9 @@ fn main() {
         "bsan" => {
             phase_cargo_bsan(args)
         },
+        "runner" => {
+            phase_runner(args)
+        },
         arg if arg == env::var("RUSTC").unwrap_or_else(|_| {
             show_error!(
                 "`cargo-bsan` called without RUSTC set; please only invoke this binary through `cargo bsan`"

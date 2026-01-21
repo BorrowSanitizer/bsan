@@ -1,3 +1,22 @@
-An error occurred: UndefinedBehavior(AliasingViolation(TreeError { error_kind: ChildAccessForbidden(Permission { inner: Disabled }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(0), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: Disabled }, access_cause: FnExit(Write), is_foreign: true, access_range: None, transition_range: 0..4, span: Span(0) }] } }, access_cause: Reborrow, accessed_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(0), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: Disabled }, access_cause: FnExit(Write), is_foreign: true, access_range: None, transition_range: 0..4, span: Span(0) }] } } }))
+An error occurred: UndefinedBehavior (AliasingViolation)
+Access created with permissions Reserved at bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs: line 17, column 18
+Last access at bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs: line 22, column 2
 
+Run with `debug` feature (inst --debug) to view full TreeError
+
+    #0 $HEX in protector_write_lazy::the_other_function::hHASH bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
+    #1 $HEX in protector_write_lazy::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in protector_write_lazy::the_other_function::hHASH bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
+    #1 $HEX in protector_write_lazy::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in protector_write_lazy::the_other_function::hHASH bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
+    #1 $HEX in protector_write_lazy::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in protector_write_lazy::the_other_function::hHASH bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
+    #1 $HEX in protector_write_lazy::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 

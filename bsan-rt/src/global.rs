@@ -1,12 +1,15 @@
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
+use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 
 use bsan_shared::ProtectorKind;
-use hashbrown::HashMap;
+use hashbrown::{DefaultHashBuilder, HashMap};
 use rustc_hash::FxBuildHasher;
 use spin::MutexGuard;
 
+#[cfg(not(test))]
+use crate::diagnostics::History;
 use crate::errors::ErrorInfo;
 use crate::memory::hooks::{BsanAllocHooks, BsanHooks};
 use crate::memory::{AllocError, Heap, ShadowHeap};
@@ -27,6 +30,8 @@ pub struct GlobalCtx {
     protected_tags: Mutex<HashMap<BorTag, ProtectorKind, FxBuildHasher>>,
     shadow_heap: ShadowHeap<Provenance>,
     alloc_metadata_map: Heap<AllocInfo>,
+    #[cfg(not(test))]
+    allocation_stack_depot: Mutex<crate::sanitizer_common_interface::StackTraceDepot>,
 }
 
 impl GlobalCtx {
@@ -38,6 +43,10 @@ impl GlobalCtx {
             protected_tags: Mutex::new(HashMap::with_hasher(FxBuildHasher)),
             alloc_metadata_map: Heap::new(&hooks)?,
             shadow_heap: ShadowHeap::new(&hooks, &raw const __BSAN_WILDCARD_PROVENANCE)?,
+            #[cfg(not(test))]
+            allocation_stack_depot: Mutex::new(
+                crate::sanitizer_common_interface::StackTraceDepot::new_in(hooks.alloc),
+            ),
         })
     }
 
@@ -81,9 +90,84 @@ impl GlobalCtx {
         tag_map.get(&bor_tag).copied()
     }
 
+    #[cfg(not(test))]
+    pub fn store_stacktrace_for_allocation(&self, alloc_id: AllocId, span_data: Span) {
+        match self.allocation_stack_depot.lock().capture_stack(alloc_id, None, span_data) {
+            Ok(()) => {}
+            Err(e) => {
+                self.handle_error(e);
+            }
+        }
+    }
+
+    #[inline(never)] // never inline to have specific break point for debugging with GDB
+    #[allow(clippy::collapsible_if)]
     pub fn handle_error(&self, info: ErrorInfo) -> ! {
-        crate::eprintln!("An error occurred: {info:?}\n\n");
+        crate::eprintln!("An error occurred: {info:?}");
+
+        // code below uses sanitizer common interface to print stack traces and detailed error info
+        #[cfg(not(test))]
+        if let ErrorInfo::UndefinedBehavior(ub_info) = info {
+            if let Some(alloc_id) = ub_info.get_alloc_id()
+                && let Ok(stack_id) = self.allocation_stack_depot.lock().print_trace(&alloc_id)
+            {
+                crate::eprintln!("{:?} previously allocated here:", alloc_id);
+                sanitizer_common_interface::print_stack_trace(Some(stack_id));
+            }
+
+            match ub_info {
+                errors::UBInfo::AliasingViolation(tree_error) => {
+                    let print_traces = |history: &History| {
+                        history.created_at().0.print_stack_trace();
+                        history.events_iter().for_each(|event| {
+                            event.span.print_stack_trace();
+                        });
+                    };
+
+                    print_traces(&tree_error.accessed_info.history);
+                    print_traces(&tree_error.conflicting_info.history);
+
+                    // #[cfg(feature = "debug")]
+                    // crate::eprintln!("[DEBUG] Full TreeError: {:#?}", tree_error);
+                }
+                errors::UBInfo::AccessOutOfBounds(prov, _, _) => {
+                    if let Some(alloc_info) = unsafe { prov.alloc_info.as_ref() } {
+                        if let Some((span, _)) = alloc_info.created_at() {
+                            span.print_stack_trace();
+                        }
+                        if let Some((span, _)) = alloc_info.conflict_at() {
+                            span.print_stack_trace();
+                        }
+                    }
+                }
+                _ => (),
+            }
+        }
         self.exit(1)
+    }
+}
+
+/// A thin wrapper around `HashMap` that uses `GlobalCtx` as its allocator
+#[derive(Debug, Clone)]
+pub struct BHashMap<K, V>(HashMap<K, V, DefaultHashBuilder, BsanAllocHooks>);
+
+impl<K, V> Deref for BHashMap<K, V> {
+    type Target = HashMap<K, V, DefaultHashBuilder, BsanAllocHooks>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<K, V> DerefMut for BHashMap<K, V> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+#[cfg(not(test))]
+impl<K, V> BHashMap<K, V> {
+    pub(crate) fn new_in(hooks: BsanAllocHooks) -> Self {
+        Self(HashMap::with_hasher_in(foldhash::fast::RandomState::default(), hooks))
     }
 }
 

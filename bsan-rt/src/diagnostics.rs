@@ -56,7 +56,7 @@ impl AccessCause {
 }
 
 /// Complete data for an event:
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Event {
     /// Transformation of permissions that occurred because of this event.
     pub transition: PermTransition,
@@ -90,7 +90,7 @@ pub struct Event {
 /// NOTE: not all of these events are relevant for a particular location,
 /// the events should be filtered before the generation of diagnostics.
 /// Available filtering methods include `History::forget` and `History::extract_relevant`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct History<A: Allocator = Global> {
     tag: BorTag,
     created: (Span, Permission),
@@ -99,8 +99,7 @@ pub struct History<A: Allocator = Global> {
 
 /// History formatted for use by `src/diagnostics.rs`.
 ///
-/// NOTE: needs to be `Send` because of a bound on `MachineStopType`, hence
-/// the use of `SpanData` rather than `Span`.
+/// NOTE: needs to be `Send` because of a bound on `MachineStopType`
 #[derive(Debug, Clone)]
 pub struct HistoryData<A: Allocator = Global> {
     pub events: Vec<(Option<Span>, String), A>, // includes creation
@@ -118,6 +117,14 @@ where
     /// Return the last recorded event, if any.
     pub fn last_event(&self) -> Option<&Event> {
         self.events.last()
+    }
+
+    pub fn created_at(&self) -> (Span, Permission) {
+        self.created
+    }
+
+    pub fn events_iter(&self) -> core::slice::Iter<'_, Event> {
+        self.events.iter()
     }
 }
 
@@ -174,7 +181,7 @@ where
 
 /// Some information that is irrelevant for the algorithm but very
 /// convenient to know about a tag for debugging and testing.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct NodeDebugInfo<A: Allocator = Global> {
     /// The tag in question.
     pub tag: BorTag,

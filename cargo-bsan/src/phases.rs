@@ -1,5 +1,6 @@
 use std::path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use rustc_version::VersionMeta;
 
@@ -94,6 +95,10 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     cmd.arg("--target");
     cmd.arg(&rustc_version.host);
 
+    let cargo_bsan_path_for_toml = escape_for_toml(&cargo_bsan_path);
+    cmd.arg("--config")
+        .arg(format!("target.'cfg(all())'.runner=[{cargo_bsan_path_for_toml}, 'runner']"));
+
     // Set `--target-dir` to `bsan` inside the original target directory.
     let target_dir = get_target_dir(&metadata);
     cmd.arg("--target-dir").arg(target_dir);
@@ -134,6 +139,29 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
 
     // Run cargo.
     debug_cmd("[cargo-bsan rustc]", verbose, &cmd);
+    exec(cmd)
+}
+
+pub fn phase_runner(mut binary_args: impl Iterator<Item = String>) {
+    let verbose = env::var("BSAN_VERBOSE")
+        .map_or(0, |verbose| verbose.parse().expect("verbosity flag must be an integer"));
+
+    let binary = binary_args.next().unwrap();
+
+    let cmd = Command::new(binary);
+
+    let bsan_sysroot = get_host_sysroot_dir(verbose);
+
+    let symbolizer_path = Path::new(&bsan_sysroot).join("bin").join("llvm-symbolizer");
+
+    if symbolizer_path.exists() {
+        unsafe {
+            env::set_var("BSAN_SYMBOLIZER_PATH", symbolizer_path);
+        }
+    }
+
+    // Run it.
+    debug_cmd("[cargo-bsan runner]", verbose, &cmd);
     exec(cmd)
 }
 

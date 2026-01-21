@@ -1,3 +1,13 @@
-An error occurred: UndefinedBehavior(AliasingViolation(TreeError { error_kind: ChildAccessForbidden(Permission { inner: Frozen }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(0), Permission { inner: Frozen }), events: [] } }, access_cause: Explicit(Write), accessed_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(0), Permission { inner: Frozen }), events: [] } } }))
+An error occurred: UndefinedBehavior (AliasingViolation)
+Access created with permissions Frozen at bsan/tests/fail/frozen_write.rs: line 4, column 14
 
+Run with `debug` feature (inst --debug) to view full TreeError
+
+    #0 $HEX in frozen_write::main::hHASH bsan/tests/fail/frozen_write.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+    #0 $HEX in frozen_write::main::hHASH bsan/tests/fail/frozen_write.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 

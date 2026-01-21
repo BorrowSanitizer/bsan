@@ -294,7 +294,7 @@ pub struct Tree<A: Allocator = Global> {
 
 /// A node in the borrow tree. Each node is uniquely identified by a tag via
 /// the `nodes` map of `Tree`.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Debug)]
 pub struct Node<A: Allocator = Global> {
     /// The tag of this node.
     pub tag: BorTag,

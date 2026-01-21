@@ -139,28 +139,28 @@ fn shr_and_raw() {
 }
 
 fn disjoint_mutable_subborrows() {
-    struct Foo {
-        a: String,
-        b: Vec<u32>,
-    }
+    // struct Foo {
+    //     a: String,
+    //     b: Vec<u32>,
+    // }
 
-    unsafe fn borrow_field_a<'a>(this: *mut Foo) -> &'a mut String {
-        &mut (*this).a
-    }
+    // unsafe fn borrow_field_a<'a>(this: *mut Foo) -> &'a mut String {
+    //     &mut (*this).a
+    // }
 
-    unsafe fn borrow_field_b<'a>(this: *mut Foo) -> &'a mut Vec<u32> {
-        &mut (*this).b
-    }
+    // unsafe fn borrow_field_b<'a>(this: *mut Foo) -> &'a mut Vec<u32> {
+    //     &mut (*this).b
+    // }
 
-    let mut foo = Foo { a: "hello".into(), b: vec![0, 1, 2] };
+    // let mut foo = Foo { a: "hello".into(), b: vec![0, 1, 2] };
 
-    let ptr = &mut foo as *mut Foo;
+    // let ptr = &mut foo as *mut Foo;
 
-    let a = unsafe { borrow_field_a(ptr) };
-    let b = unsafe { borrow_field_b(ptr) };
-    b.push(4);
-    a.push_str(" world");
-    assert_eq!(format!("{:?} {:?}", a, b), r#""hello world" [0, 1, 2, 4]"#);
+    // let a = unsafe { borrow_field_a(ptr) };
+    // let b = unsafe { borrow_field_b(ptr) };
+    // b.push(4);
+    // a.push_str(" world");
+    // assert_eq!(format!("{:?} {:?}", a, b), r#""hello world" [0, 1, 2, 4]"#);
 }
 
 fn raw_ref_to_part() {

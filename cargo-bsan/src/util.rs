@@ -261,3 +261,11 @@ pub fn clean_target_dir() {
         std::fs::remove_dir_all(&target_dir).unwrap();
     }
 }
+
+/// Escapes `s` in a way that is suitable for using it as a string literal in TOML syntax.
+pub fn escape_for_toml(s: &str) -> String {
+    // We want to surround this string in quotes `"`. So we first escape all quotes,
+    // and also all backslashes (that are used to escape quotes).
+    let s = s.replace('\\', r"\\").replace('"', r#"\""#);
+    format!("\"{s}\"")
+}

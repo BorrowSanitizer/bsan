@@ -14,7 +14,7 @@ use core::ptr::NonNull;
 use core::sync::atomic::AtomicUsize;
 use core::{ffi, fmt, ptr, slice};
 
-use bsan_shared::{AccessKind, RetagInfo, Size};
+use bsan_shared::{AccessKind, Permission, RetagInfo, Size};
 use libc_print::std_name::*;
 use spin::Mutex;
 
@@ -28,15 +28,18 @@ mod diagnostics;
 
 #[macro_use]
 mod span;
-use span::Span;
+use span::{FramePointer, Span};
 
 mod errors;
 mod memory;
 
+#[cfg(not(test))]
+mod sanitizer_common_interface;
+
 use crate::borrow_tracker::tree::Tree;
 use crate::errors::BorsanResult;
+use crate::frame_pointer_utils::fp;
 use crate::memory::hooks;
-use crate::span::FramePointer;
 
 /// The number of `Provenance` values stored in the thread
 /// local arrays for arguments and return values.
@@ -87,6 +90,45 @@ pub static mut __BSAN_PROV_STACK: *mut Provenance = ptr::null_mut();
 #[unsafe(no_mangle)]
 pub static mut __BSAN_CURR_THREAD: *mut ffi::c_void = ptr::null_mut();
 
+macro_rules! println {
+    ($($arg:tt)*) => {
+        libc_print::std_name::println!($($arg)*)
+    };
+}
+
+pub(crate) use println;
+
+/// This mod is only to be used for helper macros that should
+/// only be used at the entry point into the bsan-rt library (i.e., the __bsan_* functions)
+/// because they capture the frame pointer of the caller and thus should not be used
+/// in internal functions (because we only want to unwind to the caller of the __bsan_* functions).
+mod frame_pointer_utils {
+
+    macro_rules! fp {
+        () => {{
+            FramePointer({
+                let fp: usize;
+                #[cfg(target_arch = "x86_64")]
+                core::arch::asm!("mov {0}, rbp", out(reg) fp, options(nomem, nostack, preserves_flags));
+                #[cfg(target_arch = "aarch64")]
+                core::arch::asm!("mov {0}, fp", out(reg) fp, options(nomem, nostack, preserves_flags));
+                fp as *const usize
+            })
+        }};
+    }
+
+    macro_rules! create_span_data {
+        () => {{
+            unsafe {
+                let fp = $crate::frame_pointer_utils::fp!();
+                Span::new(fp.addr(), fp.ip())
+            }
+        }};
+    }
+
+    pub(crate) use {create_span_data, fp};
+}
+
 /// A struct for summarizing debug information about memory operations
 #[cfg(feature = "debug")]
 struct DebugSummary {
@@ -100,46 +142,41 @@ struct DebugSummary {
 #[cfg(feature = "debug")]
 impl fmt::Display for DebugSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[{}] 0x{:x} @({:?}, {:?}) -> ", self.op, self.ptr, self.alloc_id, self.bor_tag)?;
         match self.info {
-            AllocInfoSummary::WildCard => write!(
-                f,
-                "[{}] 0x{:x} @({:?}, {:?}) -> (wildcard)",
-                self.op, self.ptr, self.alloc_id, self.bor_tag
-            ),
-            AllocInfoSummary::Null => write!(
-                f,
-                "[{}] 0x{:x} @({:?}, {:?}) -> (null)",
-                self.op, self.ptr, self.alloc_id, self.bor_tag
-            ),
-            AllocInfoSummary::Valid { alloc_id, base_addr, size } => write!(
-                f,
-                "[{}] 0x{:x} @({:?}, {:?}) -> ({:?}, {:?}, {:?})",
-                self.op, self.ptr, self.alloc_id, self.bor_tag, alloc_id, base_addr, size
-            ),
+            AllocInfoSummary::WildCard => write!(f, "(wildcard)"),
+            AllocInfoSummary::Null => write!(f, "(null)"),
+            AllocInfoSummary::Valid { alloc_id, base_addr, size } => {
+                write!(f, "({:?}, {:?}, {:?})", alloc_id, base_addr, size)
+            }
         }
     }
 }
 
+#[cfg(feature = "debug")]
 macro_rules! debug_bsan {
-    ($op:literal, $ptr:ident, $alloc_id:ident, $bor_tag:ident, $alloc_info:expr) => {
-        #[cfg(feature = "debug")]
-        {
-            #[allow(unused_unsafe)]
-            let info = match $alloc_id.0 {
-                0 => AllocInfoSummary::WildCard,
-                1 => AllocInfoSummary::Null,
-                _ => unsafe { &*$alloc_info }.summarize(),
-            };
-            let summary = DebugSummary {
-                op: $op,
-                ptr: $ptr.addr(),
-                alloc_id: $alloc_id,
-                bor_tag: $bor_tag,
-                info,
-            };
-            libc_print::std_name::println!("{}", summary);
-        }
-    };
+    ($op:literal, $ptr:ident, $alloc_id:ident, $bor_tag:ident, $alloc_info:expr) => {{
+        #[allow(unused_unsafe)]
+        let info = match $alloc_id.0 {
+            0 => AllocInfoSummary::WildCard,
+            1 => AllocInfoSummary::Null,
+            _ => unsafe { &*$alloc_info }.summarize(),
+        };
+        let summary = DebugSummary {
+            op: $op,
+            ptr: $ptr.addr(),
+            alloc_id: $alloc_id,
+            bor_tag: $bor_tag,
+            info,
+        };
+        libc_print::std_name::println!("{}", summary);
+    }};
+}
+
+/// No-op macro when debug feature is disabled
+#[cfg(not(feature = "debug"))]
+macro_rules! debug_bsan {
+    ($op:literal, $ptr:ident, $alloc_id:ident, $bor_tag:ident, $info:expr) => {{}};
 }
 
 #[unsafe(no_mangle)]
@@ -368,6 +405,7 @@ impl AllocInfo {
         size: usize,
         alloc_id: AllocId,
         bor_tag: BorTag,
+        span: Span,
     ) -> Self {
         Self {
             alloc_id,
@@ -376,10 +414,27 @@ impl AllocInfo {
             tree_lock: Mutex::new(Some(Tree::new_in(
                 bor_tag,
                 Size::from_bytes(size),
-                Span::new(),
+                span,
                 ctx.allocator(),
             ))),
         }
+    }
+
+    pub fn conflict_at(&self) -> Option<(Span, Permission)> {
+        self.tree_lock
+            .lock()
+            .as_ref()
+            .and_then(|tree| tree.nodes.last().map(|node| node.debug_info.history.created_at()))
+    }
+
+    pub fn created_at(&self) -> Option<(Span, Permission)> {
+        self.tree_lock
+            .lock()
+            .as_ref()
+            .and_then(|tree| {
+                tree.nodes.get(tree.root).map(|node| Some(node.debug_info.history.created_at()))
+            })
+            .unwrap_or(None)
     }
 
     #[cfg(feature = "debug")]
@@ -441,8 +496,9 @@ unsafe extern "C-unwind" fn __bsan_retag(
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     let retag_info = unsafe { RetagInfo::from_raw(access_size, perm, im_data, im_len) };
+    let span_data = frame_pointer_utils::create_span_data!();
     BorrowTracker::for_access(prov, object_addr, Some(access_size), |mut bt| {
-        bt.retag(ctx, retag_info, Span::new())
+        bt.retag(ctx, retag_info, span_data)
     })
     .unwrap_or_else(|err| ctx.handle_error(err))
     .unwrap_or(bor_tag)
@@ -460,8 +516,9 @@ unsafe extern "C-unwind" fn __bsan_read(
     debug_bsan!("read", ptr, alloc_id, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
+    let span_data = frame_pointer_utils::create_span_data!();
     BorrowTracker::for_access(prov, ptr, Some(access_size), |mut bt| {
-        bt.access(ctx, Some(AccessKind::Read), Span::new())
+        bt.access(ctx, Some(AccessKind::Read), span_data)
     })
     .unwrap_or_else(|err| ctx.handle_error(err));
 }
@@ -478,8 +535,9 @@ unsafe extern "C-unwind" fn __bsan_write(
     debug_bsan!("write", ptr, alloc_id, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
+    let span_data = frame_pointer_utils::create_span_data!();
     BorrowTracker::for_access(prov, ptr, Some(access_size), |mut bt| {
-        bt.access(ctx, Some(AccessKind::Write), Span::new())
+        bt.access(ctx, Some(AccessKind::Write), span_data)
     })
     .unwrap_or_else(|err| ctx.handle_error(err));
 }
@@ -504,7 +562,8 @@ extern "C" fn __bsan_dealloc(
             return;
         }
     }
-    BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, Span::new()))
+    let span_data = frame_pointer_utils::create_span_data!();
+    BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, span_data))
         .unwrap_or_else(|err| ctx.handle_error(err));
 
     if !weak && let Some(alloc_info) = NonNull::new(alloc_info) {
@@ -516,9 +575,10 @@ extern "C" fn __bsan_dealloc(
 extern "C" fn __bsan_remove_protected_tags(data: *mut Provenance, len: usize) {
     let ctx = unsafe { global_ctx() };
     let prov_list = unsafe { slice::from_raw_parts(data, len) };
+    let span_data = frame_pointer_utils::create_span_data!();
     for prov in prov_list {
         // Protector end semantics can never trigger UB.
-        let _ = BorrowTracker::for_alloc(*prov, |mut bt| bt.access(ctx, None, Span::new()));
+        let _ = BorrowTracker::for_alloc(*prov, |mut bt| bt.access(ctx, None, span_data));
         ctx.protected_tags().remove(&prov.bor_tag);
     }
 }
@@ -582,11 +642,17 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     bor_tag: BorTag,
 ) -> NonNull<AllocInfo> {
     let ctx = unsafe { global_ctx() };
+    let span_data = frame_pointer_utils::create_span_data!();
     #[allow(clippy::let_and_return)]
     let alloc_info = ctx
-        .create_alloc_info(AllocInfo::new(ctx, base_addr, size, alloc_id, bor_tag))
+        .create_alloc_info(AllocInfo::new(ctx, base_addr, size, alloc_id, bor_tag, span_data))
         .unwrap_or_else(|info| ctx.handle_error(info));
     debug_bsan!("alloc", base_addr, alloc_id, bor_tag, alloc_info.as_ptr());
+    // TODO: this needs to be inserted whereever we need to track allocations
+    #[cfg(not(test))]
+    {
+        //unsafe { global_ctx().store_stacktrace_for_allocation(alloc_id) };
+    }
     alloc_info
 }
 
@@ -693,9 +759,23 @@ unsafe extern "C" fn __bsan_alloc_stack(
         bor_tag,
         alloc_info.as_ptr().cast::<AllocInfo>()
     );
+    let span_data = frame_pointer_utils::create_span_data!();
     unsafe {
-        alloc_info.write(AllocInfo::new(global_ctx(), base_addr, size, alloc_id, bor_tag));
+        alloc_info.write(AllocInfo::new(
+            global_ctx(),
+            base_addr,
+            size,
+            alloc_id,
+            bor_tag,
+            span_data,
+        ));
     }
+
+    /*
+    #[cfg(not(test))]
+    unsafe {
+        global_ctx().store_stacktrace_for_allocation(alloc_id)
+    }; */
 }
 
 /// Marks the borrow tag for `prov` as "exposed," allowing it to be resolved to

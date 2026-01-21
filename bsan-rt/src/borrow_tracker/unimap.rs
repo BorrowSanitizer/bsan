@@ -63,6 +63,16 @@ where
     pub fn new_in(allocator: A) -> UniValMap<V, A> {
         Self { data: Vec::new_in(allocator) }
     }
+
+    /// Get the last value
+    pub fn last(&self) -> Option<&V> {
+        self.data.iter().rev().find_map(|opt| opt.as_ref())
+    }
+
+    /// Get number of elements
+    pub fn capacity(&self) -> usize {
+        self.data.len()
+    }
 }
 
 impl<V: PartialEq, A> UniValMap<V, A>

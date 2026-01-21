@@ -113,6 +113,7 @@ fn run_tests(
     // If a test ICEs, we want to see a backtrace.
     config.program.envs.push(("RUST_BACKTRACE".into(), Some("1".into())));
     config.program.envs.push(("BSAN_BE_RUSTC".into(), Some("target".into())));
+    config.program.envs.push(("BSAN_LLVM_SYMBOLIZER".into(), Some("target".into())));
 
     // Add some flags we always want.
     config.program.args.push(
@@ -192,10 +193,14 @@ regexes! {
     r"\\"                           => "/",
     // erase Rust stdlib path
     "[^ \n`]*/(rust[^/]*|checkout)/library/" => "RUSTLIB/",
-    // erase platform file paths
-    r"\bsys/([a-z_]+)/[a-z]+\b"     => "sys/$1/PLATFORM",
+    // erase platform file paths and line numbers
+    r"\bsys/([a-z_]+)/[a-z]+\.rs: line \d+, column \d+\b" => "sys/$1/PLATFORM.rs: line NN, column NN",
     // erase paths into the crate registry
     r"[^ ]*/\.?cargo/registry/.*/(.*\.rs)"  => "CARGO_REGISTRY/.../$1",
+    // normalize workspace paths to relative
+    r"(/workspaces/bsan/|/__w/bsan/bsan/)([^ \n]+)" => "bsan/$2",
+    // normalize hash suffixes after function names in bt
+    r"::h[0-9a-f]{16}\b" => "::hHASH",
 }
 
 #[allow(unused)]

@@ -1,3 +1,22 @@
-An error occurred: UndefinedBehavior(AliasingViolation(TreeError { error_kind: ChildAccessForbidden(Permission { inner: ReservedFrz { conflicted: true } }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>(StrongProtector), name: None, history: History { tag: <TAG>(StrongProtector), created: (Span(0), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: ReservedFrz { conflicted: true } }, access_cause: Reborrow, is_foreign: true, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(0) }] } }, access_cause: Explicit(Write), accessed_info: NodeDebugInfo { tag: <TAG>(StrongProtector), name: None, history: History { tag: <TAG>(StrongProtector), created: (Span(0), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: ReservedFrz { conflicted: true } }, access_cause: Reborrow, is_foreign: true, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(0) }] } } }))
+An error occurred: UndefinedBehavior (AliasingViolation)
+Access created with permissions Reserved at bsan/tests/miri-tests/fail/both_borrows/aliasing_mut3.rs: line 4, column 9
+Last access at bsan/tests/miri-tests/fail/both_borrows/aliasing_mut3.rs: line 4, column 22
 
+Run with `debug` feature (inst --debug) to view full TreeError
+
+    #0 $HEX in aliasing_mut3::safe::hHASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut3.rs:LL:CC
+    #1 $HEX in aliasing_mut3::main::hHASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut3.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in aliasing_mut3::safe::hHASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut3.rs:LL:CC
+    #1 $HEX in aliasing_mut3::main::hHASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut3.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in aliasing_mut3::safe::hHASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut3.rs:LL:CC
+    #1 $HEX in aliasing_mut3::main::hHASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut3.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in aliasing_mut3::safe::hHASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut3.rs:LL:CC
+    #1 $HEX in aliasing_mut3::main::hHASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut3.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 

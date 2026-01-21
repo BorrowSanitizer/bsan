@@ -5,5 +5,6 @@
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_deinit();
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_init();
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_reportError();
 
 #endif
