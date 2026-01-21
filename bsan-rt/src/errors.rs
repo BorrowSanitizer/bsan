@@ -60,6 +60,26 @@ impl From<UBInfo> for ErrorInfo {
 impl Display for UBInfo {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            UBInfo::AccessOutOfBounds(prov, _, _) => {
+                if let Some(alloc_info) = unsafe { prov.alloc_info.as_ref() } {
+                    if let Some((span, perm)) = alloc_info.created_at() {
+                        writeln!(f, "(AccessOutOfBounds)\nAccess created with permissions {} is out of bounds at {}", perm, span)?
+                    } else {
+                        writeln!(f, "(AccessOutOfBounds)\nAccess created with provenance {:?} is out of bounds at unknown location", prov)?
+                    }
+                    if let Some((span, perm)) = alloc_info.conflict_at() {
+                        writeln!(
+                            f,
+                            "Conflicting borrow created with permissions {} at {}",
+                            perm, span
+                        )
+                    } else {
+                        Ok(())
+                    }
+                } else {
+                    writeln!(f, "(AccessOutOfBounds)\nAccess created with provenance {:?} is out of bounds at unknown location", prov)
+                }
+            }
             UBInfo::AliasingViolation(e) => {
                 let (access_created, access_perm) = e.accessed_info.history.created_at();
                 let (conflict_created, conflict_perm) = e.conflicting_info.history.created_at();
@@ -70,13 +90,17 @@ impl Display for UBInfo {
                 writeln!(
                     f,
                     "(AliasingViolation)\nAccess created with {} permissions at {}",
-                    access_perm, access_created
+                    // "(AliasingViolation)\nAccess created with permissions {} at {}",
+                    access_perm,
+                    access_created
                 )?;
                 if conflict_created.ip() != access_created.ip() {
                     writeln!(
                         f,
                         "Conflict created with {} permissions at {}",
-                        conflict_perm, conflict_created
+                        // "Conflicting borrow created with permissions {} at {}",
+                        conflict_perm,
+                        conflict_created
                     )?;
                 }
 

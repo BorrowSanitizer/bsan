@@ -1,2 +1,5 @@
-An error occurred: UndefinedBehavior (AccessOutOfBounds(Provenance { alloc_id: ALLOC, bor_tag: <TAG>(unprotected), alloc_info: $HEX }, 4, 4))
+An error occurred: UndefinedBehavior (AccessOutOfBounds)
+Access created with permissions Disabled is out of bounds at bsan/tests/fail/access_oob.rs: line 3, column 9
+Conflicting borrow created with permissions Reserved at bsan/tests/fail/access_oob.rs: line 4, column 14
+
 

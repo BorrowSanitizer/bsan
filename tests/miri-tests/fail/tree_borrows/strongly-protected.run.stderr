@@ -1,7 +1,7 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
 Access created with Reserved permissions at RUSTLIB/core/src/mem/mod.rs: line 964, column 22
 Conflict created with Reserved permissions at bsan/tests/miri-tests/fail/tree_borrows/strongly-protected.rs: line 3, column 10
-Last access at RUSTLIB/std/src/sys/alloc/PLATFORM.rs: line 48, column 18
+Last access at RUSTLIB/std/src/sys/alloc/PLATFORM.rs: line NN, column NN
 
 Run with `debug` feature (inst --debug) to view full error and stack traces
 

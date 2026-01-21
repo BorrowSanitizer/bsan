@@ -1,5 +1,5 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Disabled permissions at RUSTLIB/std/src/sys/alloc/PLATFORM.rs: line 13, column 9
+Access created with Disabled permissions at RUSTLIB/std/src/sys/alloc/PLATFORM.rs: line NN, column NN
 Conflict created with Frozen permissions at bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector3.rs: line 5, column 23
 
 Run with `debug` feature (inst --debug) to view full error and stack traces

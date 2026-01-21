@@ -101,6 +101,7 @@ impl GlobalCtx {
     }
 
     #[inline(never)] // never inline to have specific break point for debugging with GDB
+    #[allow(clippy::collapsible_if)]
     pub fn handle_error(&self, info: ErrorInfo) -> ! {
         crate::eprintln!("An error occurred: {info:?}\n");
 

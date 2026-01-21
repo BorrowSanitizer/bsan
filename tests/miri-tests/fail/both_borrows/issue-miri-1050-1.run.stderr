@@ -1,2 +1,5 @@
-An error occurred: UndefinedBehavior (AccessOutOfBounds(Provenance { alloc_id: ALLOC, bor_tag: <TAG>(unprotected), alloc_info: $HEX }, 4, 2))
+An error occurred: UndefinedBehavior (AccessOutOfBounds)
+Access created with permissions Disabled is out of bounds at RUSTLIB/std/src/sys/alloc/PLATFORM.rs: line NN, column NN
+Conflicting borrow created with permissions Reserved at RUSTLIB/alloc/src/boxed.rs: line 1254, column 21
+
 
