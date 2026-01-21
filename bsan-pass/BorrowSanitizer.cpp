@@ -87,8 +87,6 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // then `ProvenanceMap[std::make_pair(V, 2)]` would return the third
   // provenance value within `V`.
   ProvenanceMap BaseProvMap;
-  DenseMap<BasicBlock *, Value *> ProvenanceOffset;
-  SmallVector<PHINode *> ProvenanceSlotPHINodes;
 
   // Most allocations have a single `lifetime.start`. We assign a single
   // provenance value to these allocations starting from the entry block. It is
@@ -146,7 +144,11 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // the pointer receiving the retag.
   SmallVector<CallBase *> RetagPlaceVec;
 
-  // Expose tag intrinsics (`__expose_tag`), which are deleted entirely.
+  // The number of "function-entry" retags, of any kind.
+  unsigned NumFnEntryRetags = 0;
+
+  // Expose tag intrinsics (`__expose_tag`), which need to be replaced with
+  // their first argument (the reference being cast into a raw pointer).
   SmallVector<CallBase *> ExposeTagVec;
 
   // The start of the current frame of protected tags. This is the "top" of the
@@ -158,42 +160,12 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // every exit point.
   std::unique_ptr<StackLifetime> LifetimeInfo;
 
-  unsigned NumFnEntryRetags = 0;
-
 public:
   BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
                          const TargetLibraryInfo &TLI, DominatorTree &DT)
       : F(F), BS(BS), DIB(*F.getParent(), /*AllowUnresolved*/ false), C(BS.C),
         TLI(&TLI), CurrentBlock(&F.getEntryBlock()), DT(DT) {
     removeUnreachableBlocks(F);
-  }
-
-  Value *getProvenanceOffset(BasicBlock *BB) {
-    if (ProvenanceOffset.contains(BB)) {
-      return ProvenanceOffset[BB];
-    }
-    if (BB->isEntryBlock()) {
-      ProvenanceOffset[BB] = FrameTop;
-      return ProvenanceOffset[BB];
-    }
-
-    if (BasicBlock *Pred = BB->getSinglePredecessor()) {
-      ProvenanceOffset[BB] = getProvenanceOffset(Pred);
-      return ProvenanceOffset[BB];
-    }
-
-    IRBuilder<> IRB(&BB->front());
-    PHINode *NormalNode = IRB.CreatePHI(BS.PtrTy, pred_size(BB), "_bsphi_slot");
-    NormalNode->dropDbgRecords();
-
-    ProvenanceOffset[BB] = NormalNode;
-    for (BasicBlock *Pred : predecessors(BB)) {
-      NormalNode->addIncoming(FrameTop, Pred);
-      getProvenanceOffset(Pred);
-    }
-
-    ProvenanceSlotPHINodes.push_back(NormalNode);
-    return ProvenanceOffset[BB];
   }
 
   bool run() {
@@ -222,7 +194,6 @@ public:
     patchShadowPHINodes();
     patchAllocaPHINodes();
     removeRetagIntrinsics();
-    patchProvenanceSlotPHINodes();
     return true;
   }
 
@@ -383,13 +354,6 @@ private:
     }
 
     report_fatal_error("Unable to resolve incoming provenance.");
-  }
-
-  Value *getProvenanceSlot(IRBuilder<> &IRB, BasicBlock *BB) {
-    Value *Offset = getProvenanceOffset(CurrentBlock);
-    Value *Slot = subtractPointer(IRB, BS.DL, Offset, BS.ProvenanceSize);
-    ProvenanceOffset[BB] = Slot;
-    return Slot;
   }
 
   ProvenanceScalar getAllocaProvenance(BasicBlock *BB, AllocaInst *AI) {
@@ -680,17 +644,6 @@ private:
     eliminatePHINodes(Worklist);
   }
 
-  void patchProvenanceSlotPHINodes() {
-    SmallVector<PHINode *> Worklist;
-    for (const auto &PN : ProvenanceSlotPHINodes) {
-      for (BasicBlock *Pred : predecessors(PN->getParent())) {
-        IRBuilder<> IRB(&Pred->front());
-        PN->setIncomingValueForBlock(Pred, ProvenanceOffset[Pred]);
-      }
-    }
-    eliminatePHINodes(Worklist);
-  }
-
   void eliminatePHINodes(SmallVectorImpl<PHINode *> &Worklist) {
     DenseSet<PHINode *> PHIToDelete;
     do {
@@ -844,7 +797,11 @@ private:
     return AllocSize;
   }
 
-  void instrumentExposeTag(CallBase &CB) { ExposeTagVec.push_back(&CB); }
+  void instrumentExposeTag(CallBase &CB) {
+    ExposeTagVec.push_back(&CB);
+    ProvenanceScalar Prov = assertProvenanceScalar(CB.getOperand(0));
+    setProvenance(&CB, Prov);
+  }
 
   void instrumentRetagPlace(CallBase &CB) {
     IRBuilder<> IRB(&CB);
@@ -1481,7 +1438,6 @@ private:
     }
     BasicBlock *Pred = CurrentBlock;
     CurrentBlock = NextInst->getParent();
-    // ProvenanceOffset[CurrentBlock] = ProvenanceOffset[Pred];
     return IRBuilder<>(NextInst);
   }
 };

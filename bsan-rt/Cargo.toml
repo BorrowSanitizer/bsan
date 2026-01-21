@@ -10,7 +10,6 @@ rustc-hash = { version = "2.1.1", default-features = false }
 libc-print = { version = "0.1.23" }
 bsan-shared = { path = "../bsan-shared" }
 spin = "0.10.0"
-backtrace =  "0.3.76"
 
 [lib]
 name = "bsan_rt_core"

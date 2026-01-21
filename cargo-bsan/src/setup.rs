@@ -144,13 +144,7 @@ pub fn setup_sysroot(
     // But keep the overflow checks, they are cheap. This completely overwrites flags
     // the user might have set, which is consistent with normal `cargo build` that does
     // not apply `RUSTFLAGS` to the sysroot either.
-    let rustflags = &[
-        "-Cdebug-assertions=off",
-        "-Coverflow-checks=on",
-        "-Cdebuginfo=2",
-        "-Zunstable-options",
-        "--emit=asm,llvm-bc,dep-info,link,llvm-ir,metadata,mir,obj,thin-link-bitcode",
-    ];
+    let rustflags = &["-Cdebug-assertions=off", "-Coverflow-checks=on", "-Cdebuginfo=2"];
 
     let mut after_build_output = String::new(); // what should be printed when the build is done.
     let notify = || {

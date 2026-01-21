@@ -8,7 +8,6 @@ use tree::{AllocRange, Tree};
 use crate::borrow_tracker::tree::{ChildParams, LocationState};
 use crate::diagnostics::AccessCause;
 use crate::errors::{BorsanResult, ErrorInfo, UBInfo};
-use crate::local::ProvenanceSlot;
 use crate::memory::hooks::BsanAllocHooks;
 use crate::span::Span;
 use crate::{AllocId, BorTag, GlobalCtx, Provenance};
@@ -204,9 +203,7 @@ impl<'b> BorrowTracker<'b> {
             span,
         };
 
-        global_ctx.local_ctx_mut(|local| {
-            self.tree_mut().new_child(child_params);
-        });
+        self.tree_mut().new_child(child_params);
 
         Ok(new_tag)
     }

@@ -27,13 +27,12 @@ pub const BSAN_DEFAULT_ARGS: &[&str] = &[
     "-Copt-level=0",
     "-Zmir-opt-level=0",
     "-Cpasses=bsan",
-    "-Zcodegen-emit-retag",
+    "-Zcodegen-emit-retag=true",
     "-Cforce-frame-pointers=yes",
     "-Zmir-preserve-ub",
     "-Zllvm-emit-lifetime-markers",
     "-Zinline-llvm=no",
     "-Cembed-bitcode=yes",
-    "-Zverify-llvm-ir",
 ];
 
 static BSAN_RT_EXPECTED: &str = "libbsan_rt.a";

@@ -239,12 +239,10 @@ fn main() -> Result<()> {
     ui_test::color_eyre::install()?;
     let target = get_version_info();
     let tmpdir = tempfile::Builder::new().prefix("bsan-uitest-").tempdir()?;
-
-    //ui(Mode::Pass, "tests/pass", &target, WithoutDependencies, tmpdir.path())?;
-    //ui(Mode::Pass, "tests/pass-dep", &target, WithDependencies, tmpdir.path())?;
-    //ui(Mode::Fail, "tests/fail", &target, WithoutDependencies, tmpdir.path())?;
-
-    //ui(Mode::Fail, "tests/miri-tests/fail", &target, WithoutDependencies, tmpdir.path())?;
-    //ui(Mode::Fail, "tests/miri-tests/pass", &target, WithoutDependencies, tmpdir.path())?;
+    ui(Mode::Pass, "tests/pass", &target, WithoutDependencies, tmpdir.path())?;
+    ui(Mode::Pass, "tests/pass-dep", &target, WithDependencies, tmpdir.path())?;
+    ui(Mode::Fail, "tests/fail", &target, WithoutDependencies, tmpdir.path())?;
+    ui(Mode::Fail, "tests/miri-tests/fail", &target, WithoutDependencies, tmpdir.path())?;
+    ui(Mode::Fail, "tests/miri-tests/pass", &target, WithoutDependencies, tmpdir.path())?;
     Ok(())
 }

@@ -12,7 +12,7 @@ use core::fmt::Debug;
 use core::panic::PanicInfo;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use core::{ffi, fmt, ptr};
+use core::{ffi, fmt, ptr, slice};
 
 use bsan_shared::{AccessKind, RetagInfo, Size};
 use libc_print::std_name::*;
@@ -36,7 +36,6 @@ mod memory;
 
 use crate::borrow_tracker::tree::Tree;
 use crate::errors::BorsanResult;
-use crate::local::ProvenanceSlot;
 use crate::memory::hooks;
 use crate::span::FramePointer;
 
@@ -121,22 +120,20 @@ macro_rules! debug_bsan {
     ($op:literal, $ptr:ident, $alloc_id:ident, $bor_tag:ident, $alloc_info:expr) => {
         #[cfg(feature = "debug")]
         {
-            if $alloc_id == AllocId(15) {
-                #[allow(unused_unsafe)]
-                let info = match $alloc_id.0 {
-                    0 => AllocInfoSummary::WildCard,
-                    1 => AllocInfoSummary::Null,
-                    _ => unsafe { &*$alloc_info }.summarize(),
-                };
-                let summary = DebugSummary {
-                    op: $op,
-                    ptr: $ptr.addr(),
-                    alloc_id: $alloc_id,
-                    bor_tag: $bor_tag,
-                    info,
-                };
-                libc_print::std_name::println!("{}", summary);
-            }
+            #[allow(unused_unsafe)]
+            let info = match $alloc_id.0 {
+                0 => AllocInfoSummary::WildCard,
+                1 => AllocInfoSummary::Null,
+                _ => unsafe { &*$alloc_info }.summarize(),
+            };
+            let summary = DebugSummary {
+                op: $op,
+                ptr: $ptr.addr(),
+                alloc_id: $alloc_id,
+                bor_tag: $bor_tag,
+                info,
+            };
+            libc_print::std_name::println!("{}", summary);
         }
     };
 }
@@ -504,21 +501,13 @@ unsafe extern "C-unwind" fn __bsan_retag(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_pop_frame(frame_start: ProvenanceSlot, protected: usize) {
+extern "C" fn __bsan_pop_frame(frame_start: *const Provenance, protected: usize) {
     let global = unsafe { global_ctx() };
-    if global.local_ctx(|local| local.provenance_from(frame_start).is_empty()) {
-        return;
+    let provenance = unsafe { slice::from_raw_parts(frame_start, protected) };
+    for prov in provenance {
+        let _ = BorrowTracker::for_alloc(*prov, |mut bt| bt.protector_end(global, Span::new()));
+        global.protected_tags().remove(&prov.bor_tag);
     }
-    global.local_ctx(|local| {
-        let provenance = local.provenance_from(frame_start);
-        for prov in &provenance[provenance.len() - protected..] {
-            let _ = BorrowTracker::for_alloc(*prov, |mut bt| bt.protector_end(global, Span::new()));
-            global.protected_tags().remove(&prov.bor_tag);
-        }
-    });
-    global.local_ctx_mut(|local| {
-        unsafe { local.pop_frame(frame_start) };
-    });
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -818,11 +807,10 @@ extern "C" fn __bsan_debug_print(alloc_id: AllocId, bor_tag: BorTag, alloc_info:
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     crate::println!("{prov:?}");
 }
-/*
+
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
     eprintln!("The BorrowSanitizer runtime panicked! {:?}", info);
     core::intrinsics::abort()
 }
-*/

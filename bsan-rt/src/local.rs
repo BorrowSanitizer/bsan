@@ -1,8 +1,5 @@
-use core::cmp::min;
 use core::mem::MaybeUninit;
-use core::ops::Deref;
-use core::ptr::NonNull;
-use core::{ptr, slice};
+use core::ptr::{self, NonNull};
 
 use crate::memory::{mmap, munmap, StackSize};
 use crate::Provenance;
@@ -60,18 +57,6 @@ pub unsafe fn deinit_local_ctx() {
     unsafe { drop(ptr::replace(&raw mut LOCAL_CTX, MaybeUninit::uninit()).assume_init()) };
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct ProvenanceSlot(NonNull<Provenance>);
-
-impl Deref for ProvenanceSlot {
-    type Target = Provenance;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { self.0.as_ref() }
-    }
-}
-
 pub struct LocalCtx {
     stack_bottom: NonNull<u8>,
     stack_size: StackSize,
@@ -86,33 +71,6 @@ impl LocalCtx {
         let stack_top = stack_top.cast::<Provenance>();
         unsafe { __BSAN_PROV_STACK = stack_top.as_ptr() };
         Self { stack_bottom, stack_size }
-    }
-
-    /// # Safety
-    /// A frame must have been pushed before being popped.
-    pub unsafe fn pop_frame(&mut self, slot: ProvenanceSlot) {
-        unsafe {
-            __BSAN_PROV_STACK = slot.0.as_ptr();
-        }
-    }
-
-    pub fn store_provenance(&mut self, value: Provenance, slot: ProvenanceSlot) {
-        unsafe {
-            slot.0.write(value);
-            __BSAN_PROV_STACK = min(__BSAN_PROV_STACK, slot.0.as_ptr())
-        }
-    }
-
-    pub fn provenance(&self) -> &[Provenance] {
-        self.provenance_from(ProvenanceSlot(self.stack_bottom.cast::<Provenance>()))
-    }
-
-    pub fn provenance_from(&self, slot: ProvenanceSlot) -> &[Provenance] {
-        unsafe {
-            let data = __BSAN_PROV_STACK;
-            let len = slot.0.as_ptr().offset_from_unsigned(data);
-            slice::from_raw_parts(data, len)
-        }
     }
 }
 

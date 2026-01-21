@@ -130,7 +130,6 @@ impl GlobalCtx {
 
     pub fn handle_error(&self, info: ErrorInfo) -> ! {
         crate::eprintln!("An error occurred: {info:?}\n\n");
-        crate::eprintln!("{:?}", backtrace::Backtrace::new());
         self.exit(1)
     }
 }

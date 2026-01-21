@@ -127,34 +127,35 @@ impl Command {
     }
 
     fn inst(env: &mut BsanEnv, file: String, debug: bool, args: &[String]) -> Result<()> {
-        let plugin = env.build_artifact(BsanPass, &[])?;
+        env.in_mode(Mode::Release, |env| {
+            let plugin = env.build_artifact(BsanPass, &[])?;
 
-        let runtime = if debug {
-            env.build_artifact(BsanRt, &["--features".to_string(), "debug".to_string()])?
-        } else {
-            env.build_artifact(BsanRt, &[])?
-        };
+            let runtime = if debug {
+                env.build_artifact(BsanRt, &["--features".to_string(), "debug".to_string()])?
+            } else {
+                env.build_artifact(BsanRt, &[])?
+            };
 
-        let driver = env.build_artifact(BsanDriver, &[])?;
-        let cargo_bsan = env.build_artifact(CargoBsan, &[])?;
+            let driver = env.build_artifact(BsanDriver, &[])?;
+            let cargo_bsan = env.build_artifact(CargoBsan, &[])?;
 
-        let sysroot_dir = path!(&env.build_dir / "sysroot");
+            let sysroot_dir = path!(&env.build_dir / "sysroot");
 
-        env.sh.set_var("BSAN_PLUGIN", plugin);
-        env.sh.set_var("BSAN_DRIVER", &driver);
-        env.sh.set_var("BSAN_RT", runtime);
-        env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
+            env.sh.set_var("BSAN_PLUGIN", plugin);
+            env.sh.set_var("BSAN_DRIVER", &driver);
+            env.sh.set_var("BSAN_RT", runtime);
+            env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
 
-        cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
+            cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
 
-        cmd!(env.sh, "{driver} {file}")
-            .env("BSAN_BE_RUSTC", "target")
-            .args(args)
-            .arg(format!("--sysroot={}", sysroot_dir.display()))
-            .quiet()
-            .run()?;
+            cmd!(env.sh, "{driver} {file}")
+                .env("BSAN_BE_RUSTC", "target")
+                .args(args)
+                .arg(format!("--sysroot={}", sysroot_dir.display()))
+                .run()?;
 
-        Ok(())
+            Ok(())
+        })
     }
 }
 
