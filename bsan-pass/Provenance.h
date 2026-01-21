@@ -3,7 +3,6 @@
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
 #include <optional>
 #include <variant>
@@ -115,22 +114,16 @@ public:
 
   std::optional<ProvenanceVector> getVector() const;
   ProvenanceVector assertVector() const;
-  void store(IRBuilder<> &IRB, const ProvenanceLayout &PL, Value *Dest,
-             AtomicOrdering Ordering = AtomicOrdering::NotAtomic);
   void store(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-             ProvenancePointer Dest,
-             AtomicOrdering Ordering = AtomicOrdering::NotAtomic);
+             ProvenancePointer Dest);
   static Provenance load(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-                         ProvenancePointer ProvPtr,
-                         AtomicOrdering Ordering = AtomicOrdering::NotAtomic);
+                         ProvenancePointer ProvPtr);
   static ProvenanceScalar loadScalar(IRBuilder<> &IRB,
                                      const ProvenanceLayout &PL,
-                                     ProvenancePointerScalar ProvPtr,
-                                     AtomicOrdering Ordering);
+                                     ProvenancePointerScalar ProvPtr);
   static ProvenanceVector loadVector(IRBuilder<> &IRB,
                                      const ProvenanceLayout &PL,
-                                     ProvenancePointerVector ProvPtr,
-                                     AtomicOrdering Ordering);
+                                     ProvenancePointerVector ProvPtr);
   static Provenance wildcard(IRBuilder<> &IRB, const ProvenanceLayout &PL,
                              ElementCount Elems, ProvenanceKind Kind);
 };

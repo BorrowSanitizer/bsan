@@ -127,7 +127,7 @@ public:
   // and return values.
   Value *ParamTLS = nullptr;
   Value *RetvalTLS = nullptr;
-  Value *ProvStack = nullptr;
+  Value *TagStack = nullptr;
   Value *AllocIdCounter = nullptr;
   Value *BorTagCounter = nullptr;
 

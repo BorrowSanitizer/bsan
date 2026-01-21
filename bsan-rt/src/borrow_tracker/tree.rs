@@ -42,22 +42,12 @@ impl AllocRange {
     #[inline]
     pub fn subrange(self, subrange: AllocRange) -> AllocRange {
         let sub_start = self.start + subrange.start;
+
         let range = alloc_range(sub_start, subrange.size);
+
         assert!(range.end() <= self.end(), "access outside the bounds for given AllocRange");
+
         range
-    }
-
-    #[inline]
-    pub fn relative_to(&self, start: Size) -> Option<AllocRange> {
-        self.within_range(start).then_some(Self {
-            start: Size::from_bytes(start.bytes() - self.start.bytes()),
-            size: self.size,
-        })
-    }
-
-    #[inline]
-    pub fn within_range(&self, size: Size) -> bool {
-        size >= self.start && size < self.end()
     }
 }
 
@@ -832,12 +822,10 @@ where
                     |_| ContinueTraversal::Recurse,
                     |args: NodeAppArgs<'_>| -> Result<(), TransitionError> {
                         let NodeAppArgs { node, perm, .. } = args;
-                        let perm =
+                        let _perm =
                             perm.get().copied().unwrap_or_else(|| node.default_location_state());
                         if global.get_protector_kind(node.tag)
                             == Some(ProtectorKind::StrongProtector)
-                            && !perm.permission().is_cell()
-                            && perm.is_accessed()
                         {
                             Err(TransitionError::ProtectedDealloc)
                         } else {
@@ -1170,3 +1158,20 @@ impl VisitProvenance for Tree {
         visit(None, Some(self.nodes.get(self.root).unwrap().tag));
     }
 }
+
+// /// Relative position of the access
+// #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// pub enum AccessRelatedness {
+//     /// The accessed pointer is the current one
+//     This,
+//     /// The accessed pointer is a (transitive) child of the current one.
+//     // Current pointer is excluded (unlike in some other places of this module
+//     // where "child" is inclusive).
+//     StrictChildAccess,
+//     /// The accessed pointer is a (transitive) parent of the current one.
+//     // Current pointer is excluded.
+//     AncestorAccess,
+//     /// The accessed pointer is neither of the above.
+//     // It's a cousin/uncle/etc., something in a side branch.
+//     CousinAccess,
+// }

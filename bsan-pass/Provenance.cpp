@@ -99,47 +99,35 @@ void Provenance::addIncoming(BasicBlock *IncomingBlock,
 }
 
 Provenance Provenance::load(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-                            ProvenancePointer ProvPtr,
-                            AtomicOrdering Ordering) {
+                            ProvenancePointer ProvPtr) {
 
   Type *IntTy = PL.getIntTy(ProvPtr.Kind, ProvPtr.Elems);
   Type *PtrTy = PL.getPtrTy(ProvPtr.Kind, ProvPtr.Elems);
 
-  LoadInst *Info = IRB.CreateLoad(PtrTy, ProvPtr.InfoPtr, true);
-  Info->setAtomic(Ordering);
   LoadInst *Id = IRB.CreateLoad(IntTy, ProvPtr.IdPtr, true);
   LoadInst *Tag = IRB.CreateLoad(IntTy, ProvPtr.TagPtr, true);
+  LoadInst *Info = IRB.CreateLoad(PtrTy, ProvPtr.InfoPtr, true);
 
   return Provenance(Id, Tag, Info, ProvPtr.Elems, ProvPtr.Kind);
 }
 
-ProvenanceScalar
-Provenance::loadScalar(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-                       ProvenancePointerScalar ProvPtr,
-                       AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
-  return Provenance::load(IRB, PL, ProvPtr, Ordering).assertScalar();
+ProvenanceScalar Provenance::loadScalar(IRBuilder<> &IRB,
+                                        const ProvenanceLayout &PL,
+                                        ProvenancePointerScalar ProvPtr) {
+  return Provenance::load(IRB, PL, ProvPtr).assertScalar();
 }
 ProvenanceVector Provenance::loadVector(IRBuilder<> &IRB,
                                         const ProvenanceLayout &PL,
-                                        ProvenancePointerVector ProvPtr,
-                                        AtomicOrdering Ordering) {
-  return Provenance::load(IRB, PL, ProvPtr, Ordering).assertVector();
+                                        ProvenancePointerVector ProvPtr) {
+  return Provenance::load(IRB, PL, ProvPtr).assertVector();
 }
 
 void Provenance::store(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-                       Value *Base, AtomicOrdering Ordering) {
-  this->store(IRB, PL,
-              ProvenancePointer(IRB, PL, Base, this->Elems, this->Kind),
-              Ordering);
-}
+                       ProvenancePointer Dest) {
 
-void Provenance::store(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-                       ProvenancePointer Dest, AtomicOrdering Ordering) {
-
-  IRB.CreateStore(this->Id, Dest.IdPtr, true);
-  IRB.CreateStore(this->Tag, Dest.TagPtr, true);
+  StoreInst *Id = IRB.CreateStore(this->Id, Dest.IdPtr, true);
+  StoreInst *Tag = IRB.CreateStore(this->Tag, Dest.TagPtr, true);
   StoreInst *Info = IRB.CreateStore(this->Info, Dest.InfoPtr, true);
-  Info->setOrdering(Ordering);
 }
 
 Provenance Provenance::wildcard(IRBuilder<> &IRB, const ProvenanceLayout &PL,

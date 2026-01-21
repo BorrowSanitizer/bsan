@@ -1,5 +1,4 @@
 use std::path;
-use std::path::PathBuf;
 
 use rustc_version::VersionMeta;
 
@@ -17,6 +16,7 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
         show_version();
         return;
     }
+
     let Some(subcommand) = args.next() else {
         show_error!(
             "`cargo bsan` needs to be called with a subcommand (e.g `run`, `test`, `clean`)"
@@ -25,10 +25,10 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
 
     let subcommand = match &*subcommand {
         "setup" => BSANCommand::Setup,
-        "build" | "test" | "t" | "run" | "r" | "nextest" => BSANCommand::Forward(subcommand),
+        "test" | "t" | "run" | "r" | "nextest" => BSANCommand::Forward(subcommand),
         "clean" => BSANCommand::Clean,
         _ => show_error!(
-            "`cargo bsan` supports the following subcommands: `run`, `build`, `test`, `nextest`, `clean`, and `setup`."
+            "`cargo bsan` supports the following subcommands: `run`, `test`, `nextest`, `clean`, and `setup`."
         ),
     };
 
@@ -39,6 +39,26 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     let rustc_version = VersionMeta::for_command(bsan_for_host()).unwrap_or_else(|err| {
         panic!("failed to determine underlying rustc version of BSAN ({:?}):\n{err:?}", bsan())
     });
+
+    let host_sysroot = get_host_sysroot_dir(verbose);
+
+    let Some(bsan_plugin) = find_library("BSAN_PLUGIN", &host_sysroot, "libbsan_plugin.so") else {
+        show_error!(
+            "failed to locate the BorrowSanitizer LLVM plugin (libbsan_plugin.so) within the host sysroot."
+        );
+    };
+    unsafe {
+        env::set_var("BSAN_PLUGIN", bsan_plugin);
+    }
+
+    let Some(runtime_dir) = find_library("BSAN_RT", &host_sysroot, "libbsan_rt.a") else {
+        show_error!(
+            "failed to locate the BorrowSanitizer runtime (libbsan_rt.a) within the host sysroot."
+        );
+    };
+    unsafe {
+        env::set_var("BSAN_RT", runtime_dir);
+    }
 
     let targets = get_arg_flag_values("--target").collect::<Vec<_>>();
 
@@ -56,22 +76,15 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
         return;
     }
 
-    let bsan_sysroot = ensure_sysroot(&subcommand, &rustc_version, verbose, quiet);
-    let bsan_path = find_bsan();
+    setup_sysroot(&subcommand, rustc_version.host.as_str(), &rustc_version, verbose, quiet);
 
-    if let BSANCommand::Setup = subcommand
-        && has_arg_flag("--print-rustflags")
-    {
-        let mut cmd = bsan();
-        cmd.env("PRINT_RUSTFLAGS", "1");
-        debug_cmd("[cargo-bsan rustc]", verbose, &cmd);
-        exec(cmd);
-    }
+    let bsan_sysroot = get_target_sysroot_dir();
+    let bsan_path = find_bsan();
 
     let cargo_cmd = match subcommand {
         BSANCommand::Forward(s) => s,
+        BSANCommand::Setup => return, // `cargo bsan setup` stops here.
         BSANCommand::Clean => unreachable!(),
-        BSANCommand::Setup => return,
     };
 
     let cargo_bsan_path = env::current_exe()
@@ -189,34 +202,4 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
     }
     debug_cmd("[cargo-bsan rustc]", verbose, &cmd);
     exec(cmd);
-}
-
-fn ensure_sysroot(
-    subcommand: &BSANCommand,
-    rustc_version: &VersionMeta,
-    verbose: usize,
-    quiet: bool,
-) -> PathBuf {
-    let host_sysroot = get_host_sysroot_dir(verbose);
-
-    let Some(bsan_plugin) = find_library("BSAN_PLUGIN", &host_sysroot, "libbsan_plugin.so") else {
-        show_error!(
-            "failed to locate the BorrowSanitizer LLVM plugin (libbsan_plugin.so) within the host sysroot."
-        );
-    };
-    unsafe {
-        env::set_var("BSAN_PLUGIN", bsan_plugin);
-    }
-
-    let Some(runtime_dir) = find_library("BSAN_RT", &host_sysroot, "libbsan_rt.a") else {
-        show_error!(
-            "failed to locate the BorrowSanitizer runtime (libbsan_rt.a) within the host sysroot."
-        );
-    };
-    unsafe {
-        env::set_var("BSAN_RT", runtime_dir);
-    }
-
-    setup_sysroot(subcommand, rustc_version.host.as_str(), rustc_version, verbose, quiet);
-    get_target_sysroot_dir()
 }

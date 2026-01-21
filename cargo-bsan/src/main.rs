@@ -70,6 +70,7 @@ fn main() {
             "`cargo-bsan` called without first argument; please only invoke this binary through `cargo bsan`"
         )
     };
+
     match first.as_str() {
         "bsan" => {
             phase_cargo_bsan(args)

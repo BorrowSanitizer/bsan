@@ -424,13 +424,7 @@ impl Buildable for BsanRtCore {
     }
 
     fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        /*let tsan_extended_rustflags = RT_FLAGS
-        .iter()
-        .cloned()
-        .chain(["-Zsanitizer=thread -Cunsafe-allow-abi-mismatch=sanitizer"].iter().cloned())
-        .collect::<Vec<&str>>();*/
-        let tsan_extended_rustflags = RT_FLAGS;
-        env.with_flags("RUSTFLAGS", &tsan_extended_rustflags, |env| env.test("bsan-rt", args))
+        env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.test("bsan-rt", args))
     }
 
     fn clippy(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
