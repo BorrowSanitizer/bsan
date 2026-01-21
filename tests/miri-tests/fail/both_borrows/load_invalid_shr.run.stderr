@@ -4,19 +4,19 @@ Last access at bsan/tests/miri-tests/fail/both_borrows/load_invalid_shr.rs: line
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in alloc::boxed::Box$LT$T$GT$::new::h32ba2c1000dd08d6 RUSTLIB/alloc/src/boxed.rs:LL:CC
-    #1 $HEX in load_invalid_shr::main::h7b4fea9bb7bd4d5f bsan/tests/miri-tests/fail/both_borrows/load_invalid_shr.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::hd509660dc2797bdf RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in alloc::boxed::Box$LT$T$GT$::new::hHASH RUSTLIB/alloc/src/boxed.rs:LL:CC
+    #1 $HEX in load_invalid_shr::main::hHASH bsan/tests/miri-tests/fail/both_borrows/load_invalid_shr.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in load_invalid_shr::main::h7b4fea9bb7bd4d5f bsan/tests/miri-tests/fail/both_borrows/load_invalid_shr.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::hd509660dc2797bdf RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::ha09afaedb052c7e7 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in load_invalid_shr::main::hHASH bsan/tests/miri-tests/fail/both_borrows/load_invalid_shr.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 
-    #0 $HEX in alloc::boxed::Box$LT$T$GT$::new::h32ba2c1000dd08d6 RUSTLIB/alloc/src/boxed.rs:LL:CC
-    #1 $HEX in load_invalid_shr::main::h7b4fea9bb7bd4d5f bsan/tests/miri-tests/fail/both_borrows/load_invalid_shr.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::hd509660dc2797bdf RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in alloc::boxed::Box$LT$T$GT$::new::hHASH RUSTLIB/alloc/src/boxed.rs:LL:CC
+    #1 $HEX in load_invalid_shr::main::hHASH bsan/tests/miri-tests/fail/both_borrows/load_invalid_shr.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in load_invalid_shr::main::h7b4fea9bb7bd4d5f bsan/tests/miri-tests/fail/both_borrows/load_invalid_shr.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::hd509660dc2797bdf RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::ha09afaedb052c7e7 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in load_invalid_shr::main::hHASH bsan/tests/miri-tests/fail/both_borrows/load_invalid_shr.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 

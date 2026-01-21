@@ -4,19 +4,19 @@ Last access at bsan/tests/miri-tests/fail/both_borrows/aliasing_mut1.rs: line 4,
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in aliasing_mut1::safe::haed4bdee2cc2abc4 bsan/tests/miri-tests/fail/both_borrows/aliasing_mut1.rs:LL:CC
-    #1 $HEX in aliasing_mut1::main::h037b13d635abed7a bsan/tests/miri-tests/fail/both_borrows/aliasing_mut1.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::h4f86a8f0526f5a9c RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in aliasing_mut1::safe::hHASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut1.rs:LL:CC
+    #1 $HEX in aliasing_mut1::main::hHASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut1.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in aliasing_mut1::safe::haed4bdee2cc2abc4 bsan/tests/miri-tests/fail/both_borrows/aliasing_mut1.rs:LL:CC
-    #1 $HEX in aliasing_mut1::main::h037b13d635abed7a bsan/tests/miri-tests/fail/both_borrows/aliasing_mut1.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::h4f86a8f0526f5a9c RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in aliasing_mut1::safe::hHASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut1.rs:LL:CC
+    #1 $HEX in aliasing_mut1::main::hHASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut1.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in aliasing_mut1::safe::haed4bdee2cc2abc4 bsan/tests/miri-tests/fail/both_borrows/aliasing_mut1.rs:LL:CC
-    #1 $HEX in aliasing_mut1::main::h037b13d635abed7a bsan/tests/miri-tests/fail/both_borrows/aliasing_mut1.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::h4f86a8f0526f5a9c RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in aliasing_mut1::safe::hHASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut1.rs:LL:CC
+    #1 $HEX in aliasing_mut1::main::hHASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut1.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in aliasing_mut1::safe::haed4bdee2cc2abc4 bsan/tests/miri-tests/fail/both_borrows/aliasing_mut1.rs:LL:CC
-    #1 $HEX in aliasing_mut1::main::h037b13d635abed7a bsan/tests/miri-tests/fail/both_borrows/aliasing_mut1.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::h4f86a8f0526f5a9c RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in aliasing_mut1::safe::hHASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut1.rs:LL:CC
+    #1 $HEX in aliasing_mut1::main::hHASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut1.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 

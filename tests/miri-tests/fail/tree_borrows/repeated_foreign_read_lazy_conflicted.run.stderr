@@ -4,19 +4,19 @@ Last access at bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_laz
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in repeated_foreign_read_lazy_conflicted::access_after_sub_1::h4015d2317f864a9d bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:LL:CC
-    #1 $HEX in repeated_foreign_read_lazy_conflicted::main::hdd87019025a1bad4 bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::h80463083956a336b RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in repeated_foreign_read_lazy_conflicted::access_after_sub_1::hHASH bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:LL:CC
+    #1 $HEX in repeated_foreign_read_lazy_conflicted::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in repeated_foreign_read_lazy_conflicted::access_after_sub_1::h4015d2317f864a9d bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:LL:CC
-    #1 $HEX in repeated_foreign_read_lazy_conflicted::main::hdd87019025a1bad4 bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::h80463083956a336b RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in repeated_foreign_read_lazy_conflicted::access_after_sub_1::hHASH bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:LL:CC
+    #1 $HEX in repeated_foreign_read_lazy_conflicted::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in repeated_foreign_read_lazy_conflicted::access_after_sub_1::h4015d2317f864a9d bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:LL:CC
-    #1 $HEX in repeated_foreign_read_lazy_conflicted::main::hdd87019025a1bad4 bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::h80463083956a336b RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in repeated_foreign_read_lazy_conflicted::access_after_sub_1::hHASH bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:LL:CC
+    #1 $HEX in repeated_foreign_read_lazy_conflicted::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in repeated_foreign_read_lazy_conflicted::access_after_sub_1::h4015d2317f864a9d bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:LL:CC
-    #1 $HEX in repeated_foreign_read_lazy_conflicted::main::hdd87019025a1bad4 bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::h80463083956a336b RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in repeated_foreign_read_lazy_conflicted::access_after_sub_1::hHASH bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:LL:CC
+    #1 $HEX in repeated_foreign_read_lazy_conflicted::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 

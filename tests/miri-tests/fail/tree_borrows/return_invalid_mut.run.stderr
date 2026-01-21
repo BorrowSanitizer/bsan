@@ -6,23 +6,23 @@ Last conflict at bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs: 
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in return_invalid_mut::main::h4a28ea5027fff53f bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::hf36989fb358b9bc8 RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::h87123d75d12e3fb9 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in return_invalid_mut::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 
-    #0 $HEX in return_invalid_mut::main::h4a28ea5027fff53f bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::hf36989fb358b9bc8 RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::h87123d75d12e3fb9 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in return_invalid_mut::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 
-    #0 $HEX in return_invalid_mut::foo::h5fcfd00b47e7a427 bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
-    #1 $HEX in return_invalid_mut::main::h4a28ea5027fff53f bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::hf36989fb358b9bc8 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in return_invalid_mut::foo::hHASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #1 $HEX in return_invalid_mut::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in return_invalid_mut::foo::h5fcfd00b47e7a427 bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
-    #1 $HEX in return_invalid_mut::main::h4a28ea5027fff53f bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::hf36989fb358b9bc8 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in return_invalid_mut::foo::hHASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #1 $HEX in return_invalid_mut::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in return_invalid_mut::foo::h5fcfd00b47e7a427 bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
-    #1 $HEX in return_invalid_mut::main::h4a28ea5027fff53f bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::hf36989fb358b9bc8 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in return_invalid_mut::foo::hHASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #1 $HEX in return_invalid_mut::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 

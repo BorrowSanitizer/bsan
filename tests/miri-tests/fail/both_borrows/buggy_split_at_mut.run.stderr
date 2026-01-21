@@ -4,19 +4,19 @@ Last access at bsan/tests/miri-tests/fail/both_borrows/buggy_split_at_mut.rs: li
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in buggy_split_at_mut::main::h3f6c2645c5ed5907 bsan/tests/miri-tests/fail/both_borrows/buggy_split_at_mut.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::h32573ebc2d02a51f RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hc7f4202d11060aec RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in buggy_split_at_mut::main::hHASH bsan/tests/miri-tests/fail/both_borrows/buggy_split_at_mut.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 
-    #0 $HEX in buggy_split_at_mut::main::h3f6c2645c5ed5907 bsan/tests/miri-tests/fail/both_borrows/buggy_split_at_mut.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::h32573ebc2d02a51f RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hc7f4202d11060aec RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in buggy_split_at_mut::main::hHASH bsan/tests/miri-tests/fail/both_borrows/buggy_split_at_mut.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 
-    #0 $HEX in buggy_split_at_mut::main::h3f6c2645c5ed5907 bsan/tests/miri-tests/fail/both_borrows/buggy_split_at_mut.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::h32573ebc2d02a51f RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hc7f4202d11060aec RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in buggy_split_at_mut::main::hHASH bsan/tests/miri-tests/fail/both_borrows/buggy_split_at_mut.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 
-    #0 $HEX in buggy_split_at_mut::main::h3f6c2645c5ed5907 bsan/tests/miri-tests/fail/both_borrows/buggy_split_at_mut.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::h32573ebc2d02a51f RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hc7f4202d11060aec RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in buggy_split_at_mut::main::hHASH bsan/tests/miri-tests/fail/both_borrows/buggy_split_at_mut.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 

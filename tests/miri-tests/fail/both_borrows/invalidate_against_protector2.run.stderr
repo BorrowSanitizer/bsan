@@ -5,15 +5,15 @@ Last access at bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protec
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in invalidate_against_protector2::main::h25cafea9548c07ce bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector2.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::h17f4e3fde54299ed RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::h2822309679dcce20 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in invalidate_against_protector2::main::hHASH bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector2.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 
-    #0 $HEX in invalidate_against_protector2::inner::h8d7c907b8164643a bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector2.rs:LL:CC
-    #1 $HEX in invalidate_against_protector2::main::h25cafea9548c07ce bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector2.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::h17f4e3fde54299ed RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in invalidate_against_protector2::inner::hHASH bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector2.rs:LL:CC
+    #1 $HEX in invalidate_against_protector2::main::hHASH bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector2.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in invalidate_against_protector2::inner::h8d7c907b8164643a bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector2.rs:LL:CC
-    #1 $HEX in invalidate_against_protector2::main::h25cafea9548c07ce bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector2.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::h17f4e3fde54299ed RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in invalidate_against_protector2::inner::hHASH bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector2.rs:LL:CC
+    #1 $HEX in invalidate_against_protector2::main::hHASH bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector2.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 

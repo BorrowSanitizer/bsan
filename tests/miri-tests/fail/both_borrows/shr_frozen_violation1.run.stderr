@@ -3,11 +3,11 @@ Access created with permissions Frozen at bsan/tests/miri-tests/fail/both_borrow
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in shr_frozen_violation1::unknown_code::h06ffa8c3172807ba bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:LL:CC
-    #1 $HEX in shr_frozen_violation1::foo::h4516bc033f9d6e47 bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:LL:CC
-    #2 $HEX in shr_frozen_violation1::main::ha56cada9f00ffb51 bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:LL:CC
+    #0 $HEX in shr_frozen_violation1::unknown_code::hHASH bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:LL:CC
+    #1 $HEX in shr_frozen_violation1::foo::hHASH bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:LL:CC
+    #2 $HEX in shr_frozen_violation1::main::hHASH bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:LL:CC
 
-    #0 $HEX in shr_frozen_violation1::unknown_code::h06ffa8c3172807ba bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:LL:CC
-    #1 $HEX in shr_frozen_violation1::foo::h4516bc033f9d6e47 bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:LL:CC
-    #2 $HEX in shr_frozen_violation1::main::ha56cada9f00ffb51 bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:LL:CC
+    #0 $HEX in shr_frozen_violation1::unknown_code::hHASH bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:LL:CC
+    #1 $HEX in shr_frozen_violation1::foo::hHASH bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:LL:CC
+    #2 $HEX in shr_frozen_violation1::main::hHASH bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:LL:CC
 

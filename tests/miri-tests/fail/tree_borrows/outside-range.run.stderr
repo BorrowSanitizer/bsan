@@ -6,23 +6,23 @@ Last conflict at bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs: line 
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in core::slice::_$LT$impl$u20$$u5b$T$u5d$$GT$::as_mut_ptr::hfd4f91dd98292041 RUSTLIB/core/src/slice/mod.rs:LL:CC
-    #1 $HEX in outside_range::main::h6d5541e0c4279402 bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::hbf77ad4d2f05e02c RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in core::slice::_$LT$impl$u20$$u5b$T$u5d$$GT$::as_mut_ptr::hHASH RUSTLIB/core/src/slice/mod.rs:LL:CC
+    #1 $HEX in outside_range::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in outside_range::stuff::hc02a8f1c2b75eff9 bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
-    #1 $HEX in outside_range::main::h6d5541e0c4279402 bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::hbf77ad4d2f05e02c RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in outside_range::stuff::hHASH bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
+    #1 $HEX in outside_range::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in outside_range::stuff::hc02a8f1c2b75eff9 bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
-    #1 $HEX in outside_range::main::h6d5541e0c4279402 bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::hbf77ad4d2f05e02c RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in outside_range::stuff::hHASH bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
+    #1 $HEX in outside_range::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in outside_range::stuff::hc02a8f1c2b75eff9 bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
-    #1 $HEX in outside_range::main::h6d5541e0c4279402 bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::hbf77ad4d2f05e02c RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in outside_range::stuff::hHASH bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
+    #1 $HEX in outside_range::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in outside_range::stuff::hc02a8f1c2b75eff9 bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
-    #1 $HEX in outside_range::main::h6d5541e0c4279402 bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::hbf77ad4d2f05e02c RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in outside_range::stuff::hHASH bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
+    #1 $HEX in outside_range::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 

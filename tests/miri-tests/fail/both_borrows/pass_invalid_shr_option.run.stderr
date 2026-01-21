@@ -4,19 +4,19 @@ Last access at bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr_option.r
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in pass_invalid_shr_option::main::hebc506ac8434bea5 bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr_option.rs
-    #1 $HEX in core::ops::function::FnOnce::call_once::h42d5136e1ce43abd RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hdd1de7c73443a5a7 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in pass_invalid_shr_option::main::hHASH bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr_option.rs
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 
-    #0 $HEX in pass_invalid_shr_option::main::hebc506ac8434bea5 bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr_option.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::h42d5136e1ce43abd RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hdd1de7c73443a5a7 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in pass_invalid_shr_option::main::hHASH bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr_option.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 
-    #0 $HEX in pass_invalid_shr_option::main::hebc506ac8434bea5 bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr_option.rs
-    #1 $HEX in core::ops::function::FnOnce::call_once::h42d5136e1ce43abd RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hdd1de7c73443a5a7 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in pass_invalid_shr_option::main::hHASH bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr_option.rs
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 
-    #0 $HEX in pass_invalid_shr_option::main::hebc506ac8434bea5 bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr_option.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::h42d5136e1ce43abd RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hdd1de7c73443a5a7 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in pass_invalid_shr_option::main::hHASH bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr_option.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 

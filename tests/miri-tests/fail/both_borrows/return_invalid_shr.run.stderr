@@ -4,27 +4,27 @@ Last access at bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs: li
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in return_invalid_shr::foo::h1d006fb2cadacbec bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
-    #1 $HEX in return_invalid_shr::main::h6689e282af08ff81 bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::hbf8722c6edfd2074 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in return_invalid_shr::foo::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #1 $HEX in return_invalid_shr::main::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in return_invalid_shr::foo::h1d006fb2cadacbec bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
-    #1 $HEX in return_invalid_shr::main::h6689e282af08ff81 bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::hbf8722c6edfd2074 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in return_invalid_shr::foo::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #1 $HEX in return_invalid_shr::main::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in return_invalid_shr::foo::h1d006fb2cadacbec bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
-    #1 $HEX in return_invalid_shr::main::h6689e282af08ff81 bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::hbf8722c6edfd2074 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in return_invalid_shr::foo::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #1 $HEX in return_invalid_shr::main::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in return_invalid_shr::foo::h1d006fb2cadacbec bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
-    #1 $HEX in return_invalid_shr::main::h6689e282af08ff81 bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::hbf8722c6edfd2074 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in return_invalid_shr::foo::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #1 $HEX in return_invalid_shr::main::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in return_invalid_shr::foo::h1d006fb2cadacbec bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
-    #1 $HEX in return_invalid_shr::main::h6689e282af08ff81 bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::hbf8722c6edfd2074 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in return_invalid_shr::foo::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #1 $HEX in return_invalid_shr::main::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in return_invalid_shr::foo::h1d006fb2cadacbec bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
-    #1 $HEX in return_invalid_shr::main::h6689e282af08ff81 bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::hbf8722c6edfd2074 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in return_invalid_shr::foo::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #1 $HEX in return_invalid_shr::main::hHASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 

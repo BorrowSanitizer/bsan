@@ -5,19 +5,19 @@ Last access at RUSTLIB/std/src/sys/alloc/PLATFORM.rs: line NN, column NN
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in core::mem::drop::h37b82682129a92cd RUSTLIB/core/src/mem/mod.rs:LL:CC
-    #1 $HEX in strongly_protected::main::_$u7b$$u7b$closure$u7d$$u7d$::hcc8a30e32530ded9 bsan/tests/miri-tests/fail/tree_borrows/strongly-protected.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::he24f4a223a7873f1 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in core::mem::drop::hHASH RUSTLIB/core/src/mem/mod.rs:LL:CC
+    #1 $HEX in strongly_protected::main::_$u7b$$u7b$closure$u7d$$u7d$::hHASH bsan/tests/miri-tests/fail/tree_borrows/strongly-protected.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in std::sys::alloc::PLATFORM::_$LT$impl$u20$core..alloc..global..GlobalAlloc$u20$for$u20$std..alloc..System$GT$::dealloc::he9b245a6dca332b2 RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
-    #1 $HEX in alloc::alloc::dealloc::hfdeff110ac9bac3f RUSTLIB/alloc/src/alloc.rs:LL:CC
-    #2 $HEX in _$LT$alloc..alloc..Global$u20$as$u20$core..alloc..Allocator$GT$::deallocate::hcef518dbd653c534 RUSTLIB/alloc/src/alloc.rs:LL:CC
+    #0 $HEX in std::sys::alloc::PLATFORM::_$LT$impl$u20$core..alloc..global..GlobalAlloc$u20$for$u20$std..alloc..System$GT$::dealloc::hHASH RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
+    #1 $HEX in alloc::alloc::dealloc::hHASH RUSTLIB/alloc/src/alloc.rs:LL:CC
+    #2 $HEX in _$LT$alloc..alloc..Global$u20$as$u20$core..alloc..Allocator$GT$::deallocate::hHASH RUSTLIB/alloc/src/alloc.rs:LL:CC
 
-    #0 $HEX in strongly_protected::inner::hd9e83db4d2a92fd1 bsan/tests/miri-tests/fail/tree_borrows/strongly-protected.rs:LL:CC
-    #1 $HEX in strongly_protected::main::hd7d331e3542fd7cf bsan/tests/miri-tests/fail/tree_borrows/strongly-protected.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::heb107c23a178cf3e RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in strongly_protected::inner::hHASH bsan/tests/miri-tests/fail/tree_borrows/strongly-protected.rs:LL:CC
+    #1 $HEX in strongly_protected::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/strongly-protected.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in std::sys::alloc::PLATFORM::_$LT$impl$u20$core..alloc..global..GlobalAlloc$u20$for$u20$std..alloc..System$GT$::dealloc::he9b245a6dca332b2 RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
-    #1 $HEX in alloc::alloc::dealloc::hfdeff110ac9bac3f RUSTLIB/alloc/src/alloc.rs:LL:CC
-    #2 $HEX in _$LT$alloc..alloc..Global$u20$as$u20$core..alloc..Allocator$GT$::deallocate::hcef518dbd653c534 RUSTLIB/alloc/src/alloc.rs:LL:CC
+    #0 $HEX in std::sys::alloc::PLATFORM::_$LT$impl$u20$core..alloc..global..GlobalAlloc$u20$for$u20$std..alloc..System$GT$::dealloc::hHASH RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
+    #1 $HEX in alloc::alloc::dealloc::hHASH RUSTLIB/alloc/src/alloc.rs:LL:CC
+    #2 $HEX in _$LT$alloc..alloc..Global$u20$as$u20$core..alloc..Allocator$GT$::deallocate::hHASH RUSTLIB/alloc/src/alloc.rs:LL:CC
 

@@ -6,19 +6,19 @@ Last conflict at RUSTLIB/alloc/src/boxed.rs: line 1372, column 9
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in core::mem::drop::h5a23508c3d86c5f0 RUSTLIB/core/src/mem/mod.rs:LL:CC
-    #1 $HEX in newtype_pair_retagging::main::_$u7b$$u7b$closure$u7d$$u7d$::hd2bbb0996d171c5f bsan/tests/miri-tests/fail/both_borrows/newtype_pair_retagging.rs:LL:CC
-    #2 $HEX in newtype_pair_retagging::dealloc_while_running::h48c619f4e5ca3de9 bsan/tests/miri-tests/fail/both_borrows/newtype_pair_retagging.rs:LL:CC
+    #0 $HEX in core::mem::drop::hHASH RUSTLIB/core/src/mem/mod.rs:LL:CC
+    #1 $HEX in newtype_pair_retagging::main::_$u7b$$u7b$closure$u7d$$u7d$::hHASH bsan/tests/miri-tests/fail/both_borrows/newtype_pair_retagging.rs:LL:CC
+    #2 $HEX in newtype_pair_retagging::dealloc_while_running::hHASH bsan/tests/miri-tests/fail/both_borrows/newtype_pair_retagging.rs:LL:CC
 
-    #0 $HEX in std::sys::alloc::PLATFORM::_$LT$impl$u20$core..alloc..global..GlobalAlloc$u20$for$u20$std..alloc..System$GT$::dealloc::he9b245a6dca332b2 RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
-    #1 $HEX in alloc::alloc::dealloc::hc307c61a7122b6f5 RUSTLIB/alloc/src/alloc.rs:LL:CC
-    #2 $HEX in _$LT$alloc..alloc..Global$u20$as$u20$core..alloc..Allocator$GT$::deallocate::h85526e85f88fb4a6 RUSTLIB/alloc/src/alloc.rs:LL:CC
+    #0 $HEX in std::sys::alloc::PLATFORM::_$LT$impl$u20$core..alloc..global..GlobalAlloc$u20$for$u20$std..alloc..System$GT$::dealloc::hHASH RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
+    #1 $HEX in alloc::alloc::dealloc::hHASH RUSTLIB/alloc/src/alloc.rs:LL:CC
+    #2 $HEX in _$LT$alloc..alloc..Global$u20$as$u20$core..alloc..Allocator$GT$::deallocate::hHASH RUSTLIB/alloc/src/alloc.rs:LL:CC
 
-    #0 $HEX in newtype_pair_retagging::dealloc_while_running::h48c619f4e5ca3de9 bsan/tests/miri-tests/fail/both_borrows/newtype_pair_retagging.rs:LL:CC
-    #1 $HEX in newtype_pair_retagging::main::hdc2f1508bafcb787 bsan/tests/miri-tests/fail/both_borrows/newtype_pair_retagging.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::h3be1799d7ca4bda4 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in newtype_pair_retagging::dealloc_while_running::hHASH bsan/tests/miri-tests/fail/both_borrows/newtype_pair_retagging.rs:LL:CC
+    #1 $HEX in newtype_pair_retagging::main::hHASH bsan/tests/miri-tests/fail/both_borrows/newtype_pair_retagging.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in alloc::boxed::Box$LT$T$C$A$GT$::from_raw_in::hbf6a9f778ef88106 RUSTLIB/alloc/src/boxed.rs:LL:CC
-    #1 $HEX in alloc::boxed::Box$LT$T$GT$::from_raw::h944306c840912d03 RUSTLIB/alloc/src/boxed.rs:LL:CC
-    #2 $HEX in newtype_pair_retagging::main::_$u7b$$u7b$closure$u7d$$u7d$::hd2bbb0996d171c5f bsan/tests/miri-tests/fail/both_borrows/newtype_pair_retagging.rs:LL:CC
+    #0 $HEX in alloc::boxed::Box$LT$T$C$A$GT$::from_raw_in::hHASH RUSTLIB/alloc/src/boxed.rs:LL:CC
+    #1 $HEX in alloc::boxed::Box$LT$T$GT$::from_raw::hHASH RUSTLIB/alloc/src/boxed.rs:LL:CC
+    #2 $HEX in newtype_pair_retagging::main::_$u7b$$u7b$closure$u7d$$u7d$::hHASH bsan/tests/miri-tests/fail/both_borrows/newtype_pair_retagging.rs:LL:CC
 

@@ -4,19 +4,19 @@ Last access at bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs: 
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in protector_write_lazy::the_other_function::h7bb3410c679e4695 bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
-    #1 $HEX in protector_write_lazy::main::hfd91f02a34c8158b bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::h6684bee8cff57b34 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in protector_write_lazy::the_other_function::hHASH bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
+    #1 $HEX in protector_write_lazy::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in protector_write_lazy::the_other_function::h7bb3410c679e4695 bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
-    #1 $HEX in protector_write_lazy::main::hfd91f02a34c8158b bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::h6684bee8cff57b34 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in protector_write_lazy::the_other_function::hHASH bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
+    #1 $HEX in protector_write_lazy::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in protector_write_lazy::the_other_function::h7bb3410c679e4695 bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
-    #1 $HEX in protector_write_lazy::main::hfd91f02a34c8158b bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::h6684bee8cff57b34 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in protector_write_lazy::the_other_function::hHASH bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
+    #1 $HEX in protector_write_lazy::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in protector_write_lazy::the_other_function::h7bb3410c679e4695 bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
-    #1 $HEX in protector_write_lazy::main::hfd91f02a34c8158b bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::h6684bee8cff57b34 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in protector_write_lazy::the_other_function::hHASH bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
+    #1 $HEX in protector_write_lazy::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 

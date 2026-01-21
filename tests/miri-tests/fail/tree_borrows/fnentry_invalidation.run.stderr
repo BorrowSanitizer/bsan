@@ -4,27 +4,27 @@ Last access at bsan/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs: 
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in fnentry_invalidation::main::h3d34e00b3d1331e7 bsan/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::h6459d310a98854bc RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::h9377e6ddf0ca3ab1 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in fnentry_invalidation::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 
-    #0 $HEX in fnentry_invalidation::main::h3d34e00b3d1331e7 bsan/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::h6459d310a98854bc RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::h9377e6ddf0ca3ab1 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in fnentry_invalidation::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 
-    #0 $HEX in fnentry_invalidation::main::h3d34e00b3d1331e7 bsan/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::h6459d310a98854bc RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::h9377e6ddf0ca3ab1 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in fnentry_invalidation::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 
-    #0 $HEX in fnentry_invalidation::main::h3d34e00b3d1331e7 bsan/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::h6459d310a98854bc RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::h9377e6ddf0ca3ab1 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in fnentry_invalidation::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 
-    #0 $HEX in fnentry_invalidation::main::h3d34e00b3d1331e7 bsan/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::h6459d310a98854bc RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::h9377e6ddf0ca3ab1 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in fnentry_invalidation::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 
-    #0 $HEX in fnentry_invalidation::main::h3d34e00b3d1331e7 bsan/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::h6459d310a98854bc RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::h9377e6ddf0ca3ab1 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in fnentry_invalidation::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 

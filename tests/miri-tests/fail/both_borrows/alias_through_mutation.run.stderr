@@ -4,19 +4,19 @@ Last access at bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in alias_through_mutation::retarget::h492ac49ac608ed4f bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:LL:CC
-    #1 $HEX in alias_through_mutation::main::h3e12cf6f99a573f5 bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::h210a989506c2590c RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in alias_through_mutation::retarget::hHASH bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:LL:CC
+    #1 $HEX in alias_through_mutation::main::hHASH bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in alias_through_mutation::main::h3e12cf6f99a573f5 bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::h210a989506c2590c RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hf83a216461df2ab8 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in alias_through_mutation::main::hHASH bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 
-    #0 $HEX in alias_through_mutation::retarget::h492ac49ac608ed4f bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:LL:CC
-    #1 $HEX in alias_through_mutation::main::h3e12cf6f99a573f5 bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::h210a989506c2590c RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in alias_through_mutation::retarget::hHASH bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:LL:CC
+    #1 $HEX in alias_through_mutation::main::hHASH bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in alias_through_mutation::main::h3e12cf6f99a573f5 bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::h210a989506c2590c RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hf83a216461df2ab8 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in alias_through_mutation::main::hHASH bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 

@@ -2,11 +2,11 @@ An error occurred: UndefinedBehavior (AccessOutOfBounds)
 Access created with permissions Disabled is out of bounds at RUSTLIB/std/src/sys/alloc/PLATFORM.rs: line NN, column NN
 Conflicting borrow created with permissions Reserved at RUSTLIB/alloc/src/boxed.rs: line 1254, column 21
 
-    #0 $HEX in std::sys::alloc::PLATFORM::_$LT$impl$u20$core..alloc..global..GlobalAlloc$u20$for$u20$std..alloc..System$GT$::alloc::h6e7314e616201b5b RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
+    #0 $HEX in std::sys::alloc::PLATFORM::_$LT$impl$u20$core..alloc..global..GlobalAlloc$u20$for$u20$std..alloc..System$GT$::alloc::hHASH RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
     #1 $HEX in __rustc::__rdl_alloc RUSTLIB/std/src/alloc.rs:LL:CC
-    #2 $HEX in alloc::alloc::alloc::hb6bd0fda86af97bd RUSTLIB/alloc/src/alloc.rs:LL:CC
+    #2 $HEX in alloc::alloc::alloc::hHASH RUSTLIB/alloc/src/alloc.rs:LL:CC
 
-    #0 $HEX in alloc::boxed::Box$LT$T$GT$::into_raw::h0e3a11aff66a3a1b RUSTLIB/alloc/src/boxed.rs:LL:CC
-    #1 $HEX in issue_miri_1050_1::main::he72ae83b9628e34f bsan/tests/miri-tests/fail/both_borrows/issue-miri-1050-1.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::h20c21d9ca42a026d RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in alloc::boxed::Box$LT$T$GT$::into_raw::hHASH RUSTLIB/alloc/src/boxed.rs:LL:CC
+    #1 $HEX in issue_miri_1050_1::main::hHASH bsan/tests/miri-tests/fail/both_borrows/issue-miri-1050-1.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
