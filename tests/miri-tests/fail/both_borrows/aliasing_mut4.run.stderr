@@ -1,7 +1,19 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Reserved permissions at RUSTLIB/core/src/mem/mod.rs: line 878, column 25
-Conflict created with Frozen permissions at bsan/tests/miri-tests/fail/both_borrows/aliasing_mut4.rs: line 6, column 9
+Access created with permissions Reserved at RUSTLIB/core/src/mem/mod.rs: line 878, column 25
+Conflicting borrow created with permissions Frozen at bsan/tests/miri-tests/fail/both_borrows/aliasing_mut4.rs: line 6, column 9
 Last access at RUSTLIB/core/src/mem/mod.rs: line 893, column 9
 
-Run with `debug` feature (inst --debug) to view full error and stack traces
+Run with `debug` feature (inst --debug) to view full TreeError
+
+    #0 $HEX in core::mem::replace::h7dace65aef9ff21d RUSTLIB/core/src/mem/mod.rs:LL:CC
+    #1 $HEX in core::cell::Cell$LT$T$GT$::replace::h3d37aa9215617d91 RUSTLIB/core/src/cell.rs:LL:CC
+    #2 $HEX in core::cell::Cell$LT$T$GT$::set::hc2e6a1358e308f18 RUSTLIB/core/src/cell.rs:LL:CC
+
+    #0 $HEX in core::mem::replace::h7dace65aef9ff21d RUSTLIB/core/src/mem/mod.rs:LL:CC
+    #1 $HEX in core::cell::Cell$LT$T$GT$::replace::h3d37aa9215617d91 RUSTLIB/core/src/cell.rs:LL:CC
+    #2 $HEX in core::cell::Cell$LT$T$GT$::set::hc2e6a1358e308f18 RUSTLIB/core/src/cell.rs:LL:CC
+
+    #0 $HEX in aliasing_mut4::safe::h322d21de8028de35 bsan/tests/miri-tests/fail/both_borrows/aliasing_mut4.rs:LL:CC
+    #1 $HEX in aliasing_mut4::main::hdc460b4cf7eb9f78 bsan/tests/miri-tests/fail/both_borrows/aliasing_mut4.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hda786aabf79332ee RUSTLIB/core/src/ops/function.rs:LL:CC
 

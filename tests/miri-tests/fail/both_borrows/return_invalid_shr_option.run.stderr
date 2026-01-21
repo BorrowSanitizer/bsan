@@ -1,6 +1,30 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Frozen permissions at bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs: line 0, column 14
+Access created with permissions Frozen at bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs: line 0, column 14
 Last access at bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs: line 7, column 14
 
-Run with `debug` feature (inst --debug) to view full error and stack traces
+Run with `debug` feature (inst --debug) to view full TreeError
+
+    #0 $HEX in return_invalid_shr_option::foo::ha42870d2d34896ba bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs
+    #1 $HEX in return_invalid_shr_option::main::h06203dcc911444a5 bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::h8185a8667ea75f96 RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in return_invalid_shr_option::foo::ha42870d2d34896ba bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:LL:CC
+    #1 $HEX in return_invalid_shr_option::main::h06203dcc911444a5 bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::h8185a8667ea75f96 RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in return_invalid_shr_option::foo::ha42870d2d34896ba bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:LL:CC
+    #1 $HEX in return_invalid_shr_option::main::h06203dcc911444a5 bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::h8185a8667ea75f96 RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in return_invalid_shr_option::foo::ha42870d2d34896ba bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs
+    #1 $HEX in return_invalid_shr_option::main::h06203dcc911444a5 bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::h8185a8667ea75f96 RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in return_invalid_shr_option::foo::ha42870d2d34896ba bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:LL:CC
+    #1 $HEX in return_invalid_shr_option::main::h06203dcc911444a5 bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::h8185a8667ea75f96 RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in return_invalid_shr_option::foo::ha42870d2d34896ba bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:LL:CC
+    #1 $HEX in return_invalid_shr_option::main::h06203dcc911444a5 bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::h8185a8667ea75f96 RUSTLIB/core/src/ops/function.rs:LL:CC
 

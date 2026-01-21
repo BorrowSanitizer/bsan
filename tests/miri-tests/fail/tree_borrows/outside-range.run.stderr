@@ -1,8 +1,28 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Reserved permissions at RUSTLIB/core/src/slice/mod.rs: line 756, column 29
-Conflict created with Reserved permissions at bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs: line 13, column 17
+Access created with permissions Reserved at RUSTLIB/core/src/slice/mod.rs: line 756, column 29
+Conflicting borrow created with permissions Reserved at bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs: line 13, column 17
 Last access at bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs: line 21, column 5
 Last conflict at bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs: line 16, column 5
 
-Run with `debug` feature (inst --debug) to view full error and stack traces
+Run with `debug` feature (inst --debug) to view full TreeError
+
+    #0 $HEX in core::slice::_$LT$impl$u20$$u5b$T$u5d$$GT$::as_mut_ptr::hfd4f91dd98292041 RUSTLIB/core/src/slice/mod.rs:LL:CC
+    #1 $HEX in outside_range::main::h6d5541e0c4279402 bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hbf77ad4d2f05e02c RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in outside_range::stuff::hc02a8f1c2b75eff9 bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
+    #1 $HEX in outside_range::main::h6d5541e0c4279402 bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hbf77ad4d2f05e02c RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in outside_range::stuff::hc02a8f1c2b75eff9 bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
+    #1 $HEX in outside_range::main::h6d5541e0c4279402 bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hbf77ad4d2f05e02c RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in outside_range::stuff::hc02a8f1c2b75eff9 bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
+    #1 $HEX in outside_range::main::h6d5541e0c4279402 bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hbf77ad4d2f05e02c RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in outside_range::stuff::hc02a8f1c2b75eff9 bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
+    #1 $HEX in outside_range::main::h6d5541e0c4279402 bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hbf77ad4d2f05e02c RUSTLIB/core/src/ops/function.rs:LL:CC
 

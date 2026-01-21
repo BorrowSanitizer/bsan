@@ -1,6 +1,14 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Disabled permissions at RUSTLIB/std/src/sys/alloc/PLATFORM.rs: line NN, column NN
-Conflict created with Frozen permissions at bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector3.rs: line 5, column 23
+Access created with permissions Disabled at RUSTLIB/std/src/sys/alloc/PLATFORM.rs: line NN, column NN
+Conflicting borrow created with permissions Frozen at bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector3.rs: line 5, column 23
 
-Run with `debug` feature (inst --debug) to view full error and stack traces
+Run with `debug` feature (inst --debug) to view full TreeError
+
+    #0 $HEX in std::sys::alloc::PLATFORM::_$LT$impl$u20$core..alloc..global..GlobalAlloc$u20$for$u20$std..alloc..System$GT$::alloc::h6e7314e616201b5b RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
+    #1 $HEX in __rustc::__rdl_alloc RUSTLIB/std/src/alloc.rs:LL:CC
+    #2 $HEX in alloc::alloc::alloc::h3610ec83a371f948 RUSTLIB/alloc/src/alloc.rs:LL:CC
+
+    #0 $HEX in invalidate_against_protector3::inner::h569ca98bcd0d7c5c bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector3.rs:LL:CC
+    #1 $HEX in invalidate_against_protector3::main::h25588642240dc32b bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector3.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::h5306877301a0eb6d RUSTLIB/core/src/ops/function.rs:LL:CC
 

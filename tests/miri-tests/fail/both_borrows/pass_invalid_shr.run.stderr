@@ -1,6 +1,22 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Frozen permissions at bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr.rs: line 9, column 25
+Access created with permissions Frozen at bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr.rs: line 9, column 25
 Last access at bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr.rs: line 10, column 14
 
-Run with `debug` feature (inst --debug) to view full error and stack traces
+Run with `debug` feature (inst --debug) to view full TreeError
+
+    #0 $HEX in pass_invalid_shr::main::h57c9d91fa0c1e3ec bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::h1d08baaebbbbc617 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hf439d190c360817c RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+    #0 $HEX in pass_invalid_shr::main::h57c9d91fa0c1e3ec bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::h1d08baaebbbbc617 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hf439d190c360817c RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+    #0 $HEX in pass_invalid_shr::main::h57c9d91fa0c1e3ec bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::h1d08baaebbbbc617 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hf439d190c360817c RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+    #0 $HEX in pass_invalid_shr::main::h57c9d91fa0c1e3ec bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::h1d08baaebbbbc617 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hf439d190c360817c RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 

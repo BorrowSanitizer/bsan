@@ -89,18 +89,14 @@ impl Display for UBInfo {
                 // Write violating locations, avoiding duplicate locs
                 writeln!(
                     f,
-                    "(AliasingViolation)\nAccess created with {} permissions at {}",
-                    // "(AliasingViolation)\nAccess created with permissions {} at {}",
-                    access_perm,
-                    access_created
+                    "(AliasingViolation)\nAccess created with permissions {} at {}",
+                    access_perm, access_created
                 )?;
                 if conflict_created.ip() != access_created.ip() {
                     writeln!(
                         f,
-                        "Conflict created with {} permissions at {}",
-                        // "Conflicting borrow created with permissions {} at {}",
-                        conflict_perm,
-                        conflict_created
+                        "Conflicting borrow created with permissions {} at {}",
+                        conflict_perm, conflict_created
                     )?;
                 }
 
@@ -118,10 +114,7 @@ impl Display for UBInfo {
                 }
 
                 #[cfg(not(feature = "debug"))]
-                write!(
-                    f,
-                    "\nRun with `debug` feature (inst --debug) to view full error and stack traces"
-                )?;
+                writeln!(f, "\nRun with `debug` feature (inst --debug) to view full TreeError")?;
 
                 Ok(())
             }

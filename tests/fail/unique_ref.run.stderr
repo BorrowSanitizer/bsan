@@ -1,6 +1,22 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Reserved permissions at bsan/tests/fail/unique_ref.rs: line 4, column 14
+Access created with permissions Reserved at bsan/tests/fail/unique_ref.rs: line 4, column 14
 Last access at bsan/tests/fail/unique_ref.rs: line 7, column 5
 
-Run with `debug` feature (inst --debug) to view full error and stack traces
+Run with `debug` feature (inst --debug) to view full TreeError
+
+    #0 $HEX in unique_ref::main::hf8a76d0a34a27161 bsan/tests/fail/unique_ref.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::h0f65c5c3f93b47fb RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::he7e37f715d3cbb52 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+    #0 $HEX in unique_ref::main::hf8a76d0a34a27161 bsan/tests/fail/unique_ref.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::h0f65c5c3f93b47fb RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::he7e37f715d3cbb52 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+    #0 $HEX in unique_ref::main::hf8a76d0a34a27161 bsan/tests/fail/unique_ref.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::h0f65c5c3f93b47fb RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::he7e37f715d3cbb52 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+    #0 $HEX in unique_ref::main::hf8a76d0a34a27161 bsan/tests/fail/unique_ref.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::h0f65c5c3f93b47fb RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::he7e37f715d3cbb52 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 

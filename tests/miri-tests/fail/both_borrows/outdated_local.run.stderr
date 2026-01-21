@@ -1,6 +1,22 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Frozen permissions at bsan/tests/miri-tests/fail/both_borrows/outdated_local.rs: line 5, column 25
+Access created with permissions Frozen at bsan/tests/miri-tests/fail/both_borrows/outdated_local.rs: line 5, column 25
 Last access at bsan/tests/miri-tests/fail/both_borrows/outdated_local.rs: line 6, column 5
 
-Run with `debug` feature (inst --debug) to view full error and stack traces
+Run with `debug` feature (inst --debug) to view full TreeError
+
+    #0 $HEX in outdated_local::main::h4511c0872173d761 bsan/tests/miri-tests/fail/both_borrows/outdated_local.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hbf7f3aa883a03d06 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::h248c450a5936a35a RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+    #0 $HEX in outdated_local::main::h4511c0872173d761 bsan/tests/miri-tests/fail/both_borrows/outdated_local.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hbf7f3aa883a03d06 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::h248c450a5936a35a RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+    #0 $HEX in outdated_local::main::h4511c0872173d761 bsan/tests/miri-tests/fail/both_borrows/outdated_local.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hbf7f3aa883a03d06 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::h248c450a5936a35a RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+    #0 $HEX in outdated_local::main::h4511c0872173d761 bsan/tests/miri-tests/fail/both_borrows/outdated_local.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hbf7f3aa883a03d06 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::h248c450a5936a35a RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 

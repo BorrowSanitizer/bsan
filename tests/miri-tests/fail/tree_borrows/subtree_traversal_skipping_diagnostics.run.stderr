@@ -1,7 +1,19 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Reserved permissions at bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs: line 11, column 17
-Conflict created with Frozen permissions at bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs: line 25, column 28
+Access created with permissions Reserved at bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs: line 11, column 17
+Conflicting borrow created with permissions Frozen at bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs: line 25, column 28
 Last access at bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs: line 19, column 5
 
-Run with `debug` feature (inst --debug) to view full error and stack traces
+Run with `debug` feature (inst --debug) to view full TreeError
+
+    #0 $HEX in subtree_traversal_skipping_diagnostics::write_to_mut::h4eead6aa7aa98700 bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:LL:CC
+    #1 $HEX in subtree_traversal_skipping_diagnostics::main::h5e83448e7cb43314 bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::h9b158f1143882562 RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in subtree_traversal_skipping_diagnostics::write_to_mut::h4eead6aa7aa98700 bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:LL:CC
+    #1 $HEX in subtree_traversal_skipping_diagnostics::main::h5e83448e7cb43314 bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::h9b158f1143882562 RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in subtree_traversal_skipping_diagnostics::main::h5e83448e7cb43314 bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::h9b158f1143882562 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::h880417cc739a09b4 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 

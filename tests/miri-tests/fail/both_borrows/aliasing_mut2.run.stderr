@@ -1,6 +1,22 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Reserved permissions at bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs: line 4, column 18
+Access created with permissions Reserved at bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs: line 4, column 18
 Last access at bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs: line 6, column 14
 
-Run with `debug` feature (inst --debug) to view full error and stack traces
+Run with `debug` feature (inst --debug) to view full TreeError
+
+    #0 $HEX in aliasing_mut2::safe::hb4b13758bce932a5 bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:LL:CC
+    #1 $HEX in aliasing_mut2::main::h984a218ba0b806e1 bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hf5fba980d4aeb58d RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in aliasing_mut2::safe::hb4b13758bce932a5 bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:LL:CC
+    #1 $HEX in aliasing_mut2::main::h984a218ba0b806e1 bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hf5fba980d4aeb58d RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in aliasing_mut2::safe::hb4b13758bce932a5 bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:LL:CC
+    #1 $HEX in aliasing_mut2::main::h984a218ba0b806e1 bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hf5fba980d4aeb58d RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in aliasing_mut2::safe::hb4b13758bce932a5 bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:LL:CC
+    #1 $HEX in aliasing_mut2::main::h984a218ba0b806e1 bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hf5fba980d4aeb58d RUSTLIB/core/src/ops/function.rs:LL:CC
 

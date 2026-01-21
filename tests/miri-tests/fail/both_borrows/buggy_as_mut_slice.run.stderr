@@ -1,6 +1,22 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Reserved permissions at bsan/tests/miri-tests/fail/both_borrows/buggy_as_mut_slice.rs: line 13, column 14
+Access created with permissions Reserved at bsan/tests/miri-tests/fail/both_borrows/buggy_as_mut_slice.rs: line 13, column 14
 Last access at bsan/tests/miri-tests/fail/both_borrows/buggy_as_mut_slice.rs: line 14, column 5
 
-Run with `debug` feature (inst --debug) to view full error and stack traces
+Run with `debug` feature (inst --debug) to view full TreeError
+
+    #0 $HEX in buggy_as_mut_slice::main::h0ab34b0dc834d00f bsan/tests/miri-tests/fail/both_borrows/buggy_as_mut_slice.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::h3c16e2fb13c2be4a RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hcad6d504bedc5348 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+    #0 $HEX in buggy_as_mut_slice::main::h0ab34b0dc834d00f bsan/tests/miri-tests/fail/both_borrows/buggy_as_mut_slice.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::h3c16e2fb13c2be4a RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hcad6d504bedc5348 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+    #0 $HEX in buggy_as_mut_slice::main::h0ab34b0dc834d00f bsan/tests/miri-tests/fail/both_borrows/buggy_as_mut_slice.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::h3c16e2fb13c2be4a RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hcad6d504bedc5348 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+    #0 $HEX in buggy_as_mut_slice::main::h0ab34b0dc834d00f bsan/tests/miri-tests/fail/both_borrows/buggy_as_mut_slice.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::h3c16e2fb13c2be4a RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hcad6d504bedc5348 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 

@@ -1,6 +1,30 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Reserved permissions at bsan/tests/miri-tests/fail/tree_borrows/parent_read_freezes_raw_mut.rs: line 8, column 20
+Access created with permissions Reserved at bsan/tests/miri-tests/fail/tree_borrows/parent_read_freezes_raw_mut.rs: line 8, column 20
 Last access at bsan/tests/miri-tests/fail/tree_borrows/parent_read_freezes_raw_mut.rs: line 11, column 9
 
-Run with `debug` feature (inst --debug) to view full error and stack traces
+Run with `debug` feature (inst --debug) to view full TreeError
+
+    #0 $HEX in parent_read_freezes_raw_mut::main::ha7a26ce85726d64b bsan/tests/miri-tests/fail/tree_borrows/parent_read_freezes_raw_mut.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::h3a66da337a4d58b4 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::h648176a163351c8c RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+    #0 $HEX in parent_read_freezes_raw_mut::main::ha7a26ce85726d64b bsan/tests/miri-tests/fail/tree_borrows/parent_read_freezes_raw_mut.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::h3a66da337a4d58b4 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::h648176a163351c8c RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+    #0 $HEX in parent_read_freezes_raw_mut::main::ha7a26ce85726d64b bsan/tests/miri-tests/fail/tree_borrows/parent_read_freezes_raw_mut.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::h3a66da337a4d58b4 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::h648176a163351c8c RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+    #0 $HEX in parent_read_freezes_raw_mut::main::ha7a26ce85726d64b bsan/tests/miri-tests/fail/tree_borrows/parent_read_freezes_raw_mut.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::h3a66da337a4d58b4 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::h648176a163351c8c RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+    #0 $HEX in parent_read_freezes_raw_mut::main::ha7a26ce85726d64b bsan/tests/miri-tests/fail/tree_borrows/parent_read_freezes_raw_mut.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::h3a66da337a4d58b4 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::h648176a163351c8c RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+    #0 $HEX in parent_read_freezes_raw_mut::main::ha7a26ce85726d64b bsan/tests/miri-tests/fail/tree_borrows/parent_read_freezes_raw_mut.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::h3a66da337a4d58b4 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::h648176a163351c8c RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 

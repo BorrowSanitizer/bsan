@@ -1,8 +1,28 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with Reserved permissions at bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs: line 20, column 15
-Conflict created with Reserved permissions at bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs: line 12, column 24
+Access created with permissions Reserved at bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs: line 20, column 15
+Conflicting borrow created with permissions Reserved at bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs: line 12, column 24
 Last access at bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs: line 21, column 5
 Last conflict at bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs: line 14, column 25
 
-Run with `debug` feature (inst --debug) to view full error and stack traces
+Run with `debug` feature (inst --debug) to view full TreeError
+
+    #0 $HEX in return_invalid_mut::main::h4a28ea5027fff53f bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hf36989fb358b9bc8 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::h87123d75d12e3fb9 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+    #0 $HEX in return_invalid_mut::main::h4a28ea5027fff53f bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::hf36989fb358b9bc8 RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::h87123d75d12e3fb9 RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+    #0 $HEX in return_invalid_mut::foo::h5fcfd00b47e7a427 bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #1 $HEX in return_invalid_mut::main::h4a28ea5027fff53f bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hf36989fb358b9bc8 RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in return_invalid_mut::foo::h5fcfd00b47e7a427 bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #1 $HEX in return_invalid_mut::main::h4a28ea5027fff53f bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hf36989fb358b9bc8 RUSTLIB/core/src/ops/function.rs:LL:CC
+
+    #0 $HEX in return_invalid_mut::foo::h5fcfd00b47e7a427 bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #1 $HEX in return_invalid_mut::main::h4a28ea5027fff53f bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::hf36989fb358b9bc8 RUSTLIB/core/src/ops/function.rs:LL:CC
 

@@ -8,7 +8,7 @@ use hashbrown::{DefaultHashBuilder, HashMap};
 use rustc_hash::FxBuildHasher;
 use spin::MutexGuard;
 
-#[cfg(feature = "debug")]
+#[cfg(not(test))]
 use crate::diagnostics::History;
 use crate::errors::ErrorInfo;
 use crate::memory::hooks::{BsanAllocHooks, BsanHooks};
@@ -103,7 +103,7 @@ impl GlobalCtx {
     #[inline(never)] // never inline to have specific break point for debugging with GDB
     #[allow(clippy::collapsible_if)]
     pub fn handle_error(&self, info: ErrorInfo) -> ! {
-        crate::eprintln!("An error occurred: {info:?}\n");
+        crate::eprintln!("An error occurred: {info:?}");
 
         // code below uses sanitizer common interface to print stack traces and detailed error info
         #[cfg(not(test))]
@@ -111,23 +111,36 @@ impl GlobalCtx {
             if let Some(alloc_id) = ub_info.get_alloc_id()
                 && let Ok(stack_id) = self.allocation_stack_depot.lock().print_trace(&alloc_id)
             {
-                crate::eprintln!("{:?} previously allocated here:\n", alloc_id);
+                crate::eprintln!("{:?} previously allocated here:", alloc_id);
                 sanitizer_common_interface::print_stack_trace(Some(stack_id));
             }
 
-            #[cfg(feature = "debug")]
-            if let errors::UBInfo::AliasingViolation(tree_error) = ub_info {
-                crate::eprintln!("[DEBUG] Full TreeError: {:#?}", tree_error);
+            match ub_info {
+                errors::UBInfo::AliasingViolation(tree_error) => {
+                    let print_traces = |history: &History| {
+                        history.created_at().0.print_stack_trace();
+                        history.events_iter().for_each(|event| {
+                            event.span.print_stack_trace();
+                        });
+                    };
 
-                let print_traces = |history: &History| {
-                    history.created_at().0.print_stack_trace();
-                    history.events_iter().for_each(|event| {
-                        event.span.print_stack_trace();
-                    });
-                };
+                    print_traces(&tree_error.accessed_info.history);
+                    print_traces(&tree_error.conflicting_info.history);
 
-                print_traces(&tree_error.accessed_info.history);
-                print_traces(&tree_error.conflicting_info.history);
+                    // #[cfg(feature = "debug")]
+                    // crate::eprintln!("[DEBUG] Full TreeError: {:#?}", tree_error);
+                }
+                errors::UBInfo::AccessOutOfBounds(prov, _, _) => {
+                    if let Some(alloc_info) = unsafe { prov.alloc_info.as_ref() } {
+                        if let Some((span, _)) = alloc_info.created_at() {
+                            span.print_stack_trace();
+                        }
+                        if let Some((span, _)) = alloc_info.conflict_at() {
+                            span.print_stack_trace();
+                        }
+                    }
+                }
+                _ => (),
             }
         }
         self.exit(1)
