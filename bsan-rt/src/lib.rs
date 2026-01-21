@@ -18,14 +18,6 @@ use bsan_shared::{AccessKind, RetagInfo, Size};
 use libc_print::std_name::*;
 use spin::Mutex;
 
-macro_rules! println {
-    ($($arg:tt)*) => {
-        libc_print::std_name::println!($($arg)*)
-    };
-}
-
-pub(crate) use println;
-
 macro_rules! handle_err {
     ($err:expr, $gtx:expr) => {{
         #[cfg(test)]
@@ -791,8 +783,8 @@ extern "C" fn __bsan_debug_print(alloc_id: AllocId, bor_tag: BorTag, alloc_info:
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_debug_print_borrow_state(
-    alloc_id: AllocId,
-    bor_tag: BorTag,
+    _alloc_id: AllocId,
+    _bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) {
     if alloc_info.is_null() {
@@ -800,12 +792,12 @@ extern "C" fn __bsan_debug_print_borrow_state(
         return;
     }
     let alloc_info = unsafe { &*alloc_info };
-    let global_ctx = unsafe { global_ctx() };
+    let _global_ctx = unsafe { global_ctx() };
 
     let tree_lock = alloc_info.tree_lock.lock();
     if let Some(tree) = &*tree_lock {
         let protected_tags = Default::default();
-        tree.print_tree(&protected_tags, true).unwrap_or_else(|err| handle_err!(err, global_ctx));
+        tree.print_tree(&protected_tags, true).unwrap_or_else(|err| handle_err!(err, _global_ctx));
     }
 }
 
@@ -820,8 +812,8 @@ extern "C" fn __bsan_debug_gc(alloc_id: AllocId, bor_tag: BorTag, alloc_info: *m
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_debug_tree_size(
-    alloc_id: AllocId,
-    bor_tag: BorTag,
+    _alloc_id: AllocId,
+    _bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) {
     if alloc_info.is_null() {
@@ -829,7 +821,6 @@ extern "C" fn __bsan_debug_tree_size(
         return;
     }
     let alloc_info = unsafe { &*alloc_info };
-    let global_ctx = unsafe { global_ctx() };
 
     let tree_lock = alloc_info.tree_lock.lock();
     if let Some(tree) = &*tree_lock {
@@ -839,15 +830,14 @@ extern "C" fn __bsan_debug_tree_size(
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_debug_snapshot(
-    alloc_id: AllocId,
-    bor_tag: BorTag,
+    _alloc_id: AllocId,
+    _bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) {
     if alloc_info.is_null() {
         return;
     }
     let alloc_info = unsafe { &*alloc_info };
-    let global_ctx = unsafe { global_ctx() };
 
     let tree_lock = alloc_info.tree_lock.lock();
     if let Some(tree) = &*tree_lock {
@@ -858,15 +848,15 @@ extern "C" fn __bsan_debug_snapshot(
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_debug_print_diff(
-    alloc_id: AllocId,
-    bor_tag: BorTag,
+    _alloc_id: AllocId,
+    _bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) {
     if alloc_info.is_null() {
         return;
     }
     let alloc_info = unsafe { &*alloc_info };
-    let global_ctx = unsafe { global_ctx() };
+    let _global_ctx = unsafe { global_ctx() };
 
     let tree_lock = alloc_info.tree_lock.lock();
     let snapshot_lock = alloc_info.snapshot.lock();
@@ -874,7 +864,7 @@ extern "C" fn __bsan_debug_print_diff(
     if let (Some(tree), Some(snapshot)) = (&*tree_lock, &*snapshot_lock) {
         let protected_tags = Default::default();
         diagnostics::print_tree_diff(tree, snapshot, &protected_tags)
-            .unwrap_or_else(|err| handle_err!(err, global_ctx));
+            .unwrap_or_else(|err| handle_err!(err, _global_ctx));
     } else {
         crate::println!("(no snapshot or tree available)");
     }
