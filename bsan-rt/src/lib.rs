@@ -434,7 +434,7 @@ impl AllocInfo {
             .and_then(|tree| {
                 tree.nodes.get(tree.root).map(|node| Some(node.debug_info.history.created_at()))
             })
-            .unwrap_or_else(|| None)
+            .unwrap_or(None)
     }
 
     #[cfg(feature = "debug")]

@@ -199,6 +199,8 @@ regexes! {
     r"[^ ]*/\.?cargo/registry/.*/(.*\.rs)"  => "CARGO_REGISTRY/.../$1",
     // normalize workspace paths to relative
     r"(/workspaces/bsan/|/__w/bsan/bsan/)([^ \n]+)" => "bsan/$2",
+    // normalize hash suffixes after function names in bt
+    r"::h[0-9a-f]{16}\b" => "::hHASH",
 }
 
 #[allow(unused)]
