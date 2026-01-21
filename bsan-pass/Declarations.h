@@ -84,7 +84,7 @@ const char kBsanFuncDebugPrintDiff[] = BSAN_DEBUG_FN("print_diff");
 const char kBsanFuncDebugParamTLS[] = BSAN_DEBUG_FN("param_tls");
 const char kBsanFuncDebugRetvalTLS[] = BSAN_DEBUG_FN("retval_tls");
 
-const char kBsanTagStackName[] = "__BSAN_PROT_TAG_STACK";
+const char kBsanProvStackName[] = "__BSAN_PROV_STACK";
 const char kBsanParamTLSName[] = "__BSAN_PARAM_TLS";
 const char kBsanRetvalTLSName[] = "__BSAN_RETVAL_TLS";
 const char kBsanBorTagCounterName[] = "__BSAN_BOR_TAG_CTR";

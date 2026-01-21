@@ -1,10 +1,11 @@
-use core::cell::SyncUnsafeCell;
+use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
-use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 
 use bsan_shared::ProtectorKind;
-use hashbrown::{DefaultHashBuilder, HashMap};
+use hashbrown::HashMap;
+use rustc_hash::FxBuildHasher;
+use spin::MutexGuard;
 
 use crate::errors::ErrorInfo;
 use crate::memory::hooks::{BsanAllocHooks, BsanHooks};
@@ -22,11 +23,10 @@ use crate::*;
 /// of unsafety throughout the library.
 #[derive(Debug)]
 pub struct GlobalCtx {
-    /// The set of allocation and deallocation functions.
     hooks: BsanHooks,
-    protected_tags: Mutex<BHashMap<BorTag, ProtectorKind>>,
-    alloc_metadata_map: Heap<AllocInfo>,
+    protected_tags: Mutex<HashMap<BorTag, ProtectorKind, FxBuildHasher>>,
     shadow_heap: ShadowHeap<Provenance>,
+    alloc_metadata_map: Heap<AllocInfo>,
 }
 
 impl GlobalCtx {
@@ -35,14 +35,10 @@ impl GlobalCtx {
     fn new(hooks: BsanHooks) -> Result<Self, AllocError> {
         Ok(Self {
             hooks,
-            protected_tags: Mutex::new(BHashMap::new_in(hooks.alloc)),
+            protected_tags: Mutex::new(HashMap::with_hasher(FxBuildHasher)),
             alloc_metadata_map: Heap::new(&hooks)?,
             shadow_heap: ShadowHeap::new(&hooks, &raw const __BSAN_WILDCARD_PROVENANCE)?,
         })
-    }
-
-    pub fn shadow_heap(&self) -> &ShadowHeap<Provenance> {
-        &self.shadow_heap
     }
 
     pub fn hooks(&self) -> &BsanHooks {
@@ -54,7 +50,11 @@ impl GlobalCtx {
     }
 
     pub(crate) unsafe fn destroy_alloc_info(&self, ptr: NonNull<AllocInfo>) {
-        unsafe { self.alloc_metadata_map.dealloc(ptr) };
+        unsafe { self.alloc_metadata_map.dealloc(ptr) }
+    }
+
+    pub fn shadow_heap(&self) -> &ShadowHeap<Provenance> {
+        &self.shadow_heap
     }
 
     pub fn allocator(&self) -> BsanAllocHooks {
@@ -67,49 +67,23 @@ impl GlobalCtx {
         }
     }
 
+    pub fn protected_tags(&self) -> MutexGuard<'_, HashMap<BorTag, ProtectorKind, FxBuildHasher>> {
+        self.protected_tags.lock()
+    }
+
     pub fn add_protected_tag(&self, bor_tag: BorTag, protector_kind: ProtectorKind) {
-        let mut tag_map = self.protected_tags.lock();
+        let mut tag_map = self.protected_tags();
         tag_map.insert(bor_tag, protector_kind);
     }
 
-    pub fn remove_protected_tags(&self, bor_tags: &[BorTag]) {
-        let mut tag_map = self.protected_tags.lock();
-        for tag in bor_tags {
-            tag_map.remove(tag);
-        }
-    }
-
     pub fn get_protector_kind(&self, bor_tag: BorTag) -> Option<ProtectorKind> {
-        let tag_map = self.protected_tags.lock();
+        let tag_map = self.protected_tags();
         tag_map.get(&bor_tag).copied()
     }
 
     pub fn handle_error(&self, info: ErrorInfo) -> ! {
         crate::eprintln!("An error occurred: {info:?}\n\n");
         self.exit(1)
-    }
-}
-
-/// A thin wrapper around `HashMap` that uses `GlobalCtx` as its allocator
-#[derive(Debug, Clone)]
-pub struct BHashMap<K, V>(HashMap<K, V, DefaultHashBuilder, BsanAllocHooks>);
-
-impl<K, V> Deref for BHashMap<K, V> {
-    type Target = HashMap<K, V, DefaultHashBuilder, BsanAllocHooks>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<K, V> DerefMut for BHashMap<K, V> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl<K, V> BHashMap<K, V> {
-    fn new_in(hooks: BsanAllocHooks) -> Self {
-        Self(HashMap::with_hasher_in(foldhash::fast::RandomState::default(), hooks))
     }
 }
 
@@ -136,8 +110,12 @@ mod global_alloc {
     static GLOBAL_ALLOCATOR: DummyAllocator = DummyAllocator;
 }
 
-pub static GLOBAL_CTX: SyncUnsafeCell<MaybeUninit<GlobalCtx>> =
-    SyncUnsafeCell::new(MaybeUninit::uninit());
+struct GlobalCtxWrapper(UnsafeCell<MaybeUninit<GlobalCtx>>);
+
+unsafe impl Send for GlobalCtxWrapper {}
+unsafe impl Sync for GlobalCtxWrapper {}
+
+static GLOBAL_CTX: GlobalCtxWrapper = GlobalCtxWrapper(UnsafeCell::new(MaybeUninit::uninit()));
 
 /// Initializes the global context object.
 ///
@@ -149,7 +127,7 @@ pub static GLOBAL_CTX: SyncUnsafeCell<MaybeUninit<GlobalCtx>> =
 #[inline]
 pub unsafe fn init_global_ctx(hooks: BsanHooks) {
     unsafe {
-        (*GLOBAL_CTX.get())
+        (*GLOBAL_CTX.0.get())
             .write(GlobalCtx::new(hooks).expect("failed to allocate global context"));
     }
 }
@@ -161,7 +139,7 @@ pub unsafe fn init_global_ctx(hooks: BsanHooks) {
 /// on the assumption that this function has not been called yet.
 #[inline]
 pub unsafe fn deinit_global_ctx() {
-    unsafe { drop(ptr::replace(GLOBAL_CTX.get(), MaybeUninit::uninit()).assume_init()) };
+    unsafe { drop(ptr::replace(GLOBAL_CTX.0.get(), MaybeUninit::uninit()).assume_init()) };
 }
 
 /// # Safety
@@ -169,6 +147,6 @@ pub unsafe fn deinit_global_ctx() {
 /// has been called and `bsan_deinit` has not yet been called.
 #[inline]
 pub unsafe fn global_ctx<'a>() -> &'a GlobalCtx {
-    let ctx = GLOBAL_CTX.get();
+    let ctx = GLOBAL_CTX.0.get();
     unsafe { &*ctx.cast::<global::GlobalCtx>() }
 }

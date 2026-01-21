@@ -4,7 +4,7 @@
 #include "sanitizer_common/sanitizer_internal_defs.h"
 
 extern THREADLOCAL void *__BSAN_CURR_THREAD;
-extern THREADLOCAL void *__BSAN_PROT_TAG_STACK;
+extern THREADLOCAL void *__BSAN_PROV_STACK;
 
 extern bool bsan_inited;
 extern bool bsan_init_is_running;
