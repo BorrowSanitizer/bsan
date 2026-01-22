@@ -113,13 +113,15 @@ fn run_tests(
     // If a test ICEs, we want to see a backtrace.
     config.program.envs.push(("RUST_BACKTRACE".into(), Some("1".into())));
     config.program.envs.push(("BSAN_BE_RUSTC".into(), Some("target".into())));
-    config.program.envs.push(("BSAN_LLVM_SYMBOLIZER".into(), Some("target".into())));
+    config
+        .program
+        .envs
+        .push(("BSAN_SYMBOLIZER".into(), Some(bsan_symbolizer().into())));
 
     // Add some flags we always want.
     config.program.args.push(
         format!(
-            "--sysroot={}",
-            env::var("BSAN_SYSROOT").expect("BSAN_SYSROOT must be set to run the ui test suite")
+            "--sysroot={}",bsan_sysroot().display()
         )
         .into(),
     );
@@ -198,9 +200,8 @@ regexes! {
     // erase paths into the crate registry
     r"[^ ]*/\.?cargo/registry/.*/(.*\.rs)"  => "CARGO_REGISTRY/.../$1",
     // normalize workspace paths to relative
-    r"(/workspaces/bsan/|/__w/bsan/bsan/)([^ \n]+)" => "bsan/$2",
-    // normalize hash suffixes after function names in bt
-    r"::h[0-9a-f]{16}\b" => "::hHASH",
+    r"(/.*/tests/)([^ \n]+)" => "bsan/tests/$2",
+    r"::h[0-9a-f]{16}\b" => "::HASH",
 }
 
 #[allow(unused)]
@@ -227,6 +228,16 @@ fn ui(
     };
     run_tests(mode, path, target, with_dependencies, tmpdir)
         .with_context(|| format!("ui tests in {path} for {} failed", target.host))
+}
+
+fn bsan_symbolizer() -> PathBuf {
+    let symbolizer = env::var("BSAN_SYMBOLIZER").expect("BSAN_SYMBOLIZER must be set to run the ui test suite");
+    PathBuf::from(symbolizer)
+}
+
+fn bsan_sysroot() -> PathBuf {
+    let sysroot = env::var("BSAN_SYSROOT").expect("BSAN_SYSROOT must be set to run the ui test suite");
+    PathBuf::from(sysroot)
 }
 
 fn bsan_path() -> PathBuf {

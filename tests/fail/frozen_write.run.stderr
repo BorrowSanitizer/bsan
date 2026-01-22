@@ -1,13 +1,13 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with permissions Frozen at bsan/tests/fail/frozen_write.rs: line 4, column 14
+Access created with permissions Frozen at bsan/tests/fail/frozen_write.rs:LL:CC
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in frozen_write::main::hHASH bsan/tests/fail/frozen_write.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in frozen_write::main::HASH bsan/tests/fail/frozen_write.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 
-    #0 $HEX in frozen_write::main::hHASH bsan/tests/fail/frozen_write.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in frozen_write::main::HASH bsan/tests/fail/frozen_write.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 

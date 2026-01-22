@@ -1,28 +1,28 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with permissions Reserved at bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs: line 20, column 15
-Conflicting borrow created with permissions Reserved at bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs: line 12, column 24
-Last access at bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs: line 21, column 5
-Last conflict at bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs: line 14, column 25
+Access created with permissions Reserved at bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+Conflicting borrow created with permissions Reserved at bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+Last access at bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+Last conflict at bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in return_invalid_mut::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in return_invalid_mut::main::HASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 
-    #0 $HEX in return_invalid_mut::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in return_invalid_mut::main::HASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 
-    #0 $HEX in return_invalid_mut::foo::hHASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
-    #1 $HEX in return_invalid_mut::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in return_invalid_mut::foo::HASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #1 $HEX in return_invalid_mut::main::HASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in return_invalid_mut::foo::hHASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
-    #1 $HEX in return_invalid_mut::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in return_invalid_mut::foo::HASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #1 $HEX in return_invalid_mut::main::HASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:LL:CC
 
-    #0 $HEX in return_invalid_mut::foo::hHASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
-    #1 $HEX in return_invalid_mut::main::hHASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in return_invalid_mut::foo::HASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #1 $HEX in return_invalid_mut::main::HASH bsan/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:LL:CC
+    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:LL:CC
 

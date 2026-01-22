@@ -76,13 +76,14 @@ impl Command {
             let cargo_bsan = env.build_artifact(CargoBsan, args)?;
             let runtime = env.build_artifact(BsanRt, args)?;
             let plugin = env.build_artifact(BsanPass, args)?;
-            let symbolizer = env.build_artifact(BsanPass, args)?;
+
+            let symbolizer = env.sysroot_binary("llvm-symbolizer");
 
             env.sh.set_var("BSAN_PLUGIN", plugin);
             env.sh.set_var("BSAN_DRIVER", driver);
             env.sh.set_var("BSAN_RT", runtime);
             env.sh.set_var("BSAN_SYSROOT", path!(&env.build_dir / "sysroot"));
-            env.sh.set_var("BSAN_LLVM_SYMBOLIZER", symbolizer);
+            env.sh.set_var("BSAN_SYMBOLIZER", symbolizer);
 
             cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
             let add_bless = if bless { "--bless" } else { "" };

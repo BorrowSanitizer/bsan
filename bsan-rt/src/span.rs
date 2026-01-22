@@ -19,7 +19,7 @@ pub struct SrcLoc {
 
 impl fmt::Display for SrcLoc {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: line {}, column {}", self.file, self.line, self.col)
+        write!(f, "{}:{}:{}", self.file, self.line, self.col)
     }
 }
 
@@ -83,9 +83,17 @@ impl Display for Span {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.source_location() {
             Some(loc) => write!(f, "{}", loc),
-            None => write!(f, "ip 0x{:x}", self.ip),
+            _ => write!(f, "ip 0x{:x}", self.ip),
         }
     }
+}
+
+#[macro_export]
+macro_rules! span {
+    () => {{
+        let fp = fp!();
+        Span::new(fp.addr(), fp.ip())
+    }};
 }
 
 #[repr(transparent)]
@@ -123,17 +131,16 @@ impl FramePointer {
     }
 }
 
-// impl Iterator for FramePointer {
-//     type Item = Span; // return address
-
-//     fn next(&mut self) -> Option<Span> {
-//         let prev = self.prev();
-//         if *self != prev {
-//             let ret_addr = self.ip();
-//             *self = prev;
-//             Some(ret_addr)
-//         } else {
-//             None
-//         }
-//     }
-// }
+#[macro_export]
+macro_rules! fp {
+    () => {
+            FramePointer({
+                let fp: usize;
+                #[cfg(target_arch = "x86_64")]
+                core::arch::asm!("mov {0}, rbp", out(reg) fp, options(nomem, nostack, preserves_flags));
+                #[cfg(target_arch = "aarch64")]
+                core::arch::asm!("mov {0}, fp", out(reg) fp, options(nomem, nostack, preserves_flags));
+                fp as *const usize
+            })
+    };
+}

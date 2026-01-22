@@ -1,22 +1,22 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with permissions Frozen at bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation2.rs: line 6, column 22
-Last access at bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation2.rs: line 8, column 9
+Access created with permissions Frozen at bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation2.rs:LL:CC
+Last access at bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation2.rs:LL:CC
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in shr_frozen_violation2::main::hHASH bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation2.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in shr_frozen_violation2::main::HASH bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation2.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 
-    #0 $HEX in shr_frozen_violation2::main::hHASH bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation2.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in shr_frozen_violation2::main::HASH bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation2.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 
-    #0 $HEX in shr_frozen_violation2::main::hHASH bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation2.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in shr_frozen_violation2::main::HASH bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation2.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 
-    #0 $HEX in shr_frozen_violation2::main::hHASH bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation2.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in shr_frozen_violation2::main::HASH bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation2.rs:LL:CC
+    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
 

@@ -38,7 +38,6 @@ mod sanitizer_common_interface;
 
 use crate::borrow_tracker::tree::Tree;
 use crate::errors::BorsanResult;
-use crate::frame_pointer_utils::fp;
 use crate::memory::hooks;
 
 /// The number of `Provenance` values stored in the thread
@@ -97,37 +96,6 @@ macro_rules! println {
 }
 
 pub(crate) use println;
-
-/// This mod is only to be used for helper macros that should
-/// only be used at the entry point into the bsan-rt library (i.e., the __bsan_* functions)
-/// because they capture the frame pointer of the caller and thus should not be used
-/// in internal functions (because we only want to unwind to the caller of the __bsan_* functions).
-mod frame_pointer_utils {
-
-    macro_rules! fp {
-        () => {{
-            FramePointer({
-                let fp: usize;
-                #[cfg(target_arch = "x86_64")]
-                core::arch::asm!("mov {0}, rbp", out(reg) fp, options(nomem, nostack, preserves_flags));
-                #[cfg(target_arch = "aarch64")]
-                core::arch::asm!("mov {0}, fp", out(reg) fp, options(nomem, nostack, preserves_flags));
-                fp as *const usize
-            })
-        }};
-    }
-
-    macro_rules! create_span_data {
-        () => {{
-            unsafe {
-                let fp = $crate::frame_pointer_utils::fp!();
-                Span::new(fp.addr(), fp.ip())
-            }
-        }};
-    }
-
-    pub(crate) use {create_span_data, fp};
-}
 
 /// A struct for summarizing debug information about memory operations
 #[cfg(feature = "debug")]
@@ -496,9 +464,9 @@ unsafe extern "C-unwind" fn __bsan_retag(
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     let retag_info = unsafe { RetagInfo::from_raw(access_size, perm, im_data, im_len) };
-    let span_data = frame_pointer_utils::create_span_data!();
+    let span = unsafe { span!() };
     BorrowTracker::for_access(prov, object_addr, Some(access_size), |mut bt| {
-        bt.retag(ctx, retag_info, span_data)
+        bt.retag(ctx, retag_info, span)
     })
     .unwrap_or_else(|err| ctx.handle_error(err))
     .unwrap_or(bor_tag)
@@ -516,9 +484,9 @@ unsafe extern "C-unwind" fn __bsan_read(
     debug_bsan!("read", ptr, alloc_id, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-    let span_data = frame_pointer_utils::create_span_data!();
+    let span = unsafe { span!() };
     BorrowTracker::for_access(prov, ptr, Some(access_size), |mut bt| {
-        bt.access(ctx, Some(AccessKind::Read), span_data)
+        bt.access(ctx, Some(AccessKind::Read), span)
     })
     .unwrap_or_else(|err| ctx.handle_error(err));
 }
@@ -535,9 +503,9 @@ unsafe extern "C-unwind" fn __bsan_write(
     debug_bsan!("write", ptr, alloc_id, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-    let span_data = frame_pointer_utils::create_span_data!();
+    let span = unsafe { span!() };
     BorrowTracker::for_access(prov, ptr, Some(access_size), |mut bt| {
-        bt.access(ctx, Some(AccessKind::Write), span_data)
+        bt.access(ctx, Some(AccessKind::Write), span)
     })
     .unwrap_or_else(|err| ctx.handle_error(err));
 }
@@ -562,8 +530,8 @@ extern "C" fn __bsan_dealloc(
             return;
         }
     }
-    let span_data = frame_pointer_utils::create_span_data!();
-    BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, span_data))
+    let span = unsafe { span!() };
+    BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, span))
         .unwrap_or_else(|err| ctx.handle_error(err));
 
     if !weak && let Some(alloc_info) = NonNull::new(alloc_info) {
@@ -575,10 +543,10 @@ extern "C" fn __bsan_dealloc(
 extern "C" fn __bsan_remove_protected_tags(data: *mut Provenance, len: usize) {
     let ctx = unsafe { global_ctx() };
     let prov_list = unsafe { slice::from_raw_parts(data, len) };
-    let span_data = frame_pointer_utils::create_span_data!();
+    let span = unsafe { span!() };
     for prov in prov_list {
         // Protector end semantics can never trigger UB.
-        let _ = BorrowTracker::for_alloc(*prov, |mut bt| bt.access(ctx, None, span_data));
+        let _ = BorrowTracker::for_alloc(*prov, |mut bt| bt.access(ctx, None, span));
         ctx.protected_tags().remove(&prov.bor_tag);
     }
 }
@@ -642,17 +610,12 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     bor_tag: BorTag,
 ) -> NonNull<AllocInfo> {
     let ctx = unsafe { global_ctx() };
-    let span_data = frame_pointer_utils::create_span_data!();
+    let span = unsafe { span!() };
     #[allow(clippy::let_and_return)]
     let alloc_info = ctx
-        .create_alloc_info(AllocInfo::new(ctx, base_addr, size, alloc_id, bor_tag, span_data))
+        .create_alloc_info(AllocInfo::new(ctx, base_addr, size, alloc_id, bor_tag, span))
         .unwrap_or_else(|info| ctx.handle_error(info));
     debug_bsan!("alloc", base_addr, alloc_id, bor_tag, alloc_info.as_ptr());
-    // TODO: this needs to be inserted whereever we need to track allocations
-    #[cfg(not(test))]
-    {
-        //unsafe { global_ctx().store_stacktrace_for_allocation(alloc_id) };
-    }
     alloc_info
 }
 
@@ -759,23 +722,10 @@ unsafe extern "C" fn __bsan_alloc_stack(
         bor_tag,
         alloc_info.as_ptr().cast::<AllocInfo>()
     );
-    let span_data = frame_pointer_utils::create_span_data!();
+    let span = unsafe { span!() };
     unsafe {
-        alloc_info.write(AllocInfo::new(
-            global_ctx(),
-            base_addr,
-            size,
-            alloc_id,
-            bor_tag,
-            span_data,
-        ));
+        alloc_info.write(AllocInfo::new(global_ctx(), base_addr, size, alloc_id, bor_tag, span));
     }
-
-    /*
-    #[cfg(not(test))]
-    unsafe {
-        global_ctx().store_stacktrace_for_allocation(alloc_id)
-    }; */
 }
 
 /// Marks the borrow tag for `prov` as "exposed," allowing it to be resolved to
