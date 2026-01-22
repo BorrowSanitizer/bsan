@@ -38,7 +38,7 @@ fn bsan_config(
 ) -> Config {
     // The BorrowSanitizer driver is rustc-like, so we create a default builder for rustc and modify it
     let mut program = CommandBuilder::rustc();
-    program.program = bsan_path();
+    program.program = path_from_env("BSAN_DRIVER");
 
     let mut config = Config {
         target: Some(target.host.to_owned()),
@@ -74,7 +74,7 @@ fn bsan_config(
                 program: CommandBuilder {
                     // Set the `cargo-bsan` binary, which we expect to be in the same folder as the `bsan-driver` binary.
                     // (It's a separate crate, so we don't get an env var from cargo.)
-                    program: bsan_path()
+                    program: path_from_env("BSAN_DRIVER")
                         .with_file_name(format!("cargo-bsan{}", env::consts::EXE_SUFFIX)),
                     // There is no `cargo bsan build` so we just use `cargo bsan run`.
                     args: ["bsan", "run"].into_iter().map(Into::into).collect(),
@@ -116,15 +116,14 @@ fn run_tests(
     config
         .program
         .envs
-        .push(("BSAN_SYMBOLIZER".into(), Some(bsan_symbolizer().into())));
+        .push(("BSAN_SYMBOLIZER".into(), Some(path_from_env("BSAN_SYMBOLIZER").into())));
 
     // Add some flags we always want.
-    config.program.args.push(
-        format!(
-            "--sysroot={}",bsan_sysroot().display()
-        )
-        .into(),
-    );
+    config
+        .program
+        .args
+        .push(format!("--sysroot={}", path_from_env("BSAN_SYSROOT").display()).into());
+
     config.program.args.push("-Dwarnings".into());
     config.program.args.push("-Dunused".into());
     config.program.args.push("-Ainternal_features".into());
@@ -230,23 +229,20 @@ fn ui(
         .with_context(|| format!("ui tests in {path} for {} failed", target.host))
 }
 
-fn bsan_symbolizer() -> PathBuf {
-    let symbolizer = env::var("BSAN_SYMBOLIZER").expect("BSAN_SYMBOLIZER must be set to run the ui test suite");
-    PathBuf::from(symbolizer)
-}
-
-fn bsan_sysroot() -> PathBuf {
-    let sysroot = env::var("BSAN_SYSROOT").expect("BSAN_SYSROOT must be set to run the ui test suite");
-    PathBuf::from(sysroot)
-}
-
-fn bsan_path() -> PathBuf {
-    let driver = env::var("BSAN_DRIVER").expect("BSAN_DRIVER must be set to run the ui test suite");
-    PathBuf::from(driver)
+fn path_from_env(var: &str) -> PathBuf {
+    let path =
+        env::var(var).expect(&format!("`{}` must be set to run BorrowSanitizer's ui tests.", var));
+    let path = PathBuf::from(path);
+    if !path.exists() {
+        eprintln!("`{var}` was set to a nonexistant path: `{}`", path.display());
+        std::process::exit(1);
+    } else {
+        path
+    }
 }
 
 fn get_version_info() -> VersionMeta {
-    let mut cmd = Command::new(bsan_path());
+    let mut cmd = Command::new(path_from_env("BSAN_DRIVER"));
     cmd.env("BSAN_BE_RUSTC", "host");
     VersionMeta::for_command(cmd).expect("Failed to parse rustc version info")
 }
