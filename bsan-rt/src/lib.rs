@@ -616,6 +616,11 @@ unsafe extern "C-unwind" fn __bsan_alloc(
         .create_alloc_info(AllocInfo::new(ctx, base_addr, size, alloc_id, bor_tag, span))
         .unwrap_or_else(|info| ctx.handle_error(info));
     debug_bsan!("alloc", base_addr, alloc_id, bor_tag, alloc_info.as_ptr());
+    // TODO: this needs to be inserted whereever we need to track allocations
+    // #[cfg(not(test))]
+    // unsafe {
+    //    global_ctx().store_stacktrace_for_allocation(alloc_id, span)
+    // };
     alloc_info
 }
 
@@ -726,6 +731,11 @@ unsafe extern "C" fn __bsan_alloc_stack(
     unsafe {
         alloc_info.write(AllocInfo::new(global_ctx(), base_addr, size, alloc_id, bor_tag, span));
     }
+    // TODO: this needs to be inserted whereever we need to track allocations
+    // #[cfg(not(test))]
+    // unsafe {
+    //    global_ctx().store_stacktrace_for_allocation(alloc_id, span)
+    // };
 }
 
 /// Marks the borrow tag for `prov` as "exposed," allowing it to be resolved to
