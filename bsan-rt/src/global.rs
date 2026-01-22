@@ -7,7 +7,7 @@ use bsan_shared::ProtectorKind;
 use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::errors::ErrorInfo;
-use crate::helpers::{FxHashMap, FxHashSet};
+use crate::helpers::FxHashMap;
 use crate::local::{deinit_local_ctx, init_local_ctx, local_ctx, local_ctx_mut, LocalCtx};
 use crate::memory::hooks::{BsanAllocHooks, BsanHooks};
 use crate::memory::{Heap, ShadowHeap};
