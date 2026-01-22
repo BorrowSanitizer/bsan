@@ -4,22 +4,17 @@ use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 
 use bsan_shared::ProtectorKind;
-use hashbrown::{HashMap, HashSet};
-use rustc_hash::FxBuildHasher;
 use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::errors::ErrorInfo;
+use crate::helpers::{FxHashMap, FxHashSet};
 use crate::local::{deinit_local_ctx, init_local_ctx, local_ctx, local_ctx_mut, LocalCtx};
 use crate::memory::hooks::{BsanAllocHooks, BsanHooks};
 use crate::memory::{Heap, ShadowHeap};
 use crate::*;
 
-pub trait VisitProvenance {
-    fn visit_provenance(&self, tags: &mut HashSet<BorTag>);
-}
-
 #[derive(Default)]
-pub struct ProtectedTags(HashMap<BorTag, ProtectorKind, FxBuildHasher>);
+pub struct ProtectedTags(FxHashMap<BorTag, ProtectorKind>);
 
 impl ProtectedTags {
     pub fn get_protector_kind(&self, tag: BorTag) -> Option<ProtectorKind> {
@@ -78,9 +73,8 @@ pub struct GlobalCtx {
     hooks: BsanHooks,
     protected_tags: RwLock<ProtectedTags>,
     shadow_heap: ShadowHeap<Provenance>,
-    allocations: Mutex<HashSet<NonNull<AllocInfo>>>,
     alloc_metadata_map: Heap<AllocInfo>,
-    threads: RwLock<HashMap<ThreadId, NonNull<LocalCtx>, FxBuildHasher>>,
+    threads: RwLock<FxHashMap<ThreadId, NonNull<LocalCtx>>>,
 }
 
 impl GlobalCtx {
@@ -92,23 +86,16 @@ impl GlobalCtx {
             protected_tags: RwLock::new(ProtectedTags::default()),
             alloc_metadata_map: Heap::new(),
             shadow_heap: ShadowHeap::new(&raw const __BSAN_WILDCARD_PROVENANCE),
-            threads: RwLock::new(HashMap::with_hasher(FxBuildHasher)),
-            allocations: Mutex::new(HashSet::new()),
+            threads: RwLock::new(FxHashMap::default()),
         }
-    }
-
-    pub fn hooks(&self) -> &BsanHooks {
-        &self.hooks
     }
 
     pub(crate) fn create_alloc_info(&self, info: AllocInfo) -> BorsanResult<NonNull<AllocInfo>> {
         let info = self.alloc_metadata_map.alloc(info);
-        self.allocations.lock().insert(info);
         Ok(info)
     }
 
     pub(crate) unsafe fn destroy_alloc_info(&self, ptr: NonNull<AllocInfo>) {
-        self.allocations.lock().remove(&ptr);
         unsafe { self.alloc_metadata_map.dealloc(ptr) }
     }
 
@@ -126,6 +113,7 @@ impl GlobalCtx {
         }
     }
 
+    #[allow(unused)]
     pub fn local_ctx_mut<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut LocalCtx) -> R,
@@ -135,6 +123,7 @@ impl GlobalCtx {
         f(local_ctx)
     }
 
+    #[allow(unused)]
     pub fn local_ctx<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&LocalCtx) -> R,

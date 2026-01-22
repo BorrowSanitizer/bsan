@@ -19,10 +19,11 @@ use libc_print::std_name::*;
 use spin::Mutex;
 
 mod global;
-pub use global::*;
+use global::*;
+mod helpers;
 mod local;
 
-pub mod borrow_tracker;
+mod borrow_tracker;
 use borrow_tracker::*;
 
 mod diagnostics;

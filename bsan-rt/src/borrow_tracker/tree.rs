@@ -1,7 +1,4 @@
 // This file was ported from Miri and then modified by our team.
-#![allow(unused_lifetimes)]
-#![allow(clippy::extra_unused_lifetimes)]
-
 use alloc::alloc::Global;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -12,12 +9,13 @@ use bsan_shared::{
     AccessKind, AccessRelatedness, IdempotentForeignAccess, PermTransition, Permission, RangeMap,
     Size,
 };
-use hashbrown::HashSet;
+use smallvec::SmallVec;
 
 use super::unimap::{UniEntry, UniIndex, UniKeyMap, UniValMap};
 use super::*;
 use crate::diagnostics::{AccessCause, Event, NodeDebugInfo};
 use crate::errors::{TransitionError, TreeError, TreeTransitionResult, UBResult};
+use crate::helpers::FxHashSet;
 use crate::memory::hooks::BsanAllocHooks;
 use crate::{AllocId, BorTag, ProtectedTags};
 
@@ -301,11 +299,7 @@ pub struct Node<A: Allocator = Global> {
     /// All tags except the root have a parent tag.
     pub parent: Option<UniIndex>,
     /// If the pointer was reborrowed, it has children.
-    // miri: FIXME: bench to compare this to FxHashSet and to other SmallVec sizes
-
-    // Miri's implementation uses SmallVec as an optimization, can later be discussed for
-    // bsan if needed as an optimization.
-    pub children: Vec<UniIndex, A>,
+    pub children: SmallVec<[UniIndex; 4]>,
     /// Either `Reserved`,  `Frozen`, or `Disabled`, it is the permission this tag will
     /// lazily be initialized to on the first access.
     /// It is only ever `Disabled` for a tree root, since the root is initialized to `Active` by
@@ -653,9 +647,7 @@ where
                 Node {
                     tag: root_tag,
                     parent: None,
-                    // Miri uses SmallVec here
-                    // ATTENTION: Using `Global` allocator
-                    children: Vec::new(),
+                    children: SmallVec::new(),
                     default_initial_perm: root_default_perm,
                     // The root may never be skipped, all accesses will be local.
                     default_initial_idempotent_foreign_access: IdempotentForeignAccess::None,
@@ -693,7 +685,7 @@ pub(super) struct ChildParams {
     pub span: Span,
 }
 
-impl<'tcx, A> Tree<A>
+impl<A> Tree<A>
 where
     A: Allocator + Clone + Copy,
 {
@@ -732,8 +724,7 @@ where
             Node {
                 tag: new_tag,
                 parent: Some(parent_idx),
-                // Miri uses SmallVec here
-                children: Vec::default(),
+                children: SmallVec::default(),
                 default_initial_perm: default_perm,
                 default_initial_idempotent_foreign_access: default_strongest_idempotent,
                 debug_info: NodeDebugInfo::new(new_tag, default_perm, span),
@@ -1010,7 +1001,7 @@ impl<A> Tree<A>
 where
     A: Allocator,
 {
-    pub fn remove_unreachable_tags(&mut self, live_tags: &HashSet<BorTag>, allocator: A) {
+    pub fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>, allocator: A) {
         self.remove_useless_children(self.root, live_tags);
         // Right after the GC runs is a good moment to check if we can
         // merge some adjacent ranges that were made equal by the removal of some
@@ -1021,7 +1012,7 @@ where
 
     /// Checks if a node is useless and should be GC'ed.
     /// A node is useless if it has no children and also the tag is no longer live.
-    fn is_useless(&self, idx: UniIndex, live: &HashSet<BorTag>) -> bool {
+    fn is_useless(&self, idx: UniIndex, live: &FxHashSet<BorTag>) -> bool {
         let node = self.nodes.get(idx).unwrap();
         node.children.is_empty() && !live.contains(&node.tag)
     }
@@ -1032,7 +1023,7 @@ where
     fn can_be_replaced_by_single_child(
         &self,
         idx: UniIndex,
-        live: &HashSet<BorTag>,
+        live: &FxHashSet<BorTag>,
     ) -> Option<UniIndex> {
         let node = self.nodes.get(idx).unwrap();
 
@@ -1092,7 +1083,7 @@ where
     /// `child: Reserved`. This tree can exist. If we blindly delete `parent` and reassign
     /// `child` to be a direct child of `root` then Writes to `child` are now permitted
     /// whereas they were not when `parent` was still there.
-    fn remove_useless_children(&mut self, root: UniIndex, live: &HashSet<BorTag>) {
+    fn remove_useless_children(&mut self, root: UniIndex, live: &FxHashSet<BorTag>) {
         // To avoid stack overflows, we roll our own stack.
         // Each element in the stack consists of the current tag, and the number of the
         // next child to be processed.
@@ -1160,8 +1151,10 @@ impl Node {
     }
 }
 
+#[allow(unused)]
 pub type VisitWith<'a> = dyn FnMut(Option<AllocId>, Option<BorTag>) + 'a;
 
+#[allow(unused)]
 pub trait VisitProvenance {
     fn visit_provenance(&self, visit: &mut VisitWith<'_>);
 }
