@@ -7,13 +7,16 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::alloc::Allocator;
 use core::fmt;
+use core::marker::PhantomData;
 use core::ops::Range;
 
 use bsan_shared::diagnostics::TransitionError;
 use bsan_shared::{AccessKind, PermTransition, Permission, ProtectorKind};
+use hashbrown::HashMap;
 
 use crate::borrow_tracker::tree::{AllocRange, LocationState, Tree};
-use crate::errors::UBResult;
+use crate::borrow_tracker::unimap::UniIndex;
+use crate::errors::{BorsanResult, UBResult};
 use crate::{println, AllocId, BorTag, Span};
 
 /// Cause of an access: either a real access or one
@@ -327,7 +330,6 @@ pub(super) struct TbError<'node, A: Allocator = Global> {
     /// which tag was used to read/write/deallocate.
     pub accessed_info: &'node NodeDebugInfo<A>,
 }
-
 type S = &'static str;
 /// Pretty-printing details
 ///
@@ -467,11 +469,11 @@ impl DisplayFmt {
     /// and `?Res`/`?Re*`/`?Act`/`?Frz`/`?Dis` for unaccessed locations.
     fn print_perm(&self, perm: Option<LocationState>) -> String {
         if let Some(perm) = perm {
-            if perm.is_accessed() {
-                self.accessed.yes.to_string()
-            } else {
-                self.accessed.no.to_string()
-            }
+            format!(
+                "{ac}{st}",
+                ac = if perm.is_accessed() { self.accessed.yes } else { self.accessed.no },
+                st = perm.permission().short_name(),
+            )
         } else {
             format!("{}{}", self.accessed.meh, self.perm.uninit)
         }
@@ -479,7 +481,7 @@ impl DisplayFmt {
 
     /// Print the tag with the format `<XYZ>` if the tag is unnamed,
     /// and `<XYZ=name>` if the tag is named.
-    fn print_tag(&self, tag: BorTag, name: Option<&String>) -> String {
+    fn print_tag(&self, tag: BorTag, name: &Option<String>) -> String {
         let printable_tag = tag.get();
         if let Some(name) = name {
             format!("<{printable_tag}={name}>")
@@ -490,9 +492,351 @@ impl DisplayFmt {
 
     /// Print extra text if the tag has a protector.
     fn print_protector(&self, protector: Option<&ProtectorKind>) -> &'static str {
-        protector.map_or("", |p| match *p {
-            ProtectorKind::WeakProtector => " Weakly protected",
-            ProtectorKind::StrongProtector => " Strongly protected",
-        })
+        protector
+            .map(|p| match *p {
+                ProtectorKind::WeakProtector => " Weakly protected",
+                ProtectorKind::StrongProtector => " Strongly protected",
+            })
+            .unwrap_or("")
     }
+}
+
+/// Track the indentation of the tree.
+struct DisplayIndent {
+    curr: String,
+}
+impl DisplayIndent {
+    fn new() -> Self {
+        Self { curr: "    ".to_string() }
+    }
+
+    /// Increment the indentation by one. Note: need to know if this
+    /// is the last child or not because the presence of other children
+    /// changes the way the indentation is shown.
+    fn increment(&mut self, formatter: &DisplayFmt, is_last: bool) {
+        self.curr.push_str(if is_last {
+            formatter.padding.indent_last
+        } else {
+            formatter.padding.indent_middle
+        });
+    }
+
+    /// Pop the last level of indentation.
+    fn decrement(&mut self, formatter: &DisplayFmt) {
+        for _ in 0..formatter.padding.indent_last.len() {
+            let _ = self.curr.pop();
+        }
+    }
+
+    /// Print the current indentation.
+    fn write(&self, s: &mut String) {
+        s.push_str(&self.curr);
+    }
+}
+
+/// Repeat a character a number of times.
+fn char_repeat(c: char, n: usize) -> String {
+    core::iter::once(c).cycle().take(n).collect::<String>()
+}
+
+/// Extracted information from the tree, in a form that is readily accessible
+/// for printing. I.e. resolve parent-child pointers into an actual tree,
+/// zip permissions with their tag, remove wrappers, stringify data.
+struct DisplayRepr {
+    tag: BorTag,
+    name: Option<String>,
+    rperm: Vec<Option<LocationState>>,
+    children: Vec<DisplayRepr>,
+}
+
+fn extraction_aux<A: Allocator>(
+    tree: &Tree<A>,
+    idx: UniIndex,
+    show_unnamed: bool,
+    acc: &mut Vec<DisplayRepr>,
+) {
+    let node = tree.nodes.get(idx).unwrap();
+    let name = node.debug_info.name.clone();
+    let children_sorted = {
+        let mut children = node.children.iter().cloned().collect::<Vec<_>>();
+        children.sort_by_key(|idx| tree.nodes.get(*idx).unwrap().tag);
+        children
+    };
+    if !show_unnamed && name.is_none() {
+        // We skip this node
+        for child_idx in children_sorted {
+            extraction_aux(tree, child_idx, show_unnamed, acc);
+        }
+    } else {
+        // We take this node
+        let rperm = tree
+            .rperms
+            .iter_all()
+            .map(move |(_offset, perms)| {
+                let perm = perms.get(idx);
+                perm.cloned()
+            })
+            .collect::<Vec<_>>();
+        let mut children = Vec::new();
+        for child_idx in children_sorted {
+            extraction_aux(tree, child_idx, show_unnamed, &mut children);
+        }
+        acc.push(DisplayRepr { tag: node.tag, name, rperm, children });
+    }
+}
+
+impl DisplayRepr {
+    fn from<A: Allocator>(tree: &Tree<A>, show_unnamed: bool) -> Option<Self> {
+        let mut v = Vec::new();
+        extraction_aux(tree, tree.root, show_unnamed, &mut v);
+        let Some(root) = v.pop() else {
+            if show_unnamed {
+                unreachable!(
+                    "This allocation contains no tags, not even a root. This should not happen."
+                );
+            }
+            crate::eprintln!(
+                "This allocation does not contain named tags. Use `miri_print_borrow_state(_, true)` to also print unnamed tags."
+            );
+            return None;
+        };
+        assert!(v.is_empty());
+        return Some(root);
+    }
+
+    fn print(
+        &self,
+        fmt: &DisplayFmt,
+        indenter: &mut DisplayIndent,
+        protected_tags: &HashMap<BorTag, ProtectorKind>,
+        ranges: Vec<Range<u64>>,
+        print_warning: bool,
+    ) {
+        let mut block = Vec::new();
+        // Push the header and compute the required paddings for the body.
+        // Header looks like this: `0.. 1.. 2.. 3.. 4.. 5.. 6.. 7.. 8`,
+        // and is properly aligned with the `|` of the body.
+        let (range_header, range_padding) = {
+            let mut header_top = String::new();
+            header_top.push_str("0..");
+            let mut padding = Vec::new();
+            for (i, range) in ranges.iter().enumerate() {
+                if i > 0 {
+                    header_top.push_str(fmt.perm.range_sep);
+                }
+                let s = range.end.to_string();
+                let l = s.chars().count() + fmt.perm.range_sep.chars().count();
+                {
+                    let target_len =
+                        fmt.perm.uninit.chars().count() + fmt.accessed.yes.chars().count() + 1;
+                    let tot_len = target_len.max(l);
+                    let header_top_pad_len = target_len.saturating_sub(l);
+                    let body_pad_len = tot_len.saturating_sub(target_len);
+                    header_top.push_str(&format!("{}{}", char_repeat(' ', header_top_pad_len), s));
+                    padding.push(body_pad_len);
+                }
+            }
+            ([header_top], padding)
+        };
+        for s in range_header {
+            block.push(s);
+        }
+        // This is the actual work
+        self.print_aux(
+            &range_padding,
+            fmt,
+            indenter,
+            protected_tags,
+            true, /* root _is_ the last child */
+            &mut block,
+        );
+        // Then it's just prettifying it with a border of dashes.
+        {
+            let wr = &fmt.wrapper;
+            let max_width = {
+                let block_width = block.iter().map(|s| s.chars().count()).max().unwrap();
+                if print_warning {
+                    block_width.max(wr.warning_text.chars().count())
+                } else {
+                    block_width
+                }
+            };
+            crate::eprintln!("{}", char_repeat(wr.top, max_width));
+            if print_warning {
+                crate::eprintln!("{}", wr.warning_text,);
+            }
+            for line in block {
+                crate::eprintln!("{line}");
+            }
+            crate::eprintln!("{}", char_repeat(wr.bot, max_width));
+        }
+    }
+
+    // Here is the function that does the heavy lifting
+    fn print_aux(
+        &self,
+        padding: &[usize],
+        fmt: &DisplayFmt,
+        indent: &mut DisplayIndent,
+        protected_tags: &HashMap<BorTag, ProtectorKind>,
+        is_last_child: bool,
+        acc: &mut Vec<String>,
+    ) {
+        let mut line = String::new();
+        // Format the permissions on each range.
+        // Looks like `| Act| Res| Res| Act|`.
+        line.push_str(fmt.perm.open);
+        for (i, (perm, &pad)) in self.rperm.iter().zip(padding.iter()).enumerate() {
+            if i > 0 {
+                line.push_str(fmt.perm.sep);
+            }
+            let show_perm = fmt.print_perm(*perm);
+            line.push_str(&format!("{}{}", char_repeat(' ', pad), show_perm));
+        }
+        line.push_str(fmt.perm.close);
+        // Format the tree structure.
+        // Main difficulty is handling the indentation properly.
+        indent.write(&mut line);
+        {
+            // padding
+            line.push_str(if is_last_child {
+                fmt.padding.join_last
+            } else {
+                fmt.padding.join_middle
+            });
+            line.push_str(fmt.padding.join_default);
+            line.push_str(if self.children.is_empty() {
+                fmt.padding.join_default
+            } else {
+                fmt.padding.join_haschild
+            });
+            line.push_str(fmt.padding.join_default);
+            line.push_str(fmt.padding.join_default);
+        }
+        line.push_str(&fmt.print_tag(self.tag, &self.name));
+        let protector = protected_tags.get(&self.tag);
+        line.push_str(fmt.print_protector(protector));
+        // Push the line to the accumulator then recurse.
+        acc.push(line);
+        let nb_children = self.children.len();
+        for (i, child) in self.children.iter().enumerate() {
+            indent.increment(fmt, is_last_child);
+            child.print_aux(padding, fmt, indent, protected_tags, i + 1 == nb_children, acc);
+            indent.decrement(fmt);
+        }
+    }
+}
+
+const DEFAULT_FORMATTER: DisplayFmt = DisplayFmt {
+    wrapper: DisplayFmtWrapper {
+        top: '─',
+        bot: '─',
+        warning_text: "Warning: this tree is indicative only. Some tags may have been hidden.",
+    },
+    perm: DisplayFmtPermission { open: "|", sep: "|", close: "|", uninit: "----", range_sep: ".." },
+    padding: DisplayFmtPadding {
+        join_middle: "├",
+        join_last: "└",
+        indent_middle: "│ ",
+        indent_last: "  ",
+        join_haschild: "┬",
+        join_default: "─",
+    },
+    accessed: DisplayFmtAccess { yes: " ", no: "?", meh: "-" },
+};
+
+pub trait PrintTree {
+    fn print_tree(
+        &self,
+        protected_tags: &HashMap<BorTag, ProtectorKind>,
+        show_unnamed: bool,
+    ) -> BorsanResult<()>;
+}
+
+impl<A: Allocator> PrintTree for Tree<A> {
+    /// Display the contents of the tree.
+    fn print_tree(
+        &self,
+        protected_tags: &HashMap<BorTag, ProtectorKind>,
+        show_unnamed: bool,
+    ) -> BorsanResult<()> {
+        let mut indenter = DisplayIndent::new();
+        let ranges = self.rperms.iter_all().map(|(range, _perms)| range).collect::<Vec<_>>();
+        if let Some(repr) = DisplayRepr::from(self, show_unnamed) {
+            repr.print(
+                &DEFAULT_FORMATTER,
+                &mut indenter,
+                protected_tags,
+                ranges,
+                /* print warning message about tags not shown */ !show_unnamed,
+            );
+        }
+        Ok(())
+    }
+}
+
+pub fn print_tree_diff<A: Allocator + Clone>(
+    new_tree: &Tree<A>,
+    old_tree: &Tree<A>,
+    _protected_tags: &HashMap<BorTag, ProtectorKind>,
+) -> BorsanResult<()> {
+    let mut new_tags = Vec::new();
+    let mut changed_tags = Vec::new();
+
+    let mut all_tags: Vec<BorTag> = new_tree.tag_mapping.mapping.keys().copied().collect();
+    all_tags.sort();
+
+    for tag in all_tags {
+        let new_idx = new_tree.tag_mapping.get(&tag).unwrap();
+
+        if let Some(old_idx) = old_tree.tag_mapping.get(&tag) {
+            let mut diffs = Vec::new();
+            for (range, map) in new_tree.rperms.iter_all() {
+                let new_perm = map.get(new_idx).copied();
+
+                // Find permission in old_tree for this range (sampling at start)
+                let old_perm_at_start = if let Some((_, old_map)) = old_tree
+                    .rperms
+                    .iter(
+                        bsan_shared::Size::from_bytes(range.start),
+                        bsan_shared::Size::from_bytes(1),
+                    )
+                    .next()
+                {
+                    old_map.get(old_idx).copied()
+                } else {
+                    None
+                };
+
+                if new_perm != old_perm_at_start {
+                    diffs.push((range, old_perm_at_start, new_perm));
+                }
+            }
+            if !diffs.is_empty() {
+                changed_tags.push((tag, diffs));
+            }
+        } else {
+            new_tags.push(tag);
+        }
+    }
+
+    if !new_tags.is_empty() {
+        crate::println!("New Tags:");
+        for tag in new_tags {
+            crate::println!("  {:?}", tag);
+        }
+    }
+
+    if !changed_tags.is_empty() {
+        crate::println!("Permission Changes:");
+        for (tag, diffs) in changed_tags {
+            crate::println!("  {:?}:", tag);
+            for (range, old, new) in diffs {
+                let old_s = old.map(|p| p.to_string()).unwrap_or("None".to_string());
+                let new_s = new.map(|p| p.to_string()).unwrap_or("None".to_string());
+                crate::println!("    [{}..{}): {} -> {}", range.start, range.end, old_s, new_s);
+            }
+        }
+    }
+    Ok(())
 }

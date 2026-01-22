@@ -105,6 +105,11 @@ public:
   FunctionCallee BsanFuncAssertProvenanceNull;
   FunctionCallee BsanFuncAssertProvenanceWildcard;
   FunctionCallee BsanFuncDebugPrint;
+  FunctionCallee BsanFuncDebugPrintBorrowState;
+  FunctionCallee BsanFuncDebugGC;
+  FunctionCallee BsanFuncDebugTreeSize;
+  FunctionCallee BsanFuncDebugSnapshot;
+  FunctionCallee BsanFuncDebugPrintDiff;
 
   FunctionCallee BsanFuncDebugParamTLS;
   FunctionCallee BsanFuncDebugRetvalTLS;

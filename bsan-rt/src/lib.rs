@@ -18,6 +18,19 @@ use bsan_shared::{AccessKind, Permission, RetagInfo, Size};
 use libc_print::std_name::*;
 use spin::Mutex;
 
+macro_rules! handle_err {
+    ($err:expr, $gtx:expr) => {{
+        #[cfg(test)]
+        {
+            panic!("Error in test mode: {:?}", $err);
+        }
+        #[cfg(not(test))]
+        {
+            $gtx.handle_error($err);
+        }
+    }};
+}
+
 mod global;
 pub use global::*;
 
@@ -37,6 +50,7 @@ mod memory;
 mod sanitizer_common_interface;
 
 use crate::borrow_tracker::tree::Tree;
+use crate::diagnostics::*;
 use crate::errors::BorsanResult;
 use crate::frame_pointer_utils::fp;
 use crate::memory::hooks;
@@ -387,6 +401,7 @@ pub struct AllocInfo {
     pub base_addr: FreeListAddrUnion,
     pub size: usize,
     pub tree_lock: Mutex<Option<tree::Tree<hooks::BsanAllocHooks>>>,
+    pub snapshot: Mutex<Option<tree::Tree<hooks::BsanAllocHooks>>>,
 }
 
 impl AllocInfo {
@@ -396,6 +411,7 @@ impl AllocInfo {
             base_addr: FreeListAddrUnion { base_addr: ptr::null_mut() },
             size: 0,
             tree_lock: Mutex::new(None),
+            snapshot: Mutex::new(None),
         }
     }
 
@@ -417,6 +433,7 @@ impl AllocInfo {
                 span,
                 ctx.allocator(),
             ))),
+            snapshot: Mutex::new(None),
         }
     }
 
@@ -620,7 +637,7 @@ extern "C" fn __bsan_validate_param_tls(len: usize) {
 
 /// Ensures that the provenance array for the return value is valid.
 /// If the boundary marker is null, then we called an instrumented function, so we
-/// can trust that the contents of the array is valid. Otherwise, we need to fill it
+// can trust that the contents of the array is valid. Otherwise, we need to fill it
 /// with wildcard provenance values for each pointer being returned. We also need to
 /// restore the boundary marker to the value it had before the function that was called.
 #[unsafe(no_mangle)]
@@ -842,6 +859,95 @@ extern "C" fn __bsan_debug_assert_invalid(
 extern "C" fn __bsan_debug_print(alloc_id: AllocId, bor_tag: BorTag, alloc_info: *mut AllocInfo) {
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     crate::println!("{prov:?}");
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_debug_print_borrow_state(
+    _alloc_id: AllocId,
+    _bor_tag: BorTag,
+    alloc_info: *mut AllocInfo,
+) {
+    if alloc_info.is_null() {
+        crate::println!("(null alloc_info)");
+        return;
+    }
+    let alloc_info = unsafe { &*alloc_info };
+    let _global_ctx = unsafe { global_ctx() };
+
+    let tree_lock = alloc_info.tree_lock.lock();
+    if let Some(tree) = &*tree_lock {
+        let protected_tags = Default::default();
+        tree.print_tree(&protected_tags, true).unwrap_or_else(|err| handle_err!(err, _global_ctx));
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_debug_gc(alloc_id: AllocId, bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+    if alloc_info.is_null() {
+        return;
+    }
+    // TODO: Implement GC
+    let _ = (alloc_id, bor_tag, alloc_info);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_debug_tree_size(
+    _alloc_id: AllocId,
+    _bor_tag: BorTag,
+    alloc_info: *mut AllocInfo,
+) {
+    if alloc_info.is_null() {
+        crate::println!("Tree size: (null alloc_info)");
+        return;
+    }
+    let alloc_info = unsafe { &*alloc_info };
+
+    let tree_lock = alloc_info.tree_lock.lock();
+    if let Some(tree) = &*tree_lock {
+        crate::println!("Tree size: {}", tree.tag_mapping.len());
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_debug_snapshot(
+    _alloc_id: AllocId,
+    _bor_tag: BorTag,
+    alloc_info: *mut AllocInfo,
+) {
+    if alloc_info.is_null() {
+        return;
+    }
+    let alloc_info = unsafe { &*alloc_info };
+
+    let tree_lock = alloc_info.tree_lock.lock();
+    if let Some(tree) = &*tree_lock {
+        let mut snapshot = alloc_info.snapshot.lock();
+        *snapshot = Some(tree.clone());
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_debug_print_diff(
+    _alloc_id: AllocId,
+    _bor_tag: BorTag,
+    alloc_info: *mut AllocInfo,
+) {
+    if alloc_info.is_null() {
+        return;
+    }
+    let alloc_info = unsafe { &*alloc_info };
+    let _global_ctx = unsafe { global_ctx() };
+
+    let tree_lock = alloc_info.tree_lock.lock();
+    let snapshot_lock = alloc_info.snapshot.lock();
+
+    if let (Some(tree), Some(snapshot)) = (&*tree_lock, &*snapshot_lock) {
+        let protected_tags = Default::default();
+        diagnostics::print_tree_diff(tree, snapshot, &protected_tags)
+            .unwrap_or_else(|err| handle_err!(err, _global_ctx));
+    } else {
+        crate::println!("(no snapshot or tree available)");
+    }
 }
 
 #[cfg(not(test))]

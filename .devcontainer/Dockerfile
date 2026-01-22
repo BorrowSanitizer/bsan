@@ -23,6 +23,7 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 FROM base AS build-image-dev
 RUN mkdir /build-xb
 COPY bsan-script /build-xb/bsan-script
+COPY llvm-sparse /build-xb/
 COPY config.toml /build-xb/
 COPY llvm-sparse /build-xb/
 COPY xb /build-xb/

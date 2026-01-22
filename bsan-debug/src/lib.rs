@@ -12,6 +12,12 @@ unsafe extern "C" {
     pub unsafe fn __bsan_debug_assert_invalid(ptr: *mut u8);
     /// Prints debug information about a pointer's provenance.
     pub unsafe fn __bsan_debug_print(ptr: *mut u8);
+    /// Prints the borrow state (print's the tree)
+    pub unsafe fn __bsan_debug_print_borrow_state(ptr: *mut u8);
+    /// Triggers garbage collection for the allocation associated with the pointer.
+    pub unsafe fn __bsan_debug_gc(ptr: *mut u8);
+    /// Prints the size of the tree associated with the pointer.
+    pub unsafe fn __bsan_debug_tree_size(ptr: *mut u8);
 }
 
 #[macro_export]
