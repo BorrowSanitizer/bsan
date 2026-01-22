@@ -148,10 +148,12 @@ pub fn phase_runner(mut binary_args: impl Iterator<Item = String>) {
 
     let binary = binary_args.next().unwrap();
 
-    let cmd = Command::new(binary);
+    let mut cmd = Command::new(binary);
     let llvm_symbolizer = get_host_sysroot_binary("llvm-symbolizer", verbose);
-    unsafe { env::set_var("BSAN_SYMBOLIZER", llvm_symbolizer) };
-
+    cmd.env("BSAN_SYMBOLIZER", llvm_symbolizer);
+    for arg in binary_args {
+        cmd.arg(arg);
+    }
     debug_cmd("[cargo-bsan runner]", verbose, &cmd);
     exec(cmd)
 }
