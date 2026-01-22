@@ -195,7 +195,7 @@ regexes! {
     // erase Rust stdlib path
     "[^ \n`]*/(rust[^/]*|checkout)/library/" => "RUSTLIB/",
     // erase platform file paths and line numbers
-    r"\bsys/([a-z_]+)/[a-z]+\.rs: line \d+, column \d+\b" => "sys/$1/PLATFORM.rs: line NN, column NN",
+    r"\bsys/([a-z_]+)/[a-z]+\.rs: line \d+, column \d+\b" => "sys/$1/PLATFORM.rs:NN:NN",
     // erase paths into the crate registry
     r"[^ ]*/\.?cargo/registry/.*/(.*\.rs)"  => "CARGO_REGISTRY/.../$1",
     // normalize workspace paths to relative
