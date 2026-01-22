@@ -37,10 +37,10 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_init() {
   {
     const char *symbolizer_path = GetEnv("BSAN_SYMBOLIZER");
     if (symbolizer_path) {
-        CommonFlags cf;
-        cf.CopyFrom(*common_flags());
-        cf.external_symbolizer_path = symbolizer_path;
-        OverrideCommonFlags(cf);
+      CommonFlags cf;
+      cf.CopyFrom(*common_flags());
+      cf.external_symbolizer_path = symbolizer_path;
+      OverrideCommonFlags(cf);
     }
   }
 
