@@ -1,23 +1,23 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with permissions Reserved at RUSTLIB/core/src/mem/mod.rs:LL:CC
-Conflicting borrow created with permissions Reserved at bsan/tests/miri-tests/fail/tree_borrows/strongly-protected.rs:LL:CC
-Last access at RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
+Access created with permissions Reserved at RUSTLIB/core/src/mem/mod.rs:964:22
+Conflicting borrow created with permissions Reserved at bsan/tests/miri-tests/fail/tree_borrows/strongly-protected.rs:3:10
+Last access at RUSTLIB/std/src/sys/alloc/unix.rs:48:18
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in core::mem::drop::HASH RUSTLIB/core/src/mem/mod.rs:LL:CC
-    #1 $HEX in strongly_protected::main::_$u7b$$u7b$closure$u7d$$u7d$::HASH bsan/tests/miri-tests/fail/tree_borrows/strongly-protected.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in core::mem::drop::HASH RUSTLIB/core/src/mem/mod.rs:964:22
+    #1 $HEX in strongly_protected::main::_$u7b$$u7b$closure$u7d$$u7d$::HASH bsan/tests/miri-tests/fail/tree_borrows/strongly-protected.rs:12:9
+    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
 
-    #0 $HEX in std::sys::alloc::PLATFORM::_$LT$impl$u20$core..alloc..global..GlobalAlloc$u20$for$u20$std..alloc..System$GT$::dealloc::HASH RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
-    #1 $HEX in alloc::alloc::dealloc::HASH RUSTLIB/alloc/src/alloc.rs:LL:CC
-    #2 $HEX in _$LT$alloc..alloc..Global$u20$as$u20$core..alloc..Allocator$GT$::deallocate::HASH RUSTLIB/alloc/src/alloc.rs:LL:CC
+    #0 $HEX in std::sys::alloc::PLATFORM::_$LT$impl$u20$core..alloc..global..GlobalAlloc$u20$for$u20$std..alloc..System$GT$::dealloc::HASH RUSTLIB/std/src/sys/alloc/unix.rs:48:18
+    #1 $HEX in alloc::alloc::dealloc::HASH RUSTLIB/alloc/src/alloc.rs:115:14
+    #2 $HEX in _$LT$alloc..alloc..Global$u20$as$u20$core..alloc..Allocator$GT$::deallocate::HASH RUSTLIB/alloc/src/alloc.rs:272:22
 
-    #0 $HEX in strongly_protected::inner::HASH bsan/tests/miri-tests/fail/tree_borrows/strongly-protected.rs:LL:CC
-    #1 $HEX in strongly_protected::main::HASH bsan/tests/miri-tests/fail/tree_borrows/strongly-protected.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in strongly_protected::inner::HASH bsan/tests/miri-tests/fail/tree_borrows/strongly-protected.rs:3:10
+    #1 $HEX in strongly_protected::main::HASH bsan/tests/miri-tests/fail/tree_borrows/strongly-protected.rs:11:5
+    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
 
-    #0 $HEX in std::sys::alloc::PLATFORM::_$LT$impl$u20$core..alloc..global..GlobalAlloc$u20$for$u20$std..alloc..System$GT$::dealloc::HASH RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
-    #1 $HEX in alloc::alloc::dealloc::HASH RUSTLIB/alloc/src/alloc.rs:LL:CC
-    #2 $HEX in _$LT$alloc..alloc..Global$u20$as$u20$core..alloc..Allocator$GT$::deallocate::HASH RUSTLIB/alloc/src/alloc.rs:LL:CC
+    #0 $HEX in std::sys::alloc::PLATFORM::_$LT$impl$u20$core..alloc..global..GlobalAlloc$u20$for$u20$std..alloc..System$GT$::dealloc::HASH RUSTLIB/std/src/sys/alloc/unix.rs:48:18
+    #1 $HEX in alloc::alloc::dealloc::HASH RUSTLIB/alloc/src/alloc.rs:115:14
+    #2 $HEX in _$LT$alloc..alloc..Global$u20$as$u20$core..alloc..Allocator$GT$::deallocate::HASH RUSTLIB/alloc/src/alloc.rs:272:22
 

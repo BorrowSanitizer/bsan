@@ -1,12 +1,12 @@
 An error occurred: UndefinedBehavior (AccessOutOfBounds)
-Access created with permissions Disabled is out of bounds at bsan/tests/fail/access_oob.rs:LL:CC
-Conflicting borrow created with permissions Reserved at bsan/tests/fail/access_oob.rs:LL:CC
+Access created with permissions Disabled is out of bounds at bsan/tests/fail/access_oob.rs:3:9
+Conflicting borrow created with permissions Reserved at bsan/tests/fail/access_oob.rs:4:14
 
-    #0 $HEX in access_oob::main::HASH bsan/tests/fail/access_oob.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in access_oob::main::HASH bsan/tests/fail/access_oob.rs:3:9
+    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
 
-    #0 $HEX in access_oob::main::HASH bsan/tests/fail/access_oob.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in access_oob::main::HASH bsan/tests/fail/access_oob.rs:4:14
+    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
 

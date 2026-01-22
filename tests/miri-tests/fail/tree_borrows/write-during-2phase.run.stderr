@@ -1,22 +1,22 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with permissions Reserved at bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:LL:CC
-Last access at bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:LL:CC
+Access created with permissions Reserved at bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:20:15
+Last access at bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:23:9
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in write_during_2phase::main::HASH bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in write_during_2phase::main::HASH bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:20:15
+    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
 
-    #0 $HEX in write_during_2phase::main::HASH bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in write_during_2phase::main::HASH bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:23:9
+    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
 
-    #0 $HEX in write_during_2phase::main::HASH bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in write_during_2phase::main::HASH bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:20:15
+    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
 
-    #0 $HEX in write_during_2phase::main::HASH bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in write_during_2phase::main::HASH bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:23:9
+    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
 
