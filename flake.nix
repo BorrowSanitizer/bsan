@@ -12,16 +12,17 @@
         pkgs = import nixpkgs { inherit system; };
 
         xb = pkgs.writeShellScriptBin "xb" ''
-          if [ -f "./xb" ]; then
-            exec ./xb "$@"
+          ROOT_DIR=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
+          if [ -f "$ROOT_DIR/xb" ]; then
+            exec "$ROOT_DIR/xb" "$@"
           else
-            echo "Error: './xb' script not found in current directory."
+            echo "Error: 'xb' script not found in project root."
             exit 1
           fi
         '';
 
         fhs = pkgs.buildFHSEnv {
-          name = "xb-dev-env";
+          name = "bsan-dev";
 
           targetPkgs = pkgs: with pkgs; [
             git
@@ -33,6 +34,7 @@
             cmake
             ninja
 
+            rustup
             clang
             clang-tools
             python3
@@ -47,17 +49,26 @@
           ];
 
           profile = ''
+            PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+            export RUST_DIR="$PROJECT_ROOT/.nix-rust"
+            export RUSTUP_HOME="$RUST_DIR/rustup"
+            export CARGO_HOME="$RUST_DIR/cargo"
+
+            export PATH="$CARGO_HOME/bin:$PATH"
+
             export CC=clang
             export CXX=clang++
-            export PATH=$HOME/.cargo/bin:$PATH
 
-            if ! command -v rustup >/dev/null; then
-                curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain nightly -y
+            mkdir -p "$RUSTUP_HOME" "$CARGO_HOME"
+
+            if ! rustup toolchain list 2>/dev/null | grep -q "bsan"; then
+                rustup toolchain install nightly
+                rustup default nightly
+
+                xb --skip setup
+                xb install
+                rustup default bsan
             fi
-
-            xb --skip setup
-
-            xb install
 
             rustc -vV
           '';
