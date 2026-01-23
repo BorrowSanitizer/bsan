@@ -76,7 +76,6 @@ impl Command {
             let cargo_bsan = env.build_artifact(CargoBsan, args)?;
             let runtime = env.build_artifact(BsanRt, args)?;
             let plugin = env.build_artifact(BsanPass, args)?;
-
             let symbolizer = env.sysroot_binary("llvm-symbolizer");
 
             env.sh.set_var("BSAN_PLUGIN", plugin);
@@ -84,11 +83,9 @@ impl Command {
             env.sh.set_var("BSAN_RT", runtime);
             env.sh.set_var("BSAN_SYSROOT", path!(&env.build_dir / "sysroot"));
             env.sh.set_var("BSAN_SYMBOLIZER", symbolizer);
-
             cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
             let add_bless = if bless { "--bless" } else { "" };
             cmd!(env.sh, "cargo test -p bsan --test ui -- {add_bless}").run()?;
-            cmd!(env.sh, "python3 tests/test-cargo-bsan/run_test.py").run()?;
             Ok(())
         })
     }
@@ -101,7 +98,11 @@ impl Command {
         components.iter().try_for_each(|c| c.test(env, args))?;
         components.iter().try_for_each(|c| c.clippy(env, args))?;
         //components.iter().try_for_each(|c| c.miri(env, args))?;
-        Self::ui(env, false)
+        Self::ui(env, false)?;
+
+        components.iter().try_for_each(|c| c.install(env, args))?;
+        cmd!(env.sh, "python3 tests/test-cargo-bsan/run_test.py").run()?;
+        Ok(())
     }
 
     fn clean(env: &mut BsanEnv) -> Result<()> {
