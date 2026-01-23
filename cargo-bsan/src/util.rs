@@ -176,6 +176,17 @@ pub fn get_target_sysroot_dir() -> PathBuf {
     }
 }
 
+pub fn get_host_sysroot_binary(binary: &str, verbose: usize) -> PathBuf {
+    let bsan_sysroot = get_host_sysroot_dir(verbose);
+    let sysroot_bindir = Path::new(&bsan_sysroot).join("bin");
+    let symbolizer_path = sysroot_bindir.join(binary);
+    if symbolizer_path.exists() {
+        symbolizer_path
+    } else {
+        show_error!("Unable to locate `{binary}` within the host sysroot ({sysroot_bindir:?}).");
+    }
+}
+
 pub fn ask_to_run(mut cmd: Command, ask: bool, text: &str) {
     // Disable interactive prompts in CI (GitHub Actions, Travis, AppVeyor, etc).
     // Azure doesn't set `CI` though (nothing to see here, just Microsoft being Microsoft),

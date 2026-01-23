@@ -1,23 +1,23 @@
 An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with permissions Reserved at bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs: line 4, column 13
-Conflicting borrow created with permissions Reserved at bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs: line 9, column 8
-Last access at bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs: line 10, column 5
+Access created with permissions Reserved at bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:4:13
+Conflicting borrow created with permissions Reserved at bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:9:8
+Last access at bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:10:5
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in illegal_write6::main::hHASH bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:LL:CC
-    #1 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::hHASH RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #0 $HEX in illegal_write6::main::HASH bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:4:13
+    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
 
-    #0 $HEX in illegal_write6::foo::hHASH bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:LL:CC
-    #1 $HEX in illegal_write6::main::hHASH bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in illegal_write6::foo::HASH bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:10:5
+    #1 $HEX in illegal_write6::main::HASH bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:6:5
+    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
 
-    #0 $HEX in illegal_write6::foo::hHASH bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:LL:CC
-    #1 $HEX in illegal_write6::main::hHASH bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in illegal_write6::foo::HASH bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:9:8
+    #1 $HEX in illegal_write6::main::HASH bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:6:5
+    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
 
-    #0 $HEX in illegal_write6::foo::hHASH bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:LL:CC
-    #1 $HEX in illegal_write6::main::hHASH bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:LL:CC
-    #2 $HEX in core::ops::function::FnOnce::call_once::hHASH RUSTLIB/core/src/ops/function.rs:LL:CC
+    #0 $HEX in illegal_write6::foo::HASH bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:10:5
+    #1 $HEX in illegal_write6::main::HASH bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:6:5
+    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
 
