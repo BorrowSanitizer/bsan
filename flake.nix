@@ -35,6 +35,7 @@
 
             clang
             clang-tools
+            python3
 
             llvmPackages.llvm.dev
             zlib
