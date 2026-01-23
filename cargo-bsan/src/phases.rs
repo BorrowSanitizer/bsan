@@ -1,5 +1,5 @@
 use std::path;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 use rustc_version::VersionMeta;
@@ -147,20 +147,12 @@ pub fn phase_runner(mut binary_args: impl Iterator<Item = String>) {
         .map_or(0, |verbose| verbose.parse().expect("verbosity flag must be an integer"));
 
     let binary = binary_args.next().unwrap();
+    let mut cmd = Command::new(binary);
 
-    let cmd = Command::new(binary);
+    let llvm_symbolizer = get_host_sysroot_binary("llvm-symbolizer", verbose);
+    cmd.env("BSAN_SYMBOLIZER", llvm_symbolizer);
+    cmd.args(binary_args);
 
-    let bsan_sysroot = get_host_sysroot_dir(verbose);
-
-    let symbolizer_path = Path::new(&bsan_sysroot).join("bin").join("llvm-symbolizer");
-
-    if symbolizer_path.exists() {
-        unsafe {
-            env::set_var("BSAN_SYMBOLIZER_PATH", symbolizer_path);
-        }
-    }
-
-    // Run it.
     debug_cmd("[cargo-bsan runner]", verbose, &cmd);
     exec(cmd)
 }
