@@ -1,30 +1,30 @@
-An error occurred: UndefinedBehavior (AliasingViolation)
+An error occurred: (AliasingViolation)
 Access created with permissions Frozen at bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:0:14
 Last access at bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:7:14
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in return_invalid_shr_option::foo::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs
-    #1 $HEX in return_invalid_shr_option::main::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:14:11
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    #0 $HEX in return_invalid_shr_option::foo bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs
+    #1 $HEX in return_invalid_shr_option::main bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:14:11
+    #2 $HEX in <fn() as core::ops::function::FnOnce<()>>::call_once RUSTLIB/core/src/ops/function.rs:250:5
 
-    #0 $HEX in return_invalid_shr_option::foo::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:7:14
-    #1 $HEX in return_invalid_shr_option::main::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:14:11
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    #0 $HEX in return_invalid_shr_option::foo bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:7:14
+    #1 $HEX in return_invalid_shr_option::main bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:14:11
+    #2 $HEX in <fn() as core::ops::function::FnOnce<()>>::call_once RUSTLIB/core/src/ops/function.rs:250:5
 
-    #0 $HEX in return_invalid_shr_option::foo::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:7:14
-    #1 $HEX in return_invalid_shr_option::main::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:14:11
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    #0 $HEX in return_invalid_shr_option::foo bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:7:14
+    #1 $HEX in return_invalid_shr_option::main bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:14:11
+    #2 $HEX in <fn() as core::ops::function::FnOnce<()>>::call_once RUSTLIB/core/src/ops/function.rs:250:5
 
-    #0 $HEX in return_invalid_shr_option::foo::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs
-    #1 $HEX in return_invalid_shr_option::main::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:14:11
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    #0 $HEX in return_invalid_shr_option::foo bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs
+    #1 $HEX in return_invalid_shr_option::main bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:14:11
+    #2 $HEX in <fn() as core::ops::function::FnOnce<()>>::call_once RUSTLIB/core/src/ops/function.rs:250:5
 
-    #0 $HEX in return_invalid_shr_option::foo::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:7:14
-    #1 $HEX in return_invalid_shr_option::main::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:14:11
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    #0 $HEX in return_invalid_shr_option::foo bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:7:14
+    #1 $HEX in return_invalid_shr_option::main bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:14:11
+    #2 $HEX in <fn() as core::ops::function::FnOnce<()>>::call_once RUSTLIB/core/src/ops/function.rs:250:5
 
-    #0 $HEX in return_invalid_shr_option::foo::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:7:14
-    #1 $HEX in return_invalid_shr_option::main::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:14:11
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    #0 $HEX in return_invalid_shr_option::foo bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:7:14
+    #1 $HEX in return_invalid_shr_option::main bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:14:11
+    #2 $HEX in <fn() as core::ops::function::FnOnce<()>>::call_once RUSTLIB/core/src/ops/function.rs:250:5
 

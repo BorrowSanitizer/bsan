@@ -1,22 +1,22 @@
-An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with permissions Reserved at bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:4:18
+An error occurred: (AliasingViolation)
+Access created with permissions Reserved at bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:4:0
 Last access at bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:6:14
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in aliasing_mut2::safe::HASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:4:18
-    #1 $HEX in aliasing_mut2::main::HASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:18:5
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    #0 $HEX in aliasing_mut2::safe bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:4
+    #1 $HEX in aliasing_mut2::main bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:18:5
+    #2 $HEX in <fn() as core::ops::function::FnOnce<()>>::call_once RUSTLIB/core/src/ops/function.rs:250:5
 
-    #0 $HEX in aliasing_mut2::safe::HASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:6:14
-    #1 $HEX in aliasing_mut2::main::HASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:18:5
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    #0 $HEX in aliasing_mut2::safe bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:6:14
+    #1 $HEX in aliasing_mut2::main bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:18:5
+    #2 $HEX in <fn() as core::ops::function::FnOnce<()>>::call_once RUSTLIB/core/src/ops/function.rs:250:5
 
-    #0 $HEX in aliasing_mut2::safe::HASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:4:18
-    #1 $HEX in aliasing_mut2::main::HASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:18:5
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    #0 $HEX in aliasing_mut2::safe bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:4
+    #1 $HEX in aliasing_mut2::main bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:18:5
+    #2 $HEX in <fn() as core::ops::function::FnOnce<()>>::call_once RUSTLIB/core/src/ops/function.rs:250:5
 
-    #0 $HEX in aliasing_mut2::safe::HASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:6:14
-    #1 $HEX in aliasing_mut2::main::HASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:18:5
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    #0 $HEX in aliasing_mut2::safe bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:6:14
+    #1 $HEX in aliasing_mut2::main bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:18:5
+    #2 $HEX in <fn() as core::ops::function::FnOnce<()>>::call_once RUSTLIB/core/src/ops/function.rs:250:5
 

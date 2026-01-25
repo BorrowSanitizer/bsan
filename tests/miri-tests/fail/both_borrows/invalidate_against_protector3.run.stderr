@@ -1,14 +1,14 @@
-An error occurred: UndefinedBehavior (AliasingViolation)
+An error occurred: (AliasingViolation)
 Access created with permissions Disabled at RUSTLIB/std/src/sys/alloc/PLATFORM.rs:NN:NN
-Conflicting borrow created with permissions Frozen at bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector3.rs:5:23
+Conflicting borrow created with permissions Frozen at bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector3.rs:5:0
 
 Run with `debug` feature (inst --debug) to view full TreeError
 
-    #0 $HEX in std::sys::alloc::PLATFORM::_$LT$impl$u20$core..alloc..global..GlobalAlloc$u20$for$u20$std..alloc..System$GT$::alloc::HASH RUSTLIB/std/src/sys/alloc/PLATFORM.rs:NN:NN
-    #1 $HEX in __rustc::__rdl_alloc RUSTLIB/std/src/alloc.rs:403:20
-    #2 $HEX in alloc::alloc::alloc::HASH RUSTLIB/alloc/src/alloc.rs:95:9
+    #0 $HEX in <std::alloc::System as core::alloc::global::GlobalAlloc>::alloc RUSTLIB/std/src/sys/alloc/PLATFORM.rs:NN:NN
+    #1 $HEX in __rustc::__rdl_alloc RUSTLIB/std/src/alloc.rs:455:20
+    #2 $HEX in alloc::alloc::alloc RUSTLIB/alloc/src/alloc.rs:95:9
 
-    #0 $HEX in invalidate_against_protector3::inner::HASH bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector3.rs:5:23
-    #1 $HEX in invalidate_against_protector3::main::HASH bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector3.rs:17:9
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    #0 $HEX in invalidate_against_protector3::inner bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector3.rs:5
+    #1 $HEX in invalidate_against_protector3::main bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector3.rs:17:9
+    #2 $HEX in <fn() as core::ops::function::FnOnce<()>>::call_once RUSTLIB/core/src/ops/function.rs:250:5
 

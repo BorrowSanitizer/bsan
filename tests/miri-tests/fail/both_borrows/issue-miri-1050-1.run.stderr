@@ -1,12 +1,12 @@
-An error occurred: UndefinedBehavior (AccessOutOfBounds)
+An error occurred: (AccessOutOfBounds)
 Access created with permissions Disabled is out of bounds at RUSTLIB/std/src/sys/alloc/PLATFORM.rs:NN:NN
-Conflicting borrow created with permissions Reserved at RUSTLIB/alloc/src/boxed.rs:1254:21
+Conflicting borrow created with permissions Reserved at RUSTLIB/alloc/src/boxed.rs:1378:9
 
-    #0 $HEX in std::sys::alloc::PLATFORM::_$LT$impl$u20$core..alloc..global..GlobalAlloc$u20$for$u20$std..alloc..System$GT$::alloc::HASH RUSTLIB/std/src/sys/alloc/PLATFORM.rs:NN:NN
-    #1 $HEX in __rustc::__rdl_alloc RUSTLIB/std/src/alloc.rs:403:20
-    #2 $HEX in alloc::alloc::alloc::HASH RUSTLIB/alloc/src/alloc.rs:95:9
+    #0 $HEX in <std::alloc::System as core::alloc::global::GlobalAlloc>::alloc RUSTLIB/std/src/sys/alloc/PLATFORM.rs:NN:NN
+    #1 $HEX in __rustc::__rdl_alloc RUSTLIB/std/src/alloc.rs:455:20
+    #2 $HEX in alloc::alloc::alloc RUSTLIB/alloc/src/alloc.rs:95:9
 
-    #0 $HEX in alloc::boxed::Box$LT$T$GT$::into_raw::HASH RUSTLIB/alloc/src/boxed.rs:1254:21
-    #1 $HEX in issue_miri_1050_1::main::HASH bsan/tests/miri-tests/fail/both_borrows/issue-miri-1050-1.rs:5:19
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    #0 $HEX in <alloc::boxed::Box<u16>>::into_raw RUSTLIB/alloc/src/boxed.rs:1378:9
+    #1 $HEX in issue_miri_1050_1::main bsan/tests/miri-tests/fail/both_borrows/issue-miri-1050-1.rs:5:19
+    #2 $HEX in <fn() as core::ops::function::FnOnce<()>>::call_once RUSTLIB/core/src/ops/function.rs:250:5
 
