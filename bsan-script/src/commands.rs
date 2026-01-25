@@ -315,6 +315,7 @@ impl Buildable for BsanRt {
     }
 
     fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
+        let llvm_objcopy = env.target_binary("llvm-objcopy");
         let llvm_ar = env.target_binary("llvm-ar");
         let clang = "clang";
 
@@ -337,8 +338,12 @@ impl Buildable for BsanRt {
                 .arg(&merged_obj)
                 .run()?;
 
-            env.sh.remove_path(&dest_archive)?;
+            cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_* -G __BSAN_*")
+                .arg(&merged_obj)
+                .quiet()
+                .run()?;
 
+            env.sh.remove_path(&dest_archive)?;
             // Create a new archive with the merged object file.
             cmd!(env.sh, "{llvm_ar} rcs {dest_archive} {merged_obj}").quiet().run()?;
             Ok(())
@@ -424,7 +429,6 @@ impl Buildable for BsanRtCore {
             env.build("bsan-rt", args)?;
             Ok(env.assert_artifact(&self.artifact(env)))
         })?;
-
         Ok(Some(rust_runtime))
     }
 
