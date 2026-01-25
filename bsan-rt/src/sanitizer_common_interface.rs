@@ -96,12 +96,8 @@ impl StackTraceDepot {
         Ok(())
     }
 
-    pub(crate) fn print_trace(&self, alloc_id: &AllocId) -> BorsanResult<StackTraceId> {
-        let stack_id = self.alloc_stacks.get(alloc_id);
-        match stack_id {
-            Some(id) => Ok(*id),
-            None => panic!("No stack trace found for allocation ID {:?}", alloc_id),
-        }
+    pub(crate) fn print_trace(&self, alloc_id: &AllocId) -> Option<StackTraceId> {
+        self.alloc_stacks.get(alloc_id).copied()
     }
 }
 

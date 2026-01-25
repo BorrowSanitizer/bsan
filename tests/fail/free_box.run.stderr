@@ -1,1 +1,1 @@
-An error occurred: UndefinedBehavior (UseAfterFree(ALLOC))
+An error occurred: (UseAfterFree(ALLOC))

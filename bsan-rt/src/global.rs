@@ -180,12 +180,11 @@ impl GlobalCtx {
     #[inline(never)] // never inline to have specific break point for debugging with GDB
     #[allow(clippy::collapsible_if)]
     pub fn handle_error(&self, ub_info: UBInfo) -> ! {
-        crate::eprintln!("An error occurred: {ub_info:?}");
-
+        crate::eprintln!("An error occurred: {ub_info}");
         #[cfg(not(test))]
         {
             if let Some(alloc_id) = ub_info.get_alloc_id()
-                && let Ok(stack_id) = self.allocation_stack_depot.lock().print_trace(&alloc_id)
+                && let Some(stack_id) = self.allocation_stack_depot.lock().print_trace(&alloc_id)
             {
                 crate::eprintln!("{:?} previously allocated here:", alloc_id);
                 sanitizer_common_interface::print_stack_trace(Some(stack_id));
