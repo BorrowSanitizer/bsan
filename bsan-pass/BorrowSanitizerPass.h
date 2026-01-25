@@ -7,7 +7,7 @@
 namespace llvm {
 
 struct BorrowSanitizerOptions {
-  BorrowSanitizerOptions(){};
+  BorrowSanitizerOptions() {};
 };
 
 struct BorrowSanitizerPass : public PassInfoMixin<BorrowSanitizerPass> {

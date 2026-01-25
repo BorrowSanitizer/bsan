@@ -299,7 +299,6 @@ static RT_FLAGS: &[&str] = &[
     "-Cpanic=abort",
     "-Zpanic_abort_tests",
     "-Cembed-bitcode=yes",
-    "-Clto",
     "-Cforce-frame-pointers=yes",
     "-Crelocation-model=pic",
 ];

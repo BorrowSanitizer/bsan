@@ -93,11 +93,7 @@ impl<'b> BorrowTracker<'b> {
             let relative_offset = start.addr().wrapping_sub(base_addr.addr());
             if start.addr() < base_addr.addr() || (relative_offset + access_size > alloc_size) {
                 return if access_size != 0 {
-                    Err(UBInfo::AccessOutOfBounds(
-                        prov,
-                        access_size,
-                        alloc_size,
-                    ))
+                    Err(UBInfo::AccessOutOfBounds(prov, access_size, alloc_size))
                 } else {
                     Ok(None)
                 };

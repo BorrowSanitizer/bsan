@@ -746,20 +746,12 @@ const DEFAULT_FORMATTER: DisplayFmt = DisplayFmt {
 };
 
 pub trait PrintTree {
-    fn print_tree(
-        &self,
-        protected_tags: &HashMap<BorTag, ProtectorKind>,
-        show_unnamed: bool,
-    );
+    fn print_tree(&self, protected_tags: &HashMap<BorTag, ProtectorKind>, show_unnamed: bool);
 }
 
 impl<A: Allocator> PrintTree for Tree<A> {
     /// Display the contents of the tree.
-    fn print_tree(
-        &self,
-        protected_tags: &HashMap<BorTag, ProtectorKind>,
-        show_unnamed: bool,
-    ) {
+    fn print_tree(&self, protected_tags: &HashMap<BorTag, ProtectorKind>, show_unnamed: bool) {
         let mut indenter = DisplayIndent::new();
         let ranges = self.rperms.iter_all().map(|(range, _perms)| range).collect::<Vec<_>>();
         if let Some(repr) = DisplayRepr::from(self, show_unnamed) {

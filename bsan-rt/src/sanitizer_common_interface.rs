@@ -1,8 +1,8 @@
 use crate::alloc::string::ToString;
-use crate::errors::{BorsanResult};
+use crate::errors::BorsanResult;
+use crate::helpers::FxHashMap;
 use crate::span::SrcLoc;
 use crate::{AllocId, Span};
-use crate::helpers::FxHashMap;
 
 unsafe extern "C" {
     fn __bsan_printCurrentStackTrace();

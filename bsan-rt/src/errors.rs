@@ -24,7 +24,6 @@ pub enum UBInfo {
 
 pub type UBResult<T> = Result<T, UBInfo>;
 
-
 impl Display for UBInfo {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {

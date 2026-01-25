@@ -8,14 +8,13 @@ use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[cfg(not(test))]
 use crate::diagnostics::History;
-#[cfg(not(test))]
-use crate::sanitizer_common_interface::{StackTraceDepot};
-
 use crate::errors::UBInfo;
 use crate::helpers::FxHashMap;
 use crate::local::{deinit_local_ctx, init_local_ctx, local_ctx, local_ctx_mut, LocalCtx};
 use crate::memory::hooks::{BsanAllocHooks, BsanHooks};
 use crate::memory::{Heap, ShadowHeap};
+#[cfg(not(test))]
+use crate::sanitizer_common_interface::StackTraceDepot;
 use crate::*;
 
 #[derive(Default)]
@@ -95,8 +94,7 @@ impl GlobalCtx {
             shadow_heap: ShadowHeap::new(&raw const __BSAN_WILDCARD_PROVENANCE),
             threads: RwLock::new(FxHashMap::default()),
             #[cfg(not(test))]
-            allocation_stack_depot: Mutex::new(StackTraceDepot::default(),
-            ),
+            allocation_stack_depot: Mutex::new(StackTraceDepot::default()),
         }
     }
 
