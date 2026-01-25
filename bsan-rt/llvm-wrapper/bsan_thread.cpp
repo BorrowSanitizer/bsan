@@ -18,7 +18,10 @@ BsanThread *BsanThread::Create(thread_callback_t start_routine, void *arg) {
   return thread;
 }
 
-void BsanThread::Init() { __bsan_local_init(); }
+void BsanThread::Init() {
+  GetThreadStackTopAndBottom(IsMainThread(), &stack_top_, &stack_bottom_);
+  __bsan_local_init();
+}
 
 void BsanThread::TSDDtor(void *tsd) {
   BsanThread *t = (BsanThread *)tsd;

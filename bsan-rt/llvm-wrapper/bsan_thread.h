@@ -22,6 +22,8 @@ public:
   __sanitizer_sigset_t starting_sigset_;
 
 private:
+  uptr stack_top_;
+  uptr stack_bottom_;
   thread_callback_t start_routine_;
   void *arg_;
 };

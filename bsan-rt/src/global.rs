@@ -98,10 +98,6 @@ impl GlobalCtx {
         }
     }
 
-    pub fn hooks(&self) -> &BsanHooks {
-        &self.hooks
-    }
-
     pub(crate) fn create_alloc_info(&self, info: AllocInfo) -> BorsanResult<NonNull<AllocInfo>> {
         let info = self.alloc_metadata_map.alloc(info);
         Ok(info)
@@ -170,6 +166,7 @@ impl GlobalCtx {
         }
     }
 
+    #[allow(unused)]
     #[cfg(not(test))]
     pub fn store_stacktrace_for_allocation(&self, alloc_id: AllocId, span_data: Span) {
         match self.allocation_stack_depot.lock().capture_stack(alloc_id, None, span_data) {

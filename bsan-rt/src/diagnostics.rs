@@ -601,7 +601,7 @@ impl DisplayRepr {
             return None;
         };
         assert!(v.is_empty());
-        return Some(root);
+        Some(root)
     }
 
     fn print(

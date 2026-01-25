@@ -79,6 +79,7 @@ pub(crate) struct StackTraceDepot {
 }
 
 impl StackTraceDepot {
+    #[allow(unused)]
     pub(crate) fn capture_stack(
         &mut self,
         alloc_id: AllocId,
