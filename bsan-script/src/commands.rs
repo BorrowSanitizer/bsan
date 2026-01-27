@@ -374,6 +374,7 @@ impl CompilerRt {
 
     fn fmt(env: &mut BsanEnv, check: bool) -> Result<()> {
         let mut cfg = Self::cmake(env)?;
+        cfg.define("BSAN_CLANG_FORMAT", env.sysroot_binary("clang-format"));
         if check {
             cfg.build_target("clang-format-check");
         } else {
@@ -464,6 +465,7 @@ impl BsanPass {
 
     fn fmt(env: &mut BsanEnv, check: bool) -> Result<()> {
         let mut cfg = BsanPass::cmake(env)?;
+        cfg.define("BSAN_CLANG_FORMAT", env.sysroot_binary("clang-format"));
         if check {
             cfg.build_target("clang-format-check");
         } else {

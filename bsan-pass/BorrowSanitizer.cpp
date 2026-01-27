@@ -1208,8 +1208,10 @@ private:
   }
 
   void visitLoadInst(LoadInst &LI) {
-    IRBuilder<> IRB(&LI);
+    if (LI.isAtomic())
+      return;
 
+    IRBuilder<> IRB(&LI);
     Value *Ptr = LI.getPointerOperand();
 
     Value *Size =
@@ -1229,8 +1231,10 @@ private:
   }
 
   void visitStoreInst(StoreInst &SI) {
-    IRBuilder<> IRB(&SI);
+    if (SI.isAtomic())
+      return;
 
+    IRBuilder<> IRB(&SI);
     Value *Ptr, *Val;
     Ptr = SI.getPointerOperand();
     Val = SI.getValueOperand();

@@ -77,7 +77,8 @@ void __sanitizer::BufferedStackTrace::UnwindImpl(uptr pc, uptr bp,
          request_fast);
 }
 
-extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_print_current_stack_trace() {
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE void
+__bsan_print_current_stack_trace() {
   // Capture current stack trace
   GET_CURRENT_PC_BP; // This macro defines 'pc' and 'bp' variables
   BufferedStackTrace stack;
