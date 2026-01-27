@@ -1,15 +1,19 @@
 error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x4] is forbidden
 help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this write
-	help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
-	  --> bsan/tests/miri-tests/fail/both_borrows/buggy_as_mut_slice.rs:13:14
+    help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
+      --> bsan/tests/miri-tests/fail/both_borrows/buggy_as_mut_slice.rs:13:14
 
-	help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
-	  --> bsan/tests/miri-tests/fail/both_borrows/buggy_as_mut_slice.rs:14:5
+    help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
+      --> bsan/tests/miri-tests/fail/both_borrows/buggy_as_mut_slice.rs:14:5
 
-	help: this transition corresponds to a loss of read and write permissions
+    help: this transition corresponds to a loss of read and write permissions
 
 
 backtrace:
-  0: bsan/tests/miri-tests/fail/both_borrows/buggy_as_mut_slice.rs:16:5
-  1: RUSTLIB/core/src/ops/function.rs:250:5
-  2: RUSTLIB/std/src/sys/backtrace.rs:166:18
+  0:
+    bsan/tests/miri-tests/fail/both_borrows/buggy_as_mut_slice.rs:16:5
+  1:
+    RUSTLIB/core/src/ops/function.rs:250:5
+  2:
+    RUSTLIB/std/src/sys/backtrace.rs:166:18
+

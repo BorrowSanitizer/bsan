@@ -1,15 +1,19 @@
 error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x0] is forbidden
 help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow
-	help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
-	  --> bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:20:15
+    help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
+      --> bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:20:15
 
-	help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
-	  --> bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:23:9
+    help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
+      --> bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:23:9
 
-	help: this transition corresponds to a loss of read and write permissions
+    help: this transition corresponds to a loss of read and write permissions
 
 
 backtrace:
-  0: bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:11:0
-  1: bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:20:17
-  2: RUSTLIB/core/src/ops/function.rs:250:5
+  0:
+    bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:11:0
+  1:
+    bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:20:17
+  2:
+    RUSTLIB/core/src/ops/function.rs:250:5
+

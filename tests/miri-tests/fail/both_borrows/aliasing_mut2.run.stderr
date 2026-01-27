@@ -1,15 +1,19 @@
 error: Undefined Behavior: write through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
 help: the accessed tag <TAG>(StrongProtector) has state Reserved (conflicted) which forbids this write
-	help: the accessed tag <TAG>(StrongProtector) was created here, in the initial state Reserved
-	  --> bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:4:0
+    help: the accessed tag <TAG>(StrongProtector) was created here, in the initial state Reserved
+      --> bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:4:0
 
-	help: the accessed tag <TAG>(StrongProtector) later transitioned due to a foreign read
-	  --> bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:6:14
+    help: the accessed tag <TAG>(StrongProtector) later transitioned due to a foreign read
+      --> bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:6:14
 
-	help: this transition corresponds to a temporary loss of write permissions until function exit
+    help: this transition corresponds to a temporary loss of write permissions until function exit
 
 
 backtrace:
-  0: bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:7:5
-  1: bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:18:5
-  2: RUSTLIB/core/src/ops/function.rs:250:5
+  0:
+    bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:7:5
+  1:
+    bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:18:5
+  2:
+    RUSTLIB/core/src/ops/function.rs:250:5
+

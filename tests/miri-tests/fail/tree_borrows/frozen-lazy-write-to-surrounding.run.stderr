@@ -1,10 +1,14 @@
 error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is forbidden
 help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this write
-	help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-	  --> bsan/tests/miri-tests/fail/tree_borrows/frozen-lazy-write-to-surrounding.rs:6:13
+    help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
+      --> bsan/tests/miri-tests/fail/tree_borrows/frozen-lazy-write-to-surrounding.rs:6:13
 
 
 backtrace:
-  0: RUSTLIB/core/src/ptr/mod.rs:1910:9
-  1: RUSTLIB/core/src/ptr/mut_ptr.rs:1418:18
-  2: bsan/tests/miri-tests/fail/tree_borrows/frozen-lazy-write-to-surrounding.rs:8:18
+  0:
+    RUSTLIB/core/src/ptr/mod.rs:1910:9
+  1:
+    RUSTLIB/core/src/ptr/mut_ptr.rs:1418:18
+  2:
+    bsan/tests/miri-tests/fail/tree_borrows/frozen-lazy-write-to-surrounding.rs:8:18
+

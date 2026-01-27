@@ -2,14 +2,18 @@ error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is for
 help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
 help: this write would cause the protected tag <TAG>(StrongProtector) (currently Reserved) to become Disabled
 help: protected tags must never be Disabled
-	help: the accessed tag <TAG>(unprotected) was created here
-	  --> bsan/tests/fail/protected_write.rs:4:14
+    help: the accessed tag <TAG>(unprotected) was created here
+      --> bsan/tests/fail/protected_write.rs:4:14
 
-	help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
-	  --> bsan/tests/fail/protected_write.rs:9:0
+    help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
+      --> bsan/tests/fail/protected_write.rs:9:0
 
 
 backtrace:
-  0: bsan/tests/fail/protected_write.rs:10:14
-  1: bsan/tests/fail/protected_write.rs:6:5
-  2: RUSTLIB/core/src/ops/function.rs:250:5
+  0:
+    bsan/tests/fail/protected_write.rs:10:14
+  1:
+    bsan/tests/fail/protected_write.rs:6:5
+  2:
+    RUSTLIB/core/src/ops/function.rs:250:5
+

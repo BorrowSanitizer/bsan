@@ -1,15 +1,19 @@
 error: Undefined Behavior: read through <TAG>(unprotected) at ALLOC[0x0] is forbidden
 help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this read
-	help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-	  --> bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:6:14
+    help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
+      --> bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:6:14
 
-	help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
-	  --> bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:15:5
+    help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
+      --> bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:15:5
 
-	help: this transition corresponds to a loss of read permissions
+    help: this transition corresponds to a loss of read permissions
 
 
 backtrace:
-  0: bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:16:16
-  1: RUSTLIB/core/src/ops/function.rs:250:5
-  2: RUSTLIB/std/src/sys/backtrace.rs:166:18
+  0:
+    bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:16:16
+  1:
+    RUSTLIB/core/src/ops/function.rs:250:5
+  2:
+    RUSTLIB/std/src/sys/backtrace.rs:166:18
+
