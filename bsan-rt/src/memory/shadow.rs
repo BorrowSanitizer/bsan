@@ -4,8 +4,7 @@ use core::ops::{BitAnd, Shr};
 use core::ptr::NonNull;
 use core::{mem, ptr};
 
-use hashbrown::HashSet;
-use spin::{Mutex, RwLock};
+use spin::RwLock;
 
 use super::{mmap, munmap};
 
@@ -106,7 +105,6 @@ impl TableIndex {
 pub struct ShadowHeap<T> {
     table: NonNull<L1Array<T>>,
     default: *const T,
-    visited: Mutex<HashSet<NonNull<T>>>,
     l2_blocks: RwLock<Vec<usize>>,
 }
 
@@ -124,12 +122,7 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
                 let size_bytes = NonZero::new_unchecked(mem::size_of::<L1Array<T>>());
                 mmap(size_bytes).cast::<L1Array<T>>()
             };
-            Self {
-                table,
-                default,
-                visited: Mutex::new(HashSet::new()),
-                l2_blocks: RwLock::new(Vec::<usize>::new()),
-            }
+            Self { table, default, l2_blocks: RwLock::new(Vec::<usize>::new()) }
         }
     }
 
@@ -268,7 +261,6 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
             let l2_page = self.ensure_l2(idx);
             let ptr = &raw mut (*l2_page.as_ptr())[idx.l2_index];
             let ptr = NonNull::new_unchecked(ptr);
-            self.visited.lock().insert(ptr);
             ptr
         }
     }
