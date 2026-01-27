@@ -1,0 +1,4 @@
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/outdated_local.rs:5:25
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/outdated_local.rs:6:5
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/outdated_local.rs:5:25
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/outdated_local.rs:6:5

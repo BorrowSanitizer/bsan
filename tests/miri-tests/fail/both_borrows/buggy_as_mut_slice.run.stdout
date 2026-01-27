@@ -1,0 +1,4 @@
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/buggy_as_mut_slice.rs:13:14
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/buggy_as_mut_slice.rs:14:5
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/buggy_as_mut_slice.rs:13:14
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/buggy_as_mut_slice.rs:14:5

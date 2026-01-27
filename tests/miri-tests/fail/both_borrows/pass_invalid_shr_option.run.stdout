@@ -1,0 +1,4 @@
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/pass_invalid_shr_option.rs:0:14
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/pass_invalid_shr_option.rs:10:14
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/pass_invalid_shr_option.rs:0:14
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/pass_invalid_shr_option.rs:10:14

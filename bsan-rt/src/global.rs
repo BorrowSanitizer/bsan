@@ -149,8 +149,21 @@ impl GlobalCtx {
         }
     }
 
-    pub fn handle_error(&self, info: UBInfo) -> ! {
-        crate::eprintln!("An error occurred: {info:?}\n\n");
+    pub fn handle_error(&self, ub_info: UBInfo) -> ! {
+        crate::eprintln!("An error occurred: {ub_info:?}");
+        match ub_info {
+            errors::UBInfo::AliasingViolation(tree_error) => {
+                let print_traces = |history: &History| {
+                    crate::println!("{}", history.created_at().0.symbolize());
+                    history.events_iter().for_each(|event| {
+                        crate::println!("{}", event.span.symbolize());
+                    });
+                };
+                print_traces(&tree_error.accessed_info.history);
+                print_traces(&tree_error.conflicting_info.history);
+            }
+            _ => {}
+        }
         self.exit(1)
     }
 }

@@ -14,7 +14,7 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{ffi, fmt, ptr, slice};
 
-use bsan_shared::{AccessKind, RetagInfo, Size};
+use bsan_shared::{AccessKind, Permission, RetagInfo, Size};
 use libc_print::std_name::*;
 use spin::Mutex;
 
@@ -22,6 +22,7 @@ mod global;
 use global::*;
 mod helpers;
 mod local;
+mod sanitizer_common_interface;
 
 mod borrow_tracker;
 use borrow_tracker::*;
@@ -37,7 +38,7 @@ mod errors;
 mod memory;
 
 use crate::borrow_tracker::tree::Tree;
-use crate::span::FramePointer;
+use crate::span::FramePtr;
 
 /// The number of `Provenance` values stored in the thread
 /// local arrays for arguments and return values.
@@ -66,7 +67,7 @@ pub static mut __BSAN_PARAM_TLS: [Provenance; TLS_SIZE] = [Provenance::wildcard(
 /// then we clear the array.
 #[thread_local]
 #[unsafe(no_mangle)]
-pub static mut __BSAN_TLS_MARKER: FramePointer = FramePointer::null();
+pub static mut __BSAN_TLS_MARKER: FramePtr = FramePtr::null();
 
 /// A pointer to the local state of the current thread. This is
 /// managed by the LLVM wrapper, but we define it here, since thread-local
@@ -403,7 +404,13 @@ impl AllocInfo {
         }
     }
 
-    fn new(base_addr: *mut c_void, size: usize, alloc_id: AllocId, bor_tag: BorTag) -> Self {
+    fn new(
+        base_addr: *mut c_void,
+        size: usize,
+        alloc_id: AllocId,
+        bor_tag: BorTag,
+        span: Span,
+    ) -> Self {
         Self {
             alloc_id,
             base_addr: FreeListAddrUnion { base_addr },
@@ -411,10 +418,27 @@ impl AllocInfo {
             tree_lock: Mutex::new(Some(Tree::new_in(
                 bor_tag,
                 Size::from_bytes(size),
-                Span::new(),
+                span,
                 alloc::alloc::Global,
             ))),
         }
+    }
+
+    pub fn conflict_at(&self) -> Option<(Span, Permission)> {
+        self.tree_lock
+            .lock()
+            .as_ref()
+            .and_then(|tree| tree.nodes.last().map(|node| node.debug_info.history.created_at()))
+    }
+
+    pub fn created_at(&self) -> Option<(Span, Permission)> {
+        self.tree_lock
+            .lock()
+            .as_ref()
+            .and_then(|tree| {
+                tree.nodes.get(tree.root).map(|node| Some(node.debug_info.history.created_at()))
+            })
+            .unwrap_or(None)
     }
 
     #[cfg(feature = "debug")]
@@ -485,8 +509,10 @@ unsafe extern "C-unwind" fn __bsan_retag(
     debug_bsan!("retag", object_addr, alloc_id, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
+    let span = unsafe { fp!().span() };
+
     let retag_info = unsafe { RetagInfo::from_raw(access_size, perm, im_data, im_len) };
-    BorrowTracker::retag(ctx, prov, object_addr, Some(access_size), retag_info, Span::new())
+    BorrowTracker::retag(ctx, prov, object_addr, Some(access_size), retag_info, span)
         .unwrap_or_else(|err| ctx.handle_error(err))
 }
 
@@ -494,8 +520,10 @@ unsafe extern "C-unwind" fn __bsan_retag(
 extern "C" fn __bsan_pop_frame(frame_start: *const Provenance, protected: usize) {
     let global = unsafe { global_ctx() };
     let provenance = unsafe { slice::from_raw_parts(frame_start, protected) };
+    let span = unsafe { fp!().span() };
+
     for prov in provenance {
-        let _ = BorrowTracker::for_alloc(*prov, |mut bt| bt.protector_end(global, Span::new()));
+        let _ = BorrowTracker::for_alloc(*prov, |mut bt| bt.protector_end(global, span));
         global.protected_tags_mut().remove_protector(prov.bor_tag);
     }
 }
@@ -512,8 +540,10 @@ unsafe extern "C-unwind" fn __bsan_read(
     debug_bsan!("read", ptr, alloc_id, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
+    let span = unsafe { fp!().span() };
+
     BorrowTracker::for_access(prov, ptr, Some(access_size), |mut bt| {
-        bt.access(ctx, AccessKind::Read, Span::new())
+        bt.access(ctx, AccessKind::Read, span)
     })
     .unwrap_or_else(|err| ctx.handle_error(err));
 }
@@ -530,8 +560,10 @@ unsafe extern "C-unwind" fn __bsan_write(
     debug_bsan!("write", ptr, alloc_id, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
+    let span = unsafe { fp!().span() };
+
     BorrowTracker::for_access(prov, ptr, Some(access_size), |mut bt| {
-        bt.access(ctx, AccessKind::Write, Span::new())
+        bt.access(ctx, AccessKind::Write, span)
     })
     .unwrap_or_else(|err| ctx.handle_error(err));
 }
@@ -548,6 +580,7 @@ extern "C" fn __bsan_dealloc(
     debug_bsan!("dealloc", ptr, alloc_id, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov: Provenance = Provenance { alloc_id, bor_tag, alloc_info };
+    let span = unsafe { fp!().span() };
     if weak {
         if alloc_info.is_null() {
             return;
@@ -556,7 +589,7 @@ extern "C" fn __bsan_dealloc(
             return;
         }
     }
-    BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, Span::new()))
+    BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, span))
         .unwrap_or_else(|err| ctx.handle_error(err));
 
     if !weak && let Some(alloc_info) = NonNull::new(alloc_info) {
@@ -570,7 +603,7 @@ extern "C" fn __bsan_dealloc(
 /// uninstrumented code, we check to see if our caller's frame pointer matches this boundary
 /// marker to determine whether we can trust our thread-local provenance arrays.
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_mark_tls() -> FramePointer {
+extern "C" fn __bsan_mark_tls() -> FramePtr {
     let marker = &raw mut __BSAN_TLS_MARKER;
     let prev_fp = unsafe { ptr::read(marker) };
     // This needs to be volatile, otherwise it has a tendency to
@@ -592,7 +625,7 @@ extern "C" fn __bsan_validate_param_tls(len: usize) {
         // Unwind twice: once to get the frame pointer of the function that called
         // into this API endpoint, and then again to get its caller.
         if fp!().unwind(2) == __BSAN_TLS_MARKER {
-            ptr::write_volatile(&raw mut __BSAN_TLS_MARKER, FramePointer::null());
+            ptr::write_volatile(&raw mut __BSAN_TLS_MARKER, FramePtr::null());
         } else {
             __BSAN_PARAM_TLS[0..len].fill(Provenance::wildcard());
         }
@@ -605,9 +638,9 @@ extern "C" fn __bsan_validate_param_tls(len: usize) {
 /// with wildcard provenance values for each pointer being returned. We also need to
 /// restore the boundary marker to the value it had before the function that was called.
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_validate_retval_tls(len: usize, prev_marker: FramePointer) {
+extern "C" fn __bsan_validate_retval_tls(len: usize, prev_marker: FramePtr) {
     unsafe {
-        if __BSAN_TLS_MARKER != FramePointer::null() {
+        if __BSAN_TLS_MARKER != FramePtr::null() {
             __BSAN_RETVAL_TLS[0..len].fill(Provenance::wildcard());
         }
         ptr::write_volatile(&raw mut __BSAN_TLS_MARKER, prev_marker);
@@ -623,8 +656,11 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     bor_tag: BorTag,
 ) -> NonNull<AllocInfo> {
     let ctx = unsafe { global_ctx() };
+    let span = unsafe { fp!().span() };
+
     #[allow(clippy::let_and_return)]
-    let alloc_info = ctx.create_alloc_info(AllocInfo::new(base_addr, size, alloc_id, bor_tag));
+    let alloc_info =
+        ctx.create_alloc_info(AllocInfo::new(base_addr, size, alloc_id, bor_tag, span));
     debug_bsan!("alloc", base_addr, alloc_id, bor_tag, alloc_info.as_ptr());
     alloc_info
 }
@@ -724,8 +760,10 @@ unsafe extern "C" fn __bsan_alloc_stack(
         bor_tag,
         alloc_info.as_ptr().cast::<AllocInfo>()
     );
+    let span = unsafe { fp!().span() };
+
     unsafe {
-        alloc_info.write(AllocInfo::new(base_addr, size, alloc_id, bor_tag));
+        alloc_info.write(AllocInfo::new(base_addr, size, alloc_id, bor_tag, span));
     }
 }
 

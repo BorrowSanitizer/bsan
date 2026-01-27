@@ -1,0 +1,4 @@
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:17:18
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:22:2
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:17:18
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:22:2

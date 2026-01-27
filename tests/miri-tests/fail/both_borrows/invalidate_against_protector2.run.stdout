@@ -1,0 +1,3 @@
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/invalidate_against_protector2.rs:14:16
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/invalidate_against_protector2.rs:7:14
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/invalidate_against_protector2.rs:3:0

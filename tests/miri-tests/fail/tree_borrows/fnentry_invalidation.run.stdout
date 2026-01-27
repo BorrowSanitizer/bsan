@@ -1,0 +1,6 @@
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:13:13
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:15:9
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:17:5
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:13:13
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:15:9
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:17:5

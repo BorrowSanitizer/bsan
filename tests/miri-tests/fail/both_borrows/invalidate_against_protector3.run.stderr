@@ -1,14 +1,1 @@
-An error occurred: (AliasingViolation)
-Access created with permissions Disabled at RUSTLIB/std/src/sys/alloc/PLATFORM.rs:NN:NN
-Conflicting borrow created with permissions Frozen at bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector3.rs:5:0
-
-Run with `debug` feature (inst --debug) to view full TreeError
-
-    #0 $HEX in <std::alloc::System as core::alloc::global::GlobalAlloc>::alloc RUSTLIB/std/src/sys/alloc/PLATFORM.rs:NN:NN
-    #1 $HEX in __rustc::__rdl_alloc RUSTLIB/std/src/alloc.rs:455:20
-    #2 $HEX in alloc::alloc::alloc RUSTLIB/alloc/src/alloc.rs:95:9
-
-    #0 $HEX in invalidate_against_protector3::inner bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector3.rs:5
-    #1 $HEX in invalidate_against_protector3::main bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector3.rs:17:9
-    #2 $HEX in <fn() as core::ops::function::FnOnce<()>>::call_once RUSTLIB/core/src/ops/function.rs:250:5
-
+An error occurred: AliasingViolation(TreeError { error_kind: ProtectedDisabled(Permission { inner: Frozen }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>(StrongProtector), name: None, history: History { tag: <TAG>(StrongProtector), created: (Span(99293148842833), Permission { inner: Frozen }), events: [] } }, access_cause: Explicit(Write), accessed_info: NodeDebugInfo { tag: <TAG>(unprotected), name: Some("root of the allocation"), history: History { tag: <TAG>(unprotected), created: (Span(99293149239799), Permission { inner: Disabled }), events: [] } } })

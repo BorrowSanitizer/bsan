@@ -1,13 +1,1 @@
-An error occurred: (AliasingViolation)
-Access created with permissions Frozen at bsan/tests/miri-tests/fail/tree_borrows/frozen-lazy-write-to-surrounding.rs:6:13
-
-Run with `debug` feature (inst --debug) to view full TreeError
-
-    #0 $HEX in frozen_lazy_write_to_surrounding::main bsan/tests/miri-tests/fail/tree_borrows/frozen-lazy-write-to-surrounding.rs:6:13
-    #1 $HEX in <fn() as core::ops::function::FnOnce<()>>::call_once RUSTLIB/core/src/ops/function.rs:250:5
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()> RUSTLIB/std/src/sys/backtrace.rs:166:18
-
-    #0 $HEX in frozen_lazy_write_to_surrounding::main bsan/tests/miri-tests/fail/tree_borrows/frozen-lazy-write-to-surrounding.rs:6:13
-    #1 $HEX in <fn() as core::ops::function::FnOnce<()>>::call_once RUSTLIB/core/src/ops/function.rs:250:5
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()> RUSTLIB/std/src/sys/backtrace.rs:166:18
-
+An error occurred: AliasingViolation(TreeError { error_kind: ChildAccessForbidden(Permission { inner: Frozen }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(101350544348720), Permission { inner: Frozen }), events: [] } }, access_cause: Explicit(Write), accessed_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(101350544348720), Permission { inner: Frozen }), events: [] } } })

@@ -1,0 +1,4 @@
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/shr_frozen_violation2.rs:6:22
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/shr_frozen_violation2.rs:8:9
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/shr_frozen_violation2.rs:6:22
+/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/shr_frozen_violation2.rs:8:9
