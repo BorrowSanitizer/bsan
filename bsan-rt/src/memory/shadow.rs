@@ -60,17 +60,59 @@ struct ZeroableRwLock<T: Zeroable> {
 }
 unsafe impl<T: Zeroable> Zeroable for ZeroableRwLock<T> {}
 
+struct L2Entry<T> {
+    #[cfg(feature = "shadowHeapL2Synchronization-none")]
+    value: T,
+    #[cfg(feature = "shadowHeapL2Synchronization-rwlock")]
+    value: RwLock<T>,
+}
+
+impl<T> L2Entry<T> {
+    fn new(value: T) -> Self {
+        Self {
+            #[cfg(feature = "shadowHeapL2Synchronization-none")]
+            value,
+            #[cfg(feature = "shadowHeapL2Synchronization-rwlock")]
+            value: RwLock::new(value),
+        }
+    }
+
+    fn get_read_ptr(&self) -> *const T {
+        #[cfg(feature = "shadowHeapL2Synchronization-none")]
+        {
+            &self.value as *const T
+        }
+        #[cfg(feature = "shadowHeapL2Synchronization-rwlock")]
+        {
+            use core::ops::Deref;
+            self.value.read().deref() as *const T
+        }
+    }
+
+    
+    fn get_write_ptr(&mut self) -> *mut T {
+        #[cfg(feature = "shadowHeapL2Synchronization-none")]
+        {
+            &mut self.value as *mut T
+        }
+        #[cfg(feature = "shadowHeapL2Synchronization-rwlock")]
+        {
+            use core::ops::DerefMut;
+            self.value.write().deref_mut() as *mut T
+        }
+    }
+}
+
 type L1Entry<T> = ZeroableRwLock<Option<NonNull<L2Array<T>>>>;
-type L2Entry<T> = T;
 type L2Array<T> = [L2Entry<T>; L2_LEN];
 type L1Array<T> = [L1Entry<T>; L1_LEN];
 
-// Prevent that we increase the size of L1Entry during refactoring
-type OldL1Entry<T> = RwLock<*mut L2Array<T>>;
-// We have a RwLock<T> containing a AtomicUsize pointer (8 bytes on 64-bit systems) + UnsafeCell<T> where T is a pointer (8 bytes on 64-bit systems).
-use crate::Provenance;
-const _: () = assert!(size_of::<OldL1Entry<Provenance>>() == 16);
-const _: () = assert!(size_of::<L1Entry<Provenance>>() <= size_of::<OldL1Entry<Provenance>>());
+// // Prevent that we increase the size of L1Entry during refactoring
+// type OldL1Entry<T> = RwLock<*mut L2Array<T>>;
+// // We have a RwLock<T> containing a AtomicUsize pointer (8 bytes on 64-bit systems) + UnsafeCell<T> where T is a pointer (8 bytes on 64-bit systems).
+// use crate::Provenance;
+// const _: () = assert!(size_of::<OldL1Entry<Provenance>>() == 16);
+// const _: () = assert!(size_of::<L1Entry<Provenance>>() <= size_of::<OldL1Entry<Provenance>>());
 
 impl TableIndex {
     fn new(address: usize) -> Self {
@@ -133,7 +175,7 @@ impl<T: Sized> ShadowHeap<T> {
     // Size of L1 and L2 tables in bytes
     // The check for non-zero is done at compile time, hence the unwrap is safe.
     const L1_SIZE: NonZero<usize> = NonZero::new(mem::size_of::<L1Array<T>>()).unwrap();
-    const L2_SIZE: NonZero<usize> = NonZero::new(mem::size_of::<T>() * L2_LEN).unwrap();
+    const L2_SIZE: NonZero<usize> = NonZero::new(mem::size_of::<L2Entry<T>>() * L2_LEN).unwrap();
 }
 
 impl<T: Sized + Default + Copy> ShadowHeap<T> {
@@ -209,7 +251,7 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
         while prov_remaining > 0 {
             let l2_dest = self.ensure_l2(hooks, dst_index)?;
             unsafe {
-                (*l2_dest.as_ptr())[dst_index.l2_index] = value;
+                (*l2_dest.as_ptr())[dst_index.l2_index] = L2Entry::new(value);
             }
             dst_index = dst_index.add(1);
             prov_remaining -= 1;
@@ -228,7 +270,7 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
             let idx = table_idx.add(prov_idx);
             let l2_dest = self.ensure_l2(hooks, idx)?;
             unsafe {
-                (*l2_dest.as_ptr())[idx.l2_index] = prov;
+                *((*l2_dest.as_ptr())[idx.l2_index].get_write_ptr()) = prov;
             }
         }
         Ok(())
@@ -239,7 +281,7 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
         for offset in 0..len {
             let curr_idx = start_idx.add(offset);
             let ptr = if let Some(curr_l2) = self.get_l2(curr_idx) {
-                unsafe { &raw const (*curr_l2.as_ptr())[curr_idx.l2_index] }
+                unsafe { (*curr_l2.as_ptr())[curr_idx.l2_index].get_read_ptr() }
             } else {
                 self.default
             };
@@ -272,10 +314,10 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
 
         while words_remaining > 0 {
             unsafe {
-                // We want always want to ensure that the destination contains provenance values
+                // We always want to ensure that the destination contains provenance values
                 // for the entire range, starting from the source.
-                let l2_table_src: Option<NonNull<[T; L2_LEN]>> = self.get_l2(src_index);
-                let l2_table_dst: NonNull<[T; L2_LEN]> = self.ensure_l2(hooks, dst_index)?;
+                let l2_table_src: Option<NonNull<[L2Entry<T>; L2_LEN]>> = self.get_l2(src_index);
+                let l2_table_dst: NonNull<[L2Entry<T>; L2_LEN]> = self.ensure_l2(hooks, dst_index)?;
 
                 let num_src = src_index.num_remaining_in_page();
                 let num_dst = dst_index.num_remaining_in_page();
@@ -283,10 +325,10 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
                 let num_can_write =
                     core::cmp::min(words_remaining, core::cmp::min(num_dst, num_src));
 
-                let dst: *mut T = &raw mut (*l2_table_dst.as_ptr())[dst_index.l2_index];
+                let dst: *mut T = (*l2_table_dst.as_ptr())[dst_index.l2_index].get_write_ptr();
 
                 if let Some(l2_table_src) = l2_table_src {
-                    let src: *mut T = &raw mut (*l2_table_src.as_ptr())[src_index.l2_index];
+                    let src: *const T = (*l2_table_src.as_ptr())[src_index.l2_index].get_read_ptr();
                     ptr::copy(src, dst, num_can_write);
                 } else {
                     // The source might not be entirely shadowed; for example, we could be copying
@@ -295,7 +337,7 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
                     // provenance value.
                     for offset in 0..num_can_write {
                         ptr::write(
-                            &raw mut (*l2_table_dst.as_ptr())[dst_index.l2_index + offset],
+                            (*l2_table_dst.as_ptr())[dst_index.l2_index + offset].get_write_ptr(),
                             T::default(), // FIXME: we should use *self.default here?
                         );
                     }
@@ -313,7 +355,7 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
         let idx = TableIndex::new(addr);
         unsafe {
             self.get_l2(idx)
-                .map(|l2_page| &raw const (*l2_page.as_ptr())[idx.l2_index])
+                .map(|l2_page| (*l2_page.as_ptr())[idx.l2_index].get_read_ptr())
                 .unwrap_or(self.default)
         }
     }
@@ -322,7 +364,7 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
         let idx = TableIndex::new(addr);
         unsafe {
             let l2_page = self.ensure_l2(hooks, idx)?;
-            let ptr = &raw mut (*l2_page.as_ptr())[idx.l2_index];
+            let ptr = (*l2_page.as_ptr())[idx.l2_index].get_write_ptr();
             Ok(NonNull::new_unchecked(ptr))
         }
     }

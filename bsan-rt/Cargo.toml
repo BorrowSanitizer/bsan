@@ -20,6 +20,10 @@ name = "bsan_rt_core"
 crate-type = ["staticlib"]
 
 [features]
-default = ["pic"]
+default = ["pic", "shadowHeapL2Synchronization-rwlock"]
 pic = []
 debug = []
+
+# Those are mutually exclusive features. At least one must be enabled.
+shadowHeapL2Synchronization-none = []
+shadowHeapL2Synchronization-rwlock = []
