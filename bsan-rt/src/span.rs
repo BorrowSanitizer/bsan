@@ -27,8 +27,8 @@ impl fmt::Display for Symbol {
 pub struct Span(pub usize);
 
 impl Span {
-    pub fn symbolize(&self) -> Symbol {
-        crate::sanitizer_common_interface::symbolize_pc_into(self.0)
+    pub fn symbolize(self) -> Symbol {
+        crate::sanitizer_common_interface::symbolize(self)
     }
 }
 

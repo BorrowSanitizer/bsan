@@ -1,5 +1,5 @@
 use crate::alloc::string::ToString;
-use crate::span::Symbol;
+use crate::span::{Span, Symbol};
 
 unsafe extern "C" {
     fn __bsan_symbolize_pc(
@@ -11,12 +11,12 @@ unsafe extern "C" {
     ) -> i32;
 }
 
-pub(crate) fn symbolize_pc_into(pc: usize) -> Symbol {
+pub(crate) fn symbolize(span: Span) -> Symbol {
     let mut buf = [0u8; 512];
     let mut line: u32 = 0;
     let mut column: u32 = 0;
     let ok =
-        unsafe { __bsan_symbolize_pc(pc, buf.as_mut_ptr(), buf.len(), &mut line, &mut column) };
+        unsafe { __bsan_symbolize_pc(span.0, buf.as_mut_ptr(), buf.len(), &mut line, &mut column) };
     if ok == 1 {
         let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
         if let Ok(s) = core::str::from_utf8(&buf[..end]) {

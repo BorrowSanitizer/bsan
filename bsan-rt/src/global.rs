@@ -73,7 +73,7 @@ pub struct GlobalCtx {
     shadow_heap: ShadowHeap<Provenance>,
     alloc_metadata_map: Heap<AllocInfo>,
     threads: RwLock<FxHashMap<ThreadId, NonNull<LocalCtx>>>,
-    pub snapshots: RwLock<FxHashMap<AllocId, Tree>>,
+    snapshots: RwLock<FxHashMap<AllocId, Tree>>,
 }
 
 impl GlobalCtx {

@@ -463,13 +463,12 @@ unsafe extern "C-unwind" fn __bsan_retag(
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_pop_frame(frame_start: *const Provenance, protected: usize) {
-    let global = unsafe { global_ctx() };
+    let ctx = unsafe { global_ctx() };
     let provenance = unsafe { slice::from_raw_parts(frame_start, protected) };
     let span = unsafe { fp!().caller_span() };
-
     for prov in provenance {
-        let _ = BorrowTracker::for_alloc(*prov, |mut bt| bt.protector_end(global, span));
-        global.protected_tags_mut().remove_protector(prov.bor_tag);
+        let _ = BorrowTracker::for_alloc(*prov, |mut bt| bt.protector_end(ctx, span));
+        ctx.protected_tags_mut().remove_protector(prov.bor_tag);
     }
 }
 
@@ -486,7 +485,6 @@ unsafe extern "C-unwind" fn __bsan_read(
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     let fp = unsafe { fp!() };
-
     BorrowTracker::for_access(prov, ptr, Some(access_size), |mut bt| {
         bt.access(ctx, AccessKind::Read, fp.caller_span())
     })
@@ -755,10 +753,10 @@ extern "C" fn __bsan_debug_print_borrow_state(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) {
-    let global_ctx = unsafe { global_ctx() };
+    let ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     let _ = BorrowTracker::for_alloc(prov, |bt| {
-        bt.debug_print_tree(global_ctx, false);
+        bt.debug_print_tree(ctx, false);
         Ok(())
     });
 }
@@ -782,10 +780,10 @@ extern "C" fn __bsan_debug_snapshot(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) {
-    let global_ctx = unsafe { global_ctx() };
+    let ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     let _ = BorrowTracker::for_alloc(prov, |bt| {
-        bt.debug_take_snapshot(global_ctx);
+        bt.debug_take_snapshot(ctx);
         Ok(())
     });
 }
@@ -796,10 +794,10 @@ extern "C" fn __bsan_debug_print_diff(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) {
-    let global_ctx = unsafe { global_ctx() };
+    let ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     let _ = BorrowTracker::for_alloc(prov, |bt| {
-        bt.debug_print_diff(global_ctx);
+        bt.debug_print_diff(ctx);
         Ok(())
     });
 }

@@ -110,17 +110,15 @@ impl<'b> BorrowTracker<'b> {
     }
 
     pub fn retag(
-        global_ctx: &GlobalCtx,
+        ctx: &GlobalCtx,
         prov: Provenance,
         start: *mut c_void,
         access_size: Option<usize>,
         retag_info: RetagInfo<'_>,
         span: Span,
     ) -> UBResult<BorTag> {
-        Self::for_access(prov, start, access_size, |mut bt| {
-            bt.retag_inner(global_ctx, retag_info, span)
-        })
-        .map(|opt| opt.unwrap_or(prov.bor_tag))
+        Self::for_access(prov, start, access_size, |mut bt| bt.retag_inner(ctx, retag_info, span))
+            .map(|opt| opt.unwrap_or(prov.bor_tag))
     }
     pub fn retag_inner(
         &mut self,

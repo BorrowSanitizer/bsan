@@ -1,4 +1,4 @@
-error: Undefined Behavior: AccessOutOfBounds(ALLOC, 4, 4)
+error: Undefined Behavior: an access of size 4 at offset 4 is out of bounds for ALLOC.
 backtrace:
   0:
     RUSTLIB/core/src/ptr/mod.rs:1910:9

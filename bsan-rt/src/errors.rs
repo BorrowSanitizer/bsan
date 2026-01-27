@@ -23,7 +23,15 @@ impl Display for UBInfo {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "Undefined Behavior: ")?;
         match self {
-            UBInfo::UseAfterFree(..) | UBInfo::AccessOutOfBounds(..) => write!(f, "{:?}", self),
+            UBInfo::UseAfterFree(id) => {
+                write!(f, "trying to access {id:?}, which has been freed.")
+            }
+            UBInfo::AccessOutOfBounds(id, size, offset) => {
+                write!(
+                    f,
+                    "an access of size {size} at offset {offset:x} is out of bounds for {id:?}."
+                )
+            }
             UBInfo::AliasingViolation(error) => write!(f, "{error}"),
         }
     }
