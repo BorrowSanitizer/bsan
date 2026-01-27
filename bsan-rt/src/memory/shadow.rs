@@ -290,21 +290,6 @@ impl<T> Drop for ShadowHeap<T> {
         }
     }
 }
-/*
-impl VisitTags for ShadowHeap<Provenance> {
-    fn visit_tags(&self, tags: &mut HashSet<BorTag>) {
-        let mut visited = self.visited.lock();
-        visited
-            .extract_if(|prov| {
-                let tag = unsafe { prov.as_ref().bor_tag };
-                if tag != BorTag::null() {
-                    tags.insert(tag);
-                }
-                tag == BorTag::null()
-            })
-            .for_each(|_| {});
-    }
-}*/
 
 #[cfg(test)]
 mod tests {
