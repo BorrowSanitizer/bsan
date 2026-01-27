@@ -1,1 +1,15 @@
-An error occurred: AliasingViolation(TreeError { error_kind: ChildAccessForbidden(Permission { inner: Disabled }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(110848979548291), Permission { inner: Frozen }), events: [Event { transition: PermTransition { from: Frozen, to: Disabled }, access_cause: Explicit(Write), is_foreign: true, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(110848979550333) }] } }, access_cause: Explicit(Write), accessed_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(110848979548291), Permission { inner: Frozen }), events: [Event { transition: PermTransition { from: Frozen, to: Disabled }, access_cause: Explicit(Write), is_foreign: true, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(110848979550333) }] } } })
+error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this write
+	help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
+	  --> bsan/tests/miri-tests/fail/both_borrows/box_exclusive_violation1.rs:21:0
+
+	help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
+	  --> bsan/tests/miri-tests/fail/both_borrows/box_exclusive_violation1.rs:8:5
+
+	help: this transition corresponds to a loss of read permissions
+
+
+backtrace:
+  0: bsan/tests/miri-tests/fail/both_borrows/box_exclusive_violation1.rs:29:9
+  1: bsan/tests/miri-tests/fail/both_borrows/box_exclusive_violation1.rs:10:5
+  2: bsan/tests/miri-tests/fail/both_borrows/box_exclusive_violation1.rs:36:5

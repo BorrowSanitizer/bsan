@@ -1,1 +1,15 @@
-An error occurred: AliasingViolation(TreeError { error_kind: ChildAccessForbidden(Permission { inner: ReservedFrz { conflicted: true } }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>(StrongProtector), name: None, history: History { tag: <TAG>(StrongProtector), created: (Span(104079657929795), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: ReservedFrz { conflicted: true } }, access_cause: Explicit(Read), is_foreign: true, access_range: Some(AllocRange { start: size0, size: size1 }), transition_range: 0..1, span: Span(104079657930029) }] } }, access_cause: Explicit(Write), accessed_info: NodeDebugInfo { tag: <TAG>(StrongProtector), name: None, history: History { tag: <TAG>(StrongProtector), created: (Span(104079657929795), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: ReservedFrz { conflicted: true } }, access_cause: Explicit(Read), is_foreign: true, access_range: Some(AllocRange { start: size0, size: size1 }), transition_range: 0..1, span: Span(104079657930029) }] } } })
+error: Undefined Behavior: write through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
+help: the accessed tag <TAG>(StrongProtector) has state Reserved (conflicted) which forbids this write
+	help: the accessed tag <TAG>(StrongProtector) was created here, in the initial state Reserved
+	  --> bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:7:0
+
+	help: the accessed tag <TAG>(StrongProtector) later transitioned due to a foreign read
+	  --> bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:9:18
+
+	help: this transition corresponds to a temporary loss of write permissions until function exit
+
+
+backtrace:
+  0: bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:11:5
+  1: bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:21:9
+  2: RUSTLIB/core/src/ops/function.rs:250:5

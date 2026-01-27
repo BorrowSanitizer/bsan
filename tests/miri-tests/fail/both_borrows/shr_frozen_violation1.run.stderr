@@ -1,1 +1,10 @@
-An error occurred: AliasingViolation(TreeError { error_kind: ChildAccessForbidden(Permission { inner: Frozen }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>(StrongProtector), name: None, history: History { tag: <TAG>(StrongProtector), created: (Span(110661401602419), Permission { inner: Frozen }), events: [] } }, access_cause: Explicit(Write), accessed_info: NodeDebugInfo { tag: <TAG>(StrongProtector), name: None, history: History { tag: <TAG>(StrongProtector), created: (Span(110661401602419), Permission { inner: Frozen }), events: [] } } })
+error: Undefined Behavior: write through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
+help: the accessed tag <TAG>(StrongProtector) has state Frozen which forbids this write
+	help: the accessed tag <TAG>(StrongProtector) was created here, in the initial state Frozen
+	  --> bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:15:0
+
+
+backtrace:
+  0: bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:17:9
+  1: bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:7:5
+  2: bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:12:20

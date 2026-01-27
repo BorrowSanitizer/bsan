@@ -1,1 +1,15 @@
-An error occurred: AliasingViolation(TreeError { error_kind: ChildAccessForbidden(Permission { inner: Disabled }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(105342725135391), Permission { inner: Frozen }), events: [Event { transition: PermTransition { from: Frozen, to: Disabled }, access_cause: Explicit(Write), is_foreign: true, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(105342725133927) }] } }, access_cause: Explicit(Read), accessed_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(105342725135391), Permission { inner: Frozen }), events: [Event { transition: PermTransition { from: Frozen, to: Disabled }, access_cause: Explicit(Write), is_foreign: true, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(105342725133927) }] } } })
+error: Undefined Behavior: read through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this read
+	help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
+	  --> bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:6:14
+
+	help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
+	  --> bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:15:5
+
+	help: this transition corresponds to a loss of read permissions
+
+
+backtrace:
+  0: bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:16:16
+  1: RUSTLIB/core/src/ops/function.rs:250:5
+  2: RUSTLIB/std/src/sys/backtrace.rs:166:18

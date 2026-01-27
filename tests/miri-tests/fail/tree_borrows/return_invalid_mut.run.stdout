@@ -1,5 +1,0 @@
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:20:15
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:21:5
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:12:24
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:13:5
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/tree_borrows/return_invalid_mut.rs:14:25

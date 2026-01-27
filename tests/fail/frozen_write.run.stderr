@@ -1,1 +1,10 @@
-An error occurred: AliasingViolation(TreeError { error_kind: ChildAccessForbidden(Permission { inner: Frozen }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(96677660214595), Permission { inner: Frozen }), events: [] } }, access_cause: Explicit(Write), accessed_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(96677660214595), Permission { inner: Frozen }), events: [] } } })
+error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this write
+	help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
+	  --> bsan/tests/fail/frozen_write.rs:4:14
+
+
+backtrace:
+  0: bsan/tests/fail/frozen_write.rs:9:14
+  1: bsan/tests/fail/frozen_write.rs:5:5
+  2: RUSTLIB/core/src/ops/function.rs:250:5

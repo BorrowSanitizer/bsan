@@ -1,1 +1,15 @@
-An error occurred: AliasingViolation(TreeError { error_kind: ChildAccessForbidden(Permission { inner: ReservedFrz { conflicted: true } }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>(StrongProtector), name: None, history: History { tag: <TAG>(StrongProtector), created: (Span(104770225594513), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: ReservedFrz { conflicted: true } }, access_cause: Explicit(Read), is_foreign: true, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(104770225594779) }] } }, access_cause: Explicit(Write), accessed_info: NodeDebugInfo { tag: <TAG>(StrongProtector), name: None, history: History { tag: <TAG>(StrongProtector), created: (Span(104770225594513), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: ReservedFrz { conflicted: true } }, access_cause: Explicit(Read), is_foreign: true, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(104770225594779) }] } } })
+error: Undefined Behavior: write through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
+help: the accessed tag <TAG>(StrongProtector) has state Reserved (conflicted) which forbids this write
+	help: the accessed tag <TAG>(StrongProtector) was created here, in the initial state Reserved
+	  --> bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:4:0
+
+	help: the accessed tag <TAG>(StrongProtector) later transitioned due to a foreign read
+	  --> bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:6:14
+
+	help: this transition corresponds to a temporary loss of write permissions until function exit
+
+
+backtrace:
+  0: bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:7:5
+  1: bsan/tests/miri-tests/fail/both_borrows/aliasing_mut2.rs:18:5
+  2: RUSTLIB/core/src/ops/function.rs:250:5

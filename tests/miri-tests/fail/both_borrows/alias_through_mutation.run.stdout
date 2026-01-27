@@ -1,4 +1,0 @@
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:6:14
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:15:5
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:6:14
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:15:5

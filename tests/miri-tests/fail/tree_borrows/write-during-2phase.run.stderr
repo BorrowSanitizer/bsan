@@ -1,1 +1,15 @@
-An error occurred: AliasingViolation(TreeError { error_kind: ChildAccessForbidden(Permission { inner: Disabled }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(100367130433057), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: Disabled }, access_cause: Explicit(Write), is_foreign: true, access_range: Some(AllocRange { start: size0, size: size8 }), transition_range: 0..8, span: Span(100367130433196) }] } }, access_cause: Reborrow, accessed_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(100367130433057), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: Disabled }, access_cause: Explicit(Write), is_foreign: true, access_range: Some(AllocRange { start: size0, size: size8 }), transition_range: 0..8, span: Span(100367130433196) }] } } })
+error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow
+	help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
+	  --> bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:20:15
+
+	help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
+	  --> bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:23:9
+
+	help: this transition corresponds to a loss of read and write permissions
+
+
+backtrace:
+  0: bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:11:0
+  1: bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:20:17
+  2: RUSTLIB/core/src/ops/function.rs:250:5

@@ -22,6 +22,7 @@ impl fmt::Display for Symbol {
         }
     }
 }
+
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct Span(pub usize);
 
@@ -47,7 +48,7 @@ impl FramePtr {
         self
     }
 
-    pub fn span(&self) -> Span {
+    pub fn caller_span(&self) -> Span {
         Span(unsafe { ptr::read(self.0.add(1)) })
     }
 
@@ -83,12 +84,12 @@ macro_rules! fp {
 }
 
 impl Iterator for FramePtr {
-    type Item = Span; // return address
+    type Item = Span;
 
     fn next(&mut self) -> Option<Span> {
         let prev = self.prev();
         if *self != prev {
-            let ret_addr = self.span();
+            let ret_addr = self.caller_span();
             *self = prev;
             Some(ret_addr)
         } else {

@@ -149,22 +149,25 @@ impl GlobalCtx {
         }
     }
 
-    pub fn handle_error(&self, ub_info: UBInfo) -> ! {
-        crate::eprintln!("An error occurred: {ub_info:?}");
-        match ub_info {
-            errors::UBInfo::AliasingViolation(tree_error) => {
-                let print_traces = |history: &History| {
-                    crate::println!("{}", history.created_at().0.symbolize());
-                    history.events_iter().for_each(|event| {
-                        crate::println!("{}", event.span.symbolize());
-                    });
-                };
-                print_traces(&tree_error.accessed_info.history);
-                print_traces(&tree_error.conflicting_info.history);
-            }
-            _ => {}
+    pub fn handle_error(&self, ub_info: UBInfo, fp: FramePtr) -> ! {
+        crate::eprintln!("error: {ub_info}");
+        crate::eprintln!("backtrace:");
+        for (i, frame) in fp.take(3).enumerate() {
+            crate::eprintln!("  {i}:\n    {}", frame.symbolize());
         }
+        crate::eprint!("\n");
         self.exit(1)
+    }
+
+    pub fn take_snapshot(&self, alloc_id: AllocId, tree: Tree) {
+        self.snapshots.write().insert(alloc_id, tree);
+    }
+
+    pub fn with_snapshot<F>(&self, alloc_id: AllocId, f: F)
+    where
+        F: FnOnce(&Tree),
+    {
+        self.snapshots.read().get(&alloc_id).map(f);
     }
 }
 

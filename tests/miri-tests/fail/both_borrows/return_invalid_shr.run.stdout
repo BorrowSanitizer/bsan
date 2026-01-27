@@ -1,6 +1,0 @@
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:6:24
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:7:14
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:7:14
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:6:24
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:7:14
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/return_invalid_shr.rs:7:14

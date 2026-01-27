@@ -1,4 +1,0 @@
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/box_exclusive_violation1.rs:21:0
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/box_exclusive_violation1.rs:8:5
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/box_exclusive_violation1.rs:21:0
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/box_exclusive_violation1.rs:8:5

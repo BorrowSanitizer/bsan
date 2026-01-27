@@ -1,4 +1,0 @@
-/home/icmccorm/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/boxed.rs:264:0
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/load_invalid_shr.rs:9:14
-/home/icmccorm/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/boxed.rs:264:0
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/load_invalid_shr.rs:9:14

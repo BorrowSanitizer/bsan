@@ -1,1 +1,15 @@
-An error occurred: AliasingViolation(TreeError { error_kind: ChildAccessForbidden(Permission { inner: Disabled }), alloc_id: ALLOC, error_offset: 4, conflicting_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(93826111047163), Permission { inner: Frozen }), events: [Event { transition: PermTransition { from: Frozen, to: Disabled }, access_cause: Explicit(Write), is_foreign: true, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(93826111047357) }, Event { transition: PermTransition { from: Frozen, to: Disabled }, access_cause: Explicit(Write), is_foreign: true, access_range: Some(AllocRange { start: size4, size: size4 }), transition_range: 4..8, span: Span(93826111047395) }] } }, access_cause: Reborrow, accessed_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(93826111047163), Permission { inner: Frozen }), events: [Event { transition: PermTransition { from: Frozen, to: Disabled }, access_cause: Explicit(Write), is_foreign: true, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(93826111047357) }, Event { transition: PermTransition { from: Frozen, to: Disabled }, access_cause: Explicit(Write), is_foreign: true, access_range: Some(AllocRange { start: size4, size: size4 }), transition_range: 4..8, span: Span(93826111047395) }] } } })
+error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x4] is forbidden
+help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow
+	help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
+	  --> bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_tuple.rs:6:15
+
+	help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
+	  --> bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_tuple.rs:7:14
+
+	help: this transition corresponds to a loss of read permissions
+
+
+backtrace:
+  0: bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_tuple.rs:8:5
+  1: bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_tuple.rs:14:5
+  2: RUSTLIB/core/src/ops/function.rs:250:5

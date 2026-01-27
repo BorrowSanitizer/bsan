@@ -1,1 +1,15 @@
-An error occurred: AliasingViolation(TreeError { error_kind: ProtectedDisabled(Permission { inner: ReservedFrz { conflicted: false } }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>(StrongProtector), name: None, history: History { tag: <TAG>(StrongProtector), created: (Span(107009817838513), Permission { inner: ReservedFrz { conflicted: false } }), events: [] } }, access_cause: Explicit(Write), accessed_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(107009817839511), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: Active }, access_cause: Explicit(Write), is_foreign: false, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(107009817838821) }] } } })
+error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
+help: this write would cause the protected tag <TAG>(StrongProtector) (currently Reserved) to become Disabled
+help: protected tags must never be Disabled
+	help: the accessed tag <TAG>(unprotected) was created here
+	  --> bsan/tests/fail/protected_write.rs:4:14
+
+	help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
+	  --> bsan/tests/fail/protected_write.rs:9:0
+
+
+backtrace:
+  0: bsan/tests/fail/protected_write.rs:10:14
+  1: bsan/tests/fail/protected_write.rs:6:5
+  2: RUSTLIB/core/src/ops/function.rs:250:5

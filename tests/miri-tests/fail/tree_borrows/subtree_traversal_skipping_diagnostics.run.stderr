@@ -1,1 +1,14 @@
-An error occurred: AliasingViolation(TreeError { error_kind: ChildAccessForbidden(Permission { inner: Frozen }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(95537308494210), Permission { inner: Frozen }), events: [] } }, access_cause: Explicit(Write), accessed_info: NodeDebugInfo { tag: <TAG>(StrongProtector), name: None, history: History { tag: <TAG>(StrongProtector), created: (Span(95537308493155), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: Active }, access_cause: Explicit(Write), is_foreign: false, access_range: Some(AllocRange { start: size0, size: size1 }), transition_range: 0..1, span: Span(95537308493429) }] } } })
+error: Undefined Behavior: write through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
+help: the accessed tag <TAG>(StrongProtector) is a child of the conflicting tag <TAG>(unprotected)
+help: the conflicting tag <TAG>(unprotected) has state Frozen which forbids this write
+	help: the accessed tag <TAG>(StrongProtector) was created here
+	  --> bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:11:0
+
+	help: the conflicting tag <TAG>(unprotected) was created here, in the initial state Frozen
+	  --> bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:25:28
+
+
+backtrace:
+  0: bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:19:5
+  1: bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:27:9
+  2: RUSTLIB/core/src/ops/function.rs:250:5

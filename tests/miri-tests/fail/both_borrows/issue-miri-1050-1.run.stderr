@@ -1,1 +1,5 @@
-An error occurred: AccessOutOfBounds(Provenance { alloc_id: ALLOC, bor_tag: <TAG>(unprotected), alloc_info: $HEX }, 4, 2)
+error: Undefined Behavior: AccessOutOfBounds(ALLOC, 4, 2)
+backtrace:
+  0: RUSTLIB/alloc/src/boxed.rs:1493:9
+  1: RUSTLIB/alloc/src/boxed.rs:1266:18
+  2: bsan/tests/miri-tests/fail/both_borrows/issue-miri-1050-1.rs:6:14

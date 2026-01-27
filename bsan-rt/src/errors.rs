@@ -1,21 +1,19 @@
 // Components in this file were ported from Miri, and then modified by our team.
 use alloc::boxed::Box;
+use alloc::vec::Vec;
 use core::fmt::{Debug, Display};
 
 use bsan_shared::Permission;
 
-use crate::diagnostics::{AccessCause, NodeDebugInfo};
-use crate::{AllocId, Provenance};
+use crate::diagnostics::{AccessCause, HistoryData, NodeDebugInfo};
+use crate::AllocId;
 
 pub type TreeTransitionResult<T> = core::result::Result<T, TransitionError>;
 
 #[derive(Debug)]
 pub enum UBInfo {
-    InvalidProvenance,
-    AccessOutOfBounds(Provenance, usize, usize),
+    AccessOutOfBounds(AllocId, usize, usize),
     UseAfterFree(AllocId),
-    GlobalFree(AllocId),
-    StackFree(AllocId),
     AliasingViolation(Box<TreeError>),
 }
 
@@ -23,13 +21,10 @@ pub type UBResult<T> = Result<T, UBInfo>;
 
 impl Display for UBInfo {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "Undefined Behavior: ")?;
         match self {
-            UBInfo::InvalidProvenance => write!(f, "{:?}", self),
-            UBInfo::AccessOutOfBounds(..) => write!(f, "{:?}", self),
-            UBInfo::UseAfterFree(..) => write!(f, "{:?}", self),
-            UBInfo::GlobalFree(..) => write!(f, "{:?}", self),
-            UBInfo::StackFree(..) => write!(f, "{:?}", self),
-            UBInfo::AliasingViolation(_error) => write!(f, "{:?}", self),
+            UBInfo::UseAfterFree(..) | UBInfo::AccessOutOfBounds(..) => write!(f, "{:?}", self),
+            UBInfo::AliasingViolation(error) => write!(f, "{error}"),
         }
     }
 }
@@ -71,4 +66,93 @@ pub struct TreeError {
     /// Which tag the access that caused this error was made through, i.e.
     /// which tag was used to read/write/deallocate.
     pub accessed_info: NodeDebugInfo,
+}
+
+impl core::fmt::Display for TreeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        use TransitionError::*;
+        let cause = self.access_cause;
+        let error_offset = self.error_offset;
+        let access = self.access_cause;
+        let accessed = &self.accessed_info;
+        let accessed_tag = accessed.tag;
+        let conflicting = &self.conflicting_info;
+
+        // An access is considered conflicting if it happened through a
+        // different tag than the one who caused UB.
+        // When doing a wildcard access (where `accessed` is `None`) we
+        // do not know which precise tag the accessed happened from,
+        // however we can be certain that it did not come from the
+        // conflicting tag.
+        // This is because the wildcard data structure already removes
+        // all tags through which an access would cause UB.
+        let accessed_is_conflicting = accessed.tag == conflicting.tag;
+        let title = format!(
+            "{cause} through {accessed_tag:?} at {alloc_id:?}[{error_offset:#x}] is forbidden",
+            alloc_id = self.alloc_id
+        );
+
+        let (title, details, conflicting_tag_name) = match self.error_kind {
+            ChildAccessForbidden(perm) => {
+                let conflicting_tag_name =
+                    if accessed_is_conflicting { "accessed" } else { "conflicting" };
+                let mut details = Vec::new();
+                if !accessed_is_conflicting {
+                    details.push(format!(
+                        "the accessed tag {accessed_tag:?} is a child of the conflicting tag {conflicting}"
+                    ));
+                }
+                details.push(format!(
+                    "the {conflicting_tag_name} tag {conflicting} has state {perm} which forbids this {access}"
+                ));
+                (title, details, conflicting_tag_name)
+            }
+            ProtectedDisabled(before_disabled) => {
+                let conflicting_tag_name = "protected";
+                let details = vec![
+                    format!(
+                        "the accessed tag {accessed_tag:?} is foreign to the {conflicting_tag_name} tag {conflicting} (i.e., it is not a child)"
+                    ),
+                    format!(
+                        "this {access} would cause the {conflicting_tag_name} tag {conflicting} (currently {before_disabled}) to become Disabled"
+                    ),
+                    format!("protected tags must never be Disabled"),
+                ];
+                (title, details, conflicting_tag_name)
+            }
+            ProtectedDealloc => {
+                let conflicting_tag_name = "strongly protected";
+                let details = vec![
+                    format!(
+                        "the allocation of the accessed tag {accessed_tag:?} also contains the {conflicting_tag_name} tag {conflicting}"
+                    ),
+                    format!("the {conflicting_tag_name} tag {conflicting} disallows deallocations"),
+                ];
+                (title, details, conflicting_tag_name)
+            }
+        };
+        let mut history = HistoryData::default();
+        if !accessed_is_conflicting {
+            history.extend(self.accessed_info.history.forget(), "accessed", false);
+        }
+        history.extend(
+            self.conflicting_info.history.extract_relevant(error_offset),
+            conflicting_tag_name,
+            true,
+        );
+
+        writeln!(f, "{title}")?;
+        for detail in details {
+            writeln!(f, "help: {}", detail)?;
+        }
+
+        for event in history.events {
+            writeln!(f, "    help: {}", event.1)?;
+            if let Some(span) = event.0 {
+                writeln!(f, "      --> {}", span.symbolize())?;
+            }
+            writeln!(f)?;
+        }
+        Ok(())
+    }
 }

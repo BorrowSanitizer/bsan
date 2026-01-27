@@ -17,6 +17,7 @@ use hashbrown::HashMap;
 use crate::borrow_tracker::tree::{AllocRange, LocationState, Tree};
 use crate::borrow_tracker::unimap::UniIndex;
 use crate::errors::UBResult;
+use crate::global::ProtectedTagsRef;
 use crate::{println, AllocId, BorTag, Span};
 
 /// Cause of an access: either a real access or one
@@ -100,18 +101,12 @@ pub struct History<A: Allocator = Global> {
     events: Vec<Event, A>,
 }
 
-/// History formatted for use by `src/diagnostics.rs`.
-///
-/// NOTE: needs to be `Send` because of a bound on `MachineStopType`
-#[derive(Debug, Clone)]
-pub struct HistoryData<A: Allocator = Global> {
-    pub events: Vec<(Option<Span>, String), A>, // includes creation
+#[derive(Default, Debug, Clone)]
+pub struct HistoryData {
+    pub events: Vec<(Option<Span>, String)>, // includes creation
 }
 
-impl<A> History<A>
-where
-    A: Allocator,
-{
+impl History {
     /// Record an additional event to the history.
     pub fn push(&mut self, event: Event) {
         self.events.push(event);
@@ -131,16 +126,12 @@ where
     }
 }
 
-impl<A> HistoryData<A>
-where
-    A: Allocator,
-{
+impl HistoryData {
     // Format events from `new_history` into those recorded by `self`.
     //
-    #[allow(unused)]
-    fn extend(
+    pub fn extend(
         &mut self,
-        new_history: History<A>,
+        new_history: History,
         tag_name: &'static str,
         show_initial_state: bool,
     ) {
@@ -286,25 +277,18 @@ where
     }
 }
 
-#[allow(unused)]
-impl<A> History<A>
-where
-    A: Allocator,
-{
+impl History {
     /// Keep only the tag and creation
-    fn forget(&self, alloc: A) -> Self {
-        History { events: Vec::new_in(alloc), created: self.created, tag: self.tag }
+    pub fn forget(&self) -> Self {
+        History { events: Vec::new(), created: self.created, tag: self.tag }
     }
 
     /// Reconstruct the history relevant to `error_offset` by filtering
     /// only events whose range contains the offset we are interested in.
-    fn extract_relevant(&self, error_offset: u64, _error_kind: TransitionError, alloc: A) -> Self {
+    pub fn extract_relevant(&self, error_offset: u64) -> Self {
         let filtered_events =
             self.events.iter().filter(|e| e.transition_range.contains(&error_offset)).cloned();
-        // removed some of Miri's additional information as it is not neccessary to bsan
-        // .filter(|e| e.transition.is_relevant(error_kind))
-
-        let mut events_vec = Vec::new_in(alloc);
+        let mut events_vec = Vec::new();
         events_vec.extend(filtered_events);
 
         History { events: events_vec, created: self.created, tag: self.tag }
@@ -491,9 +475,9 @@ impl DisplayFmt {
     }
 
     /// Print extra text if the tag has a protector.
-    fn print_protector(&self, protector: Option<&ProtectorKind>) -> &'static str {
+    fn print_protector(&self, protector: Option<ProtectorKind>) -> &'static str {
         protector
-            .map(|p| match *p {
+            .map(|p| match p {
                 ProtectorKind::WeakProtector => " Weakly protected",
                 ProtectorKind::StrongProtector => " Strongly protected",
             })
@@ -608,7 +592,7 @@ impl DisplayRepr {
         &self,
         fmt: &DisplayFmt,
         indenter: &mut DisplayIndent,
-        protected_tags: &HashMap<BorTag, ProtectorKind>,
+        protected_tags: &ProtectedTagsRef<'_>,
         ranges: Vec<Range<u64>>,
         print_warning: bool,
     ) {
@@ -678,7 +662,7 @@ impl DisplayRepr {
         padding: &[usize],
         fmt: &DisplayFmt,
         indent: &mut DisplayIndent,
-        protected_tags: &HashMap<BorTag, ProtectorKind>,
+        protected_tags: &ProtectedTagsRef<'_>,
         is_last_child: bool,
         acc: &mut Vec<String>,
     ) {
@@ -714,7 +698,7 @@ impl DisplayRepr {
             line.push_str(fmt.padding.join_default);
         }
         line.push_str(&fmt.print_tag(self.tag, &self.name));
-        let protector = protected_tags.get(&self.tag);
+        let protector = protected_tags.get_protector_kind(self.tag);
         line.push_str(fmt.print_protector(protector));
         // Push the line to the accumulator then recurse.
         acc.push(line);
@@ -746,12 +730,12 @@ const DEFAULT_FORMATTER: DisplayFmt = DisplayFmt {
 };
 
 pub trait PrintTree {
-    fn print_tree(&self, protected_tags: &HashMap<BorTag, ProtectorKind>, show_unnamed: bool);
+    fn print_tree(&self, protected_tags: &ProtectedTagsRef<'_>, show_unnamed: bool);
 }
 
 impl<A: Allocator> PrintTree for Tree<A> {
     /// Display the contents of the tree.
-    fn print_tree(&self, protected_tags: &HashMap<BorTag, ProtectorKind>, show_unnamed: bool) {
+    fn print_tree(&self, protected_tags: &ProtectedTagsRef<'_>, show_unnamed: bool) {
         let mut indenter = DisplayIndent::new();
         let ranges = self.rperms.iter_all().map(|(range, _perms)| range).collect::<Vec<_>>();
         if let Some(repr) = DisplayRepr::from(self, show_unnamed) {
@@ -769,7 +753,7 @@ impl<A: Allocator> PrintTree for Tree<A> {
 pub fn print_tree_diff<A: Allocator + Clone>(
     new_tree: &Tree<A>,
     old_tree: &Tree<A>,
-    _protected_tags: &HashMap<BorTag, ProtectorKind>,
+    _protected_tags: &ProtectedTagsRef<'_>,
 ) {
     let mut new_tags = Vec::new();
     let mut changed_tags = Vec::new();

@@ -322,6 +322,7 @@ struct NodeAppArgs<'node> {
     /// Relative position of the access
     rel_pos: AccessRelatedness,
 }
+
 /// Data given to the error handler
 struct ErrHandlerArgs<'node> {
     /// Kind of error that occurred
@@ -334,6 +335,7 @@ struct ErrHandlerArgs<'node> {
     /// error was triggered.
     accessed_info: &'node NodeDebugInfo,
 }
+
 /// Internal contents of `Tree` with the minimum of mutable access for
 /// the purposes of the tree traversal functions: the permissions (`perms`) can be
 /// updated but not the tree structure (`tag_mapping` and `nodes`)

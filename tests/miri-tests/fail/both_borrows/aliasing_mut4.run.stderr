@@ -1,1 +1,15 @@
-An error occurred: AliasingViolation(TreeError { error_kind: ProtectedDisabled(Permission { inner: Frozen }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>(StrongProtector), name: None, history: History { tag: <TAG>(StrongProtector), created: (Span(100081397011977), Permission { inner: Frozen }), events: [] } }, access_cause: Explicit(Write), accessed_info: NodeDebugInfo { tag: <TAG>(StrongProtector), name: None, history: History { tag: <TAG>(StrongProtector), created: (Span(100081397000125), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: Active }, access_cause: Explicit(Write), is_foreign: false, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(100081397000557) }] } } })
+error: Undefined Behavior: write through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
+help: the accessed tag <TAG>(StrongProtector) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
+help: this write would cause the protected tag <TAG>(StrongProtector) (currently Frozen) to become Disabled
+help: protected tags must never be Disabled
+	help: the accessed tag <TAG>(StrongProtector) was created here
+	  --> RUSTLIB/core/src/mem/mod.rs:886:0
+
+	help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Frozen
+	  --> bsan/tests/miri-tests/fail/both_borrows/aliasing_mut4.rs:6:0
+
+
+backtrace:
+  0: RUSTLIB/core/src/mem/mod.rs:901:9
+  1: RUSTLIB/core/src/cell.rs:513:9
+  2: RUSTLIB/core/src/cell.rs:437:14

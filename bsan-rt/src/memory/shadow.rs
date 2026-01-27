@@ -198,30 +198,6 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
         }
     }
 
-    pub fn store_consecutive(&self, dst: usize, it: impl Iterator<Item = T>) {
-        let table_idx = TableIndex::new(dst);
-        for (prov_idx, prov) in it.enumerate() {
-            let idx = table_idx.add(prov_idx);
-            let l2_dest = self.ensure_l2(idx);
-            unsafe {
-                (*l2_dest.as_ptr())[idx.l2_index] = prov;
-            }
-        }
-    }
-
-    pub fn load_consecutive(&self, src: usize, len: usize, mut dest: impl Extend<T>) {
-        let start_idx = TableIndex::new(src);
-        for offset in 0..len {
-            let curr_idx = start_idx.add(offset);
-            let ptr = if let Some(curr_l2) = self.get_l2(curr_idx) {
-                unsafe { &raw const (*curr_l2.as_ptr())[curr_idx.l2_index] }
-            } else {
-                self.default
-            };
-            dest.extend([unsafe { *ptr }]);
-        }
-    }
-
     /// Copy provenance values within a given range from the source to the destination.
     pub fn memcpy(&self, src: usize, dst: usize, num_bytes: usize) {
         if num_bytes < PTR_BYTES {

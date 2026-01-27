@@ -1,4 +1,0 @@
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/illegal_write5.rs:9:25
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/illegal_write5.rs:18:14
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/illegal_write5.rs:9:25
-/home/icmccorm/bsan/bsan-clean/tests/miri-tests/fail/both_borrows/illegal_write5.rs:18:14

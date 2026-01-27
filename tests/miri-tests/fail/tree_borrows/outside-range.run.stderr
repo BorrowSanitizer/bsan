@@ -1,1 +1,15 @@
-An error occurred: AliasingViolation(TreeError { error_kind: ProtectedDisabled(Permission { inner: ReservedFrz { conflicted: false } }), alloc_id: ALLOC, error_offset: 3, conflicting_info: NodeDebugInfo { tag: <TAG>(StrongProtector), name: None, history: History { tag: <TAG>(StrongProtector), created: (Span(97670259829564), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: Disabled }, access_cause: Explicit(Write), is_foreign: true, access_range: Some(AllocRange { start: size1, size: size1 }), transition_range: 1..2, span: Span(97670259830047) }] } }, access_cause: Explicit(Write), accessed_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(97670259831911), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: Active }, access_cause: Explicit(Write), is_foreign: false, access_range: Some(AllocRange { start: size1, size: size1 }), transition_range: 1..2, span: Span(97670259830047) }, Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: Active }, access_cause: Explicit(Write), is_foreign: false, access_range: Some(AllocRange { start: size3, size: size1 }), transition_range: 3..4, span: Span(97670259830952) }] } } })
+error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x3] is forbidden
+help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
+help: this write would cause the protected tag <TAG>(StrongProtector) (currently Reserved) to become Disabled
+help: protected tags must never be Disabled
+	help: the accessed tag <TAG>(unprotected) was created here
+	  --> RUSTLIB/core/src/slice/mod.rs:757:0
+
+	help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
+	  --> bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:13:0
+
+
+backtrace:
+  0: bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:21:5
+  1: bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:9:9
+  2: RUSTLIB/core/src/ops/function.rs:250:5

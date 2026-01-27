@@ -6,7 +6,7 @@ use spin::MutexGuard;
 use tree::{AllocRange, Tree};
 
 use crate::borrow_tracker::tree::{ChildParams, LocationState};
-use crate::diagnostics::AccessCause;
+use crate::diagnostics::{self, AccessCause, PrintTree};
 use crate::errors::{UBInfo, UBResult};
 use crate::span::Span;
 use crate::{AllocId, BorTag, GlobalCtx, Provenance};
@@ -24,6 +24,10 @@ pub struct BorrowTracker<'b> {
 impl<'b> BorrowTracker<'b> {
     fn tree_mut(&mut self) -> &mut Tree {
         self.tree.as_mut().unwrap()
+    }
+
+    fn tree(&self) -> &Tree {
+        self.tree.as_ref().unwrap()
     }
 
     pub fn for_alloc<T, F>(prov: Provenance, f: F) -> UBResult<Option<T>>
@@ -92,7 +96,7 @@ impl<'b> BorrowTracker<'b> {
             let relative_offset = start.addr().wrapping_sub(base_addr.addr());
             if start.addr() < base_addr.addr() || (relative_offset + access_size > alloc_size) {
                 return if access_size != 0 {
-                    Err(UBInfo::AccessOutOfBounds(prov, access_size, alloc_size))
+                    Err(UBInfo::AccessOutOfBounds(prov.alloc_id, access_size, alloc_size))
                 } else {
                     Ok(None)
                 };
@@ -211,8 +215,7 @@ impl<'b> BorrowTracker<'b> {
             alloc_id,
             span,
             alloc::alloc::Global,
-        )?;
-        Ok(())
+        )
     }
 
     pub fn access(
@@ -229,8 +232,7 @@ impl<'b> BorrowTracker<'b> {
             alloc_id,
             span,
             alloc::alloc::Global,
-        )?;
-        Ok(())
+        )
     }
 
     pub fn dealloc(&mut self, global_ctx: &GlobalCtx, span: Span) -> UBResult<()> {
@@ -248,5 +250,24 @@ impl<'b> BorrowTracker<'b> {
         let info = unsafe { &mut *self.prov.alloc_info };
         info.alloc_id = AllocId::invalid();
         Ok(())
+    }
+
+    pub fn debug_take_snapshot(&self, ctx: &GlobalCtx) {
+        let tree = self.tree();
+        ctx.take_snapshot(self.prov.alloc_id, tree.clone());
+    }
+
+    pub fn debug_print_diff(&self, ctx: &GlobalCtx) {
+        ctx.with_snapshot(self.prov.alloc_id, |old_tree| {
+            diagnostics::print_tree_diff(self.tree(), old_tree, &ctx.protected_tags());
+        });
+    }
+
+    pub fn debug_print_tree(&self, ctx: &GlobalCtx, show_unnamed: bool) {
+        self.tree().print_tree(&ctx.protected_tags(), show_unnamed);
+    }
+
+    pub fn debug_tree_size(&self) -> usize {
+        self.tree().tag_mapping.len()
     }
 }

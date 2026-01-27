@@ -1,1 +1,15 @@
-An error occurred: AliasingViolation(TreeError { error_kind: ChildAccessForbidden(Permission { inner: Disabled }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(109733330007031), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: Disabled }, access_cause: Explicit(Write), is_foreign: true, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(109733330007307) }] } }, access_cause: Explicit(Write), accessed_info: NodeDebugInfo { tag: <TAG>(unprotected), name: None, history: History { tag: <TAG>(unprotected), created: (Span(109733330007031), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: Disabled }, access_cause: Explicit(Write), is_foreign: true, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(109733330007307) }] } } })
+error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this write
+	help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
+	  --> bsan/tests/fail/unique_ref.rs:4:14
+
+	help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
+	  --> bsan/tests/fail/unique_ref.rs:7:5
+
+	help: this transition corresponds to a loss of read and write permissions
+
+
+backtrace:
+  0: bsan/tests/fail/unique_ref.rs:9:9
+  1: RUSTLIB/core/src/ops/function.rs:250:5
+  2: RUSTLIB/std/src/sys/backtrace.rs:166:18

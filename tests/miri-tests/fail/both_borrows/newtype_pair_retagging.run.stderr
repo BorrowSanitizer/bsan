@@ -1,1 +1,20 @@
-An error occurred: AliasingViolation(TreeError { error_kind: ProtectedDisabled(Permission { inner: ReservedFrz { conflicted: true } }), alloc_id: ALLOC, error_offset: 0, conflicting_info: NodeDebugInfo { tag: <TAG>(StrongProtector), name: None, history: History { tag: <TAG>(StrongProtector), created: (Span(98236973185147), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: ReservedFrz { conflicted: true } }, access_cause: Reborrow, is_foreign: true, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(98236973240775) }] } }, access_cause: Dealloc, accessed_info: NodeDebugInfo { tag: <TAG>(WeakProtector), name: None, history: History { tag: <TAG>(WeakProtector), created: (Span(98236973191862), Permission { inner: ReservedFrz { conflicted: false } }), events: [Event { transition: PermTransition { from: ReservedFrz { conflicted: false }, to: Active }, access_cause: Dealloc, is_foreign: false, access_range: Some(AllocRange { start: size0, size: size4 }), transition_range: 0..4, span: Span(98236973642131) }] } } })
+error: Undefined Behavior: deallocation through <TAG>(WeakProtector) at ALLOC[0x0] is forbidden
+help: the accessed tag <TAG>(WeakProtector) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
+help: this deallocation would cause the protected tag <TAG>(StrongProtector) (currently Reserved (conflicted)) to become Disabled
+help: protected tags must never be Disabled
+	help: the accessed tag <TAG>(WeakProtector) was created here
+	  --> RUSTLIB/core/src/mem/mod.rs:970:0
+
+	help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
+	  --> bsan/tests/miri-tests/fail/both_borrows/newtype_pair_retagging.rs:5:0
+
+	help: the protected tag <TAG>(StrongProtector) later transitioned due to a reborrow (acting as a foreign read access)
+	  --> RUSTLIB/alloc/src/boxed.rs:1493:9
+
+	help: this transition corresponds to a temporary loss of write permissions until function exit
+
+
+backtrace:
+  0: RUSTLIB/std/src/sys/alloc/PLATFORM.rs:NN:NN
+  1: RUSTLIB/alloc/src/alloc.rs:115:14
+  2: RUSTLIB/alloc/src/alloc.rs:209:22
