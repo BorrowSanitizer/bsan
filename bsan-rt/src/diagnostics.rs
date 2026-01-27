@@ -16,7 +16,7 @@ use hashbrown::HashMap;
 
 use crate::borrow_tracker::tree::{AllocRange, LocationState, Tree};
 use crate::borrow_tracker::unimap::UniIndex;
-use crate::errors::{BorsanResult, UBResult};
+use crate::errors::UBResult;
 use crate::{println, AllocId, BorTag, Span};
 
 /// Cause of an access: either a real access or one
@@ -770,7 +770,7 @@ pub fn print_tree_diff<A: Allocator + Clone>(
     new_tree: &Tree<A>,
     old_tree: &Tree<A>,
     _protected_tags: &HashMap<BorTag, ProtectorKind>,
-) -> BorsanResult<()> {
+) {
     let mut new_tags = Vec::new();
     let mut changed_tags = Vec::new();
 
@@ -829,5 +829,4 @@ pub fn print_tree_diff<A: Allocator + Clone>(
             }
         }
     }
-    Ok(())
 }

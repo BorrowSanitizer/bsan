@@ -16,7 +16,6 @@ use super::*;
 use crate::diagnostics::{AccessCause, Event, NodeDebugInfo};
 use crate::errors::{TransitionError, TreeError, TreeTransitionResult, UBResult};
 use crate::helpers::FxHashSet;
-use crate::memory::hooks::BsanAllocHooks;
 use crate::{AllocId, BorTag, ProtectedTags};
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -679,7 +678,7 @@ pub(super) struct ChildParams {
     pub base_offset: Size,
     pub parent_tag: BorTag,
     pub new_tag: BorTag,
-    pub inside_perms: RangeMap<LocationState, BsanAllocHooks>,
+    pub inside_perms: RangeMap<LocationState>,
     pub default_perm: Permission,
     pub protected: bool,
     pub span: Span,

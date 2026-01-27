@@ -14,7 +14,7 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{ffi, fmt, ptr, slice};
 
-use bsan_shared::{AccessKind, Permission, RetagInfo, Size};
+use bsan_shared::{AccessKind, RetagInfo, Size};
 use libc_print::std_name::*;
 use spin::Mutex;
 
@@ -27,29 +27,17 @@ mod borrow_tracker;
 use borrow_tracker::*;
 
 mod diagnostics;
+use diagnostics::*;
 
 #[macro_use]
 mod span;
-use span::{FramePointer, Span};
+use span::Span;
 
 mod errors;
 mod memory;
 
-#[cfg(not(test))]
-mod sanitizer_common_interface;
-
 use crate::borrow_tracker::tree::Tree;
-use crate::diagnostics::*;
-use crate::errors::BorsanResult;
-use crate::memory::hooks;
-
-macro_rules! println {
-    ($($arg:tt)*) => {
-        libc_print::std_name::println!($($arg)*)
-    };
-}
-
-pub(crate) use println;
+use crate::span::FramePointer;
 
 /// The number of `Provenance` values stored in the thread
 /// local arrays for arguments and return values.
@@ -105,41 +93,46 @@ struct DebugSummary {
 #[cfg(feature = "debug")]
 impl fmt::Display for DebugSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}] 0x{:x} @({:?}, {:?}) -> ", self.op, self.ptr, self.alloc_id, self.bor_tag)?;
         match self.info {
-            AllocInfoSummary::WildCard => write!(f, "(wildcard)"),
-            AllocInfoSummary::Null => write!(f, "(null)"),
-            AllocInfoSummary::Valid { alloc_id, base_addr, size } => {
-                write!(f, "({:?}, {:?}, {:?})", alloc_id, base_addr, size)
-            }
+            AllocInfoSummary::WildCard => write!(
+                f,
+                "[{}] 0x{:x} @({:?}, {:?}) -> (wildcard)",
+                self.op, self.ptr, self.alloc_id, self.bor_tag
+            ),
+            AllocInfoSummary::Null => write!(
+                f,
+                "[{}] 0x{:x} @({:?}, {:?}) -> (null)",
+                self.op, self.ptr, self.alloc_id, self.bor_tag
+            ),
+            AllocInfoSummary::Valid { alloc_id, base_addr, size } => write!(
+                f,
+                "[{}] 0x{:x} @({:?}, {:?}) -> ({:?}, {:?}, {:?})",
+                self.op, self.ptr, self.alloc_id, self.bor_tag, alloc_id, base_addr, size
+            ),
         }
     }
 }
 
-#[cfg(feature = "debug")]
 macro_rules! debug_bsan {
-    ($op:literal, $ptr:ident, $alloc_id:ident, $bor_tag:ident, $alloc_info:expr) => {{
-        #[allow(unused_unsafe)]
-        let info = match $alloc_id.0 {
-            0 => AllocInfoSummary::WildCard,
-            1 => AllocInfoSummary::Null,
-            _ => unsafe { &*$alloc_info }.summarize(),
-        };
-        let summary = DebugSummary {
-            op: $op,
-            ptr: $ptr.addr(),
-            alloc_id: $alloc_id,
-            bor_tag: $bor_tag,
-            info,
-        };
-        libc_print::std_name::println!("{}", summary);
-    }};
-}
-
-/// No-op macro when debug feature is disabled
-#[cfg(not(feature = "debug"))]
-macro_rules! debug_bsan {
-    ($op:literal, $ptr:ident, $alloc_id:ident, $bor_tag:ident, $info:expr) => {{}};
+    ($op:literal, $ptr:ident, $alloc_id:ident, $bor_tag:ident, $alloc_info:expr) => {
+        #[cfg(feature = "debug")]
+        {
+            #[allow(unused_unsafe)]
+            let info = match $alloc_id.0 {
+                0 => AllocInfoSummary::WildCard,
+                1 => AllocInfoSummary::Null,
+                _ => unsafe { &*$alloc_info }.summarize(),
+            };
+            let summary = DebugSummary {
+                op: $op,
+                ptr: $ptr.addr(),
+                alloc_id: $alloc_id,
+                bor_tag: $bor_tag,
+                info,
+            };
+            libc_print::std_name::println!("{}", summary);
+        }
+    };
 }
 
 #[unsafe(no_mangle)]
@@ -210,7 +203,7 @@ impl AllocId {
 
 impl Default for AllocId {
     fn default() -> Self {
-        AllocId(__BSAN_THREAD_ID_CTR.fetch_add(1, Ordering::Relaxed))
+        AllocId(__BSAN_ALLOC_ID_CTR.fetch_add(1, Ordering::Relaxed))
     }
 }
 
@@ -397,8 +390,7 @@ pub struct AllocInfo {
     pub alloc_id: AllocId,
     pub base_addr: FreeListAddrUnion,
     pub size: usize,
-    pub tree_lock: Mutex<Option<tree::Tree<hooks::BsanAllocHooks>>>,
-    pub snapshot: Mutex<Option<tree::Tree<hooks::BsanAllocHooks>>>,
+    pub tree_lock: Mutex<Option<tree::Tree>>,
 }
 
 impl AllocInfo {
@@ -408,18 +400,10 @@ impl AllocInfo {
             base_addr: FreeListAddrUnion { base_addr: ptr::null_mut() },
             size: 0,
             tree_lock: Mutex::new(None),
-            snapshot: Mutex::new(None),
         }
     }
 
-    fn new(
-        ctx: &GlobalCtx,
-        base_addr: *mut c_void,
-        size: usize,
-        alloc_id: AllocId,
-        bor_tag: BorTag,
-        span: Span,
-    ) -> Self {
+    fn new(base_addr: *mut c_void, size: usize, alloc_id: AllocId, bor_tag: BorTag) -> Self {
         Self {
             alloc_id,
             base_addr: FreeListAddrUnion { base_addr },
@@ -427,28 +411,10 @@ impl AllocInfo {
             tree_lock: Mutex::new(Some(Tree::new_in(
                 bor_tag,
                 Size::from_bytes(size),
-                span,
-                ctx.allocator(),
+                Span::new(),
+                alloc::alloc::Global,
             ))),
-            snapshot: Mutex::new(None),
         }
-    }
-
-    pub fn conflict_at(&self) -> Option<(Span, Permission)> {
-        self.tree_lock
-            .lock()
-            .as_ref()
-            .and_then(|tree| tree.nodes.last().map(|node| node.debug_info.history.created_at()))
-    }
-
-    pub fn created_at(&self) -> Option<(Span, Permission)> {
-        self.tree_lock
-            .lock()
-            .as_ref()
-            .and_then(|tree| {
-                tree.nodes.get(tree.root).map(|node| Some(node.debug_info.history.created_at()))
-            })
-            .unwrap_or(None)
     }
 
     #[cfg(feature = "debug")]
@@ -480,7 +446,7 @@ pub enum AllocInfoSummary {
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_internal_init() {
     unsafe {
-        init_global_ctx(hooks::DEFAULT_HOOKS);
+        init_global_ctx();
     }
 }
 
@@ -496,8 +462,7 @@ unsafe extern "C-unwind" fn __bsan_internal_deinit() {
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_local_init() {
-    let ctx = unsafe { global_ctx() };
-    ctx.init_local_ctx().unwrap_or_else(|err| ctx.handle_error(err))
+    unsafe { global_ctx().init_local_ctx() };
 }
 
 #[unsafe(no_mangle)]
@@ -519,20 +484,18 @@ unsafe extern "C-unwind" fn __bsan_retag(
 ) -> BorTag {
     debug_bsan!("retag", object_addr, alloc_id, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
-    let span = unsafe { span!() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     let retag_info = unsafe { RetagInfo::from_raw(access_size, perm, im_data, im_len) };
-    BorrowTracker::retag(ctx, prov, object_addr, Some(access_size), retag_info, span)
+    BorrowTracker::retag(ctx, prov, object_addr, Some(access_size), retag_info, Span::new())
         .unwrap_or_else(|err| ctx.handle_error(err))
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_pop_frame(frame_start: *const Provenance, protected: usize) {
     let global = unsafe { global_ctx() };
-    let span = unsafe { span!() };
     let provenance = unsafe { slice::from_raw_parts(frame_start, protected) };
     for prov in provenance {
-        let _ = BorrowTracker::for_alloc(*prov, |mut bt| bt.protector_end(global, span));
+        let _ = BorrowTracker::for_alloc(*prov, |mut bt| bt.protector_end(global, Span::new()));
         global.protected_tags_mut().remove_protector(prov.bor_tag);
     }
 }
@@ -549,9 +512,8 @@ unsafe extern "C-unwind" fn __bsan_read(
     debug_bsan!("read", ptr, alloc_id, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-    let span = unsafe { span!() };
     BorrowTracker::for_access(prov, ptr, Some(access_size), |mut bt| {
-        bt.access(ctx, AccessKind::Read, span)
+        bt.access(ctx, AccessKind::Read, Span::new())
     })
     .unwrap_or_else(|err| ctx.handle_error(err));
 }
@@ -568,9 +530,8 @@ unsafe extern "C-unwind" fn __bsan_write(
     debug_bsan!("write", ptr, alloc_id, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-    let span = unsafe { span!() };
     BorrowTracker::for_access(prov, ptr, Some(access_size), |mut bt| {
-        bt.access(ctx, AccessKind::Write, span)
+        bt.access(ctx, AccessKind::Write, Span::new())
     })
     .unwrap_or_else(|err| ctx.handle_error(err));
 }
@@ -595,8 +556,7 @@ extern "C" fn __bsan_dealloc(
             return;
         }
     }
-    let span = unsafe { span!() };
-    BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, span))
+    BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, Span::new()))
         .unwrap_or_else(|err| ctx.handle_error(err));
 
     if !weak && let Some(alloc_info) = NonNull::new(alloc_info) {
@@ -641,7 +601,7 @@ extern "C" fn __bsan_validate_param_tls(len: usize) {
 
 /// Ensures that the provenance array for the return value is valid.
 /// If the boundary marker is null, then we called an instrumented function, so we
-// can trust that the contents of the array is valid. Otherwise, we need to fill it
+/// can trust that the contents of the array is valid. Otherwise, we need to fill it
 /// with wildcard provenance values for each pointer being returned. We also need to
 /// restore the boundary marker to the value it had before the function that was called.
 #[unsafe(no_mangle)]
@@ -663,17 +623,9 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     bor_tag: BorTag,
 ) -> NonNull<AllocInfo> {
     let ctx = unsafe { global_ctx() };
-    let span = unsafe { span!() };
     #[allow(clippy::let_and_return)]
-    let alloc_info = ctx
-        .create_alloc_info(AllocInfo::new(ctx, base_addr, size, alloc_id, bor_tag, span))
-        .unwrap_or_else(|info| ctx.handle_error(info));
+    let alloc_info = ctx.create_alloc_info(AllocInfo::new(base_addr, size, alloc_id, bor_tag));
     debug_bsan!("alloc", base_addr, alloc_id, bor_tag, alloc_info.as_ptr());
-    // TODO: this needs to be inserted whereever we need to track allocations
-    // #[cfg(not(test))]
-    // unsafe {
-    //    global_ctx().store_stacktrace_for_allocation(alloc_id, span)
-    // };
     alloc_info
 }
 
@@ -745,8 +697,7 @@ unsafe extern "C-unwind" fn __bsan_shadow_store_vector(
 /// Reserves a stack slot for allocation metadata.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_reserve_stack_slot() -> NonNull<AllocInfo> {
-    let ctx = unsafe { global_ctx() };
-    ctx.create_alloc_info(AllocInfo::invalid()).unwrap_or_else(|info| ctx.handle_error(info))
+    unsafe { global_ctx().create_alloc_info(AllocInfo::invalid()) }
 }
 
 #[unsafe(no_mangle)]
@@ -773,15 +724,9 @@ unsafe extern "C" fn __bsan_alloc_stack(
         bor_tag,
         alloc_info.as_ptr().cast::<AllocInfo>()
     );
-    let span = unsafe { span!() };
     unsafe {
-        alloc_info.write(AllocInfo::new(global_ctx(), base_addr, size, alloc_id, bor_tag, span));
+        alloc_info.write(AllocInfo::new(base_addr, size, alloc_id, bor_tag));
     }
-    // TODO: this needs to be inserted whereever we need to track allocations
-    // #[cfg(not(test))]
-    // unsafe {
-    //    global_ctx().store_stacktrace_for_allocation(alloc_id, span)
-    // };
 }
 
 /// Marks the borrow tag for `prov` as "exposed," allowing it to be resolved to
@@ -869,15 +814,6 @@ extern "C" fn __bsan_debug_print_borrow_state(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_debug_gc(alloc_id: AllocId, bor_tag: BorTag, alloc_info: *mut AllocInfo) {
-    if alloc_info.is_null() {
-        return;
-    }
-    // TODO: Implement GC
-    let _ = (alloc_id, bor_tag, alloc_info);
-}
-
-#[unsafe(no_mangle)]
 extern "C" fn __bsan_debug_tree_size(
     _alloc_id: AllocId,
     _bor_tag: BorTag,
@@ -888,7 +824,6 @@ extern "C" fn __bsan_debug_tree_size(
         return;
     }
     let alloc_info = unsafe { &*alloc_info };
-
     let tree_lock = alloc_info.tree_lock.lock();
     if let Some(tree) = &*tree_lock {
         crate::println!("Tree size: {}", tree.tag_mapping.len());
@@ -897,7 +832,7 @@ extern "C" fn __bsan_debug_tree_size(
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_debug_snapshot(
-    _alloc_id: AllocId,
+    alloc_id: AllocId,
     _bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) {
@@ -905,17 +840,16 @@ extern "C" fn __bsan_debug_snapshot(
         return;
     }
     let alloc_info = unsafe { &*alloc_info };
-
+    let global = unsafe { global_ctx() };
     let tree_lock = alloc_info.tree_lock.lock();
     if let Some(tree) = &*tree_lock {
-        let mut snapshot = alloc_info.snapshot.lock();
-        *snapshot = Some(tree.clone());
+        global.snapshots.write().insert(alloc_id, tree.clone());
     }
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_debug_print_diff(
-    _alloc_id: AllocId,
+    alloc_id: AllocId,
     _bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) {
@@ -924,14 +858,12 @@ extern "C" fn __bsan_debug_print_diff(
     }
     let alloc_info = unsafe { &*alloc_info };
     let global_ctx = unsafe { global_ctx() };
-
     let tree_lock = alloc_info.tree_lock.lock();
-    let snapshot_lock = alloc_info.snapshot.lock();
-
-    if let (Some(tree), Some(snapshot)) = (&*tree_lock, &*snapshot_lock) {
+    let snapshot_lock = global_ctx.snapshots.read();
+    let snapshot = snapshot_lock.get(&alloc_id);
+    if let (Some(tree), Some(snapshot)) = (&*tree_lock, snapshot) {
         let protected_tags = Default::default();
         diagnostics::print_tree_diff(tree, snapshot, &protected_tags)
-            .unwrap_or_else(|err| global_ctx.handle_error(err));
     } else {
         crate::println!("(no snapshot or tree available)");
     }

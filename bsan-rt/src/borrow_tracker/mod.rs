@@ -7,8 +7,7 @@ use tree::{AllocRange, Tree};
 
 use crate::borrow_tracker::tree::{ChildParams, LocationState};
 use crate::diagnostics::AccessCause;
-use crate::errors::{BorsanResult, UBInfo};
-use crate::memory::hooks::BsanAllocHooks;
+use crate::errors::{UBInfo, UBResult};
 use crate::span::Span;
 use crate::{AllocId, BorTag, GlobalCtx, Provenance};
 
@@ -19,17 +18,17 @@ pub mod unimap;
 pub struct BorrowTracker<'b> {
     prov: Provenance,
     range: AllocRange,
-    tree: MutexGuard<'b, Option<Tree<BsanAllocHooks>>>,
+    tree: MutexGuard<'b, Option<Tree>>,
 }
 
 impl<'b> BorrowTracker<'b> {
-    fn tree_mut(&mut self) -> &mut Tree<BsanAllocHooks> {
+    fn tree_mut(&mut self) -> &mut Tree {
         self.tree.as_mut().unwrap()
     }
 
-    pub fn for_alloc<T, F>(prov: Provenance, f: F) -> BorsanResult<Option<T>>
+    pub fn for_alloc<T, F>(prov: Provenance, f: F) -> UBResult<Option<T>>
     where
-        F: FnOnce(Self) -> BorsanResult<T>,
+        F: FnOnce(Self) -> UBResult<T>,
     {
         if prov.alloc_id == AllocId::wildcard() {
             Ok(None)
@@ -59,9 +58,9 @@ impl<'b> BorrowTracker<'b> {
         start: *mut c_void,
         access_size: Option<usize>,
         f: F,
-    ) -> BorsanResult<Option<T>>
+    ) -> UBResult<Option<T>>
     where
-        F: FnOnce(Self) -> BorsanResult<T>,
+        F: FnOnce(Self) -> UBResult<T>,
     {
         if prov.alloc_id == AllocId::wildcard() {
             Ok(None)
@@ -113,7 +112,7 @@ impl<'b> BorrowTracker<'b> {
         access_size: Option<usize>,
         retag_info: RetagInfo<'_>,
         span: Span,
-    ) -> BorsanResult<BorTag> {
+    ) -> UBResult<BorTag> {
         Self::for_access(prov, start, access_size, |mut bt| {
             bt.retag_inner(global_ctx, retag_info, span)
         })
@@ -124,7 +123,7 @@ impl<'b> BorrowTracker<'b> {
         global_ctx: &GlobalCtx,
         retag_info: RetagInfo<'_>,
         span: Span,
-    ) -> BorsanResult<BorTag> {
+    ) -> UBResult<BorTag> {
         let alloc_id = self.prov.alloc_id;
         let parent_tag = self.prov.bor_tag;
         let new_tag = BorTag::default();
@@ -156,7 +155,7 @@ impl<'b> BorrowTracker<'b> {
         let mut inside_perms = RangeMap::new_in(
             Size::from_bytes(retag_info.size),
             initial_state,
-            global_ctx.allocator(),
+            alloc::alloc::Global,
         );
 
         if let Some(im_layout) = retag_info.im_layout {
@@ -182,7 +181,7 @@ impl<'b> BorrowTracker<'b> {
                     &global_ctx.protected_tags(),
                     alloc_id,
                     span,
-                    global_ctx.allocator(),
+                    alloc::alloc::Global,
                 )?;
             }
         }
@@ -203,7 +202,7 @@ impl<'b> BorrowTracker<'b> {
         Ok(new_tag)
     }
 
-    pub fn protector_end(&mut self, global_ctx: &GlobalCtx, span: Span) -> BorsanResult<()> {
+    pub fn protector_end(&mut self, global_ctx: &GlobalCtx, span: Span) -> UBResult<()> {
         let (bor_tag, alloc_id) = (self.prov.bor_tag, self.prov.alloc_id);
         self.tree_mut().perform_access(
             bor_tag,
@@ -211,7 +210,7 @@ impl<'b> BorrowTracker<'b> {
             &global_ctx.protected_tags(),
             alloc_id,
             span,
-            global_ctx.allocator(),
+            alloc::alloc::Global,
         )?;
         Ok(())
     }
@@ -221,7 +220,7 @@ impl<'b> BorrowTracker<'b> {
         global_ctx: &GlobalCtx,
         access_kind: AccessKind,
         span: Span,
-    ) -> BorsanResult<()> {
+    ) -> UBResult<()> {
         let (range, bor_tag, alloc_id) = (self.range, self.prov.bor_tag, self.prov.alloc_id);
         self.tree_mut().perform_access(
             bor_tag,
@@ -229,12 +228,12 @@ impl<'b> BorrowTracker<'b> {
             &global_ctx.protected_tags(),
             alloc_id,
             span,
-            global_ctx.allocator(),
+            alloc::alloc::Global,
         )?;
         Ok(())
     }
 
-    pub fn dealloc(&mut self, global_ctx: &GlobalCtx, span: Span) -> BorsanResult<()> {
+    pub fn dealloc(&mut self, global_ctx: &GlobalCtx, span: Span) -> UBResult<()> {
         let prov = self.prov;
         let range = self.range;
         let mut tree = self.tree.take().unwrap();
@@ -244,7 +243,7 @@ impl<'b> BorrowTracker<'b> {
             &global_ctx.protected_tags(),
             prov.alloc_id,
             span,
-            global_ctx.allocator(),
+            alloc::alloc::Global,
         )?;
         let info = unsafe { &mut *self.prov.alloc_info };
         info.alloc_id = AllocId::invalid();

@@ -6,15 +6,10 @@ use core::ptr::NonNull;
 use bsan_shared::ProtectorKind;
 use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-#[cfg(not(test))]
-use crate::diagnostics::History;
 use crate::errors::UBInfo;
 use crate::helpers::FxHashMap;
 use crate::local::{deinit_local_ctx, init_local_ctx, local_ctx, local_ctx_mut, LocalCtx};
-use crate::memory::hooks::{BsanAllocHooks, BsanHooks};
 use crate::memory::{Heap, ShadowHeap};
-#[cfg(not(test))]
-use crate::sanitizer_common_interface::StackTraceDepot;
 use crate::*;
 
 #[derive(Default)]
@@ -74,33 +69,26 @@ impl<'a> Deref for ProtectedTagsRef<'a> {
 /// around explicitly, but it prevents us from relying on implicit global state and limits the spread
 /// of unsafety throughout the library.
 pub struct GlobalCtx {
-    hooks: BsanHooks,
     protected_tags: RwLock<ProtectedTags>,
     shadow_heap: ShadowHeap<Provenance>,
     alloc_metadata_map: Heap<AllocInfo>,
     threads: RwLock<FxHashMap<ThreadId, NonNull<LocalCtx>>>,
-    #[cfg(not(test))]
-    allocation_stack_depot: Mutex<crate::sanitizer_common_interface::StackTraceDepot>,
+    pub snapshots: RwLock<FxHashMap<AllocId, Tree>>,
 }
 
 impl GlobalCtx {
-    /// Creates a new instance of `GlobalCtx` using the given `BsanHooks`.
-    /// This function will also initialize our shadow heap
-    fn new(hooks: BsanHooks) -> Self {
+    fn new() -> Self {
         Self {
-            hooks,
             protected_tags: RwLock::new(ProtectedTags::default()),
             alloc_metadata_map: Heap::new(),
             shadow_heap: ShadowHeap::new(&raw const __BSAN_WILDCARD_PROVENANCE),
             threads: RwLock::new(FxHashMap::default()),
-            #[cfg(not(test))]
-            allocation_stack_depot: Mutex::new(StackTraceDepot::default()),
+            snapshots: RwLock::new(FxHashMap::default()),
         }
     }
 
-    pub(crate) fn create_alloc_info(&self, info: AllocInfo) -> BorsanResult<NonNull<AllocInfo>> {
-        let info = self.alloc_metadata_map.alloc(info);
-        Ok(info)
+    pub(crate) fn create_alloc_info(&self, info: AllocInfo) -> NonNull<AllocInfo> {
+        self.alloc_metadata_map.alloc(info)
     }
 
     pub(crate) unsafe fn destroy_alloc_info(&self, ptr: NonNull<AllocInfo>) {
@@ -111,13 +99,9 @@ impl GlobalCtx {
         &self.shadow_heap
     }
 
-    pub fn allocator(&self) -> BsanAllocHooks {
-        self.hooks.alloc
-    }
-
     pub fn exit(&self, code: i32) -> ! {
         unsafe {
-            (self.hooks.exit)(code);
+            libc::exit(code);
         }
     }
 
@@ -148,12 +132,11 @@ impl GlobalCtx {
         ProtectedTagsRefMut(self.protected_tags.write())
     }
 
-    pub fn init_local_ctx(&self) -> BorsanResult<()> {
+    pub fn init_local_ctx(&self) {
         let tid = ThreadId::default();
         unsafe { __BSAN_THREAD_ID = tid };
         let local_ctx = unsafe { init_local_ctx(tid.is_main()) };
         self.threads.write().insert(tid, local_ctx);
-        Ok(())
     }
 
     /// # Safety
@@ -166,56 +149,8 @@ impl GlobalCtx {
         }
     }
 
-    #[allow(unused)]
-    #[cfg(not(test))]
-    pub fn store_stacktrace_for_allocation(&self, alloc_id: AllocId, span_data: Span) {
-        match self.allocation_stack_depot.lock().capture_stack(alloc_id, None, span_data) {
-            Ok(()) => {}
-            Err(e) => {
-                self.handle_error(e);
-            }
-        }
-    }
-
-    #[inline(never)] // never inline to have specific break point for debugging with GDB
-    #[allow(clippy::collapsible_if)]
-    pub fn handle_error(&self, ub_info: UBInfo) -> ! {
-        crate::eprintln!("An error occurred: {ub_info}");
-        #[cfg(not(test))]
-        {
-            if let Some(alloc_id) = ub_info.get_alloc_id()
-                && let Some(stack_id) = self.allocation_stack_depot.lock().print_trace(&alloc_id)
-            {
-                crate::eprintln!("{:?} previously allocated here:", alloc_id);
-                sanitizer_common_interface::print_stack_trace(Some(stack_id));
-            }
-
-            match ub_info {
-                errors::UBInfo::AliasingViolation(tree_error) => {
-                    let print_traces = |history: &History| {
-                        history.created_at().0.print_stack_trace();
-                        history.events_iter().for_each(|event| {
-                            event.span.print_stack_trace();
-                        });
-                    };
-
-                    print_traces(&tree_error.accessed_info.history);
-                    print_traces(&tree_error.conflicting_info.history);
-                }
-                errors::UBInfo::AccessOutOfBounds(prov, _, _) => {
-                    if let Some(alloc_info) = unsafe { prov.alloc_info.as_ref() } {
-                        if let Some((span, _)) = alloc_info.created_at() {
-                            span.print_stack_trace();
-                        }
-                        if let Some((span, _)) = alloc_info.conflict_at() {
-                            span.print_stack_trace();
-                        }
-                    }
-                }
-                _ => (),
-            }
-        }
-
+    pub fn handle_error(&self, info: UBInfo) -> ! {
+        crate::eprintln!("An error occurred: {info:?}\n\n");
         self.exit(1)
     }
 }
@@ -258,9 +193,9 @@ static GLOBAL_CTX: GlobalCtxWrapper = GlobalCtxWrapper(UnsafeCell::new(MaybeUnin
 /// It is marked as `unsafe`, because it relies on the set of function pointers in
 /// `BsanHooks` to be valid.
 #[inline]
-pub unsafe fn init_global_ctx(hooks: BsanHooks) {
+pub unsafe fn init_global_ctx() {
     unsafe {
-        (*GLOBAL_CTX.0.get()).write(GlobalCtx::new(hooks));
+        (*GLOBAL_CTX.0.get()).write(GlobalCtx::new());
     }
 }
 

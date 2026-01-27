@@ -3,8 +3,6 @@
 //! pushing and popping frames containing multiple instances. A `Heap<T>` is also a bump allocator without frames.
 //! However, unlike a `Stack`, a `Heap` supports deallocating objects at any point. Both allocators rely internally
 //! on a linked list of page-sized "blocks" of memory.
-pub mod hooks;
-use hooks::*;
 
 mod heap;
 pub use heap::Heap;
@@ -20,6 +18,13 @@ use core::ptr::{self, NonNull};
 pub use shadow::ShadowHeap;
 
 use crate::{AllocInfo, BorTag};
+
+pub const BSAN_PROT_FLAGS: i32 = libc::PROT_READ | libc::PROT_WRITE;
+#[cfg(not(miri))]
+pub const BSAN_MAP_FLAGS: i32 =
+    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_ANON | libc::MAP_NORESERVE;
+#[cfg(miri)]
+pub const BSAN_MAP_FLAGS: i32 = libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_ANON;
 
 #[derive(Debug, Copy, Clone)]
 pub struct StackSize(NonZero<usize>);
@@ -172,7 +177,6 @@ pub unsafe fn munmap<T>(ptr: NonNull<T>, size_bytes: impl Into<NonZero<usize>>) 
 
 #[cfg(test)]
 mod tests {
-
     use crate::memory::{next_greater_multiple_unchecked, StackSize};
 
     #[test]
