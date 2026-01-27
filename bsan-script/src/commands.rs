@@ -368,13 +368,13 @@ impl CompilerRt {
         cfg.define("COMPILER_RT_HAS_LLVMTESTINGSUPPORT", "FALSE");
         cfg.define("LLVM_COMMON_CMAKE_UTILS", &env.toolchain_config.llvm_cmake.common);
         cfg.define("LLVM_CMAKE_DIR", &env.toolchain_config.llvm_cmake.llvm);
+        cfg.define("BSAN_CLANG_FORMAT", env.sysroot_binary("clang-format"));
         cfg.build_target(&CompilerRt.artifact(env));
         Ok(cfg)
     }
 
     fn fmt(env: &mut BsanEnv, check: bool) -> Result<()> {
         let mut cfg = Self::cmake(env)?;
-        cfg.define("BSAN_CLANG_FORMAT", env.sysroot_binary("clang-format"));
         if check {
             cfg.build_target("clang-format-check");
         } else {
@@ -459,7 +459,8 @@ impl BsanPass {
     fn cmake(env: &mut BsanEnv) -> Result<Config> {
         let source_dir = path!(env.root_dir / "bsan-pass");
         let output_dir = path!(env.artifact_dir() / "bsan-pass");
-        let cfg = env.llvm_cmake(&source_dir, &output_dir, &[])?;
+        let mut cfg = env.llvm_cmake(&source_dir, &output_dir, &[])?;
+        cfg.define("BSAN_CLANG_FORMAT", env.sysroot_binary("clang-format"));
         Ok(cfg)
     }
 
