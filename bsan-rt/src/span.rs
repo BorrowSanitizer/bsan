@@ -1,6 +1,8 @@
 use alloc::string::String;
 use core::{fmt, ptr};
 
+use crate::sanitizer_common_interface::SanitizerCommon;
+
 unsafe extern "C" {
     // Symbol defined by the linker
     unsafe static __executable_start: [u8; 0];
@@ -28,7 +30,7 @@ pub struct Span(pub usize);
 
 impl Span {
     pub fn symbolize(self) -> Symbol {
-        crate::sanitizer_common_interface::symbolize(self)
+        SanitizerCommon::symbolize(self)
     }
 }
 

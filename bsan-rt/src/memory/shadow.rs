@@ -260,8 +260,7 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
         unsafe {
             let l2_page = self.ensure_l2(idx);
             let ptr = &raw mut (*l2_page.as_ptr())[idx.l2_index];
-            let ptr = NonNull::new_unchecked(ptr);
-            ptr
+            NonNull::new_unchecked(ptr)
         }
     }
 }

@@ -14,7 +14,7 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{ffi, fmt, ptr, slice};
 
-use bsan_shared::{AccessKind, Permission, RetagInfo, Size};
+use bsan_shared::{AccessKind, RetagInfo, Size};
 use libc_print::std_name::*;
 use spin::Mutex;
 
@@ -367,23 +367,6 @@ impl AllocInfo {
                 alloc::alloc::Global,
             ))),
         }
-    }
-
-    pub fn conflict_at(&self) -> Option<(Span, Permission)> {
-        self.tree_lock
-            .lock()
-            .as_ref()
-            .and_then(|tree| tree.nodes.last().map(|node| node.debug_info.history.created_at()))
-    }
-
-    pub fn created_at(&self) -> Option<(Span, Permission)> {
-        self.tree_lock
-            .lock()
-            .as_ref()
-            .and_then(|tree| {
-                tree.nodes.get(tree.root).map(|node| Some(node.debug_info.history.created_at()))
-            })
-            .unwrap_or(None)
     }
 
     #[cfg(feature = "debug")]
