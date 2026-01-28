@@ -1,22 +1,19 @@
-An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with permissions Reserved at bsan/tests/fail/unique_ref.rs:4:14
-Last access at bsan/tests/fail/unique_ref.rs:7:5
+error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this write
+    help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
+      --> bsan/tests/fail/unique_ref.rs:4:14
 
-Run with `debug` feature (inst --debug) to view full TreeError
+    help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
+      --> bsan/tests/fail/unique_ref.rs:7:5
 
-    #0 $HEX in unique_ref::main::HASH bsan/tests/fail/unique_ref.rs:4:14
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
+    help: this transition corresponds to a loss of read and write permissions
 
-    #0 $HEX in unique_ref::main::HASH bsan/tests/fail/unique_ref.rs:7:5
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
 
-    #0 $HEX in unique_ref::main::HASH bsan/tests/fail/unique_ref.rs:4:14
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
-
-    #0 $HEX in unique_ref::main::HASH bsan/tests/fail/unique_ref.rs:7:5
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
+backtrace:
+  0:
+    bsan/tests/fail/unique_ref.rs:9:9
+  1:
+    RUSTLIB/core/src/ops/function.rs:250:5
+  2:
+    RUSTLIB/std/src/sys/backtrace.rs:166:18
 

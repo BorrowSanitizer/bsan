@@ -1,28 +1,28 @@
-An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with permissions Reserved at bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs:9:8
-Conflicting borrow created with permissions Reserved at bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs:16:25
-Last access at bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs:10:5
-Last conflict at bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs:18:25
+error: Undefined Behavior: write through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
+help: the accessed tag <TAG>(StrongProtector) is a child of the conflicting tag <TAG>(unprotected)
+help: the conflicting tag <TAG>(unprotected) has state Frozen which forbids this write
+    help: the accessed tag <TAG>(StrongProtector) was created here
+      --> bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs:9:0
 
-Run with `debug` feature (inst --debug) to view full TreeError
+    help: the conflicting tag <TAG>(unprotected) was created here, in the initial state Reserved
+      --> bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs:16:25
 
-    #0 $HEX in pass_invalid_mut::foo::HASH bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs:9:8
-    #1 $HEX in pass_invalid_mut::main::HASH bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs:19:5
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    help: the conflicting tag <TAG>(unprotected) later transitioned due to a child write
+      --> bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs:17:5
 
-    #0 $HEX in pass_invalid_mut::foo::HASH bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs:10:5
-    #1 $HEX in pass_invalid_mut::main::HASH bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs:19:5
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
 
-    #0 $HEX in pass_invalid_mut::main::HASH bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs:16:25
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
+    help: the conflicting tag <TAG>(unprotected) later transitioned due to a foreign read
+      --> bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs:18:25
 
-    #0 $HEX in pass_invalid_mut::main::HASH bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs:17:5
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
+    help: this transition corresponds to a loss of write permissions
 
-    #0 $HEX in pass_invalid_mut::main::HASH bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs:18:25
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
+
+backtrace:
+  0:
+    bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs:10:5
+  1:
+    bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs:19:5
+  2:
+    RUSTLIB/core/src/ops/function.rs:250:5
 

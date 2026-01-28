@@ -15,12 +15,12 @@ SET(BSAN_HEADERS
 )
 
 add_custom_target(clang-format
-  COMMAND clang-format ${BSAN_SOURCES} ${BSAN_HEADERS} -i --style=LLVM
+  COMMAND ${BSAN_CLANG_FORMAT} ${BSAN_SOURCES} ${BSAN_HEADERS} -i --style=LLVM
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 add_custom_target(clang-format-check
-  COMMAND clang-format ${BSAN_SOURCES} ${BSAN_HEADERS} --dry-run --Werror --style=LLVM
+  COMMAND ${BSAN_CLANG_FORMAT} ${BSAN_SOURCES} ${BSAN_HEADERS} --dry-run --Werror --style=LLVM
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 

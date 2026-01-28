@@ -1,19 +1,19 @@
-An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with permissions Reserved at RUSTLIB/core/src/mem/mod.rs:878:25
-Conflicting borrow created with permissions Frozen at bsan/tests/miri-tests/fail/both_borrows/aliasing_mut4.rs:6:9
-Last access at RUSTLIB/core/src/mem/mod.rs:893:9
+error: Undefined Behavior: write through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
+help: the accessed tag <TAG>(StrongProtector) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
+help: this write would cause the protected tag <TAG>(StrongProtector) (currently Frozen) to become Disabled
+help: protected tags must never be Disabled
+    help: the accessed tag <TAG>(StrongProtector) was created here
+      --> RUSTLIB/core/src/mem/mod.rs:886:0
 
-Run with `debug` feature (inst --debug) to view full TreeError
+    help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Frozen
+      --> bsan/tests/miri-tests/fail/both_borrows/aliasing_mut4.rs:6:0
 
-    #0 $HEX in core::mem::replace::HASH RUSTLIB/core/src/mem/mod.rs:878:25
-    #1 $HEX in core::cell::Cell$LT$T$GT$::replace::HASH RUSTLIB/core/src/cell.rs:511:9
-    #2 $HEX in core::cell::Cell$LT$T$GT$::set::HASH RUSTLIB/core/src/cell.rs:437:14
 
-    #0 $HEX in core::mem::replace::HASH RUSTLIB/core/src/mem/mod.rs:893:9
-    #1 $HEX in core::cell::Cell$LT$T$GT$::replace::HASH RUSTLIB/core/src/cell.rs:511:9
-    #2 $HEX in core::cell::Cell$LT$T$GT$::set::HASH RUSTLIB/core/src/cell.rs:437:14
-
-    #0 $HEX in aliasing_mut4::safe::HASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut4.rs:6:9
-    #1 $HEX in aliasing_mut4::main::HASH bsan/tests/miri-tests/fail/both_borrows/aliasing_mut4.rs:20:5
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+backtrace:
+  0:
+    RUSTLIB/core/src/mem/mod.rs:901:9
+  1:
+    RUSTLIB/core/src/cell.rs:513:9
+  2:
+    RUSTLIB/core/src/cell.rs:437:14
 

@@ -77,22 +77,18 @@ void __sanitizer::BufferedStackTrace::UnwindImpl(uptr pc, uptr bp,
          request_fast);
 }
 
-extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_printCurrentStackTrace() {
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE void
+__bsan_print_current_stack_trace() {
   // Capture current stack trace
   GET_CURRENT_PC_BP; // This macro defines 'pc' and 'bp' variables
   BufferedStackTrace stack;
   stack.Unwind(pc, bp, /*context=*/nullptr, /*request_fast=*/true,
                /*max_depth=*/kStackTraceMax);
-
-  // Print error message
-  // Report("%s\n", msg);
-
-  // Print stack trace
   stack.Print();
 }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void
-__bsan_printStackTrace(u32 stackId) {
+__bsan_print_stack_trace(u32 stackId) {
   StackTrace stack = StackDepotGet(stackId);
   CHECK(stack.trace);
   stack.Print();
@@ -100,7 +96,7 @@ __bsan_printStackTrace(u32 stackId) {
 
 // Get the top frame PC address from the current PC
 // Returns the previous instruction PC (adjusted for return addresses)
-extern "C" SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_GetTopFramePC(uptr pc) {
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_get_top_frame_pc(uptr pc) {
   return StackTrace::GetPreviousInstructionPc(pc);
 }
 
@@ -116,7 +112,7 @@ __bsan_StackDepotPut(uptr pc, uptr bp, u32 max_depth) {
 
 // Symbolize a single PC into file:line:column, writing the file path into
 // the provided buffer. Returns 1 on success, 0 otherwise.
-extern "C" SANITIZER_INTERFACE_ATTRIBUTE u32 __bsan_symbolizePC(
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE u32 __bsan_symbolize_pc(
     uptr pc, char *file_buf, uptr file_buf_len, u32 *line, u32 *column) {
   __sanitizer::Symbolizer *sym = __sanitizer::Symbolizer::GetOrInit();
   if (!sym) {

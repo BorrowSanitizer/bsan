@@ -19,8 +19,9 @@ use alloc::vec::Vec;
 use core::alloc::Allocator;
 use core::hash::Hash;
 
-use hashbrown::hash_map::HashMap;
-use hashbrown::DefaultHashBuilder;
+use rustc_hash::FxBuildHasher;
+
+use crate::helpers::FxHashMap;
 
 /// Intermediate key between a UniKeyMap and a UniValMap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,12 +31,12 @@ pub struct UniIndex {
 
 /// From K to UniIndex
 #[derive(Debug, Default)]
-pub struct UniKeyMap<K, A: Allocator> {
+pub struct UniKeyMap<K, A: Allocator = Global> {
     /// Underlying map that does all the hard work.
     /// Key invariant: the contents of `deassigned` are disjoint from the
     /// keys of `mapping`, and together they form the set of contiguous integers
     /// `0 .. (mapping.len() + deassigned.len())`.
-    pub mapping: HashMap<K, u32, DefaultHashBuilder, A>,
+    pub mapping: FxHashMap<K, u32, A>,
     /// Indexes that can be reused: memory gain when the map gets sparse
     /// due to many deletions.
     deassigned: Vec<u32>,
@@ -123,7 +124,10 @@ where
 {
     /// Create a new UniKeyMap with custom allocator
     pub fn new(allocator: A) -> Self {
-        Self { mapping: HashMap::new_in(allocator), deassigned: Vec::default() }
+        Self {
+            mapping: FxHashMap::with_hasher_in(FxBuildHasher, allocator),
+            deassigned: Vec::default(),
+        }
     }
     /// How many keys/index pairs are currently active.
     pub fn len(&self) -> usize {
@@ -306,11 +310,10 @@ mod tests {
         assert!(km.data.len() == 11);
     }
 
-    #[derive(Default)]
     struct MapWitness<K, V, A: Allocator> {
         key: UniKeyMap<K, A>,
-        val: UniValMap<V, Global>,
-        map: HashMap<K, V>,
+        val: UniValMap<V, A>,
+        map: FxHashMap<K, V, A>,
     }
 
     impl<K, V, A> MapWitness<K, V, A>

@@ -4,27 +4,10 @@ use core::ops::DerefMut;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
-use libc::_SC_PAGESIZE;
 use spin::mutex::SpinMutex;
 use spin::rwlock::RwLock;
 
-use super::hooks::{BsanHooks, MMap, MUnmap};
-use crate::memory::{
-    mmap, munmap, round_mut_ptr_up_to_unchecked, unmap_failed, AllocError, AllocResult,
-    InternalAllocKind, WordAligned,
-};
-
-#[allow(unused)]
-#[derive(Debug, Copy, Clone)]
-struct PageSize;
-
-#[allow(unused)]
-impl PageSize {
-    fn try_new() -> AllocResult<NonZero<usize>> {
-        let page_size = unsafe { libc::sysconf(_SC_PAGESIZE) };
-        NonZero::new(page_size as usize).ok_or(AllocError::InvalidPageSize)
-    }
-}
+use crate::memory::{mmap, munmap, round_mut_ptr_up_to_unchecked, PageSize, WordAligned};
 
 /// An object that can be allocated by a `Heap`.
 ///
@@ -36,17 +19,15 @@ impl PageSize {
 pub(crate) unsafe trait Heapable: WordAligned {
     fn next(&mut self) -> *mut Option<NonNull<Self>>;
 
-    #[allow(unused)]
-    fn is_heapable() -> AllocResult<bool> {
-        let block_size = PageSize::try_new()?;
+    fn is_heapable() -> bool {
+        debug_assert!(Self::is_word_aligned());
+        let block_size = PageSize::get();
         let overhead = mem::size_of::<HeapBlockHeader<Self>>();
-        let within_capacity = block_size
+        block_size
             .get()
             .checked_sub(overhead)
             .map(|capacity| capacity - mem::size_of::<Self>() > 0)
-            .unwrap_or(false);
-
-        Ok(within_capacity)
+            .unwrap_or(false)
     }
 }
 
@@ -55,29 +36,24 @@ pub struct Heap<T: Heapable> {
     head: RwLock<HeapBlock<T>>,
     free_list: SpinMutex<Option<NonNull<T>>>,
     block_size: NonZero<usize>,
-    mmap: MMap,
-    munmap: MUnmap,
 }
 
 unsafe impl<T: Heapable> Send for Heap<T> {}
 unsafe impl<T: Heapable> Sync for Heap<T> {}
 
 impl<T: Heapable> Heap<T> {
-    pub fn new(hooks: &BsanHooks) -> AllocResult<Self> {
-        debug_assert!(T::is_word_aligned());
+    pub fn new() -> Self {
+        debug_assert!(T::is_heapable());
 
-        let mmap = hooks.mmap_ptr;
-        let munmap = hooks.munmap_ptr;
+        let block_size = PageSize::get_cached();
 
-        let block_size = PageSize::try_new()?;
-
-        let head = unsafe { HeapBlock::<T>::new(mmap, block_size)? };
+        let head = unsafe { HeapBlock::<T>::new(block_size) };
         let head = RwLock::new(head);
 
-        Ok(Self { head, free_list: SpinMutex::new(None), block_size, mmap, munmap })
+        Self { head, free_list: SpinMutex::new(None), block_size }
     }
 
-    pub fn alloc(&self, elem: T) -> AllocResult<NonNull<T>> {
+    pub fn alloc(&self, elem: T) -> NonNull<T> {
         if let Some(mut free_list) = self.free_list.try_lock()
             && let Some(head) = *free_list
         {
@@ -89,18 +65,18 @@ impl<T: Heapable> Heap<T> {
 
             let head = head.cast::<T>();
             unsafe { head.write(elem) };
-            return Ok(head);
+            return head;
         }
         loop {
             let bump_reader = self.head.upgradeable_read();
             if let Some(alloc) = bump_reader.next() {
                 let alloc = alloc.cast::<T>();
                 unsafe { alloc.write(elem) };
-                return Ok(alloc);
+                return alloc;
             }
             if let Ok(mut bump_writer) = bump_reader.try_upgrade() {
                 let writer = bump_writer.deref_mut();
-                let mut replacement = unsafe { HeapBlock::new(self.mmap, self.block_size)? };
+                let mut replacement = unsafe { HeapBlock::new(self.block_size) };
                 let replacement_header = unsafe { replacement.header.as_mut() };
                 replacement_header.next = Some(writer.header);
                 *writer = replacement;
@@ -135,15 +111,7 @@ impl<T: Heapable> Drop for Heap<T> {
         while let Some(header) = curr {
             let header = unsafe { &*header.as_ptr() };
             curr = header.next;
-            unsafe {
-                munmap(
-                    self.munmap,
-                    InternalAllocKind::Heap,
-                    header.base_address(),
-                    header.block_size,
-                )
-                .unwrap_or_else(|_| unmap_failed())
-            };
+            unsafe { munmap(header.base_address(), header.block_size) };
         }
     }
 }
@@ -157,9 +125,8 @@ unsafe impl<T> Send for HeapBlock<T> {}
 unsafe impl<T> Sync for HeapBlock<T> {}
 
 impl<T: Heapable> HeapBlock<T> {
-    unsafe fn new(mmap_ptr: MMap, block_size: NonZero<usize>) -> AllocResult<Self> {
-        let limit = unsafe { mmap(mmap_ptr, InternalAllocKind::Heap, block_size)? };
-
+    unsafe fn new(block_size: NonZero<usize>) -> Self {
+        let limit = mmap(block_size);
         let header = unsafe {
             let high_end = limit.byte_add(block_size.get());
             high_end.cast::<HeapBlockHeader<T>>().sub(1)
@@ -177,7 +144,7 @@ impl<T: Heapable> HeapBlock<T> {
                 next: None,
             });
         }
-        Ok(Self { header })
+        Self { header }
     }
 
     fn next(&self) -> Option<NonNull<T>> {
@@ -228,8 +195,6 @@ mod test {
     use std::thread;
 
     use super::*;
-    use crate::memory::hooks::DEFAULT_HOOKS;
-    use crate::memory::{AllocError, AllocResult};
     use crate::AllocInfo;
 
     #[repr(align(8))]
@@ -247,25 +212,23 @@ mod test {
     }
 
     #[test]
-    fn alloc_roundtrip() -> AllocResult<()> {
-        let allocator = Heap::<Link>::new(&DEFAULT_HOOKS)?;
-        unsafe { allocator.dealloc(allocator.alloc(Link { next: 0 })?) }
-        Ok(())
+    fn alloc_roundtrip() {
+        let allocator = Heap::<Link>::new();
+        unsafe { allocator.dealloc(allocator.alloc(Link { next: 0 })) }
     }
 
     #[test]
-    fn allocate_from_page_in_parallel() -> AllocResult<()> {
-        let allocator = Arc::new(Heap::<Link>::new(&DEFAULT_HOOKS)?);
-        let mut threads: Vec<thread::JoinHandle<Result<(), _>>> = Vec::new();
+    fn allocate_from_page_in_parallel() {
+        let allocator = Arc::new(Heap::<Link>::new());
+        let mut threads: Vec<thread::JoinHandle<()>> = Vec::new();
 
         for id in 0..10 {
             let page = allocator.clone();
             // Create 10 threads, which will each allocate and deallocate from the page
             threads.push(thread::spawn(move || {
                 // Allocate 10 elements per thread.
-                let mut allocs: Vec<NonNull<Link>> = (0..10)
-                    .map(|_| page.alloc(Link { next: 0 }))
-                    .collect::<AllocResult<Vec<_>>>()?;
+                let mut allocs: Vec<NonNull<Link>> =
+                    (0..10).map(|_| page.alloc(Link { next: 0 })).collect::<Vec<_>>();
 
                 if id % 2 == 0 {
                     // Even-numbered threads will immediately free the elements, adding them to the
@@ -279,25 +242,22 @@ mod test {
                     // Odd-numbered threads will continue to allocate elements,
                     // hopefully picking the allocations freed by even-numbered threads.
                     for _ in 0..10 {
-                        allocs.push(page.alloc(Link { next: 0 })?);
+                        allocs.push(page.alloc(Link { next: 0 }));
                     }
                     allocs.drain(..).for_each(|alloc| unsafe {
                         page.dealloc(alloc);
                     });
                 }
-                Ok::<(), AllocError>(())
             }));
         }
 
         for thread in threads {
-            let _ = thread.join().unwrap();
+            thread.join().unwrap();
         }
-        Ok(())
     }
 
     #[test]
-    fn heapable_alloc_info() -> AllocResult<()> {
-        assert!(AllocInfo::is_heapable()?);
-        Ok(())
+    fn heapable_alloc_info() {
+        assert!(AllocInfo::is_heapable());
     }
 }

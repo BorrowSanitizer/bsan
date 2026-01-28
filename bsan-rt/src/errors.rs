@@ -1,146 +1,40 @@
 // Components in this file were ported from Miri, and then modified by our team.
 use alloc::boxed::Box;
-use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt::{Debug, Display};
 
 use bsan_shared::Permission;
 
-use crate::diagnostics::{AccessCause, NodeDebugInfo};
-use crate::memory::{self, AllocError};
-use crate::span::Span;
-use crate::{AllocId, Provenance};
+use crate::diagnostics::{AccessCause, HistoryData, NodeDebugInfo};
+use crate::AllocId;
 
-pub type BorsanResult<T> = Result<T, ErrorInfo>;
 pub type TreeTransitionResult<T> = core::result::Result<T, TransitionError>;
 
 #[derive(Debug)]
-pub enum InternalError {
-    Alloc(memory::AllocError),
-    Unexpected(String),
-}
-
-impl From<AllocError> for ErrorInfo {
-    fn from(err: AllocError) -> ErrorInfo {
-        ErrorInfo::Internal(InternalError::Alloc(err))
-    }
-}
-
-pub enum ErrorInfo {
-    Internal(InternalError),
-    UndefinedBehavior(UBInfo),
-}
-
-impl Debug for ErrorInfo {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            ErrorInfo::Internal(e) => write!(f, "{:?}", e),
-            ErrorInfo::UndefinedBehavior(e) => write!(f, "UndefinedBehavior {}", e),
-        }
-    }
-}
-
-#[derive(Debug)]
 pub enum UBInfo {
-    InvalidProvenance,
-    AccessOutOfBounds(Provenance, usize, usize),
+    AccessOutOfBounds(AllocId, usize, usize),
     UseAfterFree(AllocId),
-    GlobalFree(AllocId),
-    StackFree(AllocId),
     AliasingViolation(Box<TreeError>),
 }
 
 pub type UBResult<T> = Result<T, UBInfo>;
 
-impl From<UBInfo> for ErrorInfo {
-    fn from(err: UBInfo) -> ErrorInfo {
-        ErrorInfo::UndefinedBehavior(err)
-    }
-}
-
 impl Display for UBInfo {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "Undefined Behavior: ")?;
         match self {
-            UBInfo::AccessOutOfBounds(prov, _, _) => {
-                if let Some(alloc_info) = unsafe { prov.alloc_info.as_ref() } {
-                    if let Some((span, perm)) = alloc_info.created_at() {
-                        writeln!(f, "(AccessOutOfBounds)\nAccess created with permissions {} is out of bounds at {}", perm, span)?
-                    } else {
-                        writeln!(f, "(AccessOutOfBounds)\nAccess created with provenance {:?} is out of bounds at unknown location", prov)?
-                    }
-                    if let Some((span, perm)) = alloc_info.conflict_at() {
-                        writeln!(
-                            f,
-                            "Conflicting borrow created with permissions {} at {}",
-                            perm, span
-                        )
-                    } else {
-                        Ok(())
-                    }
-                } else {
-                    writeln!(f, "(AccessOutOfBounds)\nAccess created with provenance {:?} is out of bounds at unknown location", prov)
-                }
+            UBInfo::UseAfterFree(id) => {
+                write!(f, "trying to access {id:?}, which has been freed.")
             }
-            UBInfo::AliasingViolation(e) => {
-                let (access_created, access_perm) = e.accessed_info.history.created_at();
-                let (conflict_created, conflict_perm) = e.conflicting_info.history.created_at();
-                let last_access = e.accessed_info.history.last_event().map(|event| event.span);
-                let last_conflict = e.conflicting_info.history.last_event().map(|event| event.span);
-
-                // Write violating locations, avoiding duplicate locs
-                writeln!(
+            UBInfo::AccessOutOfBounds(id, size, offset) => {
+                write!(
                     f,
-                    "(AliasingViolation)\nAccess created with permissions {} at {}",
-                    access_perm, access_created
-                )?;
-                if conflict_created.ip() != access_created.ip() {
-                    writeln!(
-                        f,
-                        "Conflicting borrow created with permissions {} at {}",
-                        conflict_perm, conflict_created
-                    )?;
-                }
-
-                // Write last_event locations (if they exist, and avoiding dupes)
-                if let Some(loc) = last_access
-                    && loc != access_created
-                {
-                    writeln!(f, "Last access at {}", loc)?;
-                }
-                if let Some(loc) = last_conflict
-                    && loc != conflict_created
-                    && Some(loc) != last_access
-                {
-                    writeln!(f, "Last conflict at {}", loc)?;
-                }
-
-                #[cfg(not(feature = "debug"))]
-                writeln!(f, "\nRun with `debug` feature (inst --debug) to view full TreeError")?;
-
-                Ok(())
+                    "an access of size {size} at offset {offset:x} is out of bounds for {id:?}."
+                )
             }
-            _ => write!(f, "({:?})", self),
+            UBInfo::AliasingViolation(error) => write!(f, "{error}"),
         }
     }
-}
-
-impl UBInfo {
-    pub fn get_alloc_id(&self) -> Option<AllocId> {
-        match self {
-            UBInfo::UseAfterFree(alloc_id)
-            | UBInfo::GlobalFree(alloc_id)
-            | UBInfo::StackFree(alloc_id) => Some(*alloc_id),
-            UBInfo::AliasingViolation(error) => Some(error.alloc_id),
-            UBInfo::AccessOutOfBounds(prov, _access_size, _alloc_size) => Some(prov.alloc_id),
-            UBInfo::InvalidProvenance => None,
-        }
-    }
-}
-
-#[macro_export]
-macro_rules! throw_ub {
-    ($($tt:tt)*) => {
-        do yeet $crate::errors::ErrorInfo::UndefinedBehavior($($tt)*)
-    };
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -159,25 +53,6 @@ pub enum TransitionError {
     /// Cannot deallocate because some tag in the allocation is strongly protected.
     /// This kind of error can only occur on deallocations.
     ProtectedDealloc,
-}
-
-#[allow(unused)]
-#[derive(Debug)]
-pub struct BtOperation {
-    pub op: OperationType,
-    pub span: Option<Span>,
-    pub reason: Option<String>,
-}
-
-#[allow(unused)]
-#[derive(Debug)]
-pub enum OperationType {
-    Alloc,
-    Read,
-    Write,
-    Retag,
-    Dealloc,
-    Unknown,
 }
 
 // Derived from Miri's TbError
@@ -199,4 +74,93 @@ pub struct TreeError {
     /// Which tag the access that caused this error was made through, i.e.
     /// which tag was used to read/write/deallocate.
     pub accessed_info: NodeDebugInfo,
+}
+
+impl core::fmt::Display for TreeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        use TransitionError::*;
+        let cause = self.access_cause;
+        let error_offset = self.error_offset;
+        let access = self.access_cause;
+        let accessed = &self.accessed_info;
+        let accessed_tag = accessed.tag;
+        let conflicting = &self.conflicting_info;
+
+        // An access is considered conflicting if it happened through a
+        // different tag than the one who caused UB.
+        // When doing a wildcard access (where `accessed` is `None`) we
+        // do not know which precise tag the accessed happened from,
+        // however we can be certain that it did not come from the
+        // conflicting tag.
+        // This is because the wildcard data structure already removes
+        // all tags through which an access would cause UB.
+        let accessed_is_conflicting = accessed.tag == conflicting.tag;
+        let title = format!(
+            "{cause} through {accessed_tag:?} at {alloc_id:?}[{error_offset:#x}] is forbidden",
+            alloc_id = self.alloc_id
+        );
+
+        let (title, details, conflicting_tag_name) = match self.error_kind {
+            ChildAccessForbidden(perm) => {
+                let conflicting_tag_name =
+                    if accessed_is_conflicting { "accessed" } else { "conflicting" };
+                let mut details = Vec::new();
+                if !accessed_is_conflicting {
+                    details.push(format!(
+                        "the accessed tag {accessed_tag:?} is a child of the conflicting tag {conflicting}"
+                    ));
+                }
+                details.push(format!(
+                    "the {conflicting_tag_name} tag {conflicting} has state {perm} which forbids this {access}"
+                ));
+                (title, details, conflicting_tag_name)
+            }
+            ProtectedDisabled(before_disabled) => {
+                let conflicting_tag_name = "protected";
+                let details = vec![
+                    format!(
+                        "the accessed tag {accessed_tag:?} is foreign to the {conflicting_tag_name} tag {conflicting} (i.e., it is not a child)"
+                    ),
+                    format!(
+                        "this {access} would cause the {conflicting_tag_name} tag {conflicting} (currently {before_disabled}) to become Disabled"
+                    ),
+                    format!("protected tags must never be Disabled"),
+                ];
+                (title, details, conflicting_tag_name)
+            }
+            ProtectedDealloc => {
+                let conflicting_tag_name = "strongly protected";
+                let details = vec![
+                    format!(
+                        "the allocation of the accessed tag {accessed_tag:?} also contains the {conflicting_tag_name} tag {conflicting}"
+                    ),
+                    format!("the {conflicting_tag_name} tag {conflicting} disallows deallocations"),
+                ];
+                (title, details, conflicting_tag_name)
+            }
+        };
+        let mut history = HistoryData::default();
+        if !accessed_is_conflicting {
+            history.extend(self.accessed_info.history.forget(), "accessed", false);
+        }
+        history.extend(
+            self.conflicting_info.history.extract_relevant(error_offset),
+            conflicting_tag_name,
+            true,
+        );
+
+        writeln!(f, "{title}")?;
+        for detail in details {
+            writeln!(f, "help: {}", detail)?;
+        }
+
+        for event in history.events {
+            writeln!(f, "    help: {}", event.1)?;
+            if let Some(span) = event.0 {
+                writeln!(f, "      --> {}", span.symbolize())?;
+            }
+            writeln!(f)?;
+        }
+        Ok(())
+    }
 }

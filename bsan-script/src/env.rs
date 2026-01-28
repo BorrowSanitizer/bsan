@@ -109,15 +109,18 @@ impl BsanConfig {
 }
 
 impl BsanEnv {
-    pub fn new(quiet: bool, skip: bool, toolchain_dir: Option<String>) -> Result<Self> {
+    pub fn new(
+        quiet: bool,
+        skip: bool,
+        toolchain_dir: Option<PathBuf>,
+        install_from: Option<PathBuf>,
+    ) -> Result<Self> {
         let sh = Shell::new()?;
         let root_dir = utils::root_dir()?;
         let host = utils::version_meta(&sh, &active_toolchain()?)?;
 
-        let deps_dir = if let Some(toolchain_dir) = toolchain_dir {
-            path!(toolchain_dir)
-        } else {
-            let sysroot = active_sysroot()?;
+        let deps_dir = toolchain_dir.unwrap_or_else(|| {
+            let sysroot = active_sysroot().unwrap();
             if let Some(parent) = sysroot.parent() {
                 path!(parent / "bsan")
             } else {
@@ -125,12 +128,19 @@ impl BsanEnv {
                     "Please specify an installation directory for our toolchain using `xb --toolchain-dir=[dir]`."
                 )
             }
-        };
+        });
 
         let config_path = path!(root_dir / "config.toml");
         let mut config = BsanConfig::from_file(&config_path)?;
-        let toolchain_config =
-            setup::setup_toolchain(&sh, &host, &mut config, &deps_dir, &root_dir, skip)?;
+        let toolchain_config = setup::setup_toolchain(
+            &sh,
+            &host,
+            &mut config,
+            &deps_dir,
+            &root_dir,
+            skip,
+            install_from,
+        )?;
         config.save(&config_path)?;
 
         let build_dir = path!(root_dir / "target");
@@ -155,7 +165,7 @@ impl BsanEnv {
             }
             // Enable rustc-specific lints (ignored without `-Zunstable-options`).
             flags.push(
-                " -Zunstable-options -Zdylib-lto -Wrustc::internal -Wrust_2018_idioms -Wunused_lifetimes",
+                " -Zunstable-options -Wrustc::internal -Wrust_2018_idioms -Wunused_lifetimes",
             );
             // Add user-defined flags.
             if let Some(value) = std::env::var_os("RUSTFLAGS") {
@@ -255,6 +265,15 @@ impl BsanEnv {
         }
     }
 
+    pub fn host_binary(&self, binary_name: &str) -> PathBuf {
+        if !self.config.dependencies.contains(&binary_name.to_string()) {
+            show_error!(
+                "`{binary_name}` is not available as a host dependency. Try adding it to `config.toml`. "
+            );
+        } else {
+            PathBuf::from(binary_name)
+        }
+    }
     pub fn target_binary(&self, binary_name: &str) -> PathBuf {
         let target_bindir = &self.target_bindir;
         let binary = path!(target_bindir / binary_name);

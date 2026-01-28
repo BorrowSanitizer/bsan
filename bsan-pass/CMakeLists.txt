@@ -12,7 +12,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${LLVM_CXXFLAGS}")
 set(BSAN_SOURCES
   BorrowSanitizer.cpp
   BorrowSanitizerPass.cpp
-  Provenance.cpp 
+  Provenance.cpp
 )
 
 set(BSAN_HEADERS
@@ -25,12 +25,12 @@ set(BSAN_HEADERS
 set(CMAKE_CXX_CLANG_TIDY clang-tidy;-warnings-as-errors=*)
 
 add_custom_target(clang-format
-  COMMAND clang-format ${BSAN_SOURCES} ${BSAN_HEADERS} -i --style=file
+  COMMAND ${BSAN_CLANG_FORMAT} ${BSAN_SOURCES} ${BSAN_HEADERS} -i --style=file
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 add_custom_target(clang-format-check
-  COMMAND clang-format ${BSAN_SOURCES} ${BSAN_HEADERS} --dry-run --Werror --style=file
+  COMMAND ${BSAN_CLANG_FORMAT} ${BSAN_SOURCES} ${BSAN_HEADERS} --dry-run --Werror --style=file
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 

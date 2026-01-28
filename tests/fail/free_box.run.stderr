@@ -1,1 +1,9 @@
-An error occurred: UndefinedBehavior (UseAfterFree(ALLOC))
+error: Undefined Behavior: trying to access ALLOC, which has been freed.
+backtrace:
+  0:
+    bsan/tests/fail/free_box.rs:12:9
+  1:
+    RUSTLIB/core/src/ops/function.rs:250:5
+  2:
+    RUSTLIB/std/src/sys/backtrace.rs:166:18
+

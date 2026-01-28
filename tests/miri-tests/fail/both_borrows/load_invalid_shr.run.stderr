@@ -1,22 +1,19 @@
-An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with permissions Frozen at RUSTLIB/alloc/src/boxed.rs:265:16
-Last access at bsan/tests/miri-tests/fail/both_borrows/load_invalid_shr.rs:9:14
+error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow
+    help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
+      --> RUSTLIB/alloc/src/boxed.rs:264:0
 
-Run with `debug` feature (inst --debug) to view full TreeError
+    help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
+      --> bsan/tests/miri-tests/fail/both_borrows/load_invalid_shr.rs:9:14
 
-    #0 $HEX in alloc::boxed::Box$LT$T$GT$::new::HASH RUSTLIB/alloc/src/boxed.rs:265:16
-    #1 $HEX in load_invalid_shr::main::HASH bsan/tests/miri-tests/fail/both_borrows/load_invalid_shr.rs:8:23
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    help: this transition corresponds to a loss of read permissions
 
-    #0 $HEX in load_invalid_shr::main::HASH bsan/tests/miri-tests/fail/both_borrows/load_invalid_shr.rs:9:14
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
 
-    #0 $HEX in alloc::boxed::Box$LT$T$GT$::new::HASH RUSTLIB/alloc/src/boxed.rs:265:16
-    #1 $HEX in load_invalid_shr::main::HASH bsan/tests/miri-tests/fail/both_borrows/load_invalid_shr.rs:8:23
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-
-    #0 $HEX in load_invalid_shr::main::HASH bsan/tests/miri-tests/fail/both_borrows/load_invalid_shr.rs:9:14
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
+backtrace:
+  0:
+    bsan/tests/miri-tests/fail/both_borrows/load_invalid_shr.rs:10:16
+  1:
+    RUSTLIB/core/src/ops/function.rs:250:5
+  2:
+    RUSTLIB/std/src/sys/backtrace.rs:166:18
 

@@ -1,12 +1,9 @@
-An error occurred: UndefinedBehavior (AccessOutOfBounds)
-Access created with permissions Disabled is out of bounds at RUSTLIB/std/src/sys/alloc/PLATFORM.rs:NN:NN
-Conflicting borrow created with permissions Reserved at RUSTLIB/alloc/src/boxed.rs:1254:21
-
-    #0 $HEX in std::sys::alloc::PLATFORM::_$LT$impl$u20$core..alloc..global..GlobalAlloc$u20$for$u20$std..alloc..System$GT$::alloc::HASH RUSTLIB/std/src/sys/alloc/PLATFORM.rs:NN:NN
-    #1 $HEX in __rustc::__rdl_alloc RUSTLIB/std/src/alloc.rs:403:20
-    #2 $HEX in alloc::alloc::alloc::HASH RUSTLIB/alloc/src/alloc.rs:95:9
-
-    #0 $HEX in alloc::boxed::Box$LT$T$GT$::into_raw::HASH RUSTLIB/alloc/src/boxed.rs:1254:21
-    #1 $HEX in issue_miri_1050_1::main::HASH bsan/tests/miri-tests/fail/both_borrows/issue-miri-1050-1.rs:5:19
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+error: Undefined Behavior: an access of size 4 at offset 2 is out of bounds for ALLOC.
+backtrace:
+  0:
+    RUSTLIB/alloc/src/boxed.rs:1493:9
+  1:
+    RUSTLIB/alloc/src/boxed.rs:1266:18
+  2:
+    bsan/tests/miri-tests/fail/both_borrows/issue-miri-1050-1.rs:6:14
 

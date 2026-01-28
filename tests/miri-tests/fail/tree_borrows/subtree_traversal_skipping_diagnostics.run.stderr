@@ -1,19 +1,18 @@
-An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with permissions Reserved at bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:11:17
-Conflicting borrow created with permissions Frozen at bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:25:28
-Last access at bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:19:5
+error: Undefined Behavior: write through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
+help: the accessed tag <TAG>(StrongProtector) is a child of the conflicting tag <TAG>(unprotected)
+help: the conflicting tag <TAG>(unprotected) has state Frozen which forbids this write
+    help: the accessed tag <TAG>(StrongProtector) was created here
+      --> bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:11:0
 
-Run with `debug` feature (inst --debug) to view full TreeError
+    help: the conflicting tag <TAG>(unprotected) was created here, in the initial state Frozen
+      --> bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:25:28
 
-    #0 $HEX in subtree_traversal_skipping_diagnostics::write_to_mut::HASH bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:11:17
-    #1 $HEX in subtree_traversal_skipping_diagnostics::main::HASH bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:27:9
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
 
-    #0 $HEX in subtree_traversal_skipping_diagnostics::write_to_mut::HASH bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:19:5
-    #1 $HEX in subtree_traversal_skipping_diagnostics::main::HASH bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:27:9
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-
-    #0 $HEX in subtree_traversal_skipping_diagnostics::main::HASH bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:25:28
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
+backtrace:
+  0:
+    bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:19:5
+  1:
+    bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:27:9
+  2:
+    RUSTLIB/core/src/ops/function.rs:250:5
 
