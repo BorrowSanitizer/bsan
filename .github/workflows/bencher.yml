@@ -18,5 +18,5 @@ jobs:
       - uses: actions/checkout@v6
       - name: Continous benchmarking with bencher
         run: |
-            ./bencher.sh ${{ BENCHER_PROJECT }} ${{ secrets.BENCHER_API_TOKENS }}
+            ./bencher.sh $BENCHER_PROJECT '${{ secrets.BENCHER_API_TOKENS }}'
           
