@@ -11,9 +11,9 @@ help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this 
 
 backtrace:
   0:
-    bsan/tests/fail/forbidden_child_access.rs:8:26
+    RUSTLIB/core/src/hint.rs:481:0
   1:
-    RUSTLIB/core/src/ops/function.rs:250:5
+    bsan/tests/fail/forbidden_child_access.rs:8:5
   2:
-    RUSTLIB/std/src/sys/backtrace.rs:166:18
+    RUSTLIB/core/src/ops/function.rs:250:5
 
