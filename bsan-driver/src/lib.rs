@@ -64,24 +64,8 @@ impl Config {
                     _ => show_error!("Invalid value for `BSAN_BE_RUSTC`: {crate_kind:?}"),
                 };
                 (raw_args, is_target)
-            } else if env::var("RUSTC_WRAPPER").is_ok() {
-                // Otherwise, we're being invoked through RUSTC_WRAPPER. This means that our first
-                // argument is the path to *this* binary, so we skip it. This is where we can parse
-                // any BorrowSanitizer-specific arguments and use them to change our instrumentation
-                // or activate other useful features. We also need to skip any arguments that come
-                // after the "--" separator, since these will be passed to the compiled binary
-                // when it executes.
-                let mut rustc_args = vec![];
-                for arg in raw_args.iter().skip(1) {
-                    if arg == "--" {
-                        break;
-                    } else {
-                        rustc_args.push(arg.to_string());
-                    }
-                }
-                (rustc_args, true)
             } else {
-                (raw_args, true)
+                (raw_args, false)
             }
         };
         if target_crate {
