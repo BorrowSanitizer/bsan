@@ -3,9 +3,15 @@ help: the accessed tag <TAG>(StrongProtector) is a child of the conflicting tag 
 help: the conflicting tag <TAG>(unprotected) has state Frozen which forbids this write
     help: the accessed tag <TAG>(StrongProtector) was created here
       --> bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:11:0
+         |
+      11 | fn write_to_mut(m: &mut u8, other_ptr: *const u8) {
+         |
 
     help: the conflicting tag <TAG>(unprotected) was created here, in the initial state Frozen
       --> bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:25:28
+         |
+      25 |         let intermediary = &root;
+         |
 
 
 backtrace:

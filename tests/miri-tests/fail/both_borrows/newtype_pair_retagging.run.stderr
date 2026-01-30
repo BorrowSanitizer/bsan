@@ -4,6 +4,9 @@ help: this deallocation would cause the protected tag <TAG>(StrongProtector) (cu
 help: protected tags must never be Disabled
     help: the accessed tag <TAG>(WeakProtector) was created here
       --> RUSTLIB/core/src/mem/mod.rs:970:0
+         |
+     970 | pub const fn drop<T>(_x: T)
+         |
 
     help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
       --> bsan/tests/miri-tests/fail/both_borrows/newtype_pair_retagging.rs:5:0

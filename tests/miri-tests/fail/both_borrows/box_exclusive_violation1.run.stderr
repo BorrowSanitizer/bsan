@@ -2,9 +2,15 @@ error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is for
 help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this write
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
       --> bsan/tests/miri-tests/fail/both_borrows/box_exclusive_violation1.rs:21:0
+         |
+      21 | fn unknown_code_1(x: &i32) {
+         |
 
     help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
       --> bsan/tests/miri-tests/fail/both_borrows/box_exclusive_violation1.rs:8:5
+         |
+       8 |     *our = 5;
+         |
 
     help: this transition corresponds to a loss of read permissions
 

@@ -6,6 +6,8 @@ use core::fmt::{Debug, Display};
 use bsan_shared::Permission;
 
 use crate::diagnostics::{AccessCause, HistoryData, NodeDebugInfo};
+use crate::sanitizer_common_interface::SanitizerCommon;
+use crate::span::Symbol;
 use crate::AllocId;
 
 pub type TreeTransitionResult<T> = core::result::Result<T, TransitionError>;
@@ -157,7 +159,15 @@ impl core::fmt::Display for TreeError {
         for event in history.events {
             writeln!(f, "    help: {}", event.1)?;
             if let Some(span) = event.0 {
-                writeln!(f, "      --> {}", span.symbolize())?;
+                let symbol = span.symbolize();
+                writeln!(f, "      --> {}", symbol)?;
+                if let Symbol::Resolved { file, line, col: _ } = symbol
+                    && let Some(content) = SanitizerCommon::get_source_line(&file, line)
+                {
+                    writeln!(f, "         |")?;
+                    writeln!(f, "{:>8} | {}", line, content)?;
+                    writeln!(f, "         |")?;
+                }
             }
             writeln!(f)?;
         }

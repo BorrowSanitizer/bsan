@@ -2,6 +2,7 @@
 #include "bsan_thread.h"
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_flags.h"
+#include "sanitizer_common/sanitizer_libc.h"
 #include "sanitizer_common/sanitizer_stackdepot.h"
 #include "sanitizer_common/sanitizer_stacktrace.h"
 #include "sanitizer_common/sanitizer_symbolizer.h"
@@ -135,4 +136,66 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE u32 __bsan_symbolize_pc(
     *column = res->info.column;
   res->ClearAll();
   return 1;
+}
+
+// Read the line from the source file at path into the buffer.
+// Returns 1 on success, 0 otherwise.
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE u32
+__bsan_read_src_line(const char *path, u32 line, char *buf, uptr buf_len) {
+  fd_t fd = internal_open(path, 0, 0);
+  if (fd < 0) {
+    return 0;
+  }
+
+  uptr file_size = internal_filesize(fd);
+  if (file_size == 0) {
+    internal_close(fd);
+    return 0;
+  }
+
+  // alloc file content buffer
+  char *content = (char *)InternalAlloc(file_size + 1);
+  if (!content) {
+    internal_close(fd);
+    return 0;
+  }
+
+  // read whole file in lieu of no std::getline
+  uptr bytes_read = internal_read(fd, content, file_size);
+  internal_close(fd);
+
+  if (bytes_read != file_size) {
+    InternalFree(content);
+    return 0;
+  }
+  content[file_size] = '\0';
+
+  // find line
+  u32 current_line = 1;
+  char *line_start = content;
+  char *p = content;
+
+  while (*p && current_line < line) {
+    if (*p == '\n') {
+      current_line++;
+      line_start = p + 1;
+    }
+    p++;
+  }
+
+  // write line to buffer
+  if (current_line == line) {
+    uptr i = 0;
+    while (line_start[i] && line_start[i] != '\n' && line_start[i] != '\r' &&
+           i < buf_len - 1) {
+      buf[i] = line_start[i];
+      i++;
+    }
+    buf[i] = '\0';
+    InternalFree(content);
+    return 1;
+  }
+
+  InternalFree(content);
+  return 0;
 }

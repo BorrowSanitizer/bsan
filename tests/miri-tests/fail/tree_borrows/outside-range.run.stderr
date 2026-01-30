@@ -7,6 +7,9 @@ help: protected tags must never be Disabled
 
     help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
       --> bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:13:0
+         |
+      13 | unsafe fn stuff(x: &mut u8, y: *mut u8) {
+         |
 
 
 backtrace:

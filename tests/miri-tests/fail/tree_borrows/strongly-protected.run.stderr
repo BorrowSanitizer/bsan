@@ -3,12 +3,18 @@ help: the allocation of the accessed tag <TAG>(WeakProtector) also contains the 
 help: the strongly protected tag <TAG>(StrongProtector) disallows deallocations
     help: the accessed tag <TAG>(WeakProtector) was created here
       --> RUSTLIB/core/src/mem/mod.rs:970:0
+         |
+     970 | pub const fn drop<T>(_x: T)
+         |
 
     help: the strongly protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
       --> bsan/tests/miri-tests/fail/tree_borrows/strongly-protected.rs:3:0
 
     help: the strongly protected tag <TAG>(StrongProtector) later transitioned due to a deallocation (acting as a child write access)
       --> RUSTLIB/std/src/sys/alloc/PLATFORM.rs:NN:NN
+         |
+      48 |         unsafe { libc::free(ptr as *mut libc::c_void) }
+         |
 
     help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
 

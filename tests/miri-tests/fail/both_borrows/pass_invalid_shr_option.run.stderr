@@ -5,6 +5,9 @@ help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this 
 
     help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
       --> bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr_option.rs:10:14
+         |
+      10 |     unsafe { *xraw = 42 }; // unfreeze
+         |
 
     help: this transition corresponds to a loss of read permissions
 
