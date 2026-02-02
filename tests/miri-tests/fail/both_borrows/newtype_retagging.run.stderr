@@ -10,9 +10,15 @@ help: protected tags must never be Disabled
 
     help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
       --> bsan/tests/miri-tests/fail/both_borrows/newtype_retagging.rs:6:0
+         |
+       6 | fn dealloc_while_running(_n: Newtype<'_>, dealloc: impl FnOnce()) {
+         |
 
     help: the protected tag <TAG>(StrongProtector) later transitioned due to a reborrow (acting as a foreign read access)
       --> RUSTLIB/alloc/src/boxed.rs:1266:18
+         |
+    1266 |         unsafe { Self::from_raw_in(raw, Global) }
+         |
 
     help: this transition corresponds to a temporary loss of write permissions until function exit
 

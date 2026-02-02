@@ -2,6 +2,9 @@ error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is for
 help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this write
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
       --> bsan/tests/fail/frozen_write.rs:4:14
+         |
+       4 |     let rx = &x;
+         |
 
 
 backtrace:

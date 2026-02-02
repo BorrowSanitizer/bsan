@@ -2,9 +2,15 @@ error: Undefined Behavior: read through <TAG>(unprotected) at ALLOC[0x0] is forb
 help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this read
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
       --> bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation2.rs:6:22
+         |
+       6 |         let frozen = &*ptr;
+         |
 
     help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
       --> bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation2.rs:8:9
+         |
+       8 |         x = 1;
+         |
 
     help: this transition corresponds to a loss of read permissions
 

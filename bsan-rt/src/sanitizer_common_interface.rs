@@ -1,3 +1,5 @@
+use alloc::ffi::CString;
+
 use crate::alloc::string::{String, ToString};
 use crate::span::{FramePtr, Span, Symbol};
 
@@ -80,8 +82,9 @@ impl SanitizerCommon {
 
     pub fn get_source_line(file: &str, line: u32) -> Option<String> {
         let mut buf = [0u8; SRC_LINE_LEN as usize];
+        let c_path = CString::new(file).ok()?;
         let read =
-            unsafe { __bsan_read_src_line(file.as_ptr(), line, buf.as_mut_ptr(), buf.len()) };
+            unsafe { __bsan_read_src_line(c_path.as_ptr(), line, buf.as_mut_ptr(), buf.len()) };
         if read == 0 {
             return None;
         }

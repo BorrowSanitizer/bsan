@@ -2,9 +2,15 @@ error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is for
 help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this write
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
       --> bsan/tests/fail/unique_ref.rs:4:14
+         |
+       4 |     let rx = &mut x;
+         |
 
     help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
       --> bsan/tests/fail/unique_ref.rs:7:5
+         |
+       7 |     *vx = 2;
+         |
 
     help: this transition corresponds to a loss of read and write permissions
 

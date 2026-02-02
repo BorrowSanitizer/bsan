@@ -9,6 +9,9 @@ help: the strongly protected tag <TAG>(StrongProtector) disallows deallocations
 
     help: the strongly protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
       --> bsan/tests/miri-tests/fail/tree_borrows/strongly-protected.rs:3:0
+         |
+       3 | fn inner(x: &mut i32, f: fn(*mut i32)) {
+         |
 
     help: the strongly protected tag <TAG>(StrongProtector) later transitioned due to a deallocation (acting as a child write access)
       --> RUSTLIB/std/src/sys/alloc/PLATFORM.rs:NN:NN

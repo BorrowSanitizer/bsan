@@ -24,6 +24,9 @@ help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this 
 
     help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
       --> bsan/tests/miri-tests/fail/tree_borrows/error-range.rs:22:9
+         |
+      22 |         data[5] = 1;
+         |
 
     help: this transition corresponds to a loss of read permissions
 

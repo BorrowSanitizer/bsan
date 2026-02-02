@@ -2,14 +2,23 @@ error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is for
 help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this write
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
       --> bsan/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:13:13
+         |
+      13 |     let z = &mut x as *mut i32;
+         |
 
     help: the accessed tag <TAG>(unprotected) later transitioned due to a child write
       --> bsan/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:15:9
+         |
+      15 |         *z = 1;
+         |
 
     help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
 
     help: the accessed tag <TAG>(unprotected) later transitioned due to a reborrow (acting as a foreign read access)
       --> bsan/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:17:5
+         |
+      17 |     x.do_bad();
+         |
 
     help: this transition corresponds to a loss of write permissions
 
