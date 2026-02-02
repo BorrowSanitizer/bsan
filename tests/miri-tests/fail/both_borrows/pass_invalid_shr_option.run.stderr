@@ -1,7 +1,10 @@
 error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x0] is forbidden
 help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-      --> bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr_option.rs:0:14
+      --> bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr_option.rs:9:35
+         |
+       9 |     let some_xref = unsafe { Some(&*xraw) };
+         |
 
     help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
       --> bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr_option.rs:10:14
@@ -14,9 +17,9 @@ help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this 
 
 backtrace:
   0:
-    bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr_option.rs:0:2
+    bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr_option.rs:0:27
   1:
-    RUSTLIB/core/src/ops/function.rs:250:5
+    bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr_option.rs:11:5
   2:
-    RUSTLIB/std/src/sys/backtrace.rs:166:18
+    RUSTLIB/core/src/ops/function.rs:250:5
 

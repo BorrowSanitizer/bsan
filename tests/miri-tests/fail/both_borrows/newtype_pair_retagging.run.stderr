@@ -12,7 +12,7 @@ help: protected tags must never be Disabled
       --> bsan/tests/miri-tests/fail/both_borrows/newtype_pair_retagging.rs:5:0
 
     help: the protected tag <TAG>(StrongProtector) later transitioned due to a reborrow (acting as a foreign read access)
-      --> RUSTLIB/alloc/src/boxed.rs:1493:9
+      --> RUSTLIB/alloc/src/boxed.rs:1266:18
 
     help: this transition corresponds to a temporary loss of write permissions until function exit
 

@@ -1,9 +1,9 @@
 error: Undefined Behavior: an access of size 4 at offset 2 is out of bounds for ALLOC.
 backtrace:
   0:
-    RUSTLIB/alloc/src/boxed.rs:1493:9
-  1:
     RUSTLIB/alloc/src/boxed.rs:1266:18
-  2:
+  1:
     bsan/tests/miri-tests/fail/both_borrows/issue-miri-1050-1.rs:6:14
+  2:
+    RUSTLIB/core/src/ops/function.rs:250:5
 

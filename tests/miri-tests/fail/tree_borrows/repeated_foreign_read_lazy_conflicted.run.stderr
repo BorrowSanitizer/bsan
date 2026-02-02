@@ -2,9 +2,15 @@ error: Undefined Behavior: write through <TAG>(StrongProtector) at ALLOC[0x0] is
 help: the accessed tag <TAG>(StrongProtector) has state Reserved (conflicted) which forbids this write
     help: the accessed tag <TAG>(StrongProtector) was created here, in the initial state Reserved
       --> bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:7:0
+         |
+       7 | unsafe fn access_after_sub_1(x: &mut u8, orig_ptr: *mut u8) {
+         |
 
     help: the accessed tag <TAG>(StrongProtector) later transitioned due to a foreign read
       --> bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:9:18
+         |
+       9 |     do_something(*orig_ptr);
+         |
 
     help: this transition corresponds to a temporary loss of write permissions until function exit
 
