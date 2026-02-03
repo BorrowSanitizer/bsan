@@ -7,7 +7,7 @@ use crate::span::{FramePtr, Span, Symbol};
 /// in sanitizer_common/sanitizer_stacktrace.h
 #[allow(unused)]
 const STACK_TRACE_MAX: u32 = 255;
-const SRC_LINE_LEN: u32 = 90;
+const SRC_LINE_LEN_MAX: u32 = 100;
 
 #[allow(unused)]
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -81,7 +81,7 @@ impl SanitizerCommon {
     }
 
     pub fn get_source_line(file: &str, line: u32) -> Option<String> {
-        let mut buf = [0u8; SRC_LINE_LEN as usize];
+        let mut buf = [0u8; SRC_LINE_LEN_MAX as usize];
         let c_path = CString::new(file).ok()?;
         let read =
             unsafe { __bsan_read_src_line(c_path.as_ptr(), line, buf.as_mut_ptr(), buf.len()) };
