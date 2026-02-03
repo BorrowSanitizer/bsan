@@ -17,7 +17,7 @@ help: protected tags must never be Disabled
     help: the protected tag <TAG>(StrongProtector) later transitioned due to a reborrow (acting as a foreign read access)
       --> RUSTLIB/alloc/src/boxed.rs:1266:18
          |
-    1266 |         unsafe { Self::from_raw_in(raw, Global) }
+    1266 | unsafe { Self::from_raw_in(raw, Global) }
          |
 
     help: this transition corresponds to a temporary loss of write permissions until function exit

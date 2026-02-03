@@ -16,7 +16,7 @@ help: the strongly protected tag <TAG>(StrongProtector) disallows deallocations
     help: the strongly protected tag <TAG>(StrongProtector) later transitioned due to a deallocation (acting as a child write access)
       --> RUSTLIB/std/src/sys/alloc/PLATFORM.rs:NN:NN
          |
-      48 |         unsafe { libc::free(ptr as *mut libc::c_void) }
+      48 | unsafe { libc::free(ptr as *mut libc::c_void) }
          |
 
     help: this transition corresponds to the first write to a 2-phase borrowed mutable reference

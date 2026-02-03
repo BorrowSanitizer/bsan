@@ -89,6 +89,6 @@ impl SanitizerCommon {
             return None;
         }
         let end = buf.iter().position(|&b| b == 0).unwrap_or(read as usize);
-        core::str::from_utf8(&buf[..end]).ok().map(|s| s.to_string())
+        core::str::from_utf8(&buf[..end]).ok().map(|s| s.trim().to_string())
     }
 }

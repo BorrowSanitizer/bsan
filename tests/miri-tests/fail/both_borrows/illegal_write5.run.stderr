@@ -3,13 +3,13 @@ help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this 
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
       --> bsan/tests/miri-tests/fail/both_borrows/illegal_write5.rs:9:25
          |
-       9 |     let xref = unsafe { &mut *xraw };
+       9 | let xref = unsafe { &mut *xraw };
          |
 
     help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
       --> bsan/tests/miri-tests/fail/both_borrows/illegal_write5.rs:18:14
          |
-      18 |     unsafe { *xraw = 15 };
+      18 | unsafe { *xraw = 15 };
          |
 
     help: this transition corresponds to a loss of read and write permissions

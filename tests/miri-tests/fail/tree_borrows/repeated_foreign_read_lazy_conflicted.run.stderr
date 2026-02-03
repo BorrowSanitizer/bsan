@@ -9,7 +9,7 @@ help: the accessed tag <TAG>(StrongProtector) has state Reserved (conflicted) wh
     help: the accessed tag <TAG>(StrongProtector) later transitioned due to a foreign read
       --> bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:9:18
          |
-       9 |     do_something(*orig_ptr);
+       9 | do_something(*orig_ptr);
          |
 
     help: this transition corresponds to a temporary loss of write permissions until function exit

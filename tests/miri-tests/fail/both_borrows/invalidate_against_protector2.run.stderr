@@ -5,7 +5,7 @@ help: protected tags must never be Disabled
     help: the accessed tag <TAG>(unprotected) was created here
       --> bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector2.rs:14:16
          |
-      14 |     let xraw = &mut x as *mut _;
+      14 | let xraw = &mut x as *mut _;
          |
 
     help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Frozen

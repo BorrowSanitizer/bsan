@@ -3,7 +3,7 @@ help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this wr
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
       --> bsan/tests/miri-tests/fail/both_borrows/illegal_write1.rs:7:16
          |
-       7 |     let xref = &*target;
+       7 | let xref = &*target;
          |
 
 

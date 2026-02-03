@@ -5,7 +5,7 @@ help: protected tags must never be Disabled
     help: the accessed tag <TAG>(unprotected) was created here
       --> bsan/tests/fail/protected_write.rs:4:14
          |
-       4 |     let rx = &mut x;
+       4 | let rx = &mut x;
          |
 
     help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved

@@ -3,13 +3,13 @@ help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this 
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
       --> bsan/tests/miri-tests/fail/both_borrows/mut_exclusive_violation2.rs:9:25
          |
-       9 |         let raw1 = ptr1.as_mut();
+       9 | let raw1 = ptr1.as_mut();
          |
 
     help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
       --> bsan/tests/miri-tests/fail/both_borrows/mut_exclusive_violation2.rs:12:9
          |
-      12 |         *raw2 = 2;
+      12 | *raw2 = 2;
          |
 
     help: this transition corresponds to a loss of read and write permissions

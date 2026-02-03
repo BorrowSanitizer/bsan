@@ -3,13 +3,13 @@ help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this 
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
       --> bsan/tests/fail/forbidden_child_access.rs:5:23
          |
-       5 |     let r1 = unsafe { &mut *ptr };
+       5 | let r1 = unsafe { &mut *ptr };
          |
 
     help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
       --> bsan/tests/fail/forbidden_child_access.rs:7:5
          |
-       7 |     *r2 += 1;
+       7 | *r2 += 1;
          |
 
     help: this transition corresponds to a loss of read and write permissions

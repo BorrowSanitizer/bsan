@@ -5,7 +5,7 @@ help: protected tags must never be Disabled
     help: the accessed tag <TAG>(unprotected) was created here
       --> bsan/tests/miri-tests/fail/both_borrows/box_noalias_violation.rs:15:19
          |
-      15 |         let ptr = &mut v as *mut i32;
+      15 | let ptr = &mut v as *mut i32;
          |
 
     help: the protected tag <TAG>(WeakProtector) was created here, in the initial state Reserved
@@ -17,7 +17,7 @@ help: protected tags must never be Disabled
     help: the protected tag <TAG>(WeakProtector) later transitioned due to a child write
       --> bsan/tests/miri-tests/fail/both_borrows/box_noalias_violation.rs:5:5
          |
-       5 |     *x = 5;
+       5 | *x = 5;
          |
 
     help: this transition corresponds to the first write to a 2-phase borrowed mutable reference

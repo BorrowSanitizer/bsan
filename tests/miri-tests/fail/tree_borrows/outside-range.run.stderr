@@ -5,7 +5,7 @@ help: protected tags must never be Disabled
     help: the accessed tag <TAG>(unprotected) was created here
       --> RUSTLIB/core/src/slice/mod.rs:757:0
          |
-     757 |     pub const fn as_mut_ptr(&mut self) -> *mut T {
+     757 | pub const fn as_mut_ptr(&mut self) -> *mut T {
          |
 
     help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved

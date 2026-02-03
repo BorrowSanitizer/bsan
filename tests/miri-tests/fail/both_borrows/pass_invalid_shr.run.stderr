@@ -3,13 +3,13 @@ help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this 
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
       --> bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr.rs:9:25
          |
-       9 |     let xref = unsafe { &*xraw };
+       9 | let xref = unsafe { &*xraw };
          |
 
     help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
       --> bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr.rs:10:14
          |
-      10 |     unsafe { *xraw = 42 }; // unfreeze
+      10 | unsafe { *xraw = 42 }; // unfreeze
          |
 
     help: this transition corresponds to a loss of read permissions

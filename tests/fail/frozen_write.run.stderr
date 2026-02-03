@@ -3,7 +3,7 @@ help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this wr
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
       --> bsan/tests/fail/frozen_write.rs:4:14
          |
-       4 |     let rx = &x;
+       4 | let rx = &x;
          |
 
 

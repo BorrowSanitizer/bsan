@@ -3,13 +3,13 @@ help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this 
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
       --> bsan/tests/miri-tests/fail/tree_borrows/error-range.rs:12:20
          |
-      12 |         let rmut = &mut *addr_of_mut!(data[0..6]);
+      12 | let rmut = &mut *addr_of_mut!(data[0..6]);
          |
 
     help: the accessed tag <TAG>(unprotected) later transitioned due to a child write
       --> bsan/tests/miri-tests/fail/tree_borrows/error-range.rs:15:9
          |
-      15 |         rmut[5] += 1;
+      15 | rmut[5] += 1;
          |
 
     help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
@@ -17,7 +17,7 @@ help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this 
     help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign read
       --> bsan/tests/miri-tests/fail/tree_borrows/error-range.rs:20:18
          |
-      20 |         let _v = data[5];
+      20 | let _v = data[5];
          |
 
     help: this transition corresponds to a loss of write permissions
@@ -25,7 +25,7 @@ help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this 
     help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
       --> bsan/tests/miri-tests/fail/tree_borrows/error-range.rs:22:9
          |
-      22 |         data[5] = 1;
+      22 | data[5] = 1;
          |
 
     help: this transition corresponds to a loss of read permissions

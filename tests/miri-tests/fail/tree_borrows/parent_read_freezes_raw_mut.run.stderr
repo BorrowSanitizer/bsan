@@ -3,13 +3,13 @@ help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this wr
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
       --> bsan/tests/miri-tests/fail/tree_borrows/parent_read_freezes_raw_mut.rs:8:20
          |
-       8 |         let mref = &mut root;
+       8 | let mref = &mut root;
          |
 
     help: the accessed tag <TAG>(unprotected) later transitioned due to a child write
       --> bsan/tests/miri-tests/fail/tree_borrows/parent_read_freezes_raw_mut.rs:10:9
          |
-      10 |         *ptr = 0; // Write
+      10 | *ptr = 0; // Write
          |
 
     help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
@@ -17,7 +17,7 @@ help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this wr
     help: the accessed tag <TAG>(unprotected) later transitioned due to a reborrow (acting as a foreign read access)
       --> bsan/tests/miri-tests/fail/tree_borrows/parent_read_freezes_raw_mut.rs:11:9
          |
-      11 |         assert_eq!(root, 0); // Parent Read
+      11 | assert_eq!(root, 0); // Parent Read
          |
 
     help: this transition corresponds to a loss of write permissions

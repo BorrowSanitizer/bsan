@@ -5,7 +5,7 @@ help: protected tags must never be Disabled
     help: the accessed tag <TAG>(unprotected) was created here
       --> RUSTLIB/std/src/sys/alloc/PLATFORM.rs:NN:NN
          |
-      13 |         if layout.align() <= MIN_ALIGN && layout.align() <= layout.size() {
+      13 | if layout.align() <= MIN_ALIGN && layout.align() <= layout.size() {
          |
 
     help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Frozen

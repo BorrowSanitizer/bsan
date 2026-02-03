@@ -3,7 +3,7 @@ help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this wr
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
       --> bsan/tests/miri-tests/fail/tree_borrows/frozen-lazy-write-to-surrounding.rs:6:13
          |
-       6 |     let x = &pair.0;
+       6 | let x = &pair.0;
          |
 
 

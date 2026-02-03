@@ -3,13 +3,13 @@ help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this 
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
       --> bsan/tests/miri-tests/fail/both_borrows/buggy_as_mut_slice.rs:13:14
          |
-      13 |     let v2 = safe::as_mut_slice(&v);
+      13 | let v2 = safe::as_mut_slice(&v);
          |
 
     help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
       --> bsan/tests/miri-tests/fail/both_borrows/buggy_as_mut_slice.rs:14:5
          |
-      14 |     v1[1] = 5;
+      14 | v1[1] = 5;
          |
 
     help: this transition corresponds to a loss of read and write permissions
