@@ -4,7 +4,6 @@ use core::ffi::c_char;
 use crate::alloc::string::{String, ToString};
 use crate::span::{FramePtr, Span, Symbol};
 
-
 /// Maximum depth of captured stack traces as defined
 /// in sanitizer_common/sanitizer_stacktrace.h
 #[allow(unused)]
