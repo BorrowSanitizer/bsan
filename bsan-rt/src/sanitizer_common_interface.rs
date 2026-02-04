@@ -1,7 +1,9 @@
 use alloc::ffi::CString;
+use core::ffi::c_char;
 
 use crate::alloc::string::{String, ToString};
 use crate::span::{FramePtr, Span, Symbol};
+
 
 /// Maximum depth of captured stack traces as defined
 /// in sanitizer_common/sanitizer_stacktrace.h
@@ -81,7 +83,7 @@ impl SanitizerCommon {
     }
 
     pub fn get_source_line(file: &str, line: u32) -> Option<String> {
-        let mut buf = [0u8; SRC_LINE_LEN_MAX as usize];
+        let mut buf = [0 as c_char; SRC_LINE_LEN_MAX as usize];
         let c_path = CString::new(file).ok()?;
         let read =
             unsafe { __bsan_read_src_line(c_path.as_ptr(), line, buf.as_mut_ptr(), buf.len()) };
