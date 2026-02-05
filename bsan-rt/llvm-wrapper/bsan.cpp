@@ -162,8 +162,7 @@ __bsan_read_file(const char *path, char **file_buf, uptr *file_buf_len) {
 }
 
 // Free the buffer allocated by __bsan_read_file
-extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_free_buffer(char *buf,
-                                                                 uptr size) {
+extern "C" void __bsan_free_buffer(char *buf, uptr size) {
   if (buf && size > 0) {
     UnmapOrDie(buf, size);
   }
