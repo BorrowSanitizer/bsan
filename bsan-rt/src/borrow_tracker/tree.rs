@@ -25,10 +25,12 @@ pub struct AllocRange {
 }
 
 #[inline]
+#[allow(unused)]
 pub fn alloc_range(start: Size, size: Size) -> AllocRange {
     AllocRange { start, size }
 }
 
+#[allow(unused)]
 impl AllocRange {
     #[inline]
     pub fn end(self) -> Size {
@@ -998,6 +1000,7 @@ where
 }
 
 /// Integration with the BorTag garbage collector
+#[allow(unused)]
 impl<A> Tree<A>
 where
     A: Allocator,

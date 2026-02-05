@@ -141,6 +141,10 @@ impl<'b> BorrowTracker<'b> {
         let parent_tag = self.prov.bor_tag;
         let new_tag = BorTag::default();
 
+        if !self.tree().tag_mapping.contains_key(&self.prov.bor_tag) {
+            return Err(UBInfo::UseAfterFree);
+        }
+
         let protected = retag_info.perm.protector.is_some();
         if let Some(protector) = retag_info.perm.protector {
             // We register the protection in two different places.
