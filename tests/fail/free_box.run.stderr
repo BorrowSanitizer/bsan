@@ -1,4 +1,4 @@
-error: Undefined Behavior: trying to access ALLOC, which has been freed.
+error: Undefined Behavior: trying to access an allocation that has been freed.
 backtrace:
   0:
     bsan/tests/fail/free_box.rs:12:9

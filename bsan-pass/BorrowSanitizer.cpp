@@ -499,6 +499,7 @@ private:
                                Provenance Prov, AtomicOrdering Ordering) {
     ProvenancePointer ProvPtr;
     if (Prov.isVector()) {
+      report_fatal_error("Vectors are not supported.");
     } else {
       Value *ShadowPointer =
           IRB.CreateCall(BS.BsanFuncGetShadowDest, {ObjAddr});
@@ -515,7 +516,7 @@ private:
                                       AtomicOrdering Ordering) {
     ProvenancePointer ProvPtr;
     if (Comp.isVector()) {
-      report_fatal_error("Scalable vectors are not supported.");
+      report_fatal_error("Vectors are not supported.");
     } else {
       Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncGetShadowSrc, {ObjAddr});
       ProvPtr = ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
@@ -573,7 +574,7 @@ private:
           getProvenanceComponents(EntryIRB, Arg.getType());
       for (auto &C : *Components) {
         Value *CurrentArrayByteOffset =
-            EntryIRB.CreateMul(TotalNumProvenanceValues, BS.ProvenanceSize);
+            EntryIRB.CreateMul(TotalNumProvenanceValues, BS.PL.ProvenanceSize);
         Value *CurrentArraySlot =
             addPointer(EntryIRB, BS.DL, BS.ParamTLS, CurrentArrayByteOffset);
         ProvenancePointer Ptr =
@@ -626,8 +627,6 @@ private:
   void patchAllocaPHINodes() {
     SmallVector<PHINode *> Worklist;
     for (const auto &[BB, AI, Prov] : AllocaProvPHINodes) {
-      PHINode *IdNode = cast<PHINode>(Prov.Id);
-      Worklist.push_back(IdNode);
       PHINode *TagNode = cast<PHINode>(Prov.Tag);
       Worklist.push_back(TagNode);
       PHINode *InfoNode = cast<PHINode>(Prov.Info);
@@ -636,7 +635,6 @@ private:
       for (BasicBlock *IncomingBlock : predecessors(BB)) {
         ProvenanceScalar IncomingProv =
             assertAllocaProvenance(IncomingBlock, AI);
-        IdNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Id);
         TagNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Tag);
         InfoNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Info);
       }
@@ -678,11 +676,6 @@ private:
     }
   }
 
-  Value *newAllocId(IRBuilder<> &IRB) {
-    return IRB.CreateAtomicRMW(AtomicRMWInst::Add, BS.AllocIdCounter, BS.One,
-                               std::nullopt, AtomicOrdering::Monotonic);
-  }
-
   Value *newBorrowTag(IRBuilder<> &IRB) {
     return IRB.CreateAtomicRMW(AtomicRMWInst::Add, BS.BorTagCounter, BS.One,
                                std::nullopt, AtomicOrdering::Monotonic);
@@ -691,10 +684,9 @@ private:
   // Allocates object metadata for a stack or heap allocation.
   ProvenanceScalar instrumentHeapAllocation(IRBuilder<> &IRB, Value *Address,
                                             Value *Size) {
-    Value *Id = newAllocId(IRB);
     Value *Tag = newBorrowTag(IRB);
-    Value *Info = IRB.CreateCall(BS.BsanFuncAlloc, {Address, Size, Id, Tag});
-    ProvenanceScalar Prov = ProvenanceScalar(Id, Tag, Info);
+    Value *Info = IRB.CreateCall(BS.BsanFuncAlloc, {Address, Size, Tag});
+    ProvenanceScalar Prov = ProvenanceScalar(Tag, Info);
     setProvenance(Address, Prov);
     return Prov;
   }
@@ -711,8 +703,7 @@ private:
   // Deallocates a pointer.
   void instrumentDeallocation(IRBuilder<> &IRB, Value *Ptr) {
     ProvenanceScalar Prov = assertProvenanceScalar(Ptr);
-    IRB.CreateCall(BS.BsanFuncDealloc,
-                   {Ptr, Prov.Id, Prov.Tag, Prov.Info, BS.False});
+    IRB.CreateCall(BS.BsanFuncDealloc, {Ptr, Prov.Tag, Prov.Info, BS.False});
   }
 
   bool isRustShim(CallBase &CB) {
@@ -763,8 +754,6 @@ private:
       Callee = BS.BsanFuncDebugPrint;
     } else if (Name == kBsanFuncDebugPrintBorrowState) {
       Callee = BS.BsanFuncDebugPrintBorrowState;
-    } else if (Name == kBsanFuncDebugGC) {
-      Callee = BS.BsanFuncDebugGC;
     } else if (Name == kBsanFuncDebugTreeSize) {
       Callee = BS.BsanFuncDebugTreeSize;
     } else if (Name == kBsanFuncDebugSnapshot) {
@@ -775,7 +764,7 @@ private:
       report_fatal_error("Unknown debug function: " + Twine(Name) + "\n");
     }
 
-    IRB.CreateCall(Callee, {Prov.Id, Prov.Tag, Prov.Info});
+    IRB.CreateCall(Callee, {Prov.Tag, Prov.Info});
     CB.eraseFromParent();
   }
 
@@ -848,15 +837,15 @@ private:
         }
       }
 
-      TargetProv.Tag = IRB.CreateCall(
-          BS.BsanFuncRetag,
-          {Target, CB.getOperand(2), CB.getOperand(3), TargetProv.Id,
-           TargetProv.Tag, TargetProv.Info, ImArray, ImArrayLen});
+      TargetProv.Tag = IRB.CreateCall(BS.BsanFuncRetag,
+                                      {Target, CB.getOperand(2),
+                                       CB.getOperand(3), TargetProv.Tag,
+                                       TargetProv.Info, ImArray, ImArrayLen});
 
       if (isFnEntryRetag(&CB)) {
         Value *PrevSlot = IRB.CreateLoad(BS.PtrTy, BS.ProvStack, true);
         Value *NextProvSlot =
-            subtractPointer(IRB, BS.DL, PrevSlot, BS.ProvenanceSize);
+            subtractPointer(IRB, BS.DL, PrevSlot, BS.PL.ProvenanceSize);
         TargetProv.store(IRB, BS.PL, NextProvSlot);
         IRB.CreateStore(NextProvSlot, BS.ProvStack, true);
       }
@@ -922,7 +911,7 @@ private:
         ProvSrc.store(Before, BS.PL, Dest);
 
         Value *ByteWidth =
-            Before.CreateMul(Comp.NumProvenanceValues, BS.ProvenanceSize);
+            Before.CreateMul(Comp.NumProvenanceValues, BS.PL.ProvenanceSize);
         ParamByteWidth = Before.CreateAdd(ParamByteWidth, ByteWidth);
       }
     }
@@ -977,7 +966,7 @@ private:
         ProvenancePointers.push_back({Idx, Ptr});
 
         Value *ByteWidth =
-            Before.CreateMul(Comp.NumProvenanceValues, BS.ProvenanceSize);
+            Before.CreateMul(Comp.NumProvenanceValues, BS.PL.ProvenanceSize);
         RetvalByteWidth = Before.CreateAdd(RetvalByteWidth, ByteWidth);
         NumProvenanceValues =
             Before.CreateAdd(NumProvenanceValues, Comp.NumProvenanceValues);
@@ -998,57 +987,26 @@ private:
     }
   }
 
-  ProvenanceVector
-  createVectorProvenancePHI(IRBuilder<> &IRB, ElementCount Elems,
-                            iterator_range<pred_iterator> Blocks) {
-    unsigned NumIncoming = std::distance(Blocks.begin(), Blocks.end());
-    Type *IntptrVector = VectorType::get(BS.IntptrTy, Elems);
-    Type *PtrVector = VectorType::get(BS.PtrTy, Elems);
-
-    PHINode *IdNode = IRB.CreatePHI(IntptrVector, NumIncoming, "_bsphi_vec_id");
-    IdNode->dropDbgRecords();
-    PHINode *TagNode =
-        IRB.CreatePHI(IntptrVector, NumIncoming, "_bsphi_vec_tag");
-    TagNode->dropDbgRecords();
-    PHINode *InfoNode =
-        IRB.CreatePHI(PtrVector, NumIncoming, "_bsphi_vec_info");
-    InfoNode->dropDbgRecords();
-
-    ProvenanceVector WildcardVector =
-        ProvenanceVector::wildcard(IRB, BS.PL, Elems);
-
-    for (BasicBlock *BB : Blocks) {
-      IdNode->addIncoming(WildcardVector.Id, BB);
-      TagNode->addIncoming(WildcardVector.Tag, BB);
-      InfoNode->addIncoming(WildcardVector.Info, BB);
-    }
-
-    return ProvenanceVector(IdNode, TagNode, InfoNode, Elems);
-  }
-
   ProvenanceScalar
   createScalarProvenancePHI(IRBuilder<> &IRB,
                             iterator_range<pred_iterator> Blocks) {
     unsigned NumIncoming = std::distance(Blocks.begin(), Blocks.end());
-    PHINode *IdNode = IRB.CreatePHI(BS.IntptrTy, NumIncoming, "_bsphi_id");
-    IdNode->dropDbgRecords();
     PHINode *TagNode = IRB.CreatePHI(BS.IntptrTy, NumIncoming, "_bsphi_tag");
     TagNode->dropDbgRecords();
     PHINode *InfoNode = IRB.CreatePHI(BS.PtrTy, NumIncoming, "_bsphi_info");
     InfoNode->dropDbgRecords();
 
     for (BasicBlock *BB : Blocks) {
-      IdNode->addIncoming(BS.WildcardProvenance.Id, BB);
       TagNode->addIncoming(BS.WildcardProvenance.Tag, BB);
       InfoNode->addIncoming(BS.WildcardProvenance.Info, BB);
     }
-    return ProvenanceScalar(IdNode, TagNode, InfoNode);
+    return ProvenanceScalar(TagNode, InfoNode);
   }
 
   Provenance createProvenancePHI(IRBuilder<> &IRB, ProvenanceComponent Comp,
                                  iterator_range<pred_iterator> Blocks) {
     if (Comp.isVector()) {
-      return createVectorProvenancePHI(IRB, Comp.Elems, Blocks);
+      report_fatal_error("Vectors are not supported.");
     }
     return createScalarProvenancePHI(IRB, Blocks);
   }
@@ -1081,16 +1039,14 @@ private:
                                                             AllocaInst *AI) {
     TypeSize TS = BS.getAllocaSizeInBytes(*AI);
     Value *Size = IRB.CreateTypeSize(BS.IntptrTy, TS);
-    Value *Id = newAllocId(IRB);
     Value *Tag = newBorrowTag(IRB);
     Value *Info = IRB.CreateCall(BS.BsanFuncReserveStackSlot, {});
-    return std::make_pair(Size, ProvenanceScalar(Id, Tag, Info));
+    return std::make_pair(Size, ProvenanceScalar(Tag, Info));
   }
 
   void initAllocaMetadata(IRBuilder<> &IRB, AllocaInst *AI, Value *Size,
                           ProvenanceScalar Prov) {
-    IRB.CreateCall(BS.BsanFuncAllocStack,
-                   {AI, Size, Prov.Id, Prov.Tag, Prov.Info});
+    IRB.CreateCall(BS.BsanFuncAllocStack, {AI, Size, Prov.Tag, Prov.Info});
   }
 
   ProvenanceScalar createAndInitAllocaMetadata(IRBuilder<> &IRB,
@@ -1107,10 +1063,9 @@ private:
     IRBuilder<> IRB(&II);
 
     ProvenanceScalar CurrentProv = getAllocaProvenance(CurrentBlock, AI);
-    if (CurrentProv != BS.InvalidProvenance &&
-        CurrentProv != BS.WildcardProvenance) {
-      IRB.CreateCall(BS.BsanFuncDealloc, {AI, CurrentProv.Id, CurrentProv.Tag,
-                                          CurrentProv.Info, BS.True});
+    if (CurrentProv != BS.WildcardProvenance) {
+      IRB.CreateCall(BS.BsanFuncDealloc,
+                     {AI, CurrentProv.Tag, CurrentProv.Info, BS.True});
     }
     if (!shouldInstrumentAlloca(*AI))
       return;
@@ -1129,9 +1084,8 @@ private:
     IRBuilder<> IRB(&II);
 
     ProvenanceScalar Root = assertProvenanceScalar(AI);
-    if (Root != BS.InvalidProvenance && Root != BS.WildcardProvenance) {
-      IRB.CreateCall(BS.BsanFuncDealloc,
-                     {AI, Root.Id, Root.Tag, Root.Info, BS.True});
+    if (Root != BS.WildcardProvenance) {
+      IRB.CreateCall(BS.BsanFuncDealloc, {AI, Root.Tag, Root.Info, BS.True});
     }
   }
 
@@ -1158,8 +1112,7 @@ private:
                        Value *Size) {
     ProvenanceScalar Prov = assertProvenanceScalar(Ptr);
     if (Prov != BS.WildcardProvenance) {
-      IRB.CreateCall(BS.BsanFuncRead,
-                     {Ptr, Size, Prov.Id, Prov.Tag, Prov.Info});
+      IRB.CreateCall(BS.BsanFuncRead, {Ptr, Size, Prov.Tag, Prov.Info});
     }
   }
 
@@ -1168,8 +1121,7 @@ private:
                         Value *Size) {
     ProvenanceScalar Prov = assertProvenanceScalar(Ptr);
     if (Prov != BS.WildcardProvenance) {
-      IRB.CreateCall(BS.BsanFuncWrite,
-                     {Ptr, Size, Prov.Id, Prov.Tag, Prov.Info});
+      IRB.CreateCall(BS.BsanFuncWrite, {Ptr, Size, Prov.Tag, Prov.Info});
     }
   }
 
@@ -1362,11 +1314,10 @@ private:
         ProvenanceScalar ProvR =
             assertProvenanceScalar({SI.getFalseValue(), Idx});
 
-        Value *Id = IRB.CreateSelect(SI.getCondition(), ProvL.Id, ProvR.Id);
         Value *Tag = IRB.CreateSelect(SI.getCondition(), ProvL.Tag, ProvR.Tag);
         Value *Info =
             IRB.CreateSelect(SI.getCondition(), ProvL.Info, ProvR.Info);
-        setProvenance({&SI, Idx}, ProvenanceScalar(Id, Tag, Info));
+        setProvenance({&SI, Idx}, ProvenanceScalar(Tag, Info));
       }
     }
   }
@@ -1375,7 +1326,7 @@ private:
     if (NumFnEntryRetags) {
       Value *FrameBottom = IRB.CreateLoad(BS.PtrTy, BS.ProvStack, true);
       Value *FrameLen =
-          IRB.CreatePtrDiff(BS.ProvenanceTy, FrameTop, FrameBottom);
+          IRB.CreatePtrDiff(BS.PL.ProvenanceTy, FrameTop, FrameBottom);
       IRB.CreateCall(BS.BsanFuncPopFrame, {FrameBottom, FrameLen});
       IRB.CreateStore(FrameTop, BS.ProvStack, true);
     }
@@ -1385,7 +1336,7 @@ private:
         if (LifetimeInfo->isAliveAfter(AI, &I)) {
           ProvenanceScalar Root = assertProvenanceScalar(AI);
           IRB.CreateCall(BS.BsanFuncDealloc,
-                         {AI, Root.Id, Root.Tag, Root.Info, BS.True});
+                         {AI, Root.Tag, Root.Info, BS.True});
           IRB.CreateCall(BS.BsanFuncDestroyStackSlot, {Root.Info});
         }
       }
@@ -1408,7 +1359,7 @@ private:
         Prov.store(IRB, BS.PL, Dest);
 
         Value *ByteWidth =
-            IRB.CreateMul(Comp.NumProvenanceValues, BS.ProvenanceSize);
+            IRB.CreateMul(Comp.NumProvenanceValues, BS.PL.ProvenanceSize);
         RetvalByteWidth = IRB.CreateAdd(RetvalByteWidth, ByteWidth);
       }
     }
@@ -1431,7 +1382,7 @@ private:
         Prov.store(IRB, BS.PL, Dest);
 
         Value *ByteWidth =
-            IRB.CreateMul(Comp.NumProvenanceValues, BS.ProvenanceSize);
+            IRB.CreateMul(Comp.NumProvenanceValues, BS.PL.ProvenanceSize);
         RetvalByteWidth = IRB.CreateAdd(RetvalByteWidth, ByteWidth);
       }
     }
@@ -1538,12 +1489,37 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   AttributeList AL;
   AL = AL.addFnAttribute(*C, Attribute::NoUnwind);
 
-  BsanFuncRetag = M.getOrInsertFunction(kBsanFuncRetagName, AL, IntptrTy, PtrTy,
-                                        IntptrTy, Int64Ty, IntptrTy, IntptrTy,
-                                        PtrTy, PtrTy, IntptrTy);
+  BsanFuncRetag =
+      M.getOrInsertFunction(kBsanFuncRetagName, AL, IntptrTy, PtrTy, IntptrTy,
+                            Int64Ty, IntptrTy, PtrTy, PtrTy, IntptrTy);
 
-  BsanFuncRemoveProtectedTags = M.getOrInsertFunction(
-      kBsanFuncRemoveProtectedTags, AL, IRB.getVoidTy(), PtrTy, IntptrTy);
+  BsanFuncPopFrame = M.getOrInsertFunction(kBsanFuncPopFrame, AL,
+                                           IRB.getVoidTy(), PtrTy, IntptrTy);
+
+  BsanFuncRead = M.getOrInsertFunction(kBsanFuncReadName, AL, IRB.getVoidTy(),
+                                       PtrTy, IntptrTy, IntptrTy, PtrTy);
+
+  BsanFuncWrite = M.getOrInsertFunction(kBsanFuncWriteName, AL, IRB.getVoidTy(),
+                                        PtrTy, IntptrTy, IntptrTy, PtrTy);
+
+  BsanFuncAlloc = M.getOrInsertFunction(kBsanFuncAllocName, AL, PtrTy, PtrTy,
+                                        IntptrTy, IntptrTy);
+
+  BsanFuncAllocStack =
+      M.getOrInsertFunction(kBsanFuncAllocStackName, AL, IRB.getVoidTy(), PtrTy,
+                            IntptrTy, IntptrTy, PtrTy);
+  BsanFuncDealloc =
+      M.getOrInsertFunction(kBsanFuncDeallocName, AL, IRB.getVoidTy(), PtrTy,
+                            IntptrTy, PtrTy, Int8Ty);
+
+  BsanFuncMarkTLS = M.getOrInsertFunction(
+      kBsanFuncMarkTLSName, FunctionType::get(PtrTy, /*isVarArg=*/false), AL);
+
+  BsanFuncValidateParamTLS = M.getOrInsertFunction(
+      kBsanFuncValidateParamTLSName, AL, IRB.getVoidTy(), IntptrTy);
+
+  BsanFuncValidateRetvalTLS = M.getOrInsertFunction(
+      kBsanFuncValidateRetvalTLSName, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
 
   BsanFuncShadowCopy = M.getOrInsertFunction(
       kBsanFuncShadowCopyName, AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
@@ -1551,14 +1527,11 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncShadowClear = M.getOrInsertFunction(kBsanFuncShadowClearName, AL,
                                               IRB.getVoidTy(), PtrTy, IntptrTy);
 
-  BsanFuncGetShadowDest =
-      M.getOrInsertFunction(kBsanFuncGetShadowDestName, AL, PtrTy, PtrTy);
-
   BsanFuncGetShadowSrc =
       M.getOrInsertFunction(kBsanFuncGetShadowSrcName, AL, PtrTy, PtrTy);
 
-  BsanFuncAlloc = M.getOrInsertFunction(kBsanFuncAllocName, AL, PtrTy, PtrTy,
-                                        IntptrTy, IntptrTy, IntptrTy);
+  BsanFuncGetShadowDest =
+      M.getOrInsertFunction(kBsanFuncGetShadowDestName, AL, PtrTy, PtrTy);
 
   BsanFuncReserveStackSlot =
       M.getOrInsertFunction(kBsanFuncReserveStackSlotName,
@@ -1567,85 +1540,32 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncDestroyStackSlot = M.getOrInsertFunction(
       kBsanFuncDestroyStackSlotName, AL, IRB.getVoidTy(), PtrTy);
 
-  BsanFuncAllocStack =
-      M.getOrInsertFunction(kBsanFuncAllocStackName, AL, IRB.getVoidTy(), PtrTy,
-                            IntptrTy, IntptrTy, IntptrTy, PtrTy);
+  BsanFuncAssertProvenanceNull = M.getOrInsertFunction(
+      kBsanFuncAssertProvenanceNull, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
 
-  BsanFuncDealloc =
-      M.getOrInsertFunction(kBsanFuncDeallocName, AL, IRB.getVoidTy(), PtrTy,
-                            IntptrTy, IntptrTy, PtrTy, Int8Ty);
+  BsanFuncAssertProvenanceWildcard = M.getOrInsertFunction(
+      kBsanFuncAssertProvenanceWildcard, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
 
-  BsanFuncExposeTag = M.getOrInsertFunction(
-      kBsanFuncExposeTagName, AL, IRB.getVoidTy(), IntptrTy, IntptrTy, PtrTy);
+  BsanFuncAssertProvenanceValid = M.getOrInsertFunction(
+      kBsanFuncAssertProvenanceValid, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
 
-  BsanFuncRead =
-      M.getOrInsertFunction(kBsanFuncReadName, AL, IRB.getVoidTy(), PtrTy,
-                            IntptrTy, IntptrTy, IntptrTy, PtrTy);
+  BsanFuncAssertProvenanceInvalid = M.getOrInsertFunction(
+      kBsanFuncAssertProvenanceInvalid, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
 
-  BsanFuncWrite =
-      M.getOrInsertFunction(kBsanFuncWriteName, AL, IRB.getVoidTy(), PtrTy,
-                            IntptrTy, IntptrTy, IntptrTy, PtrTy);
+  BsanFuncDebugPrint = M.getOrInsertFunction(kBsanFuncDebugPrint, AL,
+                                             IRB.getVoidTy(), IntptrTy, PtrTy);
 
-  BsanFuncShadowLoadVector =
-      M.getOrInsertFunction(kBsanFuncShadowLoadVectorName, AL, IRB.getVoidTy(),
-                            PtrTy, IntptrTy, PtrTy, PtrTy, PtrTy);
-
-  BsanFuncShadowStoreVector =
-      M.getOrInsertFunction(kBsanFuncShadowStoreVectorName, AL, IRB.getVoidTy(),
-                            PtrTy, IntptrTy, PtrTy, PtrTy, PtrTy);
-
-  BsanFuncAssertProvenanceNull =
-      M.getOrInsertFunction(kBsanFuncAssertProvenanceNull, AL, IRB.getVoidTy(),
-                            IntptrTy, IntptrTy, PtrTy);
-
-  BsanFuncAssertProvenanceWildcard =
-      M.getOrInsertFunction(kBsanFuncAssertProvenanceWildcard, AL,
-                            IRB.getVoidTy(), IntptrTy, IntptrTy, PtrTy);
-
-  BsanFuncAssertProvenanceValid =
-      M.getOrInsertFunction(kBsanFuncAssertProvenanceValid, AL, IRB.getVoidTy(),
-                            IntptrTy, IntptrTy, PtrTy);
-
-  BsanFuncAssertProvenanceInvalid =
-      M.getOrInsertFunction(kBsanFuncAssertProvenanceInvalid, AL,
-                            IRB.getVoidTy(), IntptrTy, IntptrTy, PtrTy);
-
-  BsanFuncDebugPrint = M.getOrInsertFunction(
-      kBsanFuncDebugPrint, AL, IRB.getVoidTy(), IntptrTy, IntptrTy, PtrTy);
-
-  BsanFuncDebugPrintBorrowState =
-      M.getOrInsertFunction(kBsanFuncDebugPrintBorrowState, AL, IRB.getVoidTy(),
-                            IntptrTy, IntptrTy, PtrTy);
-
-  BsanFuncDebugGC = M.getOrInsertFunction(kBsanFuncDebugGC, AL, IRB.getVoidTy(),
-                                          IntptrTy, IntptrTy, PtrTy);
+  BsanFuncDebugPrintBorrowState = M.getOrInsertFunction(
+      kBsanFuncDebugPrintBorrowState, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
 
   BsanFuncDebugTreeSize = M.getOrInsertFunction(
-      kBsanFuncDebugTreeSize, AL, IRB.getVoidTy(), IntptrTy, IntptrTy, PtrTy);
+      kBsanFuncDebugTreeSize, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
 
   BsanFuncDebugSnapshot = M.getOrInsertFunction(
-      kBsanFuncDebugSnapshot, AL, IRB.getVoidTy(), IntptrTy, IntptrTy, PtrTy);
+      kBsanFuncDebugSnapshot, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
 
   BsanFuncDebugPrintDiff = M.getOrInsertFunction(
-      kBsanFuncDebugPrintDiff, AL, IRB.getVoidTy(), IntptrTy, IntptrTy, PtrTy);
-
-  BsanFuncDebugParamTLS = M.getOrInsertFunction(kBsanFuncDebugParamTLS, AL,
-                                                IRB.getVoidTy(), IntptrTy);
-
-  BsanFuncDebugRetvalTLS = M.getOrInsertFunction(kBsanFuncDebugRetvalTLS, AL,
-                                                 IRB.getVoidTy(), IntptrTy);
-
-  BsanFuncValidateParamTLS = M.getOrInsertFunction(
-      kBsanFuncValidateParamTLSName, AL, IRB.getVoidTy(), IntptrTy);
-
-  BsanFuncValidateRetvalTLS = M.getOrInsertFunction(
-      kBsanFuncValidateRetvalTLSName, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
-
-  BsanFuncMarkTLS = M.getOrInsertFunction(
-      kBsanFuncMarkTLSName, FunctionType::get(PtrTy, /*isVarArg=*/false), AL);
-
-  BsanFuncPopFrame = M.getOrInsertFunction(kBsanFuncPopFrame, AL,
-                                           IRB.getVoidTy(), PtrTy, IntptrTy);
+      kBsanFuncDebugPrintDiff, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
 
   EHPersonality Pers = getDefaultEHPersonality(TargetTriple);
   DefaultPersonalityFn =
@@ -1660,11 +1580,10 @@ void BorrowSanitizer::createUserspaceApi(Module &M,
                                          const TargetLibraryInfo &TLI) {
   IRBuilder<> IRB(*C);
   RetvalTLS = getOrInsertTLSGlobal(M, kBsanRetvalTLSName,
-                                   ArrayType::get(ProvenanceTy, kTLSSize));
+                                   ArrayType::get(PL.ProvenanceTy, kTLSSize));
   ParamTLS = getOrInsertTLSGlobal(M, kBsanParamTLSName,
-                                  ArrayType::get(ProvenanceTy, kTLSSize));
+                                  ArrayType::get(PL.ProvenanceTy, kTLSSize));
   ProvStack = getOrInsertTLSGlobal(M, kBsanProvStackName, PtrTy);
-  AllocIdCounter = getOrInsertGlobal(M, kBsanAllocIdCounterName, IntptrTy);
   BorTagCounter = getOrInsertGlobal(M, kBsanBorTagCounterName, IntptrTy);
 }
 

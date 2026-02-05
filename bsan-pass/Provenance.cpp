@@ -57,43 +57,30 @@ ProvenancePointerScalar::ProvenancePointerScalar(IRBuilder<> &IRB,
                                                  Value *Base) {
 
   Value *ZeroIdx = ConstantInt::get(IRB.getInt64Ty(), 0);
-
-  this->IdPtr = Base;
-
-  this->TagPtr = IRB.CreateGEP(
-      PL.ProvenanceTy, Base, {ZeroIdx, ConstantInt::get(IRB.getInt32Ty(), 1)});
-
+  this->TagPtr = Base;
   this->InfoPtr = IRB.CreateGEP(
-      PL.ProvenanceTy, Base, {ZeroIdx, ConstantInt::get(IRB.getInt32Ty(), 2)});
+      PL.ProvenanceTy, Base, {ZeroIdx, ConstantInt::get(IRB.getInt32Ty(), 1)});
 }
 
 ProvenancePointerVector::ProvenancePointerVector(IRBuilder<> &IRB,
                                                  const ProvenanceLayout &PL,
                                                  Value *Base,
                                                  ElementCount Elems) {
-  this->IdPtr = Base;
+  this->TagPtr = Base;
   this->Elems = Elems;
   Value *IntVecSize = IRB.CreateTypeSize(
       PL.IntptrTy,
       PL.DL->getTypeAllocSize(VectorType::get(PL.IntptrTy, Elems)));
-
-  Value *PtrVecSize = IRB.CreateTypeSize(
-      PL.PtrTy, PL.DL->getTypeAllocSize(VectorType::get(PL.PtrTy, Elems)));
-
-  Value *TagBase = IRB.CreatePointerCast(IdPtr, IRB.getIntPtrTy(*PL.DL));
-  Value *TagOffset = IRB.CreateAdd(Base, IntVecSize);
-  this->TagPtr = IRB.CreateIntToPtr(TagOffset, PL.PtrTy);
+  Value *TagOffset = IRB.CreateAdd(Base, this->TagPtr);
   this->InfoPtr =
       IRB.CreateIntToPtr(IRB.CreateAdd(TagOffset, IntVecSize), PL.PtrTy);
 }
 
 void Provenance::addIncoming(BasicBlock *IncomingBlock,
                              Provenance &IncomingProv) {
-  PHINode *IdNode = cast<PHINode>(this->Id);
   PHINode *TagNode = cast<PHINode>(this->Tag);
   PHINode *InfoNode = cast<PHINode>(this->Info);
 
-  IdNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Id);
   TagNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Tag);
   InfoNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Info);
 }
@@ -105,12 +92,11 @@ Provenance Provenance::load(IRBuilder<> &IRB, const ProvenanceLayout &PL,
   Type *IntTy = PL.getIntTy(ProvPtr.Kind, ProvPtr.Elems);
   Type *PtrTy = PL.getPtrTy(ProvPtr.Kind, ProvPtr.Elems);
 
+  LoadInst *Tag = IRB.CreateLoad(IntTy, ProvPtr.TagPtr, true);
   LoadInst *Info = IRB.CreateLoad(PtrTy, ProvPtr.InfoPtr, true);
   Info->setAtomic(Ordering);
-  LoadInst *Id = IRB.CreateLoad(IntTy, ProvPtr.IdPtr, true);
-  LoadInst *Tag = IRB.CreateLoad(IntTy, ProvPtr.TagPtr, true);
 
-  return Provenance(Id, Tag, Info, ProvPtr.Elems, ProvPtr.Kind);
+  return Provenance(Tag, Info, ProvPtr.Elems, ProvPtr.Kind);
 }
 
 ProvenanceScalar
@@ -136,8 +122,7 @@ void Provenance::store(IRBuilder<> &IRB, const ProvenanceLayout &PL,
 void Provenance::store(IRBuilder<> &IRB, const ProvenanceLayout &PL,
                        ProvenancePointer Dest, AtomicOrdering Ordering) {
 
-  IRB.CreateStore(this->Id, Dest.IdPtr, true);
-  IRB.CreateStore(this->Tag, Dest.TagPtr, true);
+  StoreInst *Tag = IRB.CreateStore(this->Tag, Dest.TagPtr, true);
   StoreInst *Info = IRB.CreateStore(this->Info, Dest.InfoPtr, true);
   Info->setOrdering(Ordering);
 }
@@ -153,16 +138,15 @@ Provenance Provenance::wildcard(IRBuilder<> &IRB, const ProvenanceLayout &PL,
 ProvenanceScalar ProvenanceScalar::wildcard(const ProvenanceLayout &PL) {
   Value *Zero = ConstantInt::get(PL.IntptrTy, 0);
   Value *InvalidPtr = ConstantPointerNull::get(PL.PtrTy);
-  return ProvenanceScalar(Zero, Zero, InvalidPtr);
+  return ProvenanceScalar(Zero, InvalidPtr);
 }
 
 ProvenanceVector ProvenanceVector::wildcard(IRBuilder<> &IRB,
                                             const ProvenanceLayout &PL,
                                             ElementCount Elems) {
   Constant *Zero = ConstantInt::get(PL.IntptrTy, 0);
-  Value *Id = ConstantVector::getSplat(Elems, Zero);
   Value *Tag = ConstantVector::getSplat(Elems, Zero);
   Value *Info =
       ConstantVector::getSplat(Elems, ConstantPointerNull::get(PL.PtrTy));
-  return ProvenanceVector(Id, Tag, Info, Elems);
+  return ProvenanceVector(Tag, Info, Elems);
 }

@@ -13,7 +13,7 @@ pub type TreeTransitionResult<T> = core::result::Result<T, TransitionError>;
 #[derive(Debug)]
 pub enum UBInfo {
     AccessOutOfBounds(AllocId, usize, usize),
-    UseAfterFree(AllocId),
+    UseAfterFree,
     AliasingViolation(Box<TreeError>),
 }
 
@@ -23,8 +23,8 @@ impl Display for UBInfo {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "Undefined Behavior: ")?;
         match self {
-            UBInfo::UseAfterFree(id) => {
-                write!(f, "trying to access {id:?}, which has been freed.")
+            UBInfo::UseAfterFree => {
+                write!(f, "trying to access an allocation that has been freed.")
             }
             UBInfo::AccessOutOfBounds(id, size, offset) => {
                 write!(

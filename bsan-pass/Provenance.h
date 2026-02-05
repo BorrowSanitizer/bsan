@@ -13,7 +13,7 @@ namespace llvm {
 // Provenance is three words, and consists of three
 // components: an allocation ID, a borrow tag, and
 // a pointer to an allocation metadata object.
-static const unsigned kProvenanceSize = 24;
+static const unsigned kProvenanceSize = 16;
 
 // We have two ways of loading provenance into memory. When we
 // need a singular provenance value, we create each of its component
@@ -29,12 +29,14 @@ struct ProvenanceLayout {
   PointerType *PtrTy = nullptr;
   Value *ProvenanceSize = nullptr;
   Type *ProvenanceTy = nullptr;
+  Align ProvenanceAlign = Align(1);
   ProvenanceLayout() {}
   ProvenanceLayout(LLVMContext *C, const DataLayout *DL) : DL(DL) {
     PtrTy = PointerType::getUnqual(*C);
     IntptrTy = Type::getIntNTy(*C, DL->getPointerSizeInBits());
-    ProvenanceTy = StructType::get(IntptrTy, IntptrTy, PtrTy);
+    ProvenanceTy = StructType::get(IntptrTy, PtrTy);
     ProvenanceSize = ConstantInt::get(IntptrTy, kProvenanceSize);
+    ProvenanceAlign = DL->getABITypeAlign(ProvenanceTy);
   }
   Type *getPtrTy(ProvenanceKind Kind, ElementCount Elems) const;
   Type *getIntTy(ProvenanceKind Kind, ElementCount Elems) const;
@@ -55,14 +57,13 @@ class ProvenancePointerVector;
 // Represents a "provenancy-carrying-component" of a typed value,
 // offset from a given location in an array of provenance values.
 struct ProvenancePointer : public WithProvenanceKind {
-  Value *IdPtr = nullptr;
   Value *TagPtr = nullptr;
   Value *InfoPtr = nullptr;
   ElementCount Elems;
   ProvenancePointer() : WithProvenanceKind(ProvenanceKind::Scalar) {}
-  ProvenancePointer(Value *Id, Value *Tag, Value *Info, ElementCount Elems,
+  ProvenancePointer(Value *Tag, Value *Info, ElementCount Elems,
                     ProvenanceKind Kind)
-      : IdPtr(Id), TagPtr(Tag), InfoPtr(Info), WithProvenanceKind(Kind) {}
+      : TagPtr(Tag), InfoPtr(Info), WithProvenanceKind(Kind) {}
 
   ProvenancePointer(IRBuilder<> &IRB, const ProvenanceLayout &PL, Value *Base,
                     ElementCount Elems, ProvenanceKind Kind);
@@ -72,8 +73,8 @@ class ProvenancePointerScalar : public ProvenancePointer {
   using ProvenancePointer::ProvenancePointer;
 
 public:
-  ProvenancePointerScalar(Value *I, Value *T, Value *F)
-      : ProvenancePointer(I, T, F, ElementCount::get(0, false),
+  ProvenancePointerScalar(Value *T, Value *F)
+      : ProvenancePointer(T, F, ElementCount::get(0, false),
                           ProvenanceKind::Scalar) {}
   ProvenancePointerScalar(IRBuilder<> &IRB, const ProvenanceLayout &PL,
                           Value *Base);
@@ -83,8 +84,8 @@ class ProvenancePointerVector : public ProvenancePointer {
   using ProvenancePointer::ProvenancePointer;
 
 public:
-  ProvenancePointerVector(Value *I, Value *T, Value *F, ElementCount Elems)
-      : ProvenancePointer(I, T, F, Elems, ProvenanceKind::Vector) {}
+  ProvenancePointerVector(Value *T, Value *F, ElementCount Elems)
+      : ProvenancePointer(T, F, Elems, ProvenanceKind::Vector) {}
   ProvenancePointerVector(IRBuilder<> &IRB, const ProvenanceLayout &PL,
                           Value *Base, ElementCount Elems);
   static ProvenancePointerVector
@@ -95,17 +96,16 @@ class ProvenanceScalar;
 class ProvenanceVector;
 class Provenance : public WithProvenanceKind {
 public:
-  Value *Id = nullptr;
   Value *Tag = nullptr;
   Value *Info = nullptr;
   ElementCount Elems;
 
   Provenance() : WithProvenanceKind(ProvenanceKind::Scalar) {}
-  Provenance(Value *I, Value *T, Value *F, ElementCount E, ProvenanceKind K)
-      : Id(I), Tag(T), Info(F), Elems(E), WithProvenanceKind(K) {}
+  Provenance(Value *T, Value *F, ElementCount E, ProvenanceKind K)
+      : Tag(T), Info(F), Elems(E), WithProvenanceKind(K) {}
   bool operator==(const Provenance &other) const {
-    return this->Id == other.Id && this->Tag == other.Tag &&
-           this->Info == other.Info && this->Elems == other.Elems;
+    return this->Tag == other.Tag && this->Info == other.Info &&
+           this->Elems == other.Elems;
   }
   bool operator!=(const Provenance &other) const { return !(*this == other); }
 
@@ -139,9 +139,8 @@ class ProvenanceScalar : public Provenance {
   using Provenance::Provenance;
 
 public:
-  ProvenanceScalar(Value *I, Value *T, Value *F)
-      : Provenance(I, T, F, ElementCount::get(0, false),
-                   ProvenanceKind::Scalar) {}
+  ProvenanceScalar(Value *T, Value *F)
+      : Provenance(T, F, ElementCount::get(0, false), ProvenanceKind::Scalar) {}
   static ProvenanceScalar wildcard(const ProvenanceLayout &PL);
 };
 
@@ -149,8 +148,8 @@ class ProvenanceVector : public Provenance {
   using Provenance::Provenance;
 
 public:
-  ProvenanceVector(Value *I, Value *T, Value *F, ElementCount E)
-      : Provenance(I, T, F, E, ProvenanceKind::Vector) {}
+  ProvenanceVector(Value *T, Value *F, ElementCount E)
+      : Provenance(T, F, E, ProvenanceKind::Vector) {}
   static ProvenanceVector wildcard(IRBuilder<> &IRB, const ProvenanceLayout &PL,
                                    ElementCount Elems);
 };
