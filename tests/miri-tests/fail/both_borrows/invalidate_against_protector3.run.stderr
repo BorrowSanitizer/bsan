@@ -3,11 +3,7 @@ help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(
 help: this write would cause the protected tag <TAG>(StrongProtector) (currently Frozen) to become Disabled
 help: protected tags must never be Disabled
     help: the accessed tag <TAG>(unprotected) was created here
-      --> RUSTLIB/std/src/sys/alloc/PLATFORM.rs:NN:NN
-         |
-      13 | if layout.align() <= MIN_ALIGN && layout.align() <= layout.size() {
-         |
-
+      --> RUSTLIB/std/src/sys/alloc/PLATFORM.rs:l:c
     help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Frozen
       --> bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector3.rs:5:0
          |
