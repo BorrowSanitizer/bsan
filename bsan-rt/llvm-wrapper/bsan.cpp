@@ -139,52 +139,32 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE u32 __bsan_symbolize_pc(
   return 1;
 }
 
-// Read the line from the source file at path into the buffer.
-// Returns 1 on success, 0 otherwise.
-extern "C" SANITIZER_INTERFACE_ATTRIBUTE u32
-__bsan_read_src_line(const char *path, u32 line, char *buf, uptr buf_len) {
-  char *content = nullptr;
-  uptr content_size = 0;
+// Read the entire file at path into the buffer.
+// Returns the number of bytes read on success, 0 otherwise.
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE uptr
+__bsan_read_file(const char *path, char **file_buf, uptr *file_buf_len) {
+  char *file = nullptr;
+  uptr file_len = 0;
   uptr bytes_read = 0;
   error_t err;
 
-  if (!ReadFileToBuffer(path, &content, &content_size, &bytes_read, (uptr)-1,
-                        &err)) {
+  if (!ReadFileToBuffer(path, &file, &file_len, &bytes_read, (uptr)-1, &err)) {
     return 0;
   }
-
   if (bytes_read == 0) {
-    UnmapOrDie(content, content_size);
+    UnmapOrDie(file, file_len);
     return 0;
   }
 
-  // find line
-  u32 current_line = 1;
-  char *line_start = content;
-  char *p = content;
-  char *content_end = content + bytes_read;
+  *file_buf = file;
+  *file_buf_len = file_len;
+  return bytes_read;
+}
 
-  while (p < content_end && current_line < line) {
-    if (*p == '\n') {
-      current_line++;
-      line_start = p + 1;
-    }
-    p++;
+// Free the buffer allocated by __bsan_read_file
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_free_buffer(char *buf,
+                                                                 uptr size) {
+  if (buf && size > 0) {
+    UnmapOrDie(buf, size);
   }
-
-  // write line to output buffer
-  if (current_line == line) {
-    uptr i = 0;
-    while (line_start < content_end && line_start[i] != '\n' &&
-           line_start[i] != '\r' && i < buf_len - 1) {
-      buf[i] = line_start[i];
-      i++;
-    }
-    buf[i] = '\0';
-    UnmapOrDie(content, content_size);
-    return 1;
-  }
-
-  UnmapOrDie(content, content_size);
-  return 0;
 }

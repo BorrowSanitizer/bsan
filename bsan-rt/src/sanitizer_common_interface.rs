@@ -1,5 +1,6 @@
 use alloc::ffi::CString;
 use core::ffi::c_char;
+use core::{ptr, slice};
 
 use crate::alloc::string::{String, ToString};
 use crate::span::{FramePtr, Span, Symbol};
@@ -8,7 +9,6 @@ use crate::span::{FramePtr, Span, Symbol};
 /// in sanitizer_common/sanitizer_stacktrace.h
 #[allow(unused)]
 const STACK_TRACE_MAX: u32 = 255;
-const SRC_LINE_LEN_MAX: u32 = 100;
 
 #[allow(unused)]
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -35,7 +35,14 @@ unsafe extern "C" {
     ) -> i32;
 
     /// Reads the source line from a file into the provided buffer.
-    fn __bsan_read_src_line(path: *const u8, line: u32, buf: *mut u8, buf_len: usize) -> u32;
+    fn __bsan_read_file(
+        path: *const c_char,
+        file_buf: *mut *mut c_char,
+        file_buf_size: *mut usize,
+    ) -> usize;
+
+    /// Free the buffer allocated by __bsan_read_file
+    fn __bsan_free_buffer(buf: *mut c_char, size: usize);
 }
 
 pub struct SanitizerCommon;
@@ -81,15 +88,32 @@ impl SanitizerCommon {
         unsafe { __bsan_print_stack_trace(id.0) }
     }
 
-    pub fn get_source_line(file: &str, line: u32) -> Option<String> {
-        let mut buf = [0 as c_char; SRC_LINE_LEN_MAX as usize];
-        let c_path = CString::new(file).ok()?;
-        let read =
-            unsafe { __bsan_read_src_line(c_path.as_ptr(), line, buf.as_mut_ptr(), buf.len()) };
-        if read == 0 {
+    /// Read entire file into a String
+    pub fn read_file(path: &str) -> Option<String> {
+        let c_path = CString::new(path).ok()?;
+
+        let mut buf_ptr: *mut c_char = ptr::null_mut();
+        let mut buf_size: usize = 0;
+
+        unsafe {
+            let bytes_read = __bsan_read_file(c_path.as_ptr(), &mut buf_ptr, &mut buf_size);
+            if bytes_read == 0 {
+                return None;
+            }
+
+            let bytes = slice::from_raw_parts(buf_ptr as *const u8, bytes_read);
+            let result = String::from_utf8_lossy(bytes).into_owned();
+            __bsan_free_buffer(buf_ptr, buf_size);
+            Some(result)
+        }
+    }
+
+    /// Read a specific line from a file
+    pub fn get_source_line(content: &str, line_number: u32) -> Option<String> {
+        if line_number == 0 {
             return None;
         }
-        let end = buf.iter().position(|&b| b == 0).unwrap_or(read as usize);
-        core::str::from_utf8(&buf[..end]).ok().map(|s| s.trim().to_string())
+
+        content.lines().nth((line_number - 1) as usize).map(|s| s.trim().to_string())
     }
 }

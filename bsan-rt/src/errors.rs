@@ -1,9 +1,11 @@
 // Components in this file were ported from Miri, and then modified by our team.
 use alloc::boxed::Box;
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display};
 
 use bsan_shared::Permission;
+use hashbrown::HashMap;
 
 use crate::diagnostics::{AccessCause, HistoryData, NodeDebugInfo};
 use crate::sanitizer_common_interface::SanitizerCommon;
@@ -156,17 +158,21 @@ impl core::fmt::Display for TreeError {
             writeln!(f, "help: {}", detail)?;
         }
 
+        let mut file_cache: HashMap<String, String> = HashMap::new();
         for event in history.events {
             writeln!(f, "    help: {}", event.1)?;
             if let Some(span) = event.0 {
                 let symbol = span.symbolize();
                 writeln!(f, "      --> {}", symbol)?;
-                if let Symbol::Resolved { file, line, col: _ } = symbol
-                    && let Some(content) = SanitizerCommon::get_source_line(&file, line)
-                {
-                    writeln!(f, "         |")?;
-                    writeln!(f, "{:>8} | {}", line, content)?;
-                    writeln!(f, "         |")?;
+                if let Symbol::Resolved { file: path, line, col: _ } = symbol {
+                    let file = file_cache
+                        .entry(path.clone())
+                        .or_insert_with(|| SanitizerCommon::read_file(&path).unwrap_or_default());
+                    if let Some(content) = SanitizerCommon::get_source_line(file, line) {
+                        writeln!(f, "         |")?;
+                        writeln!(f, "{:>8} | {}", line, content)?;
+                        writeln!(f, "         |")?;
+                    }
                 }
             }
             writeln!(f)?;
