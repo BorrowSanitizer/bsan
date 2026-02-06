@@ -2,6 +2,9 @@ error: Undefined Behavior: write through <TAG>(StrongProtector) at ALLOC[0x0] is
 help: the accessed tag <TAG>(StrongProtector) has state Frozen which forbids this write
     help: the accessed tag <TAG>(StrongProtector) was created here, in the initial state Frozen
       --> bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:15:0
+         |
+      15 | fn unknown_code(x: &i32) {
+         |
 
 
 backtrace:

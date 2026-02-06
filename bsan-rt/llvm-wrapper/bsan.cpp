@@ -1,7 +1,9 @@
 #include "bsan.h"
 #include "bsan_thread.h"
 #include "sanitizer_common/sanitizer_common.h"
+#include "sanitizer_common/sanitizer_file.h"
 #include "sanitizer_common/sanitizer_flags.h"
+#include "sanitizer_common/sanitizer_libc.h"
 #include "sanitizer_common/sanitizer_stackdepot.h"
 #include "sanitizer_common/sanitizer_stacktrace.h"
 #include "sanitizer_common/sanitizer_symbolizer.h"
@@ -135,4 +137,33 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE u32 __bsan_symbolize_pc(
     *column = res->info.column;
   res->ClearAll();
   return 1;
+}
+
+// Read the entire file at path into the buffer.
+// Returns the number of bytes read on success, 0 otherwise.
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE uptr
+__bsan_read_file(const char *path, char **file_buf, uptr *file_buf_len) {
+  char *file = nullptr;
+  uptr file_len = 0;
+  uptr bytes_read = 0;
+  error_t err;
+
+  if (!ReadFileToBuffer(path, &file, &file_len, &bytes_read, (uptr)-1, &err)) {
+    return 0;
+  }
+  if (bytes_read == 0) {
+    UnmapOrDie(file, file_len);
+    return 0;
+  }
+
+  *file_buf = file;
+  *file_buf_len = file_len;
+  return bytes_read;
+}
+
+// Free the buffer allocated by __bsan_read_file
+extern "C" void __bsan_free_buffer(char *buf, uptr size) {
+  if (buf && size > 0) {
+    UnmapOrDie(buf, size);
+  }
 }

@@ -1,4 +1,8 @@
-use crate::alloc::string::ToString;
+use alloc::ffi::CString;
+use core::ffi::c_char;
+use core::{ptr, slice};
+
+use crate::alloc::string::{String, ToString};
 use crate::span::{FramePtr, Span, Symbol};
 
 /// Maximum depth of captured stack traces as defined
@@ -29,6 +33,16 @@ unsafe extern "C" {
         line: *mut u32,
         column: *mut u32,
     ) -> i32;
+
+    /// Reads the source line from a file into the provided buffer.
+    fn __bsan_read_file(
+        path: *const c_char,
+        file_buf: *mut *mut c_char,
+        file_buf_size: *mut usize,
+    ) -> usize;
+
+    /// Free the buffer allocated by __bsan_read_file
+    fn __bsan_free_buffer(buf: *mut c_char, size: usize);
 }
 
 pub struct SanitizerCommon;
@@ -72,5 +86,34 @@ impl SanitizerCommon {
     #[allow(unused)]
     pub fn print_stack_trace(id: StackTraceId) {
         unsafe { __bsan_print_stack_trace(id.0) }
+    }
+
+    /// Read entire file into a String
+    pub fn read_file(path: &str) -> Option<String> {
+        let c_path = CString::new(path).ok()?;
+
+        let mut buf_ptr: *mut c_char = ptr::null_mut();
+        let mut buf_size: usize = 0;
+
+        unsafe {
+            let bytes_read = __bsan_read_file(c_path.as_ptr(), &mut buf_ptr, &mut buf_size);
+            if bytes_read == 0 {
+                return None;
+            }
+
+            let bytes = slice::from_raw_parts(buf_ptr as *const u8, bytes_read);
+            let result = String::from_utf8_lossy(bytes).into_owned();
+            __bsan_free_buffer(buf_ptr, buf_size);
+            Some(result)
+        }
+    }
+
+    /// Read a specific line from a file
+    pub fn get_source_line(content: &str, line_number: u32) -> Option<String> {
+        if line_number == 0 {
+            return None;
+        }
+
+        content.lines().nth((line_number - 1) as usize).map(|s| s.trim().to_string())
     }
 }

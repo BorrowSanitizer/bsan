@@ -4,9 +4,15 @@ help: this write would cause the protected tag <TAG>(StrongProtector) (currently
 help: protected tags must never be Disabled
     help: the accessed tag <TAG>(StrongProtector) was created here
       --> RUSTLIB/core/src/mem/mod.rs:886:0
+         |
+     886 | pub const fn replace<T>(dest: &mut T, src: T) -> T {
+         |
 
     help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Frozen
       --> bsan/tests/miri-tests/fail/both_borrows/aliasing_mut4.rs:6:0
+         |
+       6 | fn safe(x: &i32, y: &mut Cell<i32>) {
+         |
 
 
 backtrace:

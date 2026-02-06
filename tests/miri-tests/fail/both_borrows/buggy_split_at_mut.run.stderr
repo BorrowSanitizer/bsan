@@ -2,9 +2,15 @@ error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x4] is for
 help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this write
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
       --> bsan/tests/miri-tests/fail/both_borrows/buggy_split_at_mut.rs:14:17
+         |
+      14 | from_raw_parts_mut(ptr.offset(mid as isize), len - mid),
+         |
 
     help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
       --> bsan/tests/miri-tests/fail/both_borrows/buggy_split_at_mut.rs:24:5
+         |
+      24 | a[1] = 5;
+         |
 
     help: this transition corresponds to a loss of read and write permissions
 

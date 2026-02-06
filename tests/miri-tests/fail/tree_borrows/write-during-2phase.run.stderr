@@ -2,9 +2,15 @@ error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x0] is 
 help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
       --> bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:20:15
+         |
+      20 | let res = f.add(unsafe {
+         |
 
     help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
       --> bsan/tests/miri-tests/fail/tree_borrows/write-during-2phase.rs:23:9
+         |
+      23 | *alias = 42;
+         |
 
     help: this transition corresponds to a loss of read and write permissions
 

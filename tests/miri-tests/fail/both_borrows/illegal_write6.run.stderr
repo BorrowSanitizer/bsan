@@ -4,12 +4,21 @@ help: this write would cause the protected tag <TAG>(StrongProtector) (currently
 help: protected tags must never be Disabled
     help: the accessed tag <TAG>(unprotected) was created here
       --> bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:4:13
+         |
+       4 | let x = &mut 0u32;
+         |
 
     help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
       --> bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:9:0
+         |
+       9 | fn foo(a: &mut u32, y: *mut u32) -> u32 {
+         |
 
     help: the protected tag <TAG>(StrongProtector) later transitioned due to a child write
       --> bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:10:5
+         |
+      10 | *a = 1;
+         |
 
     help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
 

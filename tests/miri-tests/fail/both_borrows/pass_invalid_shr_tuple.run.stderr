@@ -2,9 +2,15 @@ error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x0] is 
 help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
       --> bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr_tuple.rs:10:31
+         |
+      10 | let pair_xref = unsafe { (&*xraw0, &*xraw1) };
+         |
 
     help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
       --> bsan/tests/miri-tests/fail/both_borrows/pass_invalid_shr_tuple.rs:11:14
+         |
+      11 | unsafe { *xraw0 = 42 }; // unfreeze
+         |
 
     help: this transition corresponds to a loss of read permissions
 

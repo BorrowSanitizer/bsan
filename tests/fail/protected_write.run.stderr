@@ -4,9 +4,15 @@ help: this write would cause the protected tag <TAG>(StrongProtector) (currently
 help: protected tags must never be Disabled
     help: the accessed tag <TAG>(unprotected) was created here
       --> bsan/tests/fail/protected_write.rs:4:14
+         |
+       4 | let rx = &mut x;
+         |
 
     help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
       --> bsan/tests/fail/protected_write.rs:9:0
+         |
+       9 | fn foo(_r: &mut i32, p: *mut i32) {
+         |
 
 
 backtrace:
