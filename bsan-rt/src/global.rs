@@ -20,10 +20,6 @@ impl ProtectedTags {
         self.0.get(&tag).copied()
     }
 
-    pub fn is_protected(&self, tag: BorTag) -> bool {
-        self.0.contains_key(&tag)
-    }
-
     pub fn add_protector(&mut self, tag: BorTag, kind: ProtectorKind) {
         self.0.insert(tag, kind);
     }

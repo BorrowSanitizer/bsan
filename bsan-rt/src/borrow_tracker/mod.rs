@@ -16,42 +16,47 @@ pub mod unimap;
 
 #[derive(Debug)]
 pub struct BorrowTracker<'b> {
+    alloc_id: AllocId,
     prov: Provenance,
     range: AllocRange,
-    tree: MutexGuard<'b, Option<Tree>>,
+    tree: MutexGuard<'b, Tree>,
 }
 
 impl<'b> BorrowTracker<'b> {
     fn tree_mut(&mut self) -> &mut Tree {
-        self.tree.as_mut().unwrap()
+        &mut *self.tree
     }
 
     fn tree(&self) -> &Tree {
-        self.tree.as_ref().unwrap()
+        &*self.tree
     }
 
     pub fn for_alloc<T, F>(prov: Provenance, f: F) -> UBResult<Option<T>>
     where
         F: FnOnce(Self) -> UBResult<T>,
     {
-        if prov.alloc_id == AllocId::wildcard() {
+        if prov.bor_tag == BorTag::wildcard() {
             Ok(None)
-        } else if prov.alloc_id == AllocId::invalid() {
-            Err(UBInfo::UseAfterFree(prov.alloc_id))
+        } else if prov.bor_tag == BorTag::invalid() {
+            Err(UBInfo::UseAfterFree)
         } else {
             // Safety:
             // Our instrumentation pass guarantees that if a pointer's
             // provenance is non-null and not wildcard, then it will contain
             // valid allocation info pointer.
             debug_assert!(!prov.alloc_info.is_null());
-            let root_alloc_id = unsafe { (*prov.alloc_info).alloc_id };
-            if prov.alloc_id != root_alloc_id {
-                return Err(UBInfo::UseAfterFree(prov.alloc_id));
-            }
+            let alloc_id = unsafe { (*prov.alloc_info).alloc_id };
+
+            let tree = if let Some(tree_lock) = unsafe { (*prov.alloc_info).tree_lock.as_ref() } {
+                tree_lock
+            } else {
+                return Err(UBInfo::UseAfterFree);
+            };
+
             let size = Size::from_bytes(unsafe { (*prov.alloc_info).size });
             let range = AllocRange { start: Size::ZERO, size };
-            let tree = unsafe { (*prov.alloc_info).tree_lock.lock() };
-            f(Self { prov, range, tree }).map(|v| Some(v))
+            let tree = tree.lock();
+            f(Self { alloc_id, prov, range, tree }).map(|v| Some(v))
         }
     }
 
@@ -66,15 +71,13 @@ impl<'b> BorrowTracker<'b> {
     where
         F: FnOnce(Self) -> UBResult<T>,
     {
-        if prov.alloc_id == AllocId::wildcard() {
+        if prov.bor_tag == BorTag::wildcard() {
             Ok(None)
-        } else if prov.alloc_id == AllocId::invalid() {
-            if let Some(size) = access_size
-                && size > 0
-            {
-                Err(UBInfo::UseAfterFree(prov.alloc_id))
-            } else {
+        } else if prov.bor_tag == BorTag::invalid() {
+            if access_size == Some(0) {
                 Ok(None)
+            } else {
+                Err(UBInfo::UseAfterFree)
             }
         } else {
             // Safety:
@@ -82,30 +85,34 @@ impl<'b> BorrowTracker<'b> {
             // provenance is non-null and not wildcard, then it will contain
             // valid allocation info pointer.
             debug_assert!(!prov.alloc_info.is_null());
-            let root_alloc_id = unsafe { (*prov.alloc_info).alloc_id };
+
+            let alloc_id = unsafe { (*prov.alloc_info).alloc_id };
+
             let (alloc_size, base_addr) =
-                unsafe { ((*prov.alloc_info).size, (*prov.alloc_info).base_addr.base_addr) };
+                unsafe { ((*prov.alloc_info).size, (*prov.alloc_info).base_addr.addr) };
+
             let access_size = access_size.unwrap_or(alloc_size);
-            if prov.alloc_id != root_alloc_id {
+            let tree = if let Some(tree_lock) = unsafe { (*prov.alloc_info).tree_lock.as_ref() } {
+                tree_lock
+            } else {
+                return if access_size != 0 { Err(UBInfo::UseAfterFree) } else { Ok(None) };
+            };
+
+            let relative_offset = start.addr().wrapping_sub(base_addr);
+            if start.addr() < base_addr || (relative_offset + access_size > alloc_size) {
                 return if access_size != 0 {
-                    Err(UBInfo::UseAfterFree(prov.alloc_id))
+                    Err(UBInfo::AccessOutOfBounds(alloc_id, access_size, alloc_size))
                 } else {
                     Ok(None)
                 };
             }
-            let relative_offset = start.addr().wrapping_sub(base_addr.addr());
-            if start.addr() < base_addr.addr() || (relative_offset + access_size > alloc_size) {
-                return if access_size != 0 {
-                    Err(UBInfo::AccessOutOfBounds(prov.alloc_id, access_size, alloc_size))
-                } else {
-                    Ok(None)
-                };
-            }
+
             let start = Size::from_bytes(relative_offset);
             let size = Size::from_bytes(access_size);
             let range = AllocRange { start, size };
-            let tree = unsafe { (*prov.alloc_info).tree_lock.lock() };
-            f(Self { prov, range, tree }).map(|r| Some(r))
+
+            let tree = tree.lock();
+            f(Self { alloc_id, prov, range, tree }).map(|r| Some(r))
         }
     }
 
@@ -113,22 +120,30 @@ impl<'b> BorrowTracker<'b> {
         ctx: &GlobalCtx,
         prov: Provenance,
         start: *mut c_void,
-        access_size: Option<usize>,
+        access_size: usize,
         retag_info: RetagInfo<'_>,
         span: Span,
     ) -> UBResult<BorTag> {
-        Self::for_access(prov, start, access_size, |mut bt| bt.retag_inner(ctx, retag_info, span))
-            .map(|opt| opt.unwrap_or(prov.bor_tag))
+        Self::for_access(prov, start, Some(access_size), |mut bt| {
+            bt.retag_inner(ctx, retag_info, span)
+        })
+        .map(|opt| opt.unwrap_or(prov.bor_tag))
     }
+
+    #[inline]
     pub fn retag_inner(
         &mut self,
         global_ctx: &GlobalCtx,
         retag_info: RetagInfo<'_>,
         span: Span,
     ) -> UBResult<BorTag> {
-        let alloc_id = self.prov.alloc_id;
+        let alloc_id = self.alloc_id;
         let parent_tag = self.prov.bor_tag;
         let new_tag = BorTag::default();
+
+        if !self.tree().tag_mapping.contains_key(&self.prov.bor_tag) {
+            return Err(UBInfo::UseAfterFree);
+        }
 
         let protected = retag_info.perm.protector.is_some();
         if let Some(protector) = retag_info.perm.protector {
@@ -205,7 +220,7 @@ impl<'b> BorrowTracker<'b> {
     }
 
     pub fn protector_end(&mut self, global_ctx: &GlobalCtx, span: Span) -> UBResult<()> {
-        let (bor_tag, alloc_id) = (self.prov.bor_tag, self.prov.alloc_id);
+        let (bor_tag, alloc_id) = (self.prov.bor_tag, self.alloc_id);
         self.tree_mut().perform_access(
             bor_tag,
             None,
@@ -222,7 +237,7 @@ impl<'b> BorrowTracker<'b> {
         access_kind: AccessKind,
         span: Span,
     ) -> UBResult<()> {
-        let (range, bor_tag, alloc_id) = (self.range, self.prov.bor_tag, self.prov.alloc_id);
+        let (range, bor_tag, alloc_id) = (self.range, self.prov.bor_tag, self.alloc_id);
         self.tree_mut().perform_access(
             bor_tag,
             Some((range, access_kind, AccessCause::Explicit(access_kind))),
@@ -234,29 +249,28 @@ impl<'b> BorrowTracker<'b> {
     }
 
     pub fn dealloc(&mut self, global_ctx: &GlobalCtx, span: Span) -> UBResult<()> {
-        let prov = self.prov;
-        let range = self.range;
-        let mut tree = self.tree.take().unwrap();
+        let (range, bor_tag, alloc_id) = (self.range, self.prov.bor_tag, self.alloc_id);
+        let tree = self.tree_mut();
         tree.dealloc(
-            prov.bor_tag,
+            bor_tag,
             range,
             &global_ctx.protected_tags(),
-            prov.alloc_id,
+            alloc_id,
             span,
             alloc::alloc::Global,
         )?;
         let info = unsafe { &mut *self.prov.alloc_info };
-        info.alloc_id = AllocId::invalid();
+        drop(info.tree_lock.take());
         Ok(())
     }
 
     pub fn debug_take_snapshot(&self, ctx: &GlobalCtx) {
         let tree = self.tree();
-        ctx.take_snapshot(self.prov.alloc_id, tree.clone());
+        ctx.take_snapshot(self.alloc_id, tree.clone());
     }
 
     pub fn debug_print_diff(&self, ctx: &GlobalCtx) {
-        ctx.with_snapshot(self.prov.alloc_id, |old_tree| {
+        ctx.with_snapshot(self.alloc_id, |old_tree| {
             diagnostics::print_tree_diff(self.tree(), old_tree, &ctx.protected_tags());
         });
     }
