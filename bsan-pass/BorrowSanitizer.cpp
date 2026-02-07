@@ -1093,23 +1093,23 @@ private:
   // section This should be removed when interceptors are implemented.
   void visitMemSetInst(MemSetInst &I) {
     IRBuilder<> IRB(&I);
-    IRB.CreateCall(
-        BS.BsanFuncShadowClear,
-        {I.getDest(), IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false)});
+    Value *Size = IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false);
+    insertWriteCheck(IRB, I.getDest(), Size);
+    IRB.CreateCall(BS.BsanFuncShadowClear, {I.getDest(), Size});
   }
 
   // Whenever we memcpy, we need to copy the corresponding shadow memory section
   // This should be removed when interceptors are implemented.
   void visitMemTransferInst(MemTransferInst &I) {
     IRBuilder<> IRB(&I);
-    IRB.CreateCall(BS.BsanFuncShadowCopy,
-                   {I.getSource(), I.getDest(),
-                    IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false)});
+    Value *Size = IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false);
+    insertReadCheck(IRB, I.getSource(), Size);
+    insertWriteCheck(IRB, I.getDest(), Size);
+    IRB.CreateCall(BS.BsanFuncShadowCopy, {I.getSource(), I.getDest(), Size});
   }
 
   // Inserts a check to validate a read access.
-  void insertReadCheck(IRBuilder<> &IRB, Instruction *Inst, Value *Ptr,
-                       Value *Size) {
+  void insertReadCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size) {
     ProvenanceScalar Prov = assertProvenanceScalar(Ptr);
     if (Prov != BS.WildcardProvenance) {
       IRB.CreateCall(BS.BsanFuncRead, {Ptr, Size, Prov.Tag, Prov.Info});
@@ -1117,8 +1117,7 @@ private:
   }
 
   // Inserts a check to validate a write access.
-  void insertWriteCheck(IRBuilder<> &IRB, Instruction *Inst, Value *Ptr,
-                        Value *Size) {
+  void insertWriteCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size) {
     ProvenanceScalar Prov = assertProvenanceScalar(Ptr);
     if (Prov != BS.WildcardProvenance) {
       IRB.CreateCall(BS.BsanFuncWrite, {Ptr, Size, Prov.Tag, Prov.Info});
@@ -1179,7 +1178,7 @@ private:
           IRB, Comp, ObjAddr, addAcquireOrdering(LI.getOrdering()));
       setProvenance({&LI, Idx}, Prov);
     }
-    insertReadCheck(IRB, &LI, Ptr, Size);
+    insertReadCheck(IRB, Ptr, Size);
   }
 
   void visitStoreInst(StoreInst &SI) {
@@ -1193,7 +1192,7 @@ private:
 
     Value *Size = IRB.CreateTypeSize(BS.IntptrTy,
                                      BS.DL->getTypeAllocSize(Val->getType()));
-    insertWriteCheck(IRB, &SI, Ptr, Size);
+    insertWriteCheck(IRB, Ptr, Size);
 
     IRBuilder<> NextIRB(SI.getNextNode());
     // Store provenance for the value into shadow memory.
