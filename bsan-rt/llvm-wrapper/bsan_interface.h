@@ -1,6 +1,6 @@
 #ifndef BSAN_INTERFACE_H
 #define BSAN_INTERFACE_H
-
+#include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_internal_defs.h"
 
 using namespace __sanitizer;
@@ -56,20 +56,6 @@ __bsan_destroy_stack_slot(AllocInfo *slot);
 extern "C" SANITIZER_WEAK_ATTRIBUTE void
 __bsan_alloc_stack(void *base_addr, usize size, BorTag bor_tag,
                    AllocInfo *alloc_info);
-
-// Symbolization
-extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_print_current_stack_trace();
-extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_print_stack_trace(u32 stackID);
-extern "C" SANITIZER_WEAK_ATTRIBUTE uptr __bsan_get_top_frame_pc(uptr pc);
-extern "C" SANITIZER_WEAK_ATTRIBUTE u32 __bsan_StackDepotPut(uptr pc, uptr bp,
-                                                             u32 max_depth);
-extern "C" SANITIZER_WEAK_ATTRIBUTE u32 __bsan_symbolize_pc(
-    uptr pc, char *file_buf, uptr file_buf_len, u32 *line, u32 *column);
-extern "C" SANITIZER_WEAK_ATTRIBUTE uptr __bsan_read_file(const char *path,
-                                                          char **file_buf,
-                                                          uptr *file_buf_len);
-extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_free_buffer(char *buf,
-                                                            uptr size);
 
 // Debuging
 extern "C" SANITIZER_WEAK_ATTRIBUTE void
