@@ -1,4 +1,5 @@
 //@run:0
+// Taken from https://github.com/rust-lang/hashbrown
 use hashbrown::HashMap;
 
 const N: u32 = 10;
