@@ -24,11 +24,11 @@ pub struct BorrowTracker<'b> {
 
 impl<'b> BorrowTracker<'b> {
     fn tree_mut(&mut self) -> &mut Tree {
-        &mut *self.tree
+        &mut self.tree
     }
 
     fn tree(&self) -> &Tree {
-        &*self.tree
+        &self.tree
     }
 
     pub fn for_alloc<T, F>(prov: Provenance, f: F) -> UBResult<Option<T>>
