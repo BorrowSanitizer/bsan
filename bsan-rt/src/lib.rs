@@ -390,7 +390,7 @@ unsafe extern "C-unwind" fn __bsan_retag(
     access_size: usize,
     is_protected: u8,
     ty_is_freeze: u8,
-    ty_is_unpin: u8,
+    _ty_is_unpin: u8,
     ptr_kind: RetagPtrKind,
     im_data: *const [usize; 2],
     im_len: usize,

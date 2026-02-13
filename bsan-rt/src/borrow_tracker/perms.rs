@@ -7,6 +7,7 @@ use super::helpers::{AccessKind, AccessRelatedness};
 use crate::Size;
 
 #[repr(u8)]
+#[allow(unused)]
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum RetagPtrKind {
     Box = 0,

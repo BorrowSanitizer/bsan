@@ -12,7 +12,7 @@ use path_macro::path;
 use crate::arg::*;
 
 #[derive(Clone, Debug)]
-pub enum BSANCommand {
+pub enum BsanCommand {
     /// Our own special 'setup' command.
     Setup,
     /// A command to be forwarded to cargo.
@@ -60,32 +60,6 @@ pub fn find_library(default: &str, sysroot: &Path, libname: &str) -> Option<Path
             None
         }
     })
-}
-
-/// Returns the path to the `bsan-driver` binary
-pub fn find_bsan() -> PathBuf {
-    if let Some(path) = env::var_os("BSAN_DRIVER") {
-        return path.into();
-    }
-    // Assume it is in the same directory as ourselves.
-    let mut path = std::env::current_exe().expect("current executable path invalid");
-    path.set_file_name(format!("bsan-driver{}", env::consts::EXE_SUFFIX));
-    path
-}
-
-pub fn bsan() -> Command {
-    let mut cmd = Command::new(find_bsan());
-    // We never want to inherit this from the environment.
-    // However, this is sometimes set in the environment to work around build scripts that don't
-    // honor RUSTC_WRAPPER. So remove it again in case it is set.
-    cmd.env_remove("BSAN_BE_RUSTC");
-    cmd
-}
-
-pub fn bsan_for_host() -> Command {
-    let mut cmd = bsan();
-    cmd.env("BSAN_BE_RUSTC", "host");
-    cmd
 }
 
 /// Execute the `Command`, where possible by replacing the current process with a new process
@@ -155,7 +129,7 @@ where
 
 /// Determines where the host sysroot of this execution is
 pub fn get_host_sysroot_dir(verbose: usize) -> PathBuf {
-    let mut cmd = bsan_for_host();
+    let mut cmd = rustc();
     cmd.args(["--print", "sysroot"]);
     debug_cmd("[cargo-bsan rustc]", verbose, &cmd);
     let libdir = exec_stdout(cmd);
@@ -273,10 +247,34 @@ pub fn clean_target_dir() {
     }
 }
 
+pub fn expect_env(key: &str) -> OsString {
+    env::var_os(key).expect(&format!("expected `{key}` to be set from a prior phase"))
+}
+
+pub fn expect_env_path(key: &str) -> PathBuf {
+    let path: PathBuf = expect_env(key).into();
+    if !path.exists() {
+        panic!("the path set for `{key}` does not exist: {}", path.display())
+    }
+    path
+}
+pub fn rustc_path() -> PathBuf {
+    which::which("rustc").expect("unable to locate `rustc`")
+}
+
+pub fn rustc() -> Command {
+    Command::new(rustc_path())
+}
+
 /// Escapes `s` in a way that is suitable for using it as a string literal in TOML syntax.
 pub fn escape_for_toml(s: &str) -> String {
     // We want to surround this string in quotes `"`. So we first escape all quotes,
     // and also all backslashes (that are used to escape quotes).
     let s = s.replace('\\', r"\\").replace('"', r#"\""#);
     format!("\"{s}\"")
+}
+
+pub fn forward_env(cmd: &mut Command, key: &str) {
+    let val = env::var_os(key).expect("expected `{}` to be set from a prior phase");
+    cmd.env(key, val);
 }
