@@ -169,7 +169,6 @@ pub enum Component {
     BsanRtCore,
     CompilerRt,
     BsanPass,
-    BsanShared,
 }
 
 #[macro_export]
@@ -182,7 +181,6 @@ macro_rules! all_components {
             Component::BsanRtCore,
             Component::CompilerRt,
             Component::BsanPass,
-            Component::BsanShared,
         ]
     };
 }
@@ -198,7 +196,6 @@ impl Deref for Component {
             Component::BsanRtCore => &BsanRtCore,
             Component::CompilerRt => &CompilerRt,
             Component::BsanPass => &BsanPass,
-            Component::BsanShared => &BsanShared,
         }
     }
 }
@@ -290,7 +287,6 @@ macro_rules! impl_component {
 
 impl_component!(BsanDriver, "bsan-driver", true, false);
 impl_component!(CargoBsan, "cargo-bsan", true, false);
-impl_component!(BsanShared, "bsan-shared", false, true);
 
 static RT_FLAGS: &[&str] = &[
     "-Cpanic=abort",

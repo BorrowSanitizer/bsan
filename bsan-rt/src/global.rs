@@ -3,7 +3,7 @@ use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 
-use bsan_shared::ProtectorKind;
+use borrow_tracker::ProtectorKind;
 use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::errors::UBInfo;

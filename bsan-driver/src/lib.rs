@@ -1,16 +1,10 @@
 #![feature(rustc_private)]
 
 extern crate rustc_driver;
-extern crate rustc_interface;
-extern crate rustc_middle;
-extern crate rustc_session;
 
-mod callbacks;
 use std::env;
 use std::path::PathBuf;
 use std::process::exit;
-
-pub use callbacks::BSanCallBacks;
 
 pub fn show_error_(msg: &impl std::fmt::Display) -> ! {
     eprintln!("{msg}");
@@ -34,6 +28,7 @@ pub const BSAN_DEFAULT_ARGS: &[&str] = &[
     "-Zinline-llvm=no",
     "-Cembed-bitcode=yes",
     "-Cdebuginfo=2",
+    "-Zverify-llvm-ir",
 ];
 
 static BSAN_RT_EXPECTED: &str = "libbsan_rt.a";
@@ -41,7 +36,6 @@ static BSAN_PLUGIN_EXPECTED: &str = "libbsan_plugin.so";
 
 pub struct Config {
     args: Vec<String>,
-    callbacks: BSanCallBacks,
 }
 
 impl Config {
@@ -71,7 +65,7 @@ impl Config {
         if target_crate {
             args.splice(1..1, Self::bsan_rustflags());
         }
-        Self { args, callbacks: BSanCallBacks {} }
+        Self { args }
     }
 
     fn bsan_rustflags() -> Vec<String> {
@@ -105,8 +99,11 @@ fn assert_env_file(key: &str, expected_file_name: &str) -> PathBuf {
     rt
 }
 
+struct BSanCallBacks {}
+impl rustc_driver::Callbacks for BSanCallBacks {}
+
 /// Execute a compiler with the given CLI arguments and callbacks.
-pub fn run_compiler(mut config: Config) -> ! {
-    rustc_driver::run_compiler(&config.args, &mut config.callbacks);
+pub fn run_compiler(config: Config) -> ! {
+    rustc_driver::run_compiler(&config.args, &mut BSanCallBacks {});
     std::process::exit(0)
 }

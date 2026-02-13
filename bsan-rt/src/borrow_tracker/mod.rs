@@ -1,18 +1,28 @@
 // Components in this library were ported from Miri and then modified by our team.
 use core::ffi::c_void;
 
-use bsan_shared::{AccessKind, ProtectorKind, RangeMap, RetagInfo, Size};
 use spin::MutexGuard;
 use tree::{AllocRange, Tree};
 
 use crate::borrow_tracker::tree::{ChildParams, LocationState};
-use crate::diagnostics::{self, AccessCause, PrintTree};
+use crate::diagnostics::{print_tree_diff, AccessCause, PrintTree};
 use crate::errors::{UBInfo, UBResult};
 use crate::span::Span;
 use crate::{AllocId, BorTag, GlobalCtx, Provenance};
 
+mod foreign_access_skipping;
+mod helpers;
+mod perms;
+mod range_map;
 pub mod tree;
+mod types;
+
 pub mod unimap;
+pub use foreign_access_skipping::*;
+pub use helpers::*;
+pub use perms::*;
+pub use range_map::*;
+pub use types::*;
 
 #[derive(Debug)]
 pub struct BorrowTracker<'b> {
@@ -24,11 +34,11 @@ pub struct BorrowTracker<'b> {
 
 impl<'b> BorrowTracker<'b> {
     fn tree_mut(&mut self) -> &mut Tree {
-        &mut *self.tree
+        &mut self.tree
     }
 
     fn tree(&self) -> &Tree {
-        &*self.tree
+        &self.tree
     }
 
     pub fn for_alloc<T, F>(prov: Provenance, f: F) -> UBResult<Option<T>>
@@ -271,7 +281,7 @@ impl<'b> BorrowTracker<'b> {
 
     pub fn debug_print_diff(&self, ctx: &GlobalCtx) {
         ctx.with_snapshot(self.alloc_id, |old_tree| {
-            diagnostics::print_tree_diff(self.tree(), old_tree, &ctx.protected_tags());
+            print_tree_diff(self.tree(), old_tree, &ctx.protected_tags());
         });
     }
 

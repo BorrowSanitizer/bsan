@@ -4,9 +4,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display};
 
-use bsan_shared::Permission;
 use hashbrown::HashMap;
 
+use crate::borrow_tracker::Permission;
 use crate::diagnostics::{AccessCause, HistoryData, NodeDebugInfo};
 use crate::sanitizer_common_interface::SanitizerCommon;
 use crate::span::Symbol;

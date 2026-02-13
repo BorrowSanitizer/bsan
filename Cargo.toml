@@ -1,5 +1,5 @@
 [workspace]
-members = ["bsan-debug", "bsan-driver", "bsan-rt", "bsan-script", "bsan-shared", "cargo-bsan"]
+members = ["bsan-driver", "bsan-rt", "bsan-script", "cargo-bsan"]
 default-members = ["bsan-driver", "bsan-script", "cargo-bsan"]
 exclude = ["tests/test-cargo-bsan"]
 resolver = "3"
