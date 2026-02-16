@@ -168,10 +168,10 @@ pub fn ensure_llvm_cmake(
         );
     }
 
-    let llvm_sparse = path!(root_dir / "llvm-sparse");
+    let llvm_sparse = path!(root_dir / "bsan-script" / "etc" / "llvm-sparse");
     if !llvm_sparse.exists() {
         show_error!(
-            "Unable to locate sparse checkout config file `llvm-sparse` in the root directory."
+            "Unable to locate sparse checkout config file `llvm-sparse` in `bsan-script/etc/`."
         );
     }
     let tmp_dir = sh.create_temp_dir()?;

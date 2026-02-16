@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "cargo-bsan"
+name = "cargo-bsan-test"
 version = "0.1.0"

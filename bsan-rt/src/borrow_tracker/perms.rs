@@ -6,6 +6,15 @@ use core::{fmt, mem};
 use super::helpers::{AccessKind, AccessRelatedness};
 use crate::Size;
 
+#[repr(u8)]
+#[allow(unused)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum RetagPtrKind {
+    Box = 0,
+    Ref = 1,
+    RefMut = 2,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RetagInfo<'a> {
     pub size: usize,
@@ -31,86 +40,45 @@ pub struct NewPermission {
 }
 
 impl NewPermission {
+    pub fn new(is_protected: bool, ty_is_freeze: bool, ptr_kind: RetagPtrKind) -> Self {
+        let freeze_perm = if matches!(ptr_kind, RetagPtrKind::Ref) {
+            Permission::new_frozen()
+        } else {
+            Permission::new_reserved_frz()
+        };
+
+        let nonfreeze_perm = match ptr_kind {
+            RetagPtrKind::Ref => Permission::new_cell(),
+            _ if is_protected => Permission::new_reserved_frz(),
+            _ => Permission::new_reserved_im(),
+        };
+
+        // Everything except for `Cell` gets an initial access.
+        let initial_access = |perm: &Permission| !perm.is_cell();
+
+        NewPermission {
+            freeze_perm,
+            freeze_access: initial_access(&freeze_perm),
+            nonfreeze_perm,
+            nonfreeze_access: initial_access(&nonfreeze_perm).then_some(AccessKind::Read),
+            ty_is_freeze,
+            protector: is_protected.then_some(
+                if matches!(ptr_kind, RetagPtrKind::Ref | RetagPtrKind::RefMut) {
+                    // Strong protector for references
+                    ProtectorKind::StrongProtector
+                } else {
+                    // Weak protector for boxes
+                    ProtectorKind::WeakProtector
+                },
+            ),
+        }
+    }
+
     pub fn default_perm(&self) -> Permission {
         if self.ty_is_freeze {
             self.freeze_perm
         } else {
             self.nonfreeze_perm
-        }
-    }
-
-    pub fn into_raw(self) -> u64 {
-        let freeze_perm: u16 = Permission::into_raw(self.freeze_perm);
-        let nonfreeze_perm: u16 = Permission::into_raw(self.nonfreeze_perm);
-        let freeze_access: u8 = self.freeze_access as u8;
-        let nonfreeze_access: u8 = AccessKind::into_raw(self.nonfreeze_access);
-        let ty_is_freeze: u8 = self.ty_is_freeze as u8;
-        let protector_kind: u8 = ProtectorKind::into_raw(self.protector);
-
-        cfg_select! {
-            target_endian = "little" => {
-                freeze_perm as u64
-                | (nonfreeze_perm as u64) << 16
-                | (freeze_access as u64) << 24
-                | (nonfreeze_access as u64) << 32
-                | (ty_is_freeze as u64) << 48
-                | (protector_kind as u64) << 56
-            }
-            target_endian = "big" => {
-                freeze_perm as u64
-                | (nonfreeze_perm as u64) >> 16
-                | (freeze_access as u64) >> 24
-                | (nonfreeze_access as u64) >> 32
-                | (ty_is_freeze as u64) >> 48
-                | (protector_kind as u64) >> 56            }
-        }
-    }
-
-    /// # Safety
-    #[inline]
-    #[allow(clippy::needless_late_init)]
-    pub unsafe fn from_raw(perm: u64) -> Self {
-        let freeze_perm: u16;
-        let nonfreeze_perm: u16;
-        let freeze_access: u8;
-        let nonfreeze_access: u8;
-        let ty_is_freeze: u8;
-        let protector: u8;
-
-        cfg_select! {
-            target_endian = "little" => {
-                freeze_perm = (perm & 0xFF) as u16;
-                nonfreeze_perm = ((perm >> 16) & 0xFF) as u16;
-                freeze_access = ((perm >> 24) & 0xF)  as u8;
-                nonfreeze_access = ((perm >> 32) & 0xF) as u8;
-                ty_is_freeze = ((perm >> 48) & 0xF) as u8;
-                protector = ((perm >> 56) & 0xF) as u8;
-            }
-            target_endian = "big" => {
-                freeze_perm = (perm & 0xFF) as u16;
-                nonfreeze_perm = ((perm << 16) & 0xFF) as u16;
-                freeze_access = ((perm << 24) & 0xF)  as u8;
-                nonfreeze_access = ((perm << 32) & 0xF) as u8;
-                ty_is_freeze = ((perm << 48) & 0xF) as u8;
-                protector = ((perm << 56) & 0xF) as u8;
-            }
-        }
-
-        unsafe {
-            let freeze_perm = Permission::from_raw(freeze_perm);
-            let nonfreeze_perm = Permission::from_raw(nonfreeze_perm);
-            let freeze_access = freeze_access != 0;
-            let nonfreeze_access = AccessKind::from_raw(nonfreeze_access);
-            let ty_is_freeze = ty_is_freeze != 0;
-            let protector = ProtectorKind::from_raw(protector);
-            Self {
-                freeze_perm,
-                nonfreeze_perm,
-                freeze_access,
-                nonfreeze_access,
-                ty_is_freeze,
-                protector,
-            }
         }
     }
 }
@@ -121,14 +89,18 @@ impl<'a> RetagInfo<'a> {
     /// the `ProtectorKind`, and the `AccessKind, in that order.`
     pub unsafe fn from_raw(
         size: usize,
-        perm: u64,
+        is_protected: u8,
+        ty_is_freeze: u8,
+        ptr_kind: RetagPtrKind,
         im_data: *const [usize; 2],
         im_len: usize,
     ) -> Self {
         let im_data = unsafe { mem::transmute::<*const [usize; 2], *const [Size; 2]>(im_data) };
         let im_layout =
             (!im_data.is_null()).then(|| unsafe { core::slice::from_raw_parts(im_data, im_len) });
-        let perm = unsafe { NewPermission::from_raw(perm) };
+
+        let perm = NewPermission::new(is_protected != 0, ty_is_freeze != 0, ptr_kind);
+
         Self { size, perm, im_layout }
     }
 }
@@ -151,21 +123,6 @@ pub enum ProtectorKind {
     ///
     /// This is required for LLVM IR pointers that are `dereferenceable` (and also allows `noalias`).
     StrongProtector = 2,
-}
-
-impl ProtectorKind {
-    pub fn from_raw(protector_kind: u8) -> Option<Self> {
-        match protector_kind {
-            0 => None,
-            1 => Some(ProtectorKind::WeakProtector),
-            2 => Some(ProtectorKind::StrongProtector),
-            _ => None,
-        }
-    }
-
-    pub fn into_raw(val: Option<ProtectorKind>) -> u8 {
-        val.map(|v| v as u8).unwrap_or(0)
-    }
 }
 
 /// The activation states of a pointer.
@@ -404,15 +361,6 @@ pub struct Permission {
     inner: PermissionPriv,
 }
 
-impl Permission {
-    pub fn into_raw(self) -> u16 {
-        unsafe { mem::transmute::<PermissionPriv, u16>(self.inner) }
-    }
-    unsafe fn from_raw(raw: u16) -> Self {
-        Self { inner: unsafe { core::mem::transmute::<u16, PermissionPriv>(raw) } }
-    }
-}
-
 /// Transition from one permission to the next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PermTransition {
@@ -460,6 +408,7 @@ impl Permission {
     /// which to call based on the interior mutability and the retag kind (whether there
     /// is a protector is relevant because being protected takes priority over being
     /// interior mutable)
+    #[allow(unused)]
     pub fn new_reserved(ty_is_freeze: bool, protected: bool) -> Self {
         // As demonstrated by `tests/fail/tree_borrows/reservedim_spurious_write.rs`,
         // interior mutability and protectors interact poorly.
@@ -491,6 +440,7 @@ impl Permission {
 
     /// Reject `ReservedIM` that cannot exist in the presence of a protector.
     #[cfg(test)]
+    #[allow(unused)]
     pub fn compatible_with_protector(&self) -> bool {
         self.inner.compatible_with_protector()
     }
@@ -592,6 +542,7 @@ impl PermTransition {
 
 pub mod diagnostics {
     use super::*;
+    use crate::errors::TransitionError;
     impl fmt::Display for PermissionPriv {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(
@@ -640,27 +591,7 @@ pub mod diagnostics {
         }
     }
 
-    // ATTENTION: This is a duplicate of TransitionError in `bsan-rt/borrow_tracker/errors.rs`
-    // Might get refactored out but has to be here due to the way bsan-shared and bsan-rt are structured
-    // and the way this was implemented/ported from Miri
-    #[derive(Debug, Clone, Copy)]
-    pub enum TransitionError {
-        /// This access is not allowed because some parent tag has insufficient permissions.
-        /// For example, if a tag is `Frozen` and encounters a child write this will
-        /// produce a `ChildAccessForbidden(Frozen)`.
-        /// This kind of error can only occur on child accesses.
-        ChildAccessForbidden(Permission),
-        /// A protector was triggered due to an invalid transition that loses
-        /// too much permissions.
-        /// For example, if a protected tag goes from `Active` to `Disabled` due
-        /// to a foreign write this will produce a `ProtectedDisabled(Active)`.
-        /// This kind of error can only occur on foreign accesses.
-        ProtectedDisabled(Permission),
-        /// Cannot deallocate because some tag in the allocation is strongly protected.
-        /// This kind of error can only occur on deallocations.
-        ProtectedDealloc,
-    }
-
+    #[allow(unused)]
     impl PermTransition {
         /// Readable explanation of the consequences of an event.
         /// Fits in the sentence "This transition corresponds to {trans.summary()}".
@@ -820,57 +751,11 @@ pub mod diagnostics {
 
 #[cfg(test)]
 impl Permission {
+    #[allow(unused)]
     pub fn is_reserved_frz_with_conflicted(&self, expected_conflicted: bool) -> bool {
         match self.inner {
             ReservedFrz { conflicted } => conflicted == expected_conflicted,
             _ => false,
-        }
-    }
-}
-#[cfg(test)]
-mod test {
-    #[test]
-    fn perm_into_raw_roundtrip() {
-        use crate::{AccessKind, NewPermission, Permission, ProtectorKind};
-        let initial_perms = [
-            Permission::new_reserved_frz(),
-            Permission::new_reserved_im(),
-            Permission::new_cell(),
-            Permission::new_frozen(),
-        ];
-
-        let access_kinds = [Some(AccessKind::Read), Some(AccessKind::Write), None];
-        let protector_kinds =
-            [Some(ProtectorKind::StrongProtector), Some(ProtectorKind::WeakProtector), None];
-
-        for freeze_perm in initial_perms {
-            for nonfreeze_perm in initial_perms {
-                for nonfreeze_access in access_kinds {
-                    for protector in protector_kinds {
-                        let new_perm = |freeze_access: bool, ty_is_freeze: bool| -> NewPermission {
-                            NewPermission {
-                                freeze_perm,
-                                nonfreeze_perm,
-                                freeze_access,
-                                nonfreeze_access,
-                                ty_is_freeze,
-                                protector,
-                            }
-                        };
-                        for perm in [
-                            new_perm(true, true),
-                            new_perm(true, false),
-                            new_perm(false, false),
-                            new_perm(false, true),
-                        ] {
-                            assert_eq!(
-                                unsafe { NewPermission::from_raw(NewPermission::into_raw(perm)) },
-                                perm
-                            );
-                        }
-                    }
-                }
-            }
         }
     }
 }

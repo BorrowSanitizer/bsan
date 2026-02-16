@@ -18,21 +18,6 @@ impl Display for AccessKind {
     }
 }
 
-impl AccessKind {
-    pub fn into_raw(val: Option<AccessKind>) -> u8 {
-        val.map(|v| v as u8).unwrap_or(0)
-    }
-
-    pub fn from_raw(val: u8) -> Option<Self> {
-        match val {
-            0 => None,
-            1 => Some(AccessKind::Read),
-            2 => Some(AccessKind::Write),
-            _ => None,
-        }
-    }
-}
-
 /// Relative position of the access
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AccessRelatedness {

@@ -76,25 +76,36 @@ impl Command {
     }
 
     fn ui(env: &mut BsanEnv, bless: bool) -> Result<()> {
+        let sysroot_dir = path!(&env.build_dir / "sysroot");
+        env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
+
         env.in_mode(Mode::Release, |env| {
             let args = &[];
-            let driver = env.build_artifact(BsanDriver, args)?;
+            let mut env_guards = vec![];
             let cargo_bsan = env.build_artifact(CargoBsan, args)?;
             let runtime = env.build_artifact(BsanRt, args)?;
-            let plugin = env.build_artifact(BsanPass, args)?;
-            let llvm_symbolizer = env.sysroot_binary("llvm-symbolizer");
+            let pass = env.build_artifact(BsanPass, args)?;
+            let symbolizer = env.sysroot_binary("llvm-symbolizer");
 
-            env.sh.set_var("BSAN_PLUGIN", plugin);
-            env.sh.set_var("BSAN_DRIVER", driver);
-            env.sh.set_var("BSAN_RT", runtime);
-            env.sh.set_var("BSAN_SYSROOT", path!(&env.build_dir / "sysroot"));
-            env.sh.set_var("BSAN_SYMBOLIZER", llvm_symbolizer);
+            env_guards.push(env.sh.push_env("BSAN_RT", &runtime));
+            env_guards.push(env.sh.push_env("BSAN_PLUGIN", &pass));
+            env_guards.push(env.sh.push_env("BSAN_SYMBOLIZER", &symbolizer));
+            env_guards.push(env.sh.push_env("CARGO_BSAN", &cargo_bsan));
+
             cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
+            let rustflags = cmd!(env.sh, "{cargo_bsan} bsan setup --print-rustflags").output()?;
+            let rustflags = String::from_utf8(rustflags.stdout)?;
+
+            env_guards.push(env.sh.push_env("BSAN_RUSTFLAGS", rustflags.trim()));
+
             let add_bless = if bless { "--bless" } else { "" };
             cmd!(env.sh, "cargo test -p bsan --test ui -- {add_bless}").run()?;
-            cmd!(env.sh, "python3 tests/test-cargo-bsan/run_test.py").run()?;
             Ok(())
-        })
+        })?;
+
+        crate::all_components!().iter().try_for_each(|c| c.install(env, &[]))?;
+        cmd!(env.sh, "python3 tests/test-cargo-bsan/run_test.py").run()?;
+        Ok(())
     }
 
     fn ci(env: &mut BsanEnv, args: &[String]) -> Result<()> {
@@ -137,22 +148,24 @@ impl Command {
                 env.build_artifact(BsanRt, &[])?
             };
 
-            let driver = env.build_artifact(BsanDriver, &[])?;
             let cargo_bsan = env.build_artifact(CargoBsan, &[])?;
-
             let sysroot_dir = path!(&env.build_dir / "sysroot");
 
-            env.sh.set_var("BSAN_PLUGIN", plugin);
-            env.sh.set_var("BSAN_DRIVER", &driver);
-            env.sh.set_var("BSAN_RT", runtime);
-            env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
+            let mut env_guards = vec![];
+            env_guards.push(env.sh.push_env("BSAN_PLUGIN", &plugin));
+            env_guards.push(env.sh.push_env("BSAN_RT", &runtime));
+            env_guards.push(env.sh.push_env("BSAN_SYSROOT", &sysroot_dir));
 
             cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
+            let flags = cmd!(env.sh, "{cargo_bsan} bsan setup --print-rustflags").output()?;
+            let flags = String::from_utf8(flags.stdout)?;
+            let flags = flags.split_whitespace().collect::<Vec<_>>();
 
-            cmd!(env.sh, "{driver} {file}")
-                .env("BSAN_BE_RUSTC", "target")
+            cmd!(env.sh, "rustc {file}")
+                .args(flags)
                 .args(args)
                 .arg(format!("--sysroot={}", sysroot_dir.display()))
+                .quiet()
                 .run()?;
 
             Ok(())
@@ -163,26 +176,22 @@ impl Command {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 #[clap(rename_all = "kebab-case")]
 pub enum Component {
-    BsanDriver,
     CargoBsan,
     BsanRt,
     BsanRtCore,
     CompilerRt,
     BsanPass,
-    BsanShared,
 }
 
 #[macro_export]
 macro_rules! all_components {
     () => {
         [
-            Component::BsanDriver,
             Component::CargoBsan,
             Component::BsanRt,
             Component::BsanRtCore,
             Component::CompilerRt,
             Component::BsanPass,
-            Component::BsanShared,
         ]
     };
 }
@@ -192,13 +201,11 @@ impl Deref for Component {
 
     fn deref(&self) -> &Self::Target {
         match self {
-            Component::BsanDriver => &BsanDriver,
             Component::CargoBsan => &CargoBsan,
             Component::BsanRt => &BsanRt,
             Component::BsanRtCore => &BsanRtCore,
             Component::CompilerRt => &CompilerRt,
             Component::BsanPass => &BsanPass,
-            Component::BsanShared => &BsanShared,
         }
     }
 }
@@ -288,9 +295,7 @@ macro_rules! impl_component {
     };
 }
 
-impl_component!(BsanDriver, "bsan-driver", true, false);
 impl_component!(CargoBsan, "cargo-bsan", true, false);
-impl_component!(BsanShared, "bsan-shared", false, true);
 
 static RT_FLAGS: &[&str] = &[
     "-Cpanic=abort",

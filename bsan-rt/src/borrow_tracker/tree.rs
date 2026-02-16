@@ -5,14 +5,13 @@ use alloc::vec::Vec;
 use core::alloc::Allocator;
 use core::fmt;
 
-use bsan_shared::{
-    AccessKind, AccessRelatedness, IdempotentForeignAccess, PermTransition, Permission, RangeMap,
-    Size,
-};
 use smallvec::SmallVec;
 
 use super::unimap::{UniEntry, UniIndex, UniKeyMap, UniValMap};
-use super::*;
+use super::{
+    AccessKind, AccessRelatedness, IdempotentForeignAccess, PermTransition, Permission, RangeMap,
+    Size, *,
+};
 use crate::diagnostics::{AccessCause, Event, NodeDebugInfo};
 use crate::errors::{TransitionError, TreeError, TreeTransitionResult, UBResult};
 use crate::helpers::FxHashSet;
