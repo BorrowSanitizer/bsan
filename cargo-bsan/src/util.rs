@@ -90,41 +90,14 @@ pub fn exec_stdout(mut cmd: Command) -> String {
         panic!("failed to run command: {output:?}")
     }
 }
-
-#[allow(unused)]
-pub fn exec_with_pipe<P>(mut cmd: Command, input: &[u8], path: P) -> !
-where
-    P: AsRef<Path>,
-{
-    #[cfg(unix)]
-    {
-        // Write the bytes we want to send to stdin out to a file
-        std::fs::write(&path, input).unwrap();
-        // Open the file for reading, and set our new stdin to it
-        let stdin = File::open(&path).unwrap();
-        cmd.stdin(stdin);
-        // Unlink the file so that it is fully cleaned up as soon as the new process exits
-        std::fs::remove_file(&path).unwrap();
-        // Finally, we can hand off control.
-        exec(cmd)
-    }
-    #[cfg(not(unix))]
-    {
-        drop(path); // We don't need the path, we can pipe the bytes directly
-        cmd.stdin(std::process::Stdio::piped());
-        let mut child = cmd.spawn().expect("failed to spawn process");
-        let child_stdin = child.stdin.take().unwrap();
-        // Write stdin in a background thread, as it may block.
-        let exit_status = std::thread::scope(|s| {
-            s.spawn(|| {
-                let mut child_stdin = child_stdin;
-                // Ignore failure, it is most likely due to the process having terminated.
-                let _ = child_stdin.write_all(input);
-            });
-            child.wait().expect("failed to run command")
-        });
-        std::process::exit(exit_status.code().unwrap_or(-1))
-    }
+/// Execute the `Command`, then exit this process with the exit code of the new process.
+/// `input` is also piped to the new process's stdin.
+pub fn exec_with_pipe(mut cmd: Command) -> ! {
+    // We can't use `exec` since then the background thread will stop running.
+    cmd.stdin(std::process::Stdio::inherit());
+    let mut child = cmd.spawn().expect("failed to spawn process");
+    let exit_status = child.wait().expect("failed to run command");
+    std::process::exit(exit_status.code().unwrap_or(-1))
 }
 
 /// Determines where the host sysroot of this execution is
@@ -258,23 +231,17 @@ pub fn expect_env_path(key: &str) -> PathBuf {
     }
     path
 }
+
+pub fn env_or_host(key: &str, binary: &str) -> PathBuf {
+    let path =
+        env::var_os(key).map(|p| Some(p.into())).unwrap_or_else(|| which::which(binary).ok());
+    path.expect("unable to locate `{binary}`")
+}
+
 pub fn rustc_path() -> PathBuf {
-    which::which("rustc").expect("unable to locate `rustc`")
+    env_or_host("BSAN_ORIG_RUSTC", "rustc")
 }
 
 pub fn rustc() -> Command {
     Command::new(rustc_path())
-}
-
-/// Escapes `s` in a way that is suitable for using it as a string literal in TOML syntax.
-pub fn escape_for_toml(s: &str) -> String {
-    // We want to surround this string in quotes `"`. So we first escape all quotes,
-    // and also all backslashes (that are used to escape quotes).
-    let s = s.replace('\\', r"\\").replace('"', r#"\""#);
-    format!("\"{s}\"")
-}
-
-pub fn forward_env(cmd: &mut Command, key: &str) {
-    let val = env::var_os(key).expect("expected `{}` to be set from a prior phase");
-    cmd.env(key, val);
 }

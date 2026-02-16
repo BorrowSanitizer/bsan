@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::process::Command;
 
 use rustc_version::VersionMeta;
 
@@ -82,12 +81,6 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
         }
     };
 
-    let cargo_bsan_path = env::current_exe()
-        .expect("current executable path invalid")
-        .into_os_string()
-        .into_string()
-        .expect("current executable path is not valid UTF-8");
-
     let metadata = get_cargo_metadata();
     let mut cmd = cargo();
     cmd.arg(&cargo_cmd);
@@ -102,10 +95,6 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     cmd.arg("--target");
     cmd.arg(&rustc_version.host);
 
-    let cargo_bsan_path_for_toml = escape_for_toml(&cargo_bsan_path);
-    cmd.arg("--config")
-        .arg(format!("target.'cfg(all())'.runner=[{cargo_bsan_path_for_toml}, 'runner']"));
-
     // Set `--target-dir` to `bsan` inside the original target directory.
     let target_dir = get_target_dir(&metadata);
     cmd.arg("--target-dir").arg(target_dir);
@@ -119,13 +108,6 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     }
     cmd.args(args);
 
-    if env::var_os("RUSTC_WRAPPER").is_some() {
-        println!(
-            "WARNING: Ignoring `RUSTC_WRAPPER` environment variable, BSAN does not support wrapping."
-        );
-    }
-    cmd.env("RUSTC_WRAPPER", &cargo_bsan_path);
-
     // If both RUSTC_WORKSPACE_WRAPPER and RUSTC_WRAPPER are set,
     // then both are executed in succession. Providing an independent
     // workspace-level wrapper is not supported, so we clear this variable.
@@ -136,30 +118,24 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     }
     cmd.env_remove("RUSTC_WORKSPACE_WRAPPER");
 
-    cmd.env("RUSTC", rustc_path());
     // At this point, we've completed setup, so we have a sysroot.
-    cmd.env("BSAN_SYSROOT", bsan_sysroot);
+    cmd.env("BSAN_SYSROOT", &bsan_sysroot);
+
     if verbose > 0 {
         cmd.env("BSAN_VERBOSE", verbose.to_string()); // This makes the other phases verbose.
     }
 
-    // Run cargo.
-    debug_cmd("[cargo-bsan rustc]", verbose, &cmd);
-    exec(cmd)
-}
-
-pub fn phase_runner(mut binary_args: impl Iterator<Item = String>) {
-    let verbose = env::var("BSAN_VERBOSE")
-        .map_or(0, |verbose| verbose.parse().expect("verbosity flag must be an integer"));
-
-    let binary = binary_args.next().unwrap();
-    let mut cmd = Command::new(binary);
-
     let llvm_symbolizer = get_host_sysroot_binary("llvm-symbolizer", verbose);
     cmd.env("BSAN_SYMBOLIZER", llvm_symbolizer);
-    cmd.args(binary_args);
 
-    debug_cmd("[cargo-bsan runner]", verbose, &cmd);
+    let mut rustflags = bsan_rustflags();
+    let sysroot_flag = format!("--sysroot={}", bsan_sysroot.display());
+    rustflags.push(format!("--sysroot={}", bsan_sysroot.display()));
+
+    cmd.env("RUSTFLAGS", rustflags.join(" "));
+    cmd.env("RUSTDOCFLAGS", sysroot_flag);
+    // Run cargo.
+    debug_cmd("[cargo-bsan rustc]", verbose, &cmd);
     exec(cmd)
 }
 
@@ -184,6 +160,7 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
     let target_crate = is_target_crate();
 
     let mut cmd = rustc();
+
     // Arguments are treated very differently depending on whether this crate needs to be
     // instrumented by BorrowSanitizer or if it's for a build script / proc macro.
     if target_crate {
@@ -197,13 +174,6 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
             && get_arg_flag_value("--crate-name").as_deref() == Some("panic_abort")
         {
             cmd.arg("-C").arg("panic=abort");
-        }
-    } else {
-        // This is a host crate.
-        // When we're running `cargo-bsan` from `x.py` we need to pass the sysroot explicitly
-        // due to bootstrap complications.
-        if let Some(sysroot) = env::var_os("BSAN_HOST_SYSROOT") {
-            cmd.arg("--sysroot").arg(sysroot);
         }
     }
 

@@ -94,9 +94,13 @@ impl Command {
 
             let add_bless = if bless { "--bless" } else { "" };
             cmd!(env.sh, "cargo test -p bsan --test ui -- {add_bless}").run()?;
-            cmd!(env.sh, "python3 tests/test-cargo-bsan/run_test.py").run()?;
+
             Ok(())
-        })
+        })?;
+
+        crate::all_components!().iter().try_for_each(|c| c.install(env, &[]))?;
+        cmd!(env.sh, "python3 tests/test-cargo-bsan/run_test.py").run()?;
+        Ok(())
     }
 
     fn ci(env: &mut BsanEnv, args: &[String]) -> Result<()> {

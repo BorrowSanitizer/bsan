@@ -10,7 +10,6 @@ use rustc_version::VersionMeta;
 
 use crate::arg::*;
 use crate::util::*;
-use crate::*;
 
 /// Performs the setup required to make `cargo bsan` work: Getting a custom-built libstd. Then sets
 /// `BSAN_SYSROOT`. Skipped if `BSAN_SYSROOT` is already set, in which case we expect the user has
