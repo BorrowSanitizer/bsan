@@ -1,6 +1,5 @@
 use std::env;
 use std::ffi::OsString;
-use std::fs::File;
 use std::io::{self, Write};
 use std::ops::Not;
 use std::path::{Path, PathBuf};
@@ -92,6 +91,7 @@ pub fn exec_stdout(mut cmd: Command) -> String {
 }
 /// Execute the `Command`, then exit this process with the exit code of the new process.
 /// `input` is also piped to the new process's stdin.
+#[allow(unused)]
 pub fn exec_with_pipe(mut cmd: Command) -> ! {
     // We can't use `exec` since then the background thread will stop running.
     cmd.stdin(std::process::Stdio::inherit());
