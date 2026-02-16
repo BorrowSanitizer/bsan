@@ -221,7 +221,7 @@ pub fn clean_target_dir() {
 }
 
 pub fn expect_env(key: &str) -> OsString {
-    env::var_os(key).expect(&format!("expected `{key}` to be set from a prior phase"))
+    env::var_os(key).unwrap_or_else(|| panic!("expected `{key}` to be set from a prior phase"))
 }
 
 pub fn expect_env_path(key: &str) -> PathBuf {

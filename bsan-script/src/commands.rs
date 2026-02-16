@@ -76,25 +76,30 @@ impl Command {
     }
 
     fn ui(env: &mut BsanEnv, bless: bool) -> Result<()> {
+        let sysroot_dir = path!(&env.build_dir / "sysroot");
+        env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
+
         env.in_mode(Mode::Release, |env| {
             let args = &[];
+            let mut env_guards = vec![];
             let cargo_bsan = env.build_artifact(CargoBsan, args)?;
-            env.build_artifact(BsanRt, args)?;
-            env.build_artifact(BsanPass, args)?;
+            let runtime = env.build_artifact(BsanRt, args)?;
+            let pass = env.build_artifact(BsanPass, args)?;
+            let symbolizer = env.sysroot_binary("llvm-symbolizer");
 
-            let sysroot_dir = path!(&env.build_dir / "sysroot");
-            env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
+            env_guards.push(env.sh.push_env("BSAN_RT", &runtime));
+            env_guards.push(env.sh.push_env("BSAN_PLUGIN", &pass));
+            env_guards.push(env.sh.push_env("BSAN_SYMBOLIZER", &symbolizer));
+            env_guards.push(env.sh.push_env("CARGO_BSAN", &cargo_bsan));
+
             cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
-
             let rustflags = cmd!(env.sh, "{cargo_bsan} bsan setup --print-rustflags").output()?;
             let rustflags = String::from_utf8(rustflags.stdout)?;
-            env.sh.set_var("BSAN_RUSTFLAGS", rustflags.trim());
-            env.sh.set_var("CARGO_BSAN", cargo_bsan);
-            env.sh.set_var("BSAN_SYMBOLIZER", env.sysroot_binary("llvm-symbolizer"));
+
+            env_guards.push(env.sh.push_env("BSAN_RUSTFLAGS", rustflags.trim()));
 
             let add_bless = if bless { "--bless" } else { "" };
             cmd!(env.sh, "cargo test -p bsan --test ui -- {add_bless}").run()?;
-
             Ok(())
         })?;
 
@@ -144,12 +149,12 @@ impl Command {
             };
 
             let cargo_bsan = env.build_artifact(CargoBsan, &[])?;
-
             let sysroot_dir = path!(&env.build_dir / "sysroot");
 
-            env.sh.set_var("BSAN_PLUGIN", plugin);
-            env.sh.set_var("BSAN_RT", runtime);
-            env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
+            let mut env_guards = vec![];
+            env_guards.push(env.sh.push_env("BSAN_PLUGIN", &plugin));
+            env_guards.push(env.sh.push_env("BSAN_RT", &runtime));
+            env_guards.push(env.sh.push_env("BSAN_SYSROOT", &sysroot_dir));
 
             cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
             let flags = cmd!(env.sh, "{cargo_bsan} bsan setup --print-rustflags").output()?;
