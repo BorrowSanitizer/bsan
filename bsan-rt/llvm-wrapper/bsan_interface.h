@@ -49,8 +49,11 @@ __bsan_shadow_copy(void *src, void *dest, usize access_size);
 extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_shadow_clear(void *dest,
                                                              usize access_size);
 extern "C" SANITIZER_WEAK_ATTRIBUTE AllocInfo *__bsan_reserve_stack_slot();
+
 // TODO: __bsan_shadow_load
-// TODO: __bsan_shadow_store
+
+extern "C" SANITIZER_WEAK_ATTRIBUTE void
+__bsan_shadow_store(BorTag bor_tag, AllocInfo *alloc_info, void *ptr);
 extern "C" SANITIZER_WEAK_ATTRIBUTE void
 __bsan_destroy_stack_slot(AllocInfo *slot);
 extern "C" SANITIZER_WEAK_ATTRIBUTE void

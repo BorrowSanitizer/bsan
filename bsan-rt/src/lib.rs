@@ -574,11 +574,32 @@ unsafe extern "C-unwind" fn __bsan_shadow_src(addr: *mut c_void) -> *const Prove
     ctx.shadow_heap().get_src(addr.addr())
 }
 
+#[unsafe(no_mangle)]
+unsafe extern "C-unwind" fn __bsan_shadow_load(addr: *mut c_void, dest: NonNull<Provenance>) {
+    unsafe {
+        let ctx = global_ctx();
+        let prov = ctx.shadow_heap().get_src(addr.addr()).read();
+        dest.write(prov);
+    }
+}
+
 /// Stores the given provenance value into shadow memory at the location for the given address.
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_shadow_dest(ptr: *mut c_void) -> NonNull<Provenance> {
     let ctx = unsafe { global_ctx() };
     ctx.shadow_heap().get_dest(ptr.addr())
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C-unwind" fn __bsan_shadow_store(
+    bor_tag: BorTag,
+    alloc_info: *mut AllocInfo,
+    ptr: *mut c_void,
+) {
+    let ctx = unsafe { global_ctx() };
+    let prov = Provenance { bor_tag, alloc_info };
+    let dest = ctx.shadow_heap().get_dest(ptr.addr());
+    unsafe { dest.write(prov) };
 }
 
 /// Reserves a stack slot for allocation metadata.

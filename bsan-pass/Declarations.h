@@ -39,8 +39,8 @@ const char kBsanFuncShadowClearName[] = BSAN_FN("shadow_clear");
 const char kBsanFuncGetShadowDestName[] = BSAN_FN("shadow_dest");
 const char kBsanFuncGetShadowSrcName[] = BSAN_FN("shadow_src");
 
-const char kBsanFuncShadowLoadVectorName[] = BSAN_FN("shadow_load_vector");
-const char kBsanFuncShadowStoreVectorName[] = BSAN_FN("shadow_store_vector");
+const char kBsanFuncGetShadowLoadName[] = BSAN_FN("shadow_load");
+const char kBsanFuncGetShadowStoreName[] = BSAN_FN("shadow_store");
 
 const char kBsanFuncRetagName[] = BSAN_FN("retag");
 const char kBsanFuncAllocName[] = BSAN_FN("alloc");

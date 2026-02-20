@@ -89,6 +89,9 @@ public:
   FunctionCallee BsanFuncGetShadowSrc;
   FunctionCallee BsanFuncGetShadowDest;
 
+  FunctionCallee BsanFuncShadowLoad;
+  FunctionCallee BsanFuncShadowStore;
+
   FunctionCallee BsanFuncAllocStack;
   FunctionCallee BsanFuncReserveStackSlot;
   FunctionCallee BsanFuncDestroyStackSlot;

@@ -501,11 +501,9 @@ private:
     if (Prov.isVector()) {
       report_fatal_error("Vectors are not supported.");
     } else {
-      Value *ShadowPointer =
-          IRB.CreateCall(BS.BsanFuncGetShadowDest, {ObjAddr});
-      ProvenancePointer Dest =
-          ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
-      Prov.store(IRB, BS.PL, Dest, Ordering);
+      ProvenanceScalar Scalar = Prov.assertScalar();
+      Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncShadowStore,
+                                            {Scalar.Tag, Scalar.Info, ObjAddr});
     }
   }
 
@@ -1525,6 +1523,12 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   BsanFuncShadowClear = M.getOrInsertFunction(kBsanFuncShadowClearName, AL,
                                               IRB.getVoidTy(), PtrTy, IntptrTy);
+
+  // BsanFuncShadowLoad = M.getOrInsertFunction(kBsanFuncGetShadowLoadName, AL,
+  // PtrTy, PtrTy);
+
+  BsanFuncShadowStore = M.getOrInsertFunction(
+      kBsanFuncGetShadowStoreName, AL, IRB.getVoidTy(), IntptrTy, PtrTy, PtrTy);
 
   BsanFuncGetShadowSrc =
       M.getOrInsertFunction(kBsanFuncGetShadowSrcName, AL, PtrTy, PtrTy);
