@@ -17,6 +17,7 @@ public:
     PL = ProvenanceLayout(C, DL);
     LongSize = M.getDataLayout().getPointerSizeInBits();
 
+    BoolTy = Type::getInt1Ty(*C);
     Int8Ty = Type::getInt8Ty(*C);
     Int16Ty = Type::getInt16Ty(*C);
     Int32Ty = Type::getInt32Ty(*C);
@@ -58,6 +59,7 @@ public:
 
   int LongSize;
   Triple TargetTriple;
+  Type *BoolTy;
   Type *Int8Ty;
   Type *Int16Ty;
   Type *Int32Ty;

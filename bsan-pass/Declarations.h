@@ -14,12 +14,8 @@
 
 // @__rust_retag(ptr, ptr, i64, i64)
 const char kBsanRustIntrinsicRetagPrefix[] = RUST_FN("retag");
-const char kBsanRustIntrinsicRetagOperand[] = RUST_FN("retag_operand");
-const char kBsanRustIntrinsicRetagPlace[] = RUST_FN("retag_place");
-
-// @__rust_expose_tag(ptr)
-// Indicates that this pointer is a reference being cast into a raw pointer.
-const char kBsanRustIntrinsicExposeTag[] = RUST_FN("expose_tag");
+const char kBsanRustIntrinsicRetagReg[] = RUST_FN("retag_reg");
+const char kBsanRustIntrinsicRetagMem[] = RUST_FN("retag_mem");
 
 const char kBsanModuleCtorName[] = "bsan.module_ctor";
 const char kBsanModuleDtorName[] = "bsan.module_dtor";

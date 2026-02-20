@@ -33,6 +33,27 @@ static cl::opt<bool>
                  cl::desc("Place BSan constructors in comdat sections"),
                  cl::Hidden, cl::init(true));
 
+class RetagInfo {
+public:
+  Value *Ptr;
+  Value *ImArray;
+  ConstantInt *Size;
+  ConstantInt *IsProtected;
+  ConstantInt *IsFreeze;
+  ConstantInt *IsUnpin;
+  ConstantInt *PtrKind;
+  RetagInfo(CallBase *CB) {
+    assert(CB->arg_size() == 7);
+    Ptr = CB->getOperand(0);
+    ImArray = CB->getOperand(1);
+    Size = cast<ConstantInt>(CB->getOperand(2));
+    IsProtected = cast<ConstantInt>(CB->getOperand(3));
+    IsFreeze = cast<ConstantInt>(CB->getOperand(4));
+    IsUnpin = cast<ConstantInt>(CB->getOperand(5));
+    PtrKind = cast<ConstantInt>(CB->getOperand(6));
+  }
+};
+
 class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   friend class InstVisitor<BorrowSanitizerVisitor>;
   BorrowSanitizer &BS;
@@ -137,19 +158,15 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 
   // Operand retag intrinsics (`__rust_retag_operand`), which need
   // to be replaced with their first argument (the pointer being retagged).
-  SmallVector<CallBase *> RetagOperandVec;
+  SmallVector<CallBase *> RetagRegVec;
 
   // Place retag intrinsics (`__rust_retag_place`), which update the shadow
   // provenance value for their first argument, which is a place containing
   // the pointer receiving the retag.
-  SmallVector<CallBase *> RetagPlaceVec;
+  SmallVector<CallBase *> RetagMemVec;
 
   // The number of "function-entry" retags, of any kind.
   unsigned NumFnEntryRetags = 0;
-
-  // Expose tag intrinsics (`__expose_tag`), which need to be replaced with
-  // their first argument (the reference being cast into a raw pointer).
-  SmallVector<CallBase *> ExposeTagVec;
 
   // The start of the current frame of protected tags. This is the "top" of the
   // frame, since we decrement from the beginning of the chunk. The thread-local
@@ -182,6 +199,7 @@ public:
     IRBuilder<> EntryIRB(EntryBlock, EntryBlock->getFirstNonPHIIt());
 
     populateBlocks(EntryIRB);
+
     initStack(EntryIRB);
 
     for (auto const &[BB, Insts] : Instructions) {
@@ -194,6 +212,7 @@ public:
     patchShadowPHINodes();
     patchAllocaPHINodes();
     removeRetagIntrinsics();
+
     return true;
   }
 
@@ -543,9 +562,9 @@ private:
               NumFnEntryRetags += 1;
             }
             if (CB->getType() == BS.PtrTy) {
-              RetagOperandVec.push_back(CB);
+              RetagRegVec.push_back(CB);
             } else {
-              RetagPlaceVec.push_back(CB);
+              RetagMemVec.push_back(CB);
             }
           }
           if (IntrinsicInst *I = dyn_cast<IntrinsicInst>(CB)) {
@@ -661,15 +680,11 @@ private:
   }
 
   void removeRetagIntrinsics() {
-    for (CallBase *CB : ExposeTagVec) {
+    for (CallBase *CB : RetagRegVec) {
       CB->replaceAllUsesWith(CB->getOperand(0));
       CB->eraseFromParent();
     }
-    for (CallBase *CB : RetagOperandVec) {
-      CB->replaceAllUsesWith(CB->getOperand(0));
-      CB->eraseFromParent();
-    }
-    for (CallBase *CB : RetagPlaceVec) {
+    for (CallBase *CB : RetagMemVec) {
       CB->eraseFromParent();
     }
   }
@@ -719,18 +734,16 @@ private:
 
   bool isRetag(CallBase *CB) {
     Function *Callee = CB->getCalledFunction();
-    return Callee &&
+    return CB->arg_size() == 7 && Callee &&
            Callee->getName().starts_with(kBsanRustIntrinsicRetagPrefix);
   }
 
   bool isFnEntryRetag(CallBase *CB) {
-    return isRetag(CB) && hasMetadataAnnotation(CB, "fn_entry");
-  }
-
-  bool hasMetadataAnnotation(Instruction *Inst, StringRef Name) {
-    return Inst && Inst->hasMetadata(LLVMContext::MD_annotation) &&
-           any_of(Inst->getMetadata(LLVMContext::MD_annotation)->operands(),
-                  [Name](const MDOperand &Op) { return Op.equalsStr(Name); });
+    if (isRetag(CB)) {
+      RetagInfo RI(CB);
+      return RI.IsProtected->getZExtValue() != 0;
+    }
+    return false;
   }
 
   void handleDebugFunction(CallBase &CB, Function *F) {
@@ -794,13 +807,7 @@ private:
     return AllocSize;
   }
 
-  void instrumentExposeTag(CallBase &CB) {
-    ExposeTagVec.push_back(&CB);
-    ProvenanceScalar Prov = assertProvenanceScalar(CB.getOperand(0));
-    setProvenance(&CB, Prov);
-  }
-
-  void instrumentRetagPlace(CallBase &CB) {
+  void instrumentRetagMem(CallBase &CB) {
     IRBuilder<> IRB(&CB);
     Value *Operand = CB.getOperand(0);
     Value *SrcAddr = IRB.CreateLoad(BS.PtrTy, Operand, true);
@@ -813,7 +820,7 @@ private:
     RetaggedProv.store(IRB, BS.PL, ProvPtr);
   }
 
-  void instrumentRetagOperand(CallBase &CB) {
+  void instrumentRetagReg(CallBase &CB) {
     IRBuilder<> IRB(&CB);
     ProvenanceScalar Prov = assertProvenanceScalar(CB.getOperand(0));
     ProvenanceScalar Retagged =
@@ -824,9 +831,10 @@ private:
   ProvenanceScalar instrumentRetag(IRBuilder<> &IRB, CallBase &CB,
                                    Value *Target, ProvenanceScalar TargetProv) {
     if (TargetProv != BS.WildcardProvenance) {
-      Value *ImArray = CB.getOperand(1);
+      RetagInfo RI(&CB);
+
       Value *ImArrayLen = BS.Zero;
-      if (GlobalVariable *GV = dyn_cast<GlobalVariable>(ImArray)) {
+      if (GlobalVariable *GV = dyn_cast<GlobalVariable>(RI.ImArray)) {
         if (ConstantDataArray *CA =
                 dyn_cast<ConstantDataArray>(GV->getInitializer())) {
           uint64_t NumPointerSizedPairs =
@@ -835,12 +843,12 @@ private:
         }
       }
 
-      TargetProv.Tag = IRB.CreateCall(BS.BsanFuncRetag,
-                                      {Target, CB.getOperand(2),
-                                       CB.getOperand(3), TargetProv.Tag,
-                                       TargetProv.Info, ImArray, ImArrayLen});
+      TargetProv.Tag = IRB.CreateCall(
+          BS.BsanFuncRetag,
+          {Target, RI.Size, RI.IsProtected, RI.IsFreeze, RI.IsUnpin, RI.PtrKind,
+           RI.ImArray, ImArrayLen, TargetProv.Tag, TargetProv.Info});
 
-      if (isFnEntryRetag(&CB)) {
+      if (RI.IsProtected->getZExtValue() != 0) {
         Value *PrevSlot = IRB.CreateLoad(BS.PtrTy, BS.ProvStack, true);
         Value *NextProvSlot =
             subtractPointer(IRB, BS.DL, PrevSlot, BS.PL.ProvenanceSize);
@@ -873,12 +881,9 @@ private:
       }
       if (isRetag(&CB)) {
         if (CB.getType() == BS.PtrTy) {
-          return instrumentRetagOperand(CB);
+          return instrumentRetagReg(CB);
         }
-        return instrumentRetagPlace(CB);
-      }
-      if (Callee->getName() == kBsanRustIntrinsicExposeTag) {
-        return instrumentExposeTag(CB);
+        return instrumentRetagMem(CB);
       }
     }
 
@@ -1484,11 +1489,12 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   IRBuilder<> IRB(*C);
 
   AttributeList AL;
+
   AL = AL.addFnAttribute(*C, Attribute::NoUnwind);
 
-  BsanFuncRetag =
-      M.getOrInsertFunction(kBsanFuncRetagName, AL, IntptrTy, PtrTy, IntptrTy,
-                            Int64Ty, IntptrTy, PtrTy, PtrTy, IntptrTy);
+  BsanFuncRetag = M.getOrInsertFunction(
+      kBsanFuncRetagName, AL, IntptrTy, PtrTy, IntptrTy, Int8Ty, Int8Ty, Int8Ty,
+      Int8Ty, PtrTy, IntptrTy, IntptrTy, PtrTy);
 
   BsanFuncPopFrame = M.getOrInsertFunction(kBsanFuncPopFrame, AL,
                                            IRB.getVoidTy(), PtrTy, IntptrTy);
@@ -1602,8 +1608,7 @@ bool BorrowSanitizer::instrumentFunction(Function &F,
     return false;
   }
 
-  if (F.getName() == kBsanRustIntrinsicRetagOperand ||
-      F.getName() == kBsanRustIntrinsicExposeTag) {
+  if (F.getName().starts_with(kBsanRustIntrinsicRetagPrefix)) {
     return false;
   }
 

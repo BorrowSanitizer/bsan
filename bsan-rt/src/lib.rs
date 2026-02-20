@@ -14,7 +14,7 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{ffi, fmt, ptr, slice};
 
-use bsan_shared::{AccessKind, RetagInfo, Size};
+use borrow_tracker::{AccessKind, RetagInfo, RetagPtrKind, Size};
 use libc_print::std_name::*;
 use spin::Mutex;
 
@@ -85,7 +85,6 @@ pub static mut __BSAN_THREAD_ID: ThreadId = ThreadId(0);
 struct DebugSummary {
     op: &'static str,
     ptr: usize,
-    alloc_id: AllocId,
     bor_tag: BorTag,
     info: AllocInfoSummary,
 }
@@ -94,20 +93,16 @@ struct DebugSummary {
 impl fmt::Display for DebugSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.info {
-            AllocInfoSummary::WildCard => write!(
-                f,
-                "[{}] 0x{:x} @({:?}, {:?}) -> (wildcard)",
-                self.op, self.ptr, self.alloc_id, self.bor_tag
-            ),
-            AllocInfoSummary::Null => write!(
-                f,
-                "[{}] 0x{:x} @({:?}, {:?}) -> (null)",
-                self.op, self.ptr, self.alloc_id, self.bor_tag
-            ),
+            AllocInfoSummary::WildCard => {
+                write!(f, "[{}] 0x{:x} @{:?} -> (wildcard)", self.op, self.ptr, self.bor_tag)
+            }
+            AllocInfoSummary::Null => {
+                write!(f, "[{}] 0x{:x} @{:?} -> (null)", self.op, self.ptr, self.bor_tag)
+            }
             AllocInfoSummary::Valid { alloc_id, base_addr, size } => write!(
                 f,
-                "[{}] 0x{:x} @({:?}, {:?}) -> ({:?}, {:?}, {:?})",
-                self.op, self.ptr, self.alloc_id, self.bor_tag, alloc_id, base_addr, size
+                "[{}] 0x{:x} @{:?} -> ({:?}, {:?}, {:?})",
+                self.op, self.ptr, self.bor_tag, alloc_id, base_addr, size
             ),
         }
     }
@@ -286,9 +281,16 @@ static __BSAN_WILDCARD_PROVENANCE: Provenance = Provenance::wildcard();
 #[unsafe(no_mangle)]
 static __BSAN_NULL_PROVENANCE: Provenance = Provenance::null();
 
+#[derive(Clone, Copy)]
 pub(crate) union FreeListAddrUnion {
     pub addr: usize,
     pub free_list_next: Option<NonNull<AllocInfo>>,
+}
+
+impl Debug for FreeListAddrUnion {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:x}", unsafe { self.addr })
+    }
 }
 
 /// Every allocation is associated with a "lock" object, which is an instance of `AllocInfo`.
@@ -330,14 +332,18 @@ impl AllocInfo {
 
     #[cfg(feature = "debug")]
     fn summarize(&self) -> AllocInfoSummary {
-        AllocInfoSummary::Valid { base_addr: self.base_addr, size: self.size }
+        AllocInfoSummary::Valid {
+            alloc_id: self.alloc_id,
+            base_addr: self.base_addr,
+            size: self.size,
+        }
     }
 }
 
 /// A shallow version of `AllocInfo`, for use in debug logging.
 #[cfg(feature = "debug")]
 #[derive(Debug)]
-pub enum AllocInfoSummary {
+pub(crate) enum AllocInfoSummary {
     /// When Prov is wildcard, AllocInfo is invalid
     WildCard,
     /// When Prov is null, AllocInfo is invalid
@@ -382,18 +388,22 @@ extern "C" fn __bsan_local_deinit() {
 unsafe extern "C-unwind" fn __bsan_retag(
     object_addr: *mut c_void,
     access_size: usize,
-    perm: u64,
-    bor_tag: BorTag,
-    alloc_info: *mut AllocInfo,
+    is_protected: u8,
+    ty_is_freeze: u8,
+    _ty_is_unpin: u8,
+    ptr_kind: RetagPtrKind,
     im_data: *const [usize; 2],
     im_len: usize,
+    bor_tag: BorTag,
+    alloc_info: *mut AllocInfo,
 ) -> BorTag {
     debug_bsan!("retag", object_addr, bor_tag, alloc_info);
+    let fp = unsafe { fp!() };
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-    let fp = unsafe { fp!() };
-
-    let retag_info = unsafe { RetagInfo::from_raw(access_size, perm, im_data, im_len) };
+    let retag_info = unsafe {
+        RetagInfo::from_raw(access_size, is_protected, ty_is_freeze, ptr_kind, im_data, im_len)
+    };
     BorrowTracker::retag(ctx, prov, object_addr, access_size, retag_info, fp.caller_span())
         .unwrap_or_else(|err| ctx.handle_error(err, fp))
 }

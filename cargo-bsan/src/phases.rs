@@ -1,6 +1,4 @@
-use std::path;
 use std::path::PathBuf;
-use std::process::Command;
 
 use rustc_version::VersionMeta;
 
@@ -8,6 +6,20 @@ use crate::arg::*;
 use crate::setup::*;
 use crate::util::*;
 use crate::*;
+
+pub const BSAN_DEFAULT_ARGS: &[&str] = &[
+    "--cfg=bsan",
+    "-Copt-level=0",
+    "-Zmir-opt-level=0",
+    "-Cpasses=bsan",
+    "-Zcodegen-emit-retag=true",
+    "-Cforce-frame-pointers=yes",
+    "-Zmir-preserve-ub",
+    "-Zllvm-emit-lifetime-markers",
+    "-Zinline-llvm=no",
+    "-Cembed-bitcode=yes",
+    "-Cdebuginfo=2",
+];
 
 pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     if has_arg_flag("--help") || has_arg_flag("-h") {
@@ -25,9 +37,9 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     };
 
     let subcommand = match &*subcommand {
-        "setup" => BSANCommand::Setup,
-        "build" | "test" | "t" | "run" | "r" | "nextest" => BSANCommand::Forward(subcommand),
-        "clean" => BSANCommand::Clean,
+        "setup" => BsanCommand::Setup,
+        "build" | "test" | "t" | "run" | "r" | "nextest" | "rustc" => BsanCommand::Forward(subcommand),
+        "clean" => BsanCommand::Clean,
         _ => show_error!(
             "`cargo bsan` supports the following subcommands: `run`, `build`, `test`, `nextest`, `clean`, and `setup`."
         ),
@@ -37,9 +49,8 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     let quiet = has_arg_flag("-q") || has_arg_flag("--quiet");
 
     // Determine the involved architectures.
-    let rustc_version = VersionMeta::for_command(bsan_for_host()).unwrap_or_else(|err| {
-        panic!("failed to determine underlying rustc version of BSAN ({:?}):\n{err:?}", bsan())
-    });
+    let rustc_version = VersionMeta::for_command(rustc())
+        .unwrap_or_else(|err| panic!("failed to determine underlying rustc version:\n{err:?}"));
 
     let targets = get_arg_flag_values("--target").collect::<Vec<_>>();
 
@@ -51,35 +62,24 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     // If cleaning the target directory & sysroot cache,
     // delete them then exit. There is no reason to setup a new
     // sysroot in this execution.
-    if let BSANCommand::Clean = subcommand {
+    if let BsanCommand::Clean = subcommand {
         clean_sysroot_dir();
         clean_target_dir();
         return;
     }
 
     let bsan_sysroot = ensure_sysroot(&subcommand, &rustc_version, verbose, quiet);
-    let bsan_path = find_bsan();
-
-    if let BSANCommand::Setup = subcommand
-        && has_arg_flag("--print-rustflags")
-    {
-        let mut cmd = bsan();
-        cmd.env("PRINT_RUSTFLAGS", "1");
-        debug_cmd("[cargo-bsan rustc]", verbose, &cmd);
-        exec(cmd);
-    }
 
     let cargo_cmd = match subcommand {
-        BSANCommand::Forward(s) => s,
-        BSANCommand::Clean => unreachable!(),
-        BSANCommand::Setup => return,
+        BsanCommand::Forward(s) => s,
+        BsanCommand::Clean => unreachable!(),
+        BsanCommand::Setup => {
+            if has_arg_flag("--print-rustflags") {
+                println!("{}", bsan_rustflags().join(" "))
+            }
+            return;
+        }
     };
-
-    let cargo_bsan_path = env::current_exe()
-        .expect("current executable path invalid")
-        .into_os_string()
-        .into_string()
-        .expect("current executable path is not valid UTF-8");
 
     let metadata = get_cargo_metadata();
     let mut cmd = cargo();
@@ -95,10 +95,6 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     cmd.arg("--target");
     cmd.arg(&rustc_version.host);
 
-    let cargo_bsan_path_for_toml = escape_for_toml(&cargo_bsan_path);
-    cmd.arg("--config")
-        .arg(format!("target.'cfg(all())'.runner=[{cargo_bsan_path_for_toml}, 'runner']"));
-
     // Set `--target-dir` to `bsan` inside the original target directory.
     let target_dir = get_target_dir(&metadata);
     cmd.arg("--target-dir").arg(target_dir);
@@ -112,13 +108,6 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     }
     cmd.args(args);
 
-    if env::var_os("RUSTC_WRAPPER").is_some() {
-        println!(
-            "WARNING: Ignoring `RUSTC_WRAPPER` environment variable, BSAN does not support wrapping."
-        );
-    }
-    cmd.env("RUSTC_WRAPPER", &cargo_bsan_path);
-
     // If both RUSTC_WORKSPACE_WRAPPER and RUSTC_WRAPPER are set,
     // then both are executed in succession. Providing an independent
     // workspace-level wrapper is not supported, so we clear this variable.
@@ -129,31 +118,24 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     }
     cmd.env_remove("RUSTC_WORKSPACE_WRAPPER");
 
-    cmd.env("RUSTC", path::absolute(bsan_path).unwrap());
-
     // At this point, we've completed setup, so we have a sysroot.
-    cmd.env("BSAN_SYSROOT", bsan_sysroot);
+    cmd.env("BSAN_SYSROOT", &bsan_sysroot);
+
     if verbose > 0 {
         cmd.env("BSAN_VERBOSE", verbose.to_string()); // This makes the other phases verbose.
     }
 
-    // Run cargo.
-    debug_cmd("[cargo-bsan rustc]", verbose, &cmd);
-    exec(cmd)
-}
-
-pub fn phase_runner(mut binary_args: impl Iterator<Item = String>) {
-    let verbose = env::var("BSAN_VERBOSE")
-        .map_or(0, |verbose| verbose.parse().expect("verbosity flag must be an integer"));
-
-    let binary = binary_args.next().unwrap();
-    let mut cmd = Command::new(binary);
-
     let llvm_symbolizer = get_host_sysroot_binary("llvm-symbolizer", verbose);
     cmd.env("BSAN_SYMBOLIZER", llvm_symbolizer);
-    cmd.args(binary_args);
 
-    debug_cmd("[cargo-bsan runner]", verbose, &cmd);
+    let mut rustflags = bsan_rustflags();
+    let sysroot_flag = format!("--sysroot={}", bsan_sysroot.display());
+    rustflags.push(format!("--sysroot={}", bsan_sysroot.display()));
+
+    cmd.env("RUSTFLAGS", rustflags.join(" "));
+    cmd.env("RUSTDOCFLAGS", sysroot_flag);
+    // Run cargo.
+    debug_cmd("[cargo-bsan rustc]", verbose, &cmd);
     exec(cmd)
 }
 
@@ -177,14 +159,15 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
 
     let target_crate = is_target_crate();
 
-    let mut cmd = bsan();
+    let mut cmd = rustc();
+
     // Arguments are treated very differently depending on whether this crate needs to be
     // instrumented by BorrowSanitizer or if it's for a build script / proc macro.
     if target_crate {
         if phase != RustcPhase::Setup {
             // Set the sysroot -- except during setup, where we don't have an existing sysroot yet
             // and where the bootstrap wrapper adds its own `--sysroot` flag so we can't set ours.
-            cmd.arg("--sysroot").arg(env::var_os("BSAN_SYSROOT").unwrap());
+            cmd.arg("--sysroot").arg(expect_env("BSAN_SYSROOT"));
         }
         // During setup, patch the panic runtime for `libpanic_abort` (mirroring what bootstrap usually does).
         if phase == RustcPhase::Setup
@@ -192,17 +175,14 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
         {
             cmd.arg("-C").arg("panic=abort");
         }
-    } else {
-        // This is a host crate.
-        // When we're running `cargo-bsan` from `x.py` we need to pass the sysroot explicitly
-        // due to bootstrap complications.
-        if let Some(sysroot) = env::var_os("BSAN_HOST_SYSROOT") {
-            cmd.arg("--sysroot").arg(sysroot);
-        }
     }
+
+    if target_crate {
+        cmd.args(bsan_rustflags());
+    }
+
     // Forward everything else.
     cmd.args(args);
-    cmd.env("BSAN_BE_RUSTC", if target_crate { "target" } else { "host" });
 
     if verbose > 0 {
         eprintln!("[cargo-bsan rustc] target_crate={target_crate}");
@@ -212,16 +192,16 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
 }
 
 fn ensure_sysroot(
-    subcommand: &BSANCommand,
+    subcommand: &BsanCommand,
     rustc_version: &VersionMeta,
     verbose: usize,
     quiet: bool,
 ) -> PathBuf {
     let host_sysroot = get_host_sysroot_dir(verbose);
-
     let Some(bsan_plugin) = find_library("BSAN_PLUGIN", &host_sysroot, "libbsan_plugin.so") else {
         show_error!(
-            "failed to locate the BorrowSanitizer LLVM plugin (libbsan_plugin.so) within the host sysroot."
+            "failed to locate the BorrowSanitizer LLVM plugin (libbsan_plugin.so) within the host sysroot: {}",
+                host_sysroot.display()
         );
     };
     unsafe {
@@ -239,4 +219,15 @@ fn ensure_sysroot(
 
     setup_sysroot(subcommand, rustc_version.host.as_str(), rustc_version, verbose, quiet);
     get_target_sysroot_dir()
+}
+
+fn bsan_rustflags() -> Vec<String> {
+    let rt = expect_env_path("BSAN_RT");
+    let plugin = expect_env_path("BSAN_PLUGIN");
+    let rt_dir = rt.parent().unwrap();
+    let mut additional_args = BSAN_DEFAULT_ARGS.iter().map(ToString::to_string).collect::<Vec<_>>();
+    additional_args.push(format!("-Zllvm-plugins={}", plugin.display()));
+    additional_args.push(format!("-L{}", rt_dir.display()));
+    additional_args.push("-lstatic=bsan_rt".to_string());
+    additional_args
 }

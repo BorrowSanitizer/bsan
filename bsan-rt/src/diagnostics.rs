@@ -10,13 +10,13 @@ use core::fmt;
 use core::marker::PhantomData;
 use core::ops::Range;
 
-use bsan_shared::diagnostics::TransitionError;
-use bsan_shared::{AccessKind, PermTransition, Permission, ProtectorKind};
 use hashbrown::HashMap;
 
+use super::{AccessKind, PermTransition, Permission, ProtectorKind};
 use crate::borrow_tracker::tree::{AllocRange, LocationState, Tree};
 use crate::borrow_tracker::unimap::UniIndex;
-use crate::errors::UBResult;
+use crate::borrow_tracker::Size;
+use crate::errors::{TransitionError, UBResult};
 use crate::global::ProtectedTagsRef;
 use crate::{println, AllocId, BorTag, Span};
 
@@ -770,13 +770,8 @@ pub fn print_tree_diff<A: Allocator + Clone>(
                 let new_perm = map.get(new_idx).copied();
 
                 // Find permission in old_tree for this range (sampling at start)
-                let old_perm_at_start = if let Some((_, old_map)) = old_tree
-                    .rperms
-                    .iter(
-                        bsan_shared::Size::from_bytes(range.start),
-                        bsan_shared::Size::from_bytes(1),
-                    )
-                    .next()
+                let old_perm_at_start = if let Some((_, old_map)) =
+                    old_tree.rperms.iter(Size::from_bytes(range.start), Size::from_bytes(1)).next()
                 {
                     old_map.get(old_idx).copied()
                 } else {
