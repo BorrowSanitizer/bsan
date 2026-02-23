@@ -1,4 +1,9 @@
 error: Undefined Behavior: write through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
+      --> bsan/tests/miri-tests/fail/tree_borrows/pass_invalid_mut.rs:10:5
+         |
+      10 | *nope = 31;
+         |
+
 help: the accessed tag <TAG>(StrongProtector) is a child of the conflicting tag <TAG>(unprotected)
 help: the conflicting tag <TAG>(unprotected) has state Frozen which forbids this write
     help: the accessed tag <TAG>(StrongProtector) was created here
@@ -28,7 +33,6 @@ help: the conflicting tag <TAG>(unprotected) has state Frozen which forbids this
          |
 
     help: this transition corresponds to a loss of write permissions
-
 
 backtrace:
   0:

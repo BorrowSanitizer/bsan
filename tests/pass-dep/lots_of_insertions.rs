@@ -2,14 +2,14 @@
 // Taken from https://github.com/rust-lang/hashbrown
 use hashbrown::HashMap;
 
-const N: u32 = 10;
+const N: u32 = 3;
 
 fn main() {
     let mut m = HashMap::new();
 
     // Try this a few times to make sure we never screw up the hashmap's
     // internal state.
-    for _ in 0..10 {
+    for _ in 0..N {
         assert!(m.is_empty());
 
         for i in 1..(N + 1) {

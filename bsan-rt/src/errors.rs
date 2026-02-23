@@ -2,44 +2,26 @@
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::fmt::{Debug, Display};
+use core::fmt::{Debug};
 
 use hashbrown::HashMap;
 
 use crate::borrow_tracker::Permission;
 use crate::diagnostics::{AccessCause, HistoryData, NodeDebugInfo};
 use crate::sanitizer_common_interface::SanitizerCommon;
-use crate::span::Symbol;
+use crate::span::{Span, Symbol};
 use crate::AllocId;
 
 pub type TreeTransitionResult<T> = core::result::Result<T, TransitionError>;
 
 #[derive(Debug)]
 pub enum UBInfo {
-    AccessOutOfBounds(AllocId, usize, usize),
+    AccessOutOfBounds { alloc_id: AllocId, access_size: usize, offset: usize, alloc_size: usize },
     UseAfterFree,
     AliasingViolation(Box<TreeError>),
 }
 
 pub type UBResult<T> = Result<T, UBInfo>;
-
-impl Display for UBInfo {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "Undefined Behavior: ")?;
-        match self {
-            UBInfo::UseAfterFree => {
-                write!(f, "trying to access an allocation that has been freed.")
-            }
-            UBInfo::AccessOutOfBounds(id, size, offset) => {
-                write!(
-                    f,
-                    "an access of size {size} at offset {offset:x} is out of bounds for {id:?}."
-                )
-            }
-            UBInfo::AliasingViolation(error) => write!(f, "{error}"),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 pub enum TransitionError {
@@ -80,15 +62,47 @@ pub struct TreeError {
     pub accessed_info: NodeDebugInfo,
 }
 
-impl core::fmt::Display for TreeError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+#[derive(Default)]
+pub struct ErrorFormatContext {
+    file_cache: HashMap<String, String>,
+}
+
+impl ErrorFormatContext {
+    pub fn display_ub(&mut self, info: UBInfo, current_span: Span) -> String {
+        let mut result = String::new();
+        let symbol = current_span.symbolize();
+        result.push_str("Undefined Behavior: ");
+        match info {
+            UBInfo::UseAfterFree => {
+                result.push_str("trying to access an allocation that has been freed.\n");
+                result.push_str(&self.format_symbol(symbol));
+                result.push_str("\n");
+
+            }
+            UBInfo::AccessOutOfBounds { alloc_id, access_size, alloc_size, offset } => {
+                result.push_str(&format!(
+                    "an access of size {access_size} at offset {offset:x} is out of bounds for {alloc_id:?} of size {alloc_size:x}.\n"
+                ));
+                result.push_str(&self.format_symbol(symbol));
+                result.push_str("\n");
+            }
+            UBInfo::AliasingViolation(error) => {
+                result.push_str(&self.display_tree_error(*error, symbol))
+            }
+        }
+        result
+    }
+
+    fn display_tree_error(&mut self, error: TreeError, symbol: Symbol) -> String {
+        let mut buffer = String::new();
+
         use TransitionError::*;
-        let cause = self.access_cause;
-        let error_offset = self.error_offset;
-        let access = self.access_cause;
-        let accessed = &self.accessed_info;
+        let cause = error.access_cause;
+        let error_offset = error.error_offset;
+        let access = error.access_cause;
+        let accessed = &error.accessed_info;
         let accessed_tag = accessed.tag;
-        let conflicting = &self.conflicting_info;
+        let conflicting = &error.conflicting_info;
 
         // An access is considered conflicting if it happened through a
         // different tag than the one who caused UB.
@@ -101,10 +115,10 @@ impl core::fmt::Display for TreeError {
         let accessed_is_conflicting = accessed.tag == conflicting.tag;
         let title = format!(
             "{cause} through {accessed_tag:?} at {alloc_id:?}[{error_offset:#x}] is forbidden",
-            alloc_id = self.alloc_id
+            alloc_id = error.alloc_id
         );
 
-        let (title, details, conflicting_tag_name) = match self.error_kind {
+        let (title, details, conflicting_tag_name) = match error.error_kind {
             ChildAccessForbidden(perm) => {
                 let conflicting_tag_name =
                     if accessed_is_conflicting { "accessed" } else { "conflicting" };
@@ -145,38 +159,47 @@ impl core::fmt::Display for TreeError {
         };
         let mut history = HistoryData::default();
         if !accessed_is_conflicting {
-            history.extend(self.accessed_info.history.forget(), "accessed", false);
+            history.extend(error.accessed_info.history.forget(), "accessed", false);
         }
         history.extend(
-            self.conflicting_info.history.extract_relevant(error_offset),
+            error.conflicting_info.history.extract_relevant(error_offset),
             conflicting_tag_name,
             true,
         );
 
-        writeln!(f, "{title}")?;
+        buffer.push_str(&title);
+        buffer.push_str("\n");
+        buffer.push_str(&self.format_symbol(symbol));
+        buffer.push_str("\n");
         for detail in details {
-            writeln!(f, "help: {}", detail)?;
+            buffer.push_str(&format!("help: {}\n", detail));
         }
 
-        let mut file_cache: HashMap<String, String> = HashMap::new();
         for event in history.events {
-            writeln!(f, "    help: {}", event.1)?;
+            buffer.push_str(&format!("    help: {}\n", event.1));
             if let Some(span) = event.0 {
                 let symbol = span.symbolize();
-                writeln!(f, "      --> {}", symbol)?;
-                if let Symbol::Resolved { file: path, line, col: _ } = symbol {
-                    let file = file_cache
-                        .entry(path.clone())
-                        .or_insert_with(|| SanitizerCommon::read_file(&path).unwrap_or_default());
-                    if let Some(content) = SanitizerCommon::get_source_line(file, line) {
-                        writeln!(f, "         |")?;
-                        writeln!(f, "{:>8} | {}", line, content)?;
-                        writeln!(f, "         |")?;
-                    }
-                }
+                buffer.push_str(&self.format_symbol(symbol));
             }
-            writeln!(f)?;
+            buffer.push('\n');
         }
-        Ok(())
+        buffer
+    }
+
+    fn format_symbol(&mut self, symbol: Symbol) -> String {
+        let mut buffer = String::new();
+        buffer.push_str(&format!("      --> {}\n", symbol));
+        if let Symbol::Resolved { file: path, line, col: _ } = symbol {
+            let file = self
+                .file_cache
+                .entry(path.clone())
+                .or_insert_with(|| SanitizerCommon::read_file(&path).unwrap_or_default());
+            if let Some(content) = SanitizerCommon::get_source_line(file, line) {
+                buffer.push_str("         |\n");
+                buffer.push_str(&format!("{:>8} | {}\n", line, content));
+                buffer.push_str("         |\n");
+            }
+        }
+        buffer
     }
 }

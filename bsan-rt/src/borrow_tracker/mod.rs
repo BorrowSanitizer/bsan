@@ -108,16 +108,16 @@ impl<'b> BorrowTracker<'b> {
                 return if access_size != 0 { Err(UBInfo::UseAfterFree) } else { Ok(None) };
             };
 
-            let relative_offset = start.addr().wrapping_sub(base_addr);
-            if start.addr() < base_addr || (relative_offset + access_size > alloc_size) {
+            let offset = start.addr().wrapping_sub(base_addr);
+            if start.addr() < base_addr || (offset + access_size > alloc_size) {
                 return if access_size != 0 {
-                    Err(UBInfo::AccessOutOfBounds(alloc_id, access_size, alloc_size))
+                    Err(UBInfo::AccessOutOfBounds { alloc_id, access_size, alloc_size, offset })
                 } else {
                     Ok(None)
                 };
             }
 
-            let start = Size::from_bytes(relative_offset);
+            let start = Size::from_bytes(offset);
             let size = Size::from_bytes(access_size);
             let range = AllocRange { start, size };
 

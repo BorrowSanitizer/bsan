@@ -1,4 +1,9 @@
 error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+      --> bsan/tests/fail/unique_ref.rs:9:9
+         |
+       9 | *ptr_x = 1;
+         |
+
 help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this write
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
       --> bsan/tests/fail/unique_ref.rs:4:14
@@ -13,7 +18,6 @@ help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this 
          |
 
     help: this transition corresponds to a loss of read and write permissions
-
 
 backtrace:
   0:

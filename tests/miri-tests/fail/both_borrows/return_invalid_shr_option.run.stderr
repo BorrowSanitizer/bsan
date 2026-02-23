@@ -1,4 +1,6 @@
 error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x4] is forbidden
+      --> bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:0:5
+
 help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
       --> bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_option.rs:6:29
@@ -13,7 +15,6 @@ help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this 
          |
 
     help: this transition corresponds to a loss of read permissions
-
 
 backtrace:
   0:

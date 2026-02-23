@@ -1,4 +1,9 @@
 error: Undefined Behavior: read through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+      --> bsan/tests/miri-tests/fail/both_borrows/box_noalias_violation.rs:7:5
+         |
+       7 | *y
+         |
+
 help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(WeakProtector) (i.e., it is not a child)
 help: this read would cause the protected tag <TAG>(WeakProtector) (currently Active) to become Disabled
 help: protected tags must never be Disabled
@@ -21,7 +26,6 @@ help: protected tags must never be Disabled
          |
 
     help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
-
 
 backtrace:
   0:
