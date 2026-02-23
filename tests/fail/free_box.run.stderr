@@ -1,4 +1,9 @@
 error: Undefined Behavior: trying to access an allocation that has been freed.
+      --> bsan/tests/fail/free_box.rs:12:9
+         |
+      12 | *ptr = 1;
+         |
+
 backtrace:
   0:
     bsan/tests/fail/free_box.rs:12:9

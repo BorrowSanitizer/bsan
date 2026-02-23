@@ -1,4 +1,9 @@
 error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+      --> bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:12:14
+         |
+      12 | unsafe { *y = 2 };
+         |
+
 help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
 help: this write would cause the protected tag <TAG>(StrongProtector) (currently Active) to become Disabled
 help: protected tags must never be Disabled
@@ -21,7 +26,6 @@ help: protected tags must never be Disabled
          |
 
     help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
-
 
 backtrace:
   0:

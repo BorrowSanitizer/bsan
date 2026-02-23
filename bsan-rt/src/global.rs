@@ -6,7 +6,7 @@ use core::ptr::NonNull;
 use borrow_tracker::ProtectorKind;
 use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use crate::errors::UBInfo;
+use crate::errors::{ErrorFormatContext, UBInfo};
 use crate::helpers::FxHashMap;
 use crate::local::{deinit_local_ctx, init_local_ctx, local_ctx, local_ctx_mut, LocalCtx};
 use crate::memory::{Heap, ShadowHeap};
@@ -146,7 +146,8 @@ impl GlobalCtx {
     }
 
     pub fn handle_error(&self, ub_info: UBInfo, fp: FramePtr) -> ! {
-        crate::eprintln!("error: {ub_info}");
+        let mut ctx = ErrorFormatContext::default();
+        crate::eprint!("error: {}", ctx.display_ub(ub_info, fp.caller_span()));
         crate::eprintln!("backtrace:");
         for (i, frame) in fp.take(3).enumerate() {
             crate::eprintln!("  {i}:\n    {}", frame.symbolize());

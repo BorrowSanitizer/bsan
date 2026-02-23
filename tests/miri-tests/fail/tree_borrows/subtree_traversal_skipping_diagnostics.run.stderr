@@ -1,4 +1,9 @@
 error: Undefined Behavior: write through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
+      --> bsan/tests/miri-tests/fail/tree_borrows/subtree_traversal_skipping_diagnostics.rs:19:5
+         |
+      19 | *m = 42;
+         |
+
 help: the accessed tag <TAG>(StrongProtector) is a child of the conflicting tag <TAG>(unprotected)
 help: the conflicting tag <TAG>(unprotected) has state Frozen which forbids this write
     help: the accessed tag <TAG>(StrongProtector) was created here
@@ -12,7 +17,6 @@ help: the conflicting tag <TAG>(unprotected) has state Frozen which forbids this
          |
       25 | let intermediary = &root;
          |
-
 
 backtrace:
   0:

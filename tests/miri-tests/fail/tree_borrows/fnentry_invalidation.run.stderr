@@ -1,4 +1,9 @@
 error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+      --> bsan/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:19:9
+         |
+      19 | *z = 2;
+         |
+
 help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this write
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
       --> bsan/tests/miri-tests/fail/tree_borrows/fnentry_invalidation.rs:13:13
@@ -21,7 +26,6 @@ help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this wr
          |
 
     help: this transition corresponds to a loss of write permissions
-
 
 backtrace:
   0:
