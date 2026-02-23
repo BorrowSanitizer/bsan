@@ -1,4 +1,9 @@
 error: Undefined Behavior: read through <TAG>(unprotected) at ALLOC[0x5] is forbidden
+      --> bsan/tests/miri-tests/fail/tree_borrows/error-range.rs:25:9
+         |
+      25 | rmut[5] += 1;
+         |
+
 help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this read
     help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
       --> bsan/tests/miri-tests/fail/tree_borrows/error-range.rs:12:20
@@ -29,7 +34,6 @@ help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this 
          |
 
     help: this transition corresponds to a loss of read permissions
-
 
 backtrace:
   0:

@@ -1,4 +1,9 @@
 error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+      --> bsan/tests/fail/protected_write.rs:10:14
+         |
+      10 | unsafe { *p = 1 };
+         |
+
 help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
 help: this write would cause the protected tag <TAG>(StrongProtector) (currently Reserved) to become Disabled
 help: protected tags must never be Disabled
@@ -13,7 +18,6 @@ help: protected tags must never be Disabled
          |
        9 | fn foo(_r: &mut i32, p: *mut i32) {
          |
-
 
 backtrace:
   0:

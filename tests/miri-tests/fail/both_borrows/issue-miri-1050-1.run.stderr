@@ -1,4 +1,9 @@
-error: Undefined Behavior: an access of size 4 at offset 2 is out of bounds for ALLOC.
+error: Undefined Behavior: an access of size 4 at offset 0 is out of bounds for ALLOC of size 2.
+      --> RUSTLIB/alloc/src/boxed.rs:1266:18
+         |
+    1266 | unsafe { Self::from_raw_in(raw, Global) }
+         |
+
 backtrace:
   0:
     RUSTLIB/alloc/src/boxed.rs:1266:18

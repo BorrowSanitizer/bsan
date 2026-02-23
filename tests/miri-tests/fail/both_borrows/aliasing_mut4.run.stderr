@@ -1,4 +1,9 @@
 error: Undefined Behavior: write through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
+      --> RUSTLIB/core/src/mem/mod.rs:901:9
+         |
+     901 | crate::intrinsics::write_via_move(dest, src);
+         |
+
 help: the accessed tag <TAG>(StrongProtector) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
 help: this write would cause the protected tag <TAG>(StrongProtector) (currently Frozen) to become Disabled
 help: protected tags must never be Disabled
@@ -13,7 +18,6 @@ help: protected tags must never be Disabled
          |
        6 | fn safe(x: &i32, y: &mut Cell<i32>) {
          |
-
 
 backtrace:
   0:

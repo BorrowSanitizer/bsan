@@ -1,4 +1,5 @@
 error: Undefined Behavior: deallocation through <TAG>(WeakProtector) at ALLOC[0x0] is forbidden
+      --> RUSTLIB/std/src/sys/alloc/PLATFORM.rs:l:c
 help: the allocation of the accessed tag <TAG>(WeakProtector) also contains the strongly protected tag <TAG>(StrongProtector)
 help: the strongly protected tag <TAG>(StrongProtector) disallows deallocations
     help: the accessed tag <TAG>(WeakProtector) was created here
@@ -16,7 +17,6 @@ help: the strongly protected tag <TAG>(StrongProtector) disallows deallocations
     help: the strongly protected tag <TAG>(StrongProtector) later transitioned due to a deallocation (acting as a child write access)
       --> RUSTLIB/std/src/sys/alloc/PLATFORM.rs:l:c
     help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
-
 
 backtrace:
   0:
