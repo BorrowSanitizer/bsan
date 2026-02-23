@@ -2,7 +2,7 @@
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::fmt::{Debug};
+use core::fmt::Debug;
 
 use hashbrown::HashMap;
 
@@ -76,15 +76,14 @@ impl ErrorFormatContext {
             UBInfo::UseAfterFree => {
                 result.push_str("trying to access an allocation that has been freed.\n");
                 result.push_str(&self.format_symbol(symbol));
-                result.push_str("\n");
-
+                result.push('\n');
             }
             UBInfo::AccessOutOfBounds { alloc_id, access_size, alloc_size, offset } => {
                 result.push_str(&format!(
                     "an access of size {access_size} at offset {offset:x} is out of bounds for {alloc_id:?} of size {alloc_size:x}.\n"
                 ));
                 result.push_str(&self.format_symbol(symbol));
-                result.push_str("\n");
+                result.push('\n');
             }
             UBInfo::AliasingViolation(error) => {
                 result.push_str(&self.display_tree_error(*error, symbol))
@@ -168,9 +167,9 @@ impl ErrorFormatContext {
         );
 
         buffer.push_str(&title);
-        buffer.push_str("\n");
+        buffer.push('\n');
         buffer.push_str(&self.format_symbol(symbol));
-        buffer.push_str("\n");
+        buffer.push('\n');
         for detail in details {
             buffer.push_str(&format!("help: {}\n", detail));
         }
