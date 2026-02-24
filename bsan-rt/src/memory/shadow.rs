@@ -137,18 +137,12 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
     /// We assume that `new` is only called during program initialization, so only by the main thread.
     /// So there should be no deadlock / synchronization issues.
     pub fn new(default: *const T) -> Self {
-        let table = unsafe {
-            mmap(Self::L1_SIZE).cast::<L1Array<T>>()
-        };
+        let table = mmap(Self::L1_SIZE).cast::<L1Array<T>>();
 
         // We can skip initialzation of each L1Entry because mmap returns a zeroed page and
         // we use ZeroableRwLock which is zero-initialized as RwLock::new(None)
 
-        Self {
-            table,
-            default,
-            l2_blocks: RwLock::new(Vec::<usize>::new()),
-        }
+        Self { table, default, l2_blocks: RwLock::new(Vec::<usize>::new()) }
     }
 
     #[inline]
@@ -174,9 +168,7 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
         // Slow path: upgrade to write lock for mmap allocation
         // With an upgradeable lock we don't need to double-check that l2_ptr is still None because the lock prevents other writers.
         let mut write_guard = read_guard.upgrade();
-        let l2_page = unsafe {
-            mmap(Self::L2_SIZE).cast::<L2Array<T>>()
-        };
+        let l2_page = mmap(Self::L2_SIZE).cast::<L2Array<T>>();
 
         *write_guard = Some(l2_page);
         drop(write_guard); // release lock early and prevent deadlocks
@@ -300,19 +292,12 @@ impl<T> Drop for ShadowHeap<T> {
             let mut l1_entry_guard = l1_entry.inner.write();
             let l2_table = *l1_entry_guard;
             if let Some(l2_table) = l2_table {
-                unsafe {
-                    munmap(l2_table, Self::L2_SIZE)
-                }
+                unsafe { munmap(l2_table, Self::L2_SIZE) }
                 *l1_entry_guard = None;
             }
         }
         // Free the L1 table (RwLocks will be dropped automatically)
-        unsafe {
-            munmap::<L1Array<T>>(
-                self.table,
-                Self::L1_SIZE,
-            )
-        }
+        unsafe { munmap::<L1Array<T>>(self.table, Self::L1_SIZE) }
     }
 }
 
