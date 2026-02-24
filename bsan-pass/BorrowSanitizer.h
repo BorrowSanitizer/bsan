@@ -17,16 +17,13 @@ public:
     PL = ProvenanceLayout(C, DL);
     LongSize = M.getDataLayout().getPointerSizeInBits();
 
+    BoolTy = Type::getInt1Ty(*C);
     Int8Ty = Type::getInt8Ty(*C);
     Int16Ty = Type::getInt16Ty(*C);
     Int32Ty = Type::getInt32Ty(*C);
     Int64Ty = Type::getInt64Ty(*C);
     PtrTy = PointerType::getUnqual(*C);
     IntptrTy = Type::getIntNTy(*C, LongSize);
-
-    ProvenanceTy = StructType::get(IntptrTy, IntptrTy, PtrTy);
-    ProvenanceAlign = DL->getABITypeAlign(ProvenanceTy);
-    ProvenanceSize = ConstantInt::get(IntptrTy, kProvenanceSize);
 
     Zero = ConstantInt::get(IntptrTy, 0);
     One = ConstantInt::get(IntptrTy, 1);
@@ -36,8 +33,8 @@ public:
 
     Constant *InvalidPtr = ConstantPointerNull::get(PtrTy);
 
-    WildcardProvenance = ProvenanceScalar(Zero, Zero, InvalidPtr);
-    InvalidProvenance = ProvenanceScalar(One, Zero, InvalidPtr);
+    WildcardProvenance = ProvenanceScalar(Zero, InvalidPtr);
+    InvalidProvenance = ProvenanceScalar(One, InvalidPtr);
   }
 
   bool instrumentModule(Module &M);
@@ -62,6 +59,7 @@ public:
 
   int LongSize;
   Triple TargetTriple;
+  Type *BoolTy;
   Type *Int8Ty;
   Type *Int16Ty;
   Type *Int32Ty;
@@ -71,58 +69,47 @@ public:
   Type *IntptrTy;
   Align IntptrAlign;
 
-  StructType *ProvenanceTy;
-  Align ProvenanceAlign;
-  Value *ProvenanceSize;
-
   bool CallbacksInitialized = false;
 
   Function *BsanCtorFunction = nullptr;
   Function *BsanDtorFunction = nullptr;
 
   FunctionCallee BsanFuncRetag;
-  FunctionCallee BsanFuncShadowCopy;
-  FunctionCallee BsanFuncShadowClear;
-  FunctionCallee BsanFuncGetShadowSrc;
-  FunctionCallee BsanFuncGetShadowDest;
-
-  FunctionCallee BsanFuncReserveStackSlot;
-  FunctionCallee BsanFuncDestroyStackSlot;
-  FunctionCallee BsanFuncAllocStack;
-  FunctionCallee BsanFuncRemoveProtectedTags;
-
-  FunctionCallee BsanFuncAlloc;
-  FunctionCallee BsanFuncDealloc;
-  FunctionCallee BsanFuncExposeTag;
   FunctionCallee BsanFuncRead;
   FunctionCallee BsanFuncWrite;
+  FunctionCallee BsanFuncAlloc;
+  FunctionCallee BsanFuncDealloc;
 
-  FunctionCallee BsanFuncShadowLoadVector;
-  FunctionCallee BsanFuncShadowStoreVector;
-
-  FunctionCallee BsanFuncAssertProvenanceInvalid;
-  FunctionCallee BsanFuncAssertProvenanceValid;
-  FunctionCallee BsanFuncAssertProvenanceNull;
-  FunctionCallee BsanFuncAssertProvenanceWildcard;
-  FunctionCallee BsanFuncDebugPrint;
-  FunctionCallee BsanFuncDebugPrintBorrowState;
-  FunctionCallee BsanFuncDebugGC;
-  FunctionCallee BsanFuncDebugTreeSize;
-  FunctionCallee BsanFuncDebugSnapshot;
-  FunctionCallee BsanFuncDebugPrintDiff;
-
-  FunctionCallee BsanFuncDebugParamTLS;
-  FunctionCallee BsanFuncDebugRetvalTLS;
+  FunctionCallee BsanFuncPopFrame;
 
   FunctionCallee BsanFuncMarkTLS;
   FunctionCallee BsanFuncValidateRetvalTLS;
   FunctionCallee BsanFuncValidateParamTLS;
 
+  FunctionCallee BsanFuncShadowCopy;
+  FunctionCallee BsanFuncShadowClear;
+  FunctionCallee BsanFuncGetShadowSrc;
+  FunctionCallee BsanFuncGetShadowDest;
+
+  FunctionCallee BsanFuncAllocStack;
+  FunctionCallee BsanFuncReserveStackSlot;
+  FunctionCallee BsanFuncDestroyStackSlot;
+
+  FunctionCallee BsanFuncAssertProvenanceNull;
+  FunctionCallee BsanFuncAssertProvenanceWildcard;
+  FunctionCallee BsanFuncAssertProvenanceValid;
+  FunctionCallee BsanFuncAssertProvenanceInvalid;
+
+  FunctionCallee BsanFuncDebugPrint;
+  FunctionCallee BsanFuncDebugPrintBorrowState;
+  FunctionCallee BsanFuncDebugTreeSize;
+  FunctionCallee BsanFuncDebugSnapshot;
+  FunctionCallee BsanFuncDebugPrintDiff;
+
   FunctionCallee DefaultPersonalityFn;
 
   ProvenanceScalar WildcardProvenance;
   ProvenanceScalar InvalidProvenance;
-
   // Thread-local storage for paramters
   // and return values.
   Value *ParamTLS = nullptr;

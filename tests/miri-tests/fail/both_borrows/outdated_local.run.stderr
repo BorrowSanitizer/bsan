@@ -1,22 +1,29 @@
-An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with permissions Frozen at bsan/tests/miri-tests/fail/both_borrows/outdated_local.rs:5:25
-Last access at bsan/tests/miri-tests/fail/both_borrows/outdated_local.rs:6:5
+error: Undefined Behavior: read through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+      --> bsan/tests/miri-tests/fail/both_borrows/outdated_local.rs:8:25
+         |
+       8 | assert_eq!(unsafe { *y }, 1);
+         |
 
-Run with `debug` feature (inst --debug) to view full TreeError
+help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this read
+    help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
+      --> bsan/tests/miri-tests/fail/both_borrows/outdated_local.rs:5:25
+         |
+       5 | let y: *const i32 = &x;
+         |
 
-    #0 $HEX in outdated_local::main::HASH bsan/tests/miri-tests/fail/both_borrows/outdated_local.rs:5:25
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
+    help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
+      --> bsan/tests/miri-tests/fail/both_borrows/outdated_local.rs:6:5
+         |
+       6 | x = 1; // this invalidates y by reactivating the lowermost uniq borrow for this local
+         |
 
-    #0 $HEX in outdated_local::main::HASH bsan/tests/miri-tests/fail/both_borrows/outdated_local.rs:6:5
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
+    help: this transition corresponds to a loss of read permissions
 
-    #0 $HEX in outdated_local::main::HASH bsan/tests/miri-tests/fail/both_borrows/outdated_local.rs:5:25
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
-
-    #0 $HEX in outdated_local::main::HASH bsan/tests/miri-tests/fail/both_borrows/outdated_local.rs:6:5
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
+backtrace:
+  0:
+    bsan/tests/miri-tests/fail/both_borrows/outdated_local.rs:8:25
+  1:
+    RUSTLIB/core/src/ops/function.rs:250:5
+  2:
+    RUSTLIB/std/src/sys/backtrace.rs:166:18
 

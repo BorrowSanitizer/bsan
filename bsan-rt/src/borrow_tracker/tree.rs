@@ -1,25 +1,21 @@
 // This file was ported from Miri and then modified by our team.
-#![allow(unused_lifetimes)]
-#![allow(clippy::extra_unused_lifetimes)]
-
 use alloc::alloc::Global;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::alloc::Allocator;
 use core::fmt;
 
-use bsan_shared::{
-    AccessKind, AccessRelatedness, IdempotentForeignAccess, PermTransition, Permission, RangeMap,
-    Size,
-};
-use hashbrown::HashSet;
+use smallvec::SmallVec;
 
 use super::unimap::{UniEntry, UniIndex, UniKeyMap, UniValMap};
-use super::*;
+use super::{
+    AccessKind, AccessRelatedness, IdempotentForeignAccess, PermTransition, Permission, RangeMap,
+    Size, *,
+};
 use crate::diagnostics::{AccessCause, Event, NodeDebugInfo};
 use crate::errors::{TransitionError, TreeError, TreeTransitionResult, UBResult};
-use crate::memory::hooks::BsanAllocHooks;
-use crate::{AllocId, BorTag, GlobalCtx};
+use crate::helpers::FxHashSet;
+use crate::{AllocId, BorTag, ProtectedTags};
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct AllocRange {
@@ -28,10 +24,12 @@ pub struct AllocRange {
 }
 
 #[inline]
+#[allow(unused)]
 pub fn alloc_range(start: Size, size: Size) -> AllocRange {
     AllocRange { start, size }
 }
 
+#[allow(unused)]
 impl AllocRange {
     #[inline]
     pub fn end(self) -> Size {
@@ -301,11 +299,7 @@ pub struct Node<A: Allocator = Global> {
     /// All tags except the root have a parent tag.
     pub parent: Option<UniIndex>,
     /// If the pointer was reborrowed, it has children.
-    // miri: FIXME: bench to compare this to FxHashSet and to other SmallVec sizes
-
-    // Miri's implementation uses SmallVec as an optimization, can later be discussed for
-    // bsan if needed as an optimization.
-    pub children: Vec<UniIndex, A>,
+    pub children: SmallVec<[UniIndex; 4]>,
     /// Either `Reserved`,  `Frozen`, or `Disabled`, it is the permission this tag will
     /// lazily be initialized to on the first access.
     /// It is only ever `Disabled` for a tree root, since the root is initialized to `Active` by
@@ -329,6 +323,7 @@ struct NodeAppArgs<'node> {
     /// Relative position of the access
     rel_pos: AccessRelatedness,
 }
+
 /// Data given to the error handler
 struct ErrHandlerArgs<'node> {
     /// Kind of error that occurred
@@ -341,6 +336,7 @@ struct ErrHandlerArgs<'node> {
     /// error was triggered.
     accessed_info: &'node NodeDebugInfo,
 }
+
 /// Internal contents of `Tree` with the minimum of mutable access for
 /// the purposes of the tree traversal functions: the permissions (`perms`) can be
 /// updated but not the tree structure (`tag_mapping` and `nodes`)
@@ -583,6 +579,9 @@ where
         err_builder: impl Fn(ErrHandlerArgs<'_>) -> UBInfo,
         allocator: A,
     ) -> UBResult<()> {
+        if !self.tag_mapping.contains_key(&start) {
+            panic!("Unable to find mapping for tag {:?}", start);
+        }
         let start_idx = self.tag_mapping.get(&start).unwrap();
         let mut stack =
             TreeVisitorStack::new(start_idx, f_continue, f_propagate, err_builder, allocator);
@@ -650,9 +649,7 @@ where
                 Node {
                     tag: root_tag,
                     parent: None,
-                    // Miri uses SmallVec here
-                    // ATTENTION: Using `Global` allocator
-                    children: Vec::new(),
+                    children: SmallVec::new(),
                     default_initial_perm: root_default_perm,
                     // The root may never be skipped, all accesses will be local.
                     default_initial_idempotent_foreign_access: IdempotentForeignAccess::None,
@@ -684,13 +681,13 @@ pub(super) struct ChildParams {
     pub base_offset: Size,
     pub parent_tag: BorTag,
     pub new_tag: BorTag,
-    pub inside_perms: RangeMap<LocationState, BsanAllocHooks>,
+    pub inside_perms: RangeMap<LocationState>,
     pub default_perm: Permission,
     pub protected: bool,
     pub span: Span,
 }
 
-impl<'tcx, A> Tree<A>
+impl<A> Tree<A>
 where
     A: Allocator + Clone + Copy,
 {
@@ -729,8 +726,7 @@ where
             Node {
                 tag: new_tag,
                 parent: Some(parent_idx),
-                // Miri uses SmallVec here
-                children: Vec::default(),
+                children: SmallVec::default(),
                 default_initial_perm: default_perm,
                 default_initial_idempotent_foreign_access: default_strongest_idempotent,
                 debug_info: NodeDebugInfo::new(new_tag, default_perm, span),
@@ -810,7 +806,7 @@ where
         &mut self,
         tag: BorTag,
         access_range: AllocRange,
-        global: &GlobalCtx,
+        protected_tags: &ProtectedTags,
         alloc_id: AllocId, // diagnostics
         span: Span,        // diagnostics
         allocator: A,
@@ -818,7 +814,7 @@ where
         self.perform_access(
             tag,
             Some((access_range, AccessKind::Write, AccessCause::Dealloc)),
-            global,
+            protected_tags,
             alloc_id,
             span,
             allocator,
@@ -834,7 +830,7 @@ where
                         let NodeAppArgs { node, perm, .. } = args;
                         let perm =
                             perm.get().copied().unwrap_or_else(|| node.default_location_state());
-                        if global.get_protector_kind(node.tag)
+                        if protected_tags.get_protector_kind(node.tag)
                             == Some(ProtectorKind::StrongProtector)
                             && !perm.permission().is_cell()
                             && perm.is_accessed()
@@ -884,7 +880,7 @@ where
         &mut self,
         tag: BorTag,
         access_range_and_kind: Option<(AllocRange, AccessKind, AccessCause)>,
-        global: &GlobalCtx,
+        protected_tags: &ProtectedTags,
         alloc_id: AllocId, // diagnostics
         span: Span,        // diagnostics
         allocator: A,
@@ -920,7 +916,7 @@ where
             // `traverse_this_parents_children_other`.
             old_state.record_new_access(access_kind, rel_pos);
 
-            let protected = global.get_protector_kind(node.tag).is_some();
+            let protected = protected_tags.get_protector_kind(node.tag).is_some();
 
             let transition = old_state.perform_access(access_kind, rel_pos, protected)?;
             // Record the event as part of the history
@@ -1003,11 +999,12 @@ where
 }
 
 /// Integration with the BorTag garbage collector
+#[allow(unused)]
 impl<A> Tree<A>
 where
     A: Allocator,
 {
-    pub fn remove_unreachable_tags(&mut self, live_tags: &HashSet<BorTag>, allocator: A) {
+    pub fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>, allocator: A) {
         self.remove_useless_children(self.root, live_tags);
         // Right after the GC runs is a good moment to check if we can
         // merge some adjacent ranges that were made equal by the removal of some
@@ -1018,7 +1015,7 @@ where
 
     /// Checks if a node is useless and should be GC'ed.
     /// A node is useless if it has no children and also the tag is no longer live.
-    fn is_useless(&self, idx: UniIndex, live: &HashSet<BorTag>) -> bool {
+    fn is_useless(&self, idx: UniIndex, live: &FxHashSet<BorTag>) -> bool {
         let node = self.nodes.get(idx).unwrap();
         node.children.is_empty() && !live.contains(&node.tag)
     }
@@ -1029,7 +1026,7 @@ where
     fn can_be_replaced_by_single_child(
         &self,
         idx: UniIndex,
-        live: &HashSet<BorTag>,
+        live: &FxHashSet<BorTag>,
     ) -> Option<UniIndex> {
         let node = self.nodes.get(idx).unwrap();
 
@@ -1089,7 +1086,7 @@ where
     /// `child: Reserved`. This tree can exist. If we blindly delete `parent` and reassign
     /// `child` to be a direct child of `root` then Writes to `child` are now permitted
     /// whereas they were not when `parent` was still there.
-    fn remove_useless_children(&mut self, root: UniIndex, live: &HashSet<BorTag>) {
+    fn remove_useless_children(&mut self, root: UniIndex, live: &FxHashSet<BorTag>) {
         // To avoid stack overflows, we roll our own stack.
         // Each element in the stack consists of the current tag, and the number of the
         // next child to be processed.
@@ -1157,8 +1154,10 @@ impl Node {
     }
 }
 
+#[allow(unused)]
 pub type VisitWith<'a> = dyn FnMut(Option<AllocId>, Option<BorTag>) + 'a;
 
+#[allow(unused)]
 pub trait VisitProvenance {
     fn visit_provenance(&self, visit: &mut VisitWith<'_>);
 }

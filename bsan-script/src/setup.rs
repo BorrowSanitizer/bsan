@@ -26,8 +26,9 @@ pub fn setup_toolchain(
     toolchain_dir: &Path,
     root_dir: &Path,
     skip_prompt: bool,
+    local_dir: Option<PathBuf>,
 ) -> Result<ToolchainConfig> {
-    let meta = ensure_toolchain(sh, host, config, toolchain_dir, skip_prompt)?;
+    let meta = ensure_toolchain(sh, host, config, toolchain_dir, skip_prompt, local_dir)?;
     let llvm_cmake = ensure_llvm_cmake(sh, config, toolchain_dir, root_dir)?;
     Ok(ToolchainConfig { llvm_cmake, meta })
 }
@@ -36,7 +37,8 @@ fn ensure_toolchain(
     host: &VersionMeta,
     config: &mut BsanConfig,
     toolchain_dir: &Path,
-    skip_prompt: bool,
+    mut skip_prompt: bool,
+    local_dir: Option<PathBuf>,
 ) -> Result<VersionMeta> {
     // If we have the `bsan` toolchain installed, then we've either already
     // run the setup script, or we're in our Docker container, which has all of
@@ -45,6 +47,7 @@ fn ensure_toolchain(
     let metadata = if let Ok(meta) = version_meta(sh, TOOLCHAIN_NAME)
         && let Some(ref commit_hash) = meta.commit_hash
         && commit_hash == &config.sha
+        && local_dir.is_none()
     {
         if active_toolchain()? != TOOLCHAIN_NAME {
             cmd!(sh, "rustup override set {TOOLCHAIN_NAME}").run()?;
@@ -71,9 +74,16 @@ fn ensure_toolchain(
         }
         // If we've passed these checks, then let's do the expensive step of
         // downloading and installing our custom toolchain.
+        skip_prompt = skip_prompt || local_dir.is_some();
         if let Some(PromptResult::Yes) = prompt_user_unless(skip_prompt, INSTALL_PROMPT)? {
             fs::create_dir_all(toolchain_dir)?;
-            install_toolchain(sh, host, config, toolchain_dir)
+            install_toolchain(
+                sh,
+                host,
+                config,
+                toolchain_dir,
+                local_dir.as_ref().map(|inner| inner.as_path()),
+            )
         } else {
             std::process::exit(0)
         }
@@ -85,6 +95,7 @@ fn install_toolchain(
     host: &VersionMeta,
     config: &mut BsanConfig,
     toolchain_dir: &Path,
+    local_dir: Option<&Path>,
 ) -> Result<VersionMeta> {
     cmd!(sh, "rustup toolchain uninstall {TOOLCHAIN_NAME}").quiet().run()?;
 
@@ -96,17 +107,23 @@ fn install_toolchain(
 
     let tmp_dir = sh.create_temp_dir()?;
 
+    let local_dir: Option<&Path> = local_dir.map(|dir| dir);
+
     let download_unpack_install = |prefix: &str, needs_target: bool| -> Result<()> {
         // Download the .tar.xz file
-
         let mut tar_file_name = format!("{prefix}-{archive_postfix}");
         if needs_target {
             tar_file_name = format!("{tar_file_name}-{target}");
         }
         let tar_file = format!("{tar_file_name}.tar.xz");
 
-        let tar_path = path!(tmp_dir.path() / tar_file);
-        utils::download_file(sh, &path!(artifact_url / tar_file), &tar_path, help_on_error)?;
+        let tar_path = if let Some(local_dir) = local_dir {
+            path!(local_dir / tar_file)
+        } else {
+            let tar_path = path!(tmp_dir.path() / tar_file);
+            utils::download_file(sh, &path!(artifact_url / tar_file), &tar_path, help_on_error)?;
+            tar_path
+        };
 
         // Unpack it into a .tmp subdirectory
         let out_dir = path!(tmp_dir.path() / prefix);
@@ -151,10 +168,10 @@ pub fn ensure_llvm_cmake(
         );
     }
 
-    let llvm_sparse = path!(root_dir / "llvm-sparse");
+    let llvm_sparse = path!(root_dir / "bsan-script" / "etc" / "llvm-sparse");
     if !llvm_sparse.exists() {
         show_error!(
-            "Unable to locate sparse checkout config file `llvm-sparse` in the root directory."
+            "Unable to locate sparse checkout config file `llvm-sparse` in `bsan-script/etc/`."
         );
     }
     let tmp_dir = sh.create_temp_dir()?;

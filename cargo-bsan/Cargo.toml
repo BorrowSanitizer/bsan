@@ -11,6 +11,7 @@ log = "0.4.28"
 rustc-build-sysroot = "0.5.11"
 rustc_version = "0.4"
 path_macro = "1.0.0"
+which = "8.0.0"
 
 [build-dependencies]
 rustc_tools_util = "0.4"

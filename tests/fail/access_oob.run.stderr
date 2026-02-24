@@ -1,12 +1,14 @@
-An error occurred: UndefinedBehavior (AccessOutOfBounds)
-Access created with permissions Disabled is out of bounds at bsan/tests/fail/access_oob.rs:3:9
-Conflicting borrow created with permissions Reserved at bsan/tests/fail/access_oob.rs:4:14
+error: Undefined Behavior: an access of size 4 at offset 4 is out of bounds for ALLOC of size 4.
+      --> RUSTLIB/core/src/ptr/mod.rs:1910:9
+         |
+    1910 | intrinsics::write_via_move(dst, src)
+         |
 
-    #0 $HEX in access_oob::main::HASH bsan/tests/fail/access_oob.rs:3:9
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
-
-    #0 $HEX in access_oob::main::HASH bsan/tests/fail/access_oob.rs:4:14
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
+backtrace:
+  0:
+    RUSTLIB/core/src/ptr/mod.rs:1910:9
+  1:
+    RUSTLIB/core/src/ptr/mut_ptr.rs:1418:18
+  2:
+    bsan/tests/fail/access_oob.rs:10:23
 

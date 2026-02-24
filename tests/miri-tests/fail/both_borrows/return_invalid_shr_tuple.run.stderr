@@ -1,30 +1,29 @@
-An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with permissions Frozen at bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_tuple.rs:6:15
-Last access at bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_tuple.rs:7:14
+error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x4] is forbidden
+      --> bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_tuple.rs:14:5
+         |
+      14 | foo(&mut (1, 2)).0;
+         |
 
-Run with `debug` feature (inst --debug) to view full TreeError
+help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow
+    help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
+      --> bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_tuple.rs:6:25
+         |
+       6 | let ret = (unsafe { &(*xraw).1 },);
+         |
 
-    #0 $HEX in return_invalid_shr_tuple::foo::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_tuple.rs:6:15
-    #1 $HEX in return_invalid_shr_tuple::main::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_tuple.rs:14:5
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
+      --> bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_tuple.rs:7:14
+         |
+       7 | unsafe { *xraw = (42, 23) }; // unfreeze
+         |
 
-    #0 $HEX in return_invalid_shr_tuple::foo::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_tuple.rs:7:14
-    #1 $HEX in return_invalid_shr_tuple::main::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_tuple.rs:14:5
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    help: this transition corresponds to a loss of read permissions
 
-    #0 $HEX in return_invalid_shr_tuple::foo::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_tuple.rs:7:14
-    #1 $HEX in return_invalid_shr_tuple::main::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_tuple.rs:14:5
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-
-    #0 $HEX in return_invalid_shr_tuple::foo::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_tuple.rs:6:15
-    #1 $HEX in return_invalid_shr_tuple::main::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_tuple.rs:14:5
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-
-    #0 $HEX in return_invalid_shr_tuple::foo::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_tuple.rs:7:14
-    #1 $HEX in return_invalid_shr_tuple::main::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_tuple.rs:14:5
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-
-    #0 $HEX in return_invalid_shr_tuple::foo::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_tuple.rs:7:14
-    #1 $HEX in return_invalid_shr_tuple::main::HASH bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_tuple.rs:14:5
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+backtrace:
+  0:
+    bsan/tests/miri-tests/fail/both_borrows/return_invalid_shr_tuple.rs:14:5
+  1:
+    RUSTLIB/core/src/ops/function.rs:250:5
+  2:
+    RUSTLIB/std/src/sys/backtrace.rs:166:18
 

@@ -13,8 +13,14 @@ use crate::utils::install_git_hooks;
 use crate::Command;
 
 impl Command {
-    pub fn exec(self, quiet: bool, skip: bool, toolchain_dir: Option<String>) -> Result<()> {
-        let mut env = BsanEnv::new(quiet, skip, toolchain_dir)?;
+    pub fn exec(
+        self,
+        quiet: bool,
+        skip: bool,
+        toolchain_dir: Option<PathBuf>,
+        install_from: Option<PathBuf>,
+    ) -> Result<()> {
+        let mut env = BsanEnv::new(quiet, skip, toolchain_dir, install_from)?;
         let env = &mut env;
         match self {
             Command::Setup => Self::setup(env),
@@ -70,24 +76,36 @@ impl Command {
     }
 
     fn ui(env: &mut BsanEnv, bless: bool) -> Result<()> {
+        let sysroot_dir = path!(&env.build_dir / "sysroot");
+        env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
+
         env.in_mode(Mode::Release, |env| {
             let args = &[];
-            let driver = env.build_artifact(BsanDriver, args)?;
+            let mut env_guards = vec![];
             let cargo_bsan = env.build_artifact(CargoBsan, args)?;
             let runtime = env.build_artifact(BsanRt, args)?;
-            let plugin = env.build_artifact(BsanPass, args)?;
+            let pass = env.build_artifact(BsanPass, args)?;
             let symbolizer = env.sysroot_binary("llvm-symbolizer");
 
-            env.sh.set_var("BSAN_PLUGIN", plugin);
-            env.sh.set_var("BSAN_DRIVER", driver);
-            env.sh.set_var("BSAN_RT", runtime);
-            env.sh.set_var("BSAN_SYSROOT", path!(&env.build_dir / "sysroot"));
-            env.sh.set_var("BSAN_SYMBOLIZER", symbolizer);
+            env_guards.push(env.sh.push_env("BSAN_RT", &runtime));
+            env_guards.push(env.sh.push_env("BSAN_PLUGIN", &pass));
+            env_guards.push(env.sh.push_env("BSAN_SYMBOLIZER", &symbolizer));
+            env_guards.push(env.sh.push_env("CARGO_BSAN", &cargo_bsan));
+
             cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
+            let rustflags = cmd!(env.sh, "{cargo_bsan} bsan setup --print-rustflags").output()?;
+            let rustflags = String::from_utf8(rustflags.stdout)?;
+
+            env_guards.push(env.sh.push_env("BSAN_RUSTFLAGS", rustflags.trim()));
+
             let add_bless = if bless { "--bless" } else { "" };
             cmd!(env.sh, "cargo test -p bsan --test ui -- {add_bless}").run()?;
             Ok(())
-        })
+        })?;
+
+        crate::all_components!().iter().try_for_each(|c| c.install(env, &[]))?;
+        cmd!(env.sh, "python3 tests/test-cargo-bsan/run_test.py").run()?;
+        Ok(())
     }
 
     fn ci(env: &mut BsanEnv, args: &[String]) -> Result<()> {
@@ -95,14 +113,10 @@ impl Command {
         // We want to ensure that all formatting steps are completed for every component
         // before we try running more expensive checks, like unit and integration tests.
         Self::fmt(env, true)?;
-        components.iter().try_for_each(|c| c.test(env, args))?;
         components.iter().try_for_each(|c| c.clippy(env, args))?;
+        components.iter().try_for_each(|c| c.test(env, args))?;
         //components.iter().try_for_each(|c| c.miri(env, args))?;
-        Self::ui(env, false)?;
-
-        components.iter().try_for_each(|c| c.install(env, args))?;
-        cmd!(env.sh, "python3 tests/test-cargo-bsan/run_test.py").run()?;
-        Ok(())
+        Self::ui(env, false)
     }
 
     fn clean(env: &mut BsanEnv) -> Result<()> {
@@ -125,60 +139,59 @@ impl Command {
     }
 
     fn inst(env: &mut BsanEnv, file: String, debug: bool, args: &[String]) -> Result<()> {
-        let plugin = env.build_artifact(BsanPass, &[])?;
+        env.in_mode(Mode::Release, |env| {
+            let plugin = env.build_artifact(BsanPass, &[])?;
 
-        let runtime = if debug {
-            env.build_artifact(BsanRt, &["--features".to_string(), "debug".to_string()])?
-        } else {
-            env.build_artifact(BsanRt, &[])?
-        };
+            let runtime = if debug {
+                env.build_artifact(BsanRt, &["--features".to_string(), "debug".to_string()])?
+            } else {
+                env.build_artifact(BsanRt, &[])?
+            };
 
-        let driver = env.build_artifact(BsanDriver, &[])?;
-        let cargo_bsan = env.build_artifact(CargoBsan, &[])?;
+            let cargo_bsan = env.build_artifact(CargoBsan, &[])?;
+            let sysroot_dir = path!(&env.build_dir / "sysroot");
 
-        let sysroot_dir = path!(&env.build_dir / "sysroot");
+            let mut env_guards = vec![];
+            env_guards.push(env.sh.push_env("BSAN_PLUGIN", &plugin));
+            env_guards.push(env.sh.push_env("BSAN_RT", &runtime));
+            env_guards.push(env.sh.push_env("BSAN_SYSROOT", &sysroot_dir));
 
-        env.sh.set_var("BSAN_PLUGIN", plugin);
-        env.sh.set_var("BSAN_DRIVER", &driver);
-        env.sh.set_var("BSAN_RT", runtime);
-        env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
+            cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
+            let flags = cmd!(env.sh, "{cargo_bsan} bsan setup --print-rustflags").output()?;
+            let flags = String::from_utf8(flags.stdout)?;
+            let flags = flags.split_whitespace().collect::<Vec<_>>();
 
-        cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
+            cmd!(env.sh, "rustc {file}")
+                .args(flags)
+                .args(args)
+                .arg(format!("--sysroot={}", sysroot_dir.display()))
+                .quiet()
+                .run()?;
 
-        cmd!(env.sh, "{driver} {file}")
-            .env("BSAN_BE_RUSTC", "target")
-            .args(args)
-            .arg(format!("--sysroot={}", sysroot_dir.display()))
-            .quiet()
-            .run()?;
-
-        Ok(())
+            Ok(())
+        })
     }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 #[clap(rename_all = "kebab-case")]
 pub enum Component {
-    BsanDriver,
     CargoBsan,
     BsanRt,
     BsanRtCore,
     CompilerRt,
     BsanPass,
-    BsanShared,
 }
 
 #[macro_export]
 macro_rules! all_components {
     () => {
         [
-            Component::BsanDriver,
             Component::CargoBsan,
             Component::BsanRt,
             Component::BsanRtCore,
             Component::CompilerRt,
             Component::BsanPass,
-            Component::BsanShared,
         ]
     };
 }
@@ -188,13 +201,11 @@ impl Deref for Component {
 
     fn deref(&self) -> &Self::Target {
         match self {
-            Component::BsanDriver => &BsanDriver,
             Component::CargoBsan => &CargoBsan,
             Component::BsanRt => &BsanRt,
             Component::BsanRtCore => &BsanRtCore,
             Component::CompilerRt => &CompilerRt,
             Component::BsanPass => &BsanPass,
-            Component::BsanShared => &BsanShared,
         }
     }
 }
@@ -261,7 +272,7 @@ macro_rules! impl_component {
                 if $should_install {
                     env.install(self.artifact(env), args)
                 } else {
-                    Ok(()) // Or `Err(anyhow!("Installation not supported"))` if you want it to fail
+                    Ok(())
                 }
             }
 
@@ -284,9 +295,7 @@ macro_rules! impl_component {
     };
 }
 
-impl_component!(BsanDriver, "bsan-driver", true, false);
 impl_component!(CargoBsan, "cargo-bsan", true, false);
-impl_component!(BsanShared, "bsan-shared", false, true);
 
 static RT_FLAGS: &[&str] = &[
     "-Cpanic=abort",
@@ -310,35 +319,34 @@ impl Buildable for BsanRt {
 
     fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
         let llvm_ar = env.target_binary("llvm-ar");
-        let clang = "clang";
-
         let llvm_wrapper = env.build_artifact(CompilerRt, &[])?;
         let rust_runtime = env.build_artifact(BsanRtCore, args)?;
 
         let dest_archive = path!(env.artifact_dir() / self.artifact(env));
+        cmd!(env.sh, "cp {llvm_wrapper} {dest_archive}").quiet().run()?;
+
         let tmp_dir = env.sh.create_temp_dir()?;
-
         env.cd(tmp_dir.path(), |env| {
-            let merged_obj = path!(tmp_dir.path() / "bsan_rt_merged.o");
-            // Use system-wide clang to invoke the linker driver
-            // to create a relocatable object from existing archives.
-            cmd!(env.sh, "{clang}")
-                .arg(format!("-Wl,--whole-archive"))
-                .arg(&rust_runtime)
-                .arg(&llvm_wrapper)
-                .arg("-r")
-                .arg("-o")
-                .arg(&merged_obj)
-                .run()?;
+            cmd!(env.sh, "{llvm_ar} -x {rust_runtime}").quiet().run()?;
 
-            env.sh.remove_path(&dest_archive)?;
+            let file_names: Vec<String> = fs::read_dir(tmp_dir.path())
+                .unwrap()
+                .filter_map(|entry| {
+                    let path = entry.ok().unwrap().path();
+                    if path.is_file() {
+                        path.to_str().map(|s| s.to_owned())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
 
-            // Create a new archive with the merged object file.
-            cmd!(env.sh, "{llvm_ar} rcs {dest_archive} {merged_obj}").quiet().run()?;
+            // Finally, add the objects into the static archive of C++ component.
+            cmd!(env.sh, "{llvm_ar} -r {dest_archive}").args(file_names).quiet().run()?;
             Ok(())
         })?;
 
-        Ok(Some(dest_archive))
+        Ok(Some(path!(env.artifact_dir() / dest_archive)))
     }
 
     fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
@@ -365,6 +373,7 @@ impl CompilerRt {
         cfg.define("COMPILER_RT_HAS_LLVMTESTINGSUPPORT", "FALSE");
         cfg.define("LLVM_COMMON_CMAKE_UTILS", &env.toolchain_config.llvm_cmake.common);
         cfg.define("LLVM_CMAKE_DIR", &env.toolchain_config.llvm_cmake.llvm);
+        cfg.define("BSAN_CLANG_FORMAT", env.sysroot_binary("clang-format"));
         cfg.build_target(&CompilerRt.artifact(env));
         Ok(cfg)
     }
@@ -414,22 +423,22 @@ impl Buildable for BsanRtCore {
     }
 
     fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
+        let llvm_objcopy = env.target_binary("llvm-objcopy");
         let rust_runtime = env.with_flags("RUSTFLAGS", RT_FLAGS, |env| {
             env.build("bsan-rt", args)?;
             Ok(env.assert_artifact(&self.artifact(env)))
         })?;
 
+        cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_* -G __BSAN_*")
+            .arg(&rust_runtime)
+            .quiet()
+            .run()?;
+
         Ok(Some(rust_runtime))
     }
 
     fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        /*let tsan_extended_rustflags = RT_FLAGS
-        .iter()
-        .cloned()
-        .chain(["-Zsanitizer=thread -Cunsafe-allow-abi-mismatch=sanitizer"].iter().cloned())
-        .collect::<Vec<&str>>();*/
-        let tsan_extended_rustflags = RT_FLAGS;
-        env.with_flags("RUSTFLAGS", &tsan_extended_rustflags, |env| env.test("bsan-rt", args))
+        env.with_flags("RUSTFLAGS", &RT_FLAGS, |env| env.test("bsan-rt", args))
     }
 
     fn clippy(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
@@ -455,12 +464,14 @@ impl BsanPass {
     fn cmake(env: &mut BsanEnv) -> Result<Config> {
         let source_dir = path!(env.root_dir / "bsan-pass");
         let output_dir = path!(env.artifact_dir() / "bsan-pass");
-        let cfg = env.llvm_cmake(&source_dir, &output_dir, &[])?;
+        let mut cfg = env.llvm_cmake(&source_dir, &output_dir, &[])?;
+        cfg.define("BSAN_CLANG_FORMAT", env.sysroot_binary("clang-format"));
         Ok(cfg)
     }
 
     fn fmt(env: &mut BsanEnv, check: bool) -> Result<()> {
         let mut cfg = BsanPass::cmake(env)?;
+        cfg.define("BSAN_CLANG_FORMAT", env.sysroot_binary("clang-format"));
         if check {
             cfg.build_target("clang-format-check");
         } else {

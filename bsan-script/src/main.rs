@@ -1,6 +1,8 @@
 // Our build script combines many preexisting components from Miri's build script
 // and the Rust compiler's bootstrap script.
 #![feature(io_error_more)]
+use std::path::PathBuf;
+
 use anyhow::Result;
 use clap::Parser;
 use commands::Component;
@@ -126,6 +128,9 @@ pub enum Command {
 #[command(after_help = "Environment variables:
   CARGO_EXTRA_FLAGS: Pass extra flags to all cargo invocations")]
 pub struct Cli {
+    /// Path to the local directory where the toolchain will be installed.
+    #[arg(long)]
+    install_from: Option<PathBuf>,
     /// Silence build output
     #[arg(short, long)]
     quiet: bool,
@@ -134,7 +139,7 @@ pub struct Cli {
     skip: bool,
     /// Installs the toolchain into the given directory
     #[arg(long)]
-    toolchain_dir: Option<String>,
+    toolchain_dir: Option<PathBuf>,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -142,6 +147,6 @@ pub struct Cli {
 fn main() -> Result<()> {
     let args = std::env::args();
     let cli = Cli::parse_from(args);
-    cli.command.exec(cli.quiet, cli.skip, cli.toolchain_dir)?;
+    cli.command.exec(cli.quiet, cli.skip, cli.toolchain_dir, cli.install_from)?;
     Ok(())
 }

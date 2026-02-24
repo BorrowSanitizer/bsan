@@ -1,55 +1,72 @@
 // Components in this library were ported from Miri and then modified by our team.
 use core::ffi::c_void;
-use core::sync::atomic::Ordering;
 
-use bsan_shared::{AccessKind, ProtectorKind, RangeMap, RetagInfo, Size};
 use spin::MutexGuard;
 use tree::{AllocRange, Tree};
 
 use crate::borrow_tracker::tree::{ChildParams, LocationState};
-use crate::diagnostics::AccessCause;
-use crate::errors::{BorsanResult, ErrorInfo, UBInfo};
-use crate::memory::hooks::BsanAllocHooks;
+use crate::diagnostics::{print_tree_diff, AccessCause, PrintTree};
+use crate::errors::{UBInfo, UBResult};
 use crate::span::Span;
-use crate::{AllocId, BorTag, GlobalCtx, Provenance, __BSAN_BOR_TAG_CTR};
+use crate::{AllocId, BorTag, GlobalCtx, Provenance};
 
+mod foreign_access_skipping;
+mod helpers;
+mod perms;
+mod range_map;
 pub mod tree;
+mod types;
+
 pub mod unimap;
+pub use foreign_access_skipping::*;
+pub use helpers::*;
+pub use perms::*;
+pub use range_map::*;
+pub use types::*;
 
 #[derive(Debug)]
 pub struct BorrowTracker<'b> {
+    alloc_id: AllocId,
     prov: Provenance,
     range: AllocRange,
-    tree: MutexGuard<'b, Option<Tree<BsanAllocHooks>>>,
+    tree: MutexGuard<'b, Tree>,
 }
 
 impl<'b> BorrowTracker<'b> {
-    fn tree_mut(&mut self) -> &mut Tree<BsanAllocHooks> {
-        self.tree.as_mut().unwrap()
+    fn tree_mut(&mut self) -> &mut Tree {
+        &mut self.tree
     }
 
-    pub fn for_alloc<T, F>(prov: Provenance, f: F) -> BorsanResult<Option<T>>
+    fn tree(&self) -> &Tree {
+        &self.tree
+    }
+
+    pub fn for_alloc<T, F>(prov: Provenance, f: F) -> UBResult<Option<T>>
     where
-        F: FnOnce(Self) -> BorsanResult<T>,
+        F: FnOnce(Self) -> UBResult<T>,
     {
-        if prov.alloc_id == AllocId::wildcard() {
+        if prov.bor_tag == BorTag::wildcard() {
             Ok(None)
-        } else if prov.alloc_id == AllocId::invalid() {
-            Err(ErrorInfo::UndefinedBehavior(UBInfo::UseAfterFree(prov.alloc_id)))
+        } else if prov.bor_tag == BorTag::invalid() {
+            Err(UBInfo::UseAfterFree)
         } else {
             // Safety:
             // Our instrumentation pass guarantees that if a pointer's
             // provenance is non-null and not wildcard, then it will contain
             // valid allocation info pointer.
             debug_assert!(!prov.alloc_info.is_null());
-            let root_alloc_id = unsafe { (*prov.alloc_info).alloc_id };
-            if prov.alloc_id != root_alloc_id {
-                return Err(ErrorInfo::UndefinedBehavior(UBInfo::UseAfterFree(prov.alloc_id)));
-            }
+            let alloc_id = unsafe { (*prov.alloc_info).alloc_id };
+
+            let tree = if let Some(tree_lock) = unsafe { (*prov.alloc_info).tree_lock.as_ref() } {
+                tree_lock
+            } else {
+                return Err(UBInfo::UseAfterFree);
+            };
+
             let size = Size::from_bytes(unsafe { (*prov.alloc_info).size });
             let range = AllocRange { start: Size::ZERO, size };
-            let tree = unsafe { (*prov.alloc_info).tree_lock.lock() };
-            f(Self { prov, range, tree }).map(|v| Some(v))
+            let tree = tree.lock();
+            f(Self { alloc_id, prov, range, tree }).map(|v| Some(v))
         }
     }
 
@@ -60,19 +77,17 @@ impl<'b> BorrowTracker<'b> {
         start: *mut c_void,
         access_size: Option<usize>,
         f: F,
-    ) -> BorsanResult<Option<T>>
+    ) -> UBResult<Option<T>>
     where
-        F: FnOnce(Self) -> BorsanResult<T>,
+        F: FnOnce(Self) -> UBResult<T>,
     {
-        if prov.alloc_id == AllocId::wildcard() {
+        if prov.bor_tag == BorTag::wildcard() {
             Ok(None)
-        } else if prov.alloc_id == AllocId::invalid() {
-            if let Some(size) = access_size
-                && size > 0
-            {
-                Err(ErrorInfo::UndefinedBehavior(UBInfo::UseAfterFree(prov.alloc_id)))
-            } else {
+        } else if prov.bor_tag == BorTag::invalid() {
+            if access_size == Some(0) {
                 Ok(None)
+            } else {
+                Err(UBInfo::UseAfterFree)
             }
         } else {
             // Safety:
@@ -80,52 +95,72 @@ impl<'b> BorrowTracker<'b> {
             // provenance is non-null and not wildcard, then it will contain
             // valid allocation info pointer.
             debug_assert!(!prov.alloc_info.is_null());
-            let root_alloc_id = unsafe { (*prov.alloc_info).alloc_id };
+
+            let alloc_id = unsafe { (*prov.alloc_info).alloc_id };
+
             let (alloc_size, base_addr) =
-                unsafe { ((*prov.alloc_info).size, (*prov.alloc_info).base_addr.base_addr) };
+                unsafe { ((*prov.alloc_info).size, (*prov.alloc_info).base_addr.addr) };
+
             let access_size = access_size.unwrap_or(alloc_size);
-            if prov.alloc_id != root_alloc_id {
+            let tree = if let Some(tree_lock) = unsafe { (*prov.alloc_info).tree_lock.as_ref() } {
+                tree_lock
+            } else {
+                return if access_size != 0 { Err(UBInfo::UseAfterFree) } else { Ok(None) };
+            };
+
+            let offset = start.addr().wrapping_sub(base_addr);
+            if start.addr() < base_addr || (offset + access_size > alloc_size) {
                 return if access_size != 0 {
-                    Err(ErrorInfo::UndefinedBehavior(UBInfo::UseAfterFree(prov.alloc_id)))
+                    Err(UBInfo::AccessOutOfBounds { alloc_id, access_size, alloc_size, offset })
                 } else {
                     Ok(None)
                 };
             }
-            let relative_offset = start.addr().wrapping_sub(base_addr.addr());
-            if start.addr() < base_addr.addr() || (relative_offset + access_size > alloc_size) {
-                return if access_size != 0 {
-                    Err(ErrorInfo::UndefinedBehavior(UBInfo::AccessOutOfBounds(
-                        prov,
-                        access_size,
-                        alloc_size,
-                    )))
-                } else {
-                    Ok(None)
-                };
-            }
-            let start = Size::from_bytes(relative_offset);
+
+            let start = Size::from_bytes(offset);
             let size = Size::from_bytes(access_size);
             let range = AllocRange { start, size };
-            let tree = unsafe { (*prov.alloc_info).tree_lock.lock() };
-            f(Self { prov, range, tree }).map(|r| Some(r))
+
+            let tree = tree.lock();
+            f(Self { alloc_id, prov, range, tree }).map(|r| Some(r))
         }
     }
 
     pub fn retag(
+        ctx: &GlobalCtx,
+        prov: Provenance,
+        start: *mut c_void,
+        access_size: usize,
+        retag_info: RetagInfo<'_>,
+        span: Span,
+    ) -> UBResult<BorTag> {
+        Self::for_access(prov, start, Some(access_size), |mut bt| {
+            bt.retag_inner(ctx, retag_info, span)
+        })
+        .map(|opt| opt.unwrap_or(prov.bor_tag))
+    }
+
+    #[inline]
+    pub fn retag_inner(
         &mut self,
         global_ctx: &GlobalCtx,
         retag_info: RetagInfo<'_>,
         span: Span,
-    ) -> BorsanResult<BorTag> {
-        let alloc_id = self.prov.alloc_id;
+    ) -> UBResult<BorTag> {
+        let alloc_id = self.alloc_id;
         let parent_tag = self.prov.bor_tag;
-        let new_tag = BorTag(__BSAN_BOR_TAG_CTR.fetch_add(1, Ordering::Relaxed));
+        let new_tag = BorTag::default();
+
+        if !self.tree().tag_mapping.contains_key(&self.prov.bor_tag) {
+            return Err(UBInfo::UseAfterFree);
+        }
+
         let protected = retag_info.perm.protector.is_some();
         if let Some(protector) = retag_info.perm.protector {
             // We register the protection in two different places.
             // This makes creating a protector slower, but checking whether a tag
             // is protected faster.
-            global_ctx.add_protected_tag(new_tag, protector);
+            global_ctx.protected_tags_mut().add_protector(new_tag, protector);
         }
 
         // Compute initial "inside" permissions.
@@ -147,7 +182,7 @@ impl<'b> BorrowTracker<'b> {
         let mut inside_perms = RangeMap::new_in(
             Size::from_bytes(retag_info.size),
             initial_state,
-            global_ctx.allocator(),
+            alloc::alloc::Global,
         );
 
         if let Some(im_layout) = retag_info.im_layout {
@@ -169,14 +204,11 @@ impl<'b> BorrowTracker<'b> {
                 // Perform the access (update the Tree Borrows FSM)
                 self.tree_mut().perform_access(
                     parent_tag,
-                    // TODO: Validate the Range
                     Some((range_in_alloc, AccessKind::Read, AccessCause::Reborrow)),
-                    global_ctx,
+                    &global_ctx.protected_tags(),
                     alloc_id,
-                    // TODO: Replace with actual span
                     span,
-                    // Passing in allocator explicitly to stay consistent with API
-                    global_ctx.allocator(),
+                    alloc::alloc::Global,
                 )?;
             }
         }
@@ -193,36 +225,71 @@ impl<'b> BorrowTracker<'b> {
         };
 
         self.tree_mut().new_child(child_params);
+
         Ok(new_tag)
+    }
+
+    pub fn protector_end(&mut self, global_ctx: &GlobalCtx, span: Span) -> UBResult<()> {
+        let (bor_tag, alloc_id) = (self.prov.bor_tag, self.alloc_id);
+        self.tree_mut().perform_access(
+            bor_tag,
+            None,
+            &global_ctx.protected_tags(),
+            alloc_id,
+            span,
+            alloc::alloc::Global,
+        )
     }
 
     pub fn access(
         &mut self,
         global_ctx: &GlobalCtx,
-        access_kind: Option<AccessKind>,
+        access_kind: AccessKind,
         span: Span,
-    ) -> BorsanResult<()> {
-        let (range, bor_tag, alloc_id) = (self.range, self.prov.bor_tag, self.prov.alloc_id);
-        // Perform the access (update the Tree Borrows FSM)
+    ) -> UBResult<()> {
+        let (range, bor_tag, alloc_id) = (self.range, self.prov.bor_tag, self.alloc_id);
         self.tree_mut().perform_access(
             bor_tag,
-            access_kind.map(|kind| (range, kind, AccessCause::Explicit(kind))),
-            global_ctx,
+            Some((range, access_kind, AccessCause::Explicit(access_kind))),
+            &global_ctx.protected_tags(),
             alloc_id,
             span,
-            // Passing in allocator explicitly to stay consistent with API
-            global_ctx.allocator(),
+            alloc::alloc::Global,
+        )
+    }
+
+    pub fn dealloc(&mut self, global_ctx: &GlobalCtx, span: Span) -> UBResult<()> {
+        let (range, bor_tag, alloc_id) = (self.range, self.prov.bor_tag, self.alloc_id);
+        let tree = self.tree_mut();
+        tree.dealloc(
+            bor_tag,
+            range,
+            &global_ctx.protected_tags(),
+            alloc_id,
+            span,
+            alloc::alloc::Global,
         )?;
+        let info = unsafe { &mut *self.prov.alloc_info };
+        drop(info.tree_lock.take());
         Ok(())
     }
 
-    pub fn dealloc(&mut self, global_ctx: &GlobalCtx, span: Span) -> BorsanResult<()> {
-        let prov = self.prov;
-        let range = self.range;
-        let mut tree = self.tree.take().unwrap();
-        tree.dealloc(prov.bor_tag, range, global_ctx, prov.alloc_id, span, global_ctx.allocator())?;
-        let info = unsafe { &mut *self.prov.alloc_info };
-        info.alloc_id = AllocId::invalid();
-        Ok(())
+    pub fn debug_take_snapshot(&self, ctx: &GlobalCtx) {
+        let tree = self.tree();
+        ctx.take_snapshot(self.alloc_id, tree.clone());
+    }
+
+    pub fn debug_print_diff(&self, ctx: &GlobalCtx) {
+        ctx.with_snapshot(self.alloc_id, |old_tree| {
+            print_tree_diff(self.tree(), old_tree, &ctx.protected_tags());
+        });
+    }
+
+    pub fn debug_print_tree(&self, ctx: &GlobalCtx, show_unnamed: bool) {
+        self.tree().print_tree(&ctx.protected_tags(), show_unnamed);
+    }
+
+    pub fn debug_tree_size(&self) -> usize {
+        self.tree().tag_mapping.len()
     }
 }

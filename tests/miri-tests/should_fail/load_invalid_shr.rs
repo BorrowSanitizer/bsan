@@ -8,6 +8,4 @@ fn main() {
     let xref_in_mem = Box::new(xref);
     unsafe { *xraw = 42 }; // unfreeze
     let _val = *xref_in_mem;
-    
-    
 }

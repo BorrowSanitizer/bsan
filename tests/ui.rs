@@ -1,4 +1,5 @@
 use std::env;
+use std::ffi::OsString;
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -38,7 +39,9 @@ fn bsan_config(
 ) -> Config {
     // The BorrowSanitizer driver is rustc-like, so we create a default builder for rustc and modify it
     let mut program = CommandBuilder::rustc();
-    program.program = path_from_env("BSAN_DRIVER");
+    let flags = expect_env("BSAN_RUSTFLAGS");
+    let flags = flags.trim().split(" ").map(|s| OsString::from(s)).collect::<Vec<_>>();
+    program.args.extend_from_slice(&flags);
 
     let mut config = Config {
         target: Some(target.host.to_owned()),
@@ -74,8 +77,7 @@ fn bsan_config(
                 program: CommandBuilder {
                     // Set the `cargo-bsan` binary, which we expect to be in the same folder as the `bsan-driver` binary.
                     // (It's a separate crate, so we don't get an env var from cargo.)
-                    program: path_from_env("BSAN_DRIVER")
-                        .with_file_name(format!("cargo-bsan{}", env::consts::EXE_SUFFIX)),
+                    program: path_from_env("CARGO_BSAN"),
                     // There is no `cargo bsan build` so we just use `cargo bsan run`.
                     args: ["bsan", "run"].into_iter().map(Into::into).collect(),
                     // Reset `RUSTFLAGS` to work around <https://github.com/rust-lang/rust/pull/119574#issuecomment-1876878344>.
@@ -112,7 +114,6 @@ fn run_tests(
     config.program.envs.push(("BSAN_TEMP".into(), Some(tmpdir.to_owned().into())));
     // If a test ICEs, we want to see a backtrace.
     config.program.envs.push(("RUST_BACKTRACE".into(), Some("1".into())));
-    config.program.envs.push(("BSAN_BE_RUSTC".into(), Some("target".into())));
     config
         .program
         .envs
@@ -193,7 +194,9 @@ regexes! {
     // erase Rust stdlib path
     "[^ \n`]*/(rust[^/]*|checkout)/library/" => "RUSTLIB/",
     // erase platform file paths and line numbers
-    r"\bsys/([a-z_]+)/[a-z]+\.rs:\d+:\d+\b" => "sys/$1/PLATFORM.rs:NN:NN",
+    r"\bsys/([a-z_]+)/[a-z]+\.rs:\d+:\d+\b" => "sys/$1/PLATFORM.rs:l:c",
+    // erase platform dependent line retrieved
+    r"(-->\s+\S+/PLATFORM\.rs:l:c)\n\s*\|\s*\n\s*\d+\s*\|.*\n\s*\|\s*\n" => "$1\n",
     // erase paths into the crate registry
     r"[^ ]*/\.?cargo/registry/.*/(.*\.rs)"  => "CARGO_REGISTRY/.../$1",
     // normalize workspace paths to relative
@@ -227,21 +230,19 @@ fn ui(
         .with_context(|| format!("ui tests in {path} for {} failed", target.host))
 }
 
+fn expect_env(var: &str) -> String {
+    env::var(var).expect(&format!("`{}` must be set to run BorrowSanitizer's ui tests.", var))
+}
+
 fn path_from_env(var: &str) -> PathBuf {
-    let path =
-        env::var(var).expect(&format!("`{}` must be set to run BorrowSanitizer's ui tests.", var));
-    let path = PathBuf::from(path);
-    if !path.exists() {
-        eprintln!("`{var}` was set to a nonexistant path: `{}`", path.display());
-        std::process::exit(1);
-    } else {
-        path
-    }
+    let val = expect_env(var);
+    let path = PathBuf::from(&val);
+    path.try_exists().expect(&format!("`{var}` was set to a nonexistant path: `{val}`"));
+    path
 }
 
 fn get_version_info() -> VersionMeta {
-    let mut cmd = Command::new(path_from_env("BSAN_DRIVER"));
-    cmd.env("BSAN_BE_RUSTC", "host");
+    let cmd = Command::new("rustc");
     VersionMeta::for_command(cmd).expect("Failed to parse rustc version info")
 }
 
@@ -249,11 +250,9 @@ fn main() -> Result<()> {
     ui_test::color_eyre::install()?;
     let target = get_version_info();
     let tmpdir = tempfile::Builder::new().prefix("bsan-uitest-").tempdir()?;
-
     ui(Mode::Pass, "tests/pass", &target, WithoutDependencies, tmpdir.path())?;
     ui(Mode::Pass, "tests/pass-dep", &target, WithDependencies, tmpdir.path())?;
     ui(Mode::Fail, "tests/fail", &target, WithoutDependencies, tmpdir.path())?;
-
     ui(Mode::Fail, "tests/miri-tests/fail", &target, WithoutDependencies, tmpdir.path())?;
     ui(Mode::Fail, "tests/miri-tests/pass", &target, WithoutDependencies, tmpdir.path())?;
     Ok(())

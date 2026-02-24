@@ -8,7 +8,6 @@ anyhow = "1.0.100"
 cc = "1.2.49"
 clap = { version = "4.5.53", features = ["derive"] }
 cmake = "0.1.54"
-dunce = "1.0.5"
 path_macro = "1.0.0"
 rustc_version = "0.4.1"
 semver = "1.0.27"

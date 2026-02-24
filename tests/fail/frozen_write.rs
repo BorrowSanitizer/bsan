@@ -8,3 +8,4 @@ fn main() {
 fn foo(ptr: *const i32) {
     unsafe { *(ptr as *mut i32) = 1 };
 }
+

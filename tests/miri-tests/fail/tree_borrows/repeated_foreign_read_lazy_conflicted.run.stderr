@@ -1,22 +1,29 @@
-An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with permissions Reserved at bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:7:30
-Last access at bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:9:18
+error: Undefined Behavior: write through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
+      --> bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:11:5
+         |
+      11 | *(x as *mut u8).byte_sub(1) = 42;
+         |
 
-Run with `debug` feature (inst --debug) to view full TreeError
+help: the accessed tag <TAG>(StrongProtector) has state Reserved (conflicted) which forbids this write
+    help: the accessed tag <TAG>(StrongProtector) was created here, in the initial state Reserved
+      --> bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:7:0
+         |
+       7 | unsafe fn access_after_sub_1(x: &mut u8, orig_ptr: *mut u8) {
+         |
 
-    #0 $HEX in repeated_foreign_read_lazy_conflicted::access_after_sub_1::HASH bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:7:30
-    #1 $HEX in repeated_foreign_read_lazy_conflicted::main::HASH bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:21:9
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    help: the accessed tag <TAG>(StrongProtector) later transitioned due to a foreign read
+      --> bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:9:18
+         |
+       9 | do_something(*orig_ptr);
+         |
 
-    #0 $HEX in repeated_foreign_read_lazy_conflicted::access_after_sub_1::HASH bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:9:18
-    #1 $HEX in repeated_foreign_read_lazy_conflicted::main::HASH bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:21:9
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    help: this transition corresponds to a temporary loss of write permissions until function exit
 
-    #0 $HEX in repeated_foreign_read_lazy_conflicted::access_after_sub_1::HASH bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:7:30
-    #1 $HEX in repeated_foreign_read_lazy_conflicted::main::HASH bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:21:9
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-
-    #0 $HEX in repeated_foreign_read_lazy_conflicted::access_after_sub_1::HASH bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:9:18
-    #1 $HEX in repeated_foreign_read_lazy_conflicted::main::HASH bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:21:9
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+backtrace:
+  0:
+    bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:11:5
+  1:
+    bsan/tests/miri-tests/fail/tree_borrows/repeated_foreign_read_lazy_conflicted.rs:21:9
+  2:
+    RUSTLIB/core/src/ops/function.rs:250:5
 

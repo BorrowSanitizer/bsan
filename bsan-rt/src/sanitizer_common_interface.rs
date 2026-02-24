@@ -1,120 +1,119 @@
-use crate::alloc::string::ToString;
-use crate::errors::{BorsanResult, ErrorInfo};
-use crate::memory::hooks::BsanAllocHooks;
-use crate::span::SrcLoc;
-use crate::{AllocId, BHashMap, Span};
+use alloc::ffi::CString;
+use core::ffi::c_char;
+use core::{ptr, slice};
+
+use crate::alloc::string::{String, ToString};
+use crate::span::{FramePtr, Span, Symbol};
+
+/// Maximum depth of captured stack traces as defined
+/// in sanitizer_common/sanitizer_stacktrace.h
+#[allow(unused)]
+const STACK_TRACE_MAX: u32 = 255;
+
+#[allow(unused)]
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct StackTraceId(pub(crate) u32);
 
 unsafe extern "C" {
-    fn __bsan_printCurrentStackTrace();
+    fn __bsan_print_current_stack_trace();
 
-    fn __bsan_printStackTrace(stackId: u32);
+    fn __bsan_print_stack_trace(stackId: u32);
 
     /// Captures the current stack trace, puts it into the stack depot and returns its ID
-    fn __bsan_StackDepotPut(pc: usize, bp: usize, max_depth: u32) -> u32;
+    fn __bsan_stack_depot_put(pc: usize, bp: usize, max_depth: u32) -> u32;
 
     /// Gets the top frame PC address from a stack trace ID
-    fn __bsan_GetTopFramePC(pc: usize) -> usize;
+    fn __bsan_get_top_frame_pc(pc: usize) -> usize;
 
-    /// Symbolize a single PC into file:line:column and returns 1 on success.
-    fn __bsan_symbolizePC(
+    /// Symbolize a single PC into "file:line:column" and returns 1 on success.
+    fn __bsan_symbolize_pc(
         pc: usize,
         file_buf: *mut u8,
         file_buf_len: usize,
         line: *mut u32,
         column: *mut u32,
     ) -> i32;
+
+    /// Reads the source line from a file into the provided buffer.
+    fn __bsan_read_file(
+        path: *const c_char,
+        file_buf: *mut *mut c_char,
+        file_buf_size: *mut usize,
+    ) -> usize;
+
+    /// Free the buffer allocated by __bsan_read_file
+    fn __bsan_free_buffer(buf: *mut c_char, size: usize);
 }
 
-/// Maximum depth of captured stack traces as defined in sanitizer_common/sanitizer_stacktrace.h
-const K_STACK_TRACE_MAX: u32 = 255;
+pub struct SanitizerCommon;
 
-/// Prints the stack trace corresponding to the given stack ID or the current stack trace
-pub(crate) fn print_stack_trace(stack_id: Option<StackTraceId>) {
-    unsafe {
-        match stack_id {
-            Some(id) => __bsan_printStackTrace(id.0),
-            None => __bsan_printCurrentStackTrace(),
-        }
-    }
-}
-
-/// Captures the current stack trace, puts it into the stack depot and returns its ID
-pub(crate) fn capture_current_stack_trace(
-    pc: usize,
-    bp: usize,
-    max_depth: Option<u32>,
-) -> StackTraceId {
-    let max_depth = max_depth.unwrap_or(K_STACK_TRACE_MAX);
-    unsafe { StackTraceId(__bsan_StackDepotPut(pc, bp, max_depth)) }
-}
-
-/// Gets the top frame PC address from this stack trace.
-/// This is the adjusted PC address as stored by sanitizer_common.
-pub(crate) fn _get_top_frame_pc(pc: usize) -> usize {
-    unsafe { __bsan_GetTopFramePC(pc) }
-}
-
-/// Symbolize a single PC and return a `SrcLoc` (file, line, column) on success
-pub(crate) fn symbolize_pc_into(pc: usize) -> Option<SrcLoc> {
-    let mut buf = [0u8; 512];
-    let mut line: u32 = 0;
-    let mut column: u32 = 0;
-    let ok = unsafe { __bsan_symbolizePC(pc, buf.as_mut_ptr(), buf.len(), &mut line, &mut column) };
-    if ok == 1 {
-        let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-        if let Ok(s) = core::str::from_utf8(&buf[..end]) {
-            return Some(SrcLoc { file: s.to_string(), line, col: column });
-        }
-    }
-    None
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub(crate) struct StackTraceId(pub(crate) u32);
-
-pub(crate) struct StackTraceDepot {
-    /// map from allocation ID to its stack ID
-    alloc_stacks: BHashMap<AllocId, StackTraceId>,
-}
-
-impl StackTraceDepot {
-    pub(crate) fn new_in(hooks: BsanAllocHooks) -> Self {
-        Self { alloc_stacks: BHashMap::new_in(hooks) }
+impl SanitizerCommon {
+    /// Gets the top frame PC address from this stack trace.
+    /// This is the adjusted PC address as stored by sanitizer_common.
+    #[allow(unused)]
+    pub fn get_span(fp: FramePtr) -> Span {
+        unsafe { Span(__bsan_get_top_frame_pc(fp.addr())) }
     }
 
-    pub(crate) fn capture_stack(
-        &mut self,
-        alloc_id: AllocId,
-        max_depth: Option<u32>,
-        span_data: Span,
-    ) -> BorsanResult<()> {
-        let max_depth = max_depth.unwrap_or(K_STACK_TRACE_MAX);
-        let stack_id = unsafe {
-            StackTraceId(__bsan_StackDepotPut(span_data.ip(), span_data.fp().addr(), max_depth))
+    pub fn symbolize(span: Span) -> Symbol {
+        let mut buf = [0u8; 512];
+        let mut line: u32 = 0;
+        let mut column: u32 = 0;
+        let ok = unsafe {
+            __bsan_symbolize_pc(span.0, buf.as_mut_ptr(), buf.len(), &mut line, &mut column)
         };
-        match self.alloc_stacks.insert(alloc_id, stack_id) {
-            None => Ok(()),
-            Some(_) => Err(ErrorInfo::Internal(crate::errors::InternalError::Unexpected(format!(
-                "Stack trace for allocation ID {:?} already exists",
-                alloc_id
-            )))),
+        if ok == 1 {
+            let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+            if let Ok(s) = core::str::from_utf8(&buf[..end]) {
+                return Symbol::Resolved { file: s.to_string(), line, col: column };
+            }
+        }
+        Symbol::Unknown
+    }
+
+    /// Captures the current stack trace, puts it into the stack depot and returns its ID
+    #[allow(unused)]
+    pub fn capture_stack_trace(fp: FramePtr, max_depth: Option<u32>) -> StackTraceId {
+        let max_depth = max_depth.unwrap_or(STACK_TRACE_MAX);
+        unsafe { StackTraceId(__bsan_stack_depot_put(fp.addr(), fp.caller_span().0, max_depth)) }
+    }
+
+    #[allow(unused)]
+    pub fn print_current_stack_trace() {
+        unsafe { __bsan_print_current_stack_trace() }
+    }
+
+    #[allow(unused)]
+    pub fn print_stack_trace(id: StackTraceId) {
+        unsafe { __bsan_print_stack_trace(id.0) }
+    }
+
+    /// Read entire file into a String
+    pub fn read_file(path: &str) -> Option<String> {
+        let c_path = CString::new(path).ok()?;
+
+        let mut buf_ptr: *mut c_char = ptr::null_mut();
+        let mut buf_size: usize = 0;
+
+        unsafe {
+            let bytes_read = __bsan_read_file(c_path.as_ptr(), &mut buf_ptr, &mut buf_size);
+            if bytes_read == 0 {
+                return None;
+            }
+
+            let bytes = slice::from_raw_parts(buf_ptr as *const u8, bytes_read);
+            let result = String::from_utf8_lossy(bytes).into_owned();
+            __bsan_free_buffer(buf_ptr, buf_size);
+            Some(result)
         }
     }
 
-    pub(crate) fn print_trace(&self, alloc_id: &AllocId) -> BorsanResult<StackTraceId> {
-        let stack_id = self.alloc_stacks.get(alloc_id);
-        match stack_id {
-            Some(id) => Ok(*id),
-            None => Err(ErrorInfo::Internal(crate::errors::InternalError::Unexpected(format!(
-                "No stack trace found for allocation ID {:?}",
-                alloc_id
-            )))),
+    /// Read a specific line from a file
+    pub fn get_source_line(content: &str, line_number: u32) -> Option<String> {
+        if line_number == 0 {
+            return None;
         }
-    }
-}
 
-impl core::fmt::Debug for StackTraceDepot {
-    fn fmt(&self, _f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        Ok(())
+        content.lines().nth((line_number - 1) as usize).map(|s| s.trim().to_string())
     }
 }

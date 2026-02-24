@@ -25,9 +25,6 @@ Subcommands:
     clean                    Clean the BorrowSanitizer cache & target directory
 
 The cargo options are exactly the same as for `cargo run` and `cargo test`, respectively.
-Furthermore, the following extra flags and environment variables are recognized for `run` and `test`:
-
-    BSANFLAGS                Extra flags to pass to the driver. Use this to pass `-Zbsan-...` flags.
 
 Examples:
     cargo bsan run
@@ -70,24 +67,18 @@ fn main() {
             "`cargo-bsan` called without first argument; please only invoke this binary through `cargo bsan`"
         )
     };
+
     match first.as_str() {
-        "bsan" => {
-            phase_cargo_bsan(args)
-        },
-        "runner" => {
-            phase_runner(args)
-        },
-        arg if arg == env::var("RUSTC").unwrap_or_else(|_| {
-            show_error!(
-                "`cargo-bsan` called without RUSTC set; please only invoke this binary through `cargo bsan`"
-            )
-        }) => {
+        "bsan" => phase_cargo_bsan(args),
+
+        arg if Some(arg) == env::var("RUSTC").as_ref().ok().map(|s| s.as_str()) => {
             // If the first arg is equal to the RUSTC env variable (which should be set at this
             // point), then we need to behave as rustc. This is the somewhat counter-intuitive
             // behavior of having both RUSTC and RUSTC_WRAPPER set
             // (see https://github.com/rust-lang/cargo/issues/10886).
             phase_rustc(args, RustcPhase::Build)
         }
+
         _ => show_help(),
     }
 }

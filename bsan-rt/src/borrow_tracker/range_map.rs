@@ -14,7 +14,7 @@ use core::cmp::Ordering;
 use core::ops::Range;
 use core::{iter, mem};
 
-use crate::types::Size;
+use super::types::Size;
 use crate::vec_in;
 
 #[derive(Clone, Debug)]

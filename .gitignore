@@ -10,3 +10,4 @@ CMakeFiles
 *.o
 .toolchain
 .vscode
+.nix-rust

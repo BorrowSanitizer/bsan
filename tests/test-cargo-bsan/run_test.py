@@ -169,6 +169,7 @@ ARGS = args_parser.parse_args()
 
 os.chdir(os.path.dirname(os.path.realpath(__file__)))
 
+execute(["cargo", "clean"])
 test_cargo_bsan_setup()
 test_cargo_bsan_run()
 test_cargo_bsan_test()

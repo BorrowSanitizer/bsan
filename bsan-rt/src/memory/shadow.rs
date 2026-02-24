@@ -6,9 +6,7 @@ use core::{mem, ptr};
 
 use spin::RwLock;
 
-use super::hooks::{BsanAllocHooks, BsanHooks, MUnmap};
 use super::{mmap, munmap};
-use crate::memory::{AllocResult, InternalAllocKind};
 
 /// Different targets have a different number
 /// of significant bits in their pointer representation.
@@ -122,8 +120,7 @@ impl TableIndex {
 pub struct ShadowHeap<T> {
     table: NonNull<L1Array<T>>,
     default: *const T,
-    munmap: MUnmap,
-    l2_blocks: RwLock<Vec<usize, BsanAllocHooks>>,
+    l2_blocks: RwLock<Vec<usize>>,
 }
 
 unsafe impl<T> Sync for ShadowHeap<T> {}
@@ -139,20 +136,19 @@ impl<T: Sized> ShadowHeap<T> {
 impl<T: Sized + Default + Copy> ShadowHeap<T> {
     /// We assume that `new` is only called during program initialization, so only by the main thread.
     /// So there should be no deadlock / synchronization issues.
-    pub fn new(hooks: &BsanHooks, default: *const T) -> AllocResult<Self> {
+    pub fn new(default: *const T) -> Self {
         let table = unsafe {
-            mmap(hooks.mmap_ptr, InternalAllocKind::ShadowHeap, Self::L1_SIZE)?.cast::<L1Array<T>>()
+            mmap(Self::L1_SIZE).cast::<L1Array<T>>()
         };
 
         // We can skip initialzation of each L1Entry because mmap returns a zeroed page and
         // we use ZeroableRwLock which is zero-initialized as RwLock::new(None)
 
-        Ok(Self {
+        Self {
             table,
             default,
-            munmap: hooks.munmap_ptr,
-            l2_blocks: RwLock::new(Vec::<usize, BsanAllocHooks>::new_in(hooks.alloc)),
-        })
+            l2_blocks: RwLock::new(Vec::<usize>::new()),
+        }
     }
 
     #[inline]
@@ -164,7 +160,7 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
         *read_guard
     }
 
-    fn ensure_l2(&self, hooks: &BsanHooks, idx: TableIndex) -> AllocResult<NonNull<L2Array<T>>> {
+    fn ensure_l2(&self, idx: TableIndex) -> NonNull<L2Array<T>> {
         // SAFETY: `self.table` should always be a valid pointer to an mmap'd L1Array
         let l1_entry = unsafe { &(*self.table.as_ptr())[idx.l1_index] };
 
@@ -172,30 +168,24 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
         let read_guard = l1_entry.inner.upgradeable_read();
         let l2_ptr = *read_guard;
         if let Some(l2_ptr) = l2_ptr {
-            return Ok(l2_ptr);
+            return l2_ptr;
         }
 
         // Slow path: upgrade to write lock for mmap allocation
         // With an upgradeable lock we don't need to double-check that l2_ptr is still None because the lock prevents other writers.
         let mut write_guard = read_guard.upgrade();
         let l2_page = unsafe {
-            mmap(hooks.mmap_ptr, InternalAllocKind::ShadowHeap, Self::L2_SIZE)?.cast::<L2Array<T>>()
+            mmap(Self::L2_SIZE).cast::<L2Array<T>>()
         };
 
         *write_guard = Some(l2_page);
         drop(write_guard); // release lock early and prevent deadlocks
 
         self.l2_blocks.write().push(idx.l1_index);
-        Ok(l2_page)
+        l2_page
     }
 
-    pub fn clear(
-        &self,
-        hooks: &BsanHooks,
-        dst: usize,
-        num_bytes: usize,
-        value: T,
-    ) -> AllocResult<()> {
+    pub fn clear(&self, dst: usize, num_bytes: usize, value: T) {
         // We allow writing partial provenance values here, because if a pointer
         // is partially overwritten, then it should become invalid.
         let mut dst_index = TableIndex::new(dst);
@@ -207,56 +197,27 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
         let mut prov_remaining = num_bytes.next_multiple_of(PTR_BYTES).shl(PTR_BYTES_POWER);
 
         while prov_remaining > 0 {
-            let l2_dest = self.ensure_l2(hooks, dst_index)?;
-            unsafe {
-                (*l2_dest.as_ptr())[dst_index.l2_index] = value;
-            }
-            dst_index = dst_index.add(1);
-            prov_remaining -= 1;
-        }
-        Ok(())
-    }
-
-    pub fn store_consecutive(
-        &self,
-        hooks: &BsanHooks,
-        dst: usize,
-        it: impl Iterator<Item = T>,
-    ) -> AllocResult<()> {
-        let table_idx = TableIndex::new(dst);
-        for (prov_idx, prov) in it.enumerate() {
-            let idx = table_idx.add(prov_idx);
-            let l2_dest = self.ensure_l2(hooks, idx)?;
-            unsafe {
-                (*l2_dest.as_ptr())[idx.l2_index] = prov;
-            }
-        }
-        Ok(())
-    }
-
-    pub fn load_consecutive(&self, src: usize, len: usize, mut dest: impl Extend<T>) {
-        let start_idx = TableIndex::new(src);
-        for offset in 0..len {
-            let curr_idx = start_idx.add(offset);
-            let ptr = if let Some(curr_l2) = self.get_l2(curr_idx) {
-                unsafe { &raw const (*curr_l2.as_ptr())[curr_idx.l2_index] }
+            if let Some(l2_dest) = self.get_l2(dst_index) {
+                unsafe {
+                    (*l2_dest.as_ptr())[dst_index.l2_index] = value;
+                }
+                dst_index = dst_index.add(1);
+                prov_remaining -= 1;
             } else {
-                self.default
-            };
-            dest.extend([unsafe { *ptr }]);
+                let num_remaining = dst_index.num_remaining_in_page();
+                if num_remaining < prov_remaining {
+                    prov_remaining -= num_remaining;
+                } else {
+                    break;
+                }
+            }
         }
     }
 
     /// Copy provenance values within a given range from the source to the destination.
-    pub fn memcpy(
-        &self,
-        hooks: &BsanHooks,
-        src: usize,
-        dst: usize,
-        num_bytes: usize,
-    ) -> AllocResult<()> {
+    pub fn memcpy(&self, src: usize, dst: usize, num_bytes: usize) {
         if num_bytes < PTR_BYTES {
-            return Ok(());
+            return;
         }
         // We do not want to write partial provenance values, so we round the
         // starting index (L2) up to the nearest provenance value
@@ -275,7 +236,7 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
                 // We want always want to ensure that the destination contains provenance values
                 // for the entire range, starting from the source.
                 let l2_table_src: Option<NonNull<[T; L2_LEN]>> = self.get_l2(src_index);
-                let l2_table_dst: NonNull<[T; L2_LEN]> = self.ensure_l2(hooks, dst_index)?;
+                let l2_table_dst: NonNull<[T; L2_LEN]> = self.ensure_l2(dst_index);
 
                 let num_src = src_index.num_remaining_in_page();
                 let num_dst = dst_index.num_remaining_in_page();
@@ -306,7 +267,6 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
                 words_remaining -= num_can_write;
             }
         }
-        Ok(())
     }
 
     pub fn get_src(&self, addr: usize) -> *const T {
@@ -318,12 +278,12 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
         }
     }
 
-    pub fn get_dest(&self, hooks: &BsanHooks, addr: usize) -> AllocResult<NonNull<T>> {
+    pub fn get_dest(&self, addr: usize) -> NonNull<T> {
         let idx = TableIndex::new(addr);
         unsafe {
-            let l2_page = self.ensure_l2(hooks, idx)?;
+            let l2_page = self.ensure_l2(idx);
             let ptr = &raw mut (*l2_page.as_ptr())[idx.l2_index];
-            Ok(NonNull::new_unchecked(ptr))
+            NonNull::new_unchecked(ptr)
         }
     }
 }
@@ -341,21 +301,17 @@ impl<T> Drop for ShadowHeap<T> {
             let l2_table = *l1_entry_guard;
             if let Some(l2_table) = l2_table {
                 unsafe {
-                    munmap(self.munmap, InternalAllocKind::ShadowHeap, l2_table, Self::L2_SIZE)
+                    munmap(l2_table, Self::L2_SIZE)
                 }
-                .expect("failed to unmap block");
                 *l1_entry_guard = None;
             }
         }
         // Free the L1 table (RwLocks will be dropped automatically)
         unsafe {
             munmap::<L1Array<T>>(
-                self.munmap,
-                InternalAllocKind::ShadowHeap,
                 self.table,
                 Self::L1_SIZE,
             )
-            .expect("failed to unmap block");
         }
     }
 }
@@ -363,8 +319,6 @@ impl<T> Drop for ShadowHeap<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::hooks::DEFAULT_HOOKS;
-    use crate::memory::AllocResult;
     extern crate test;
 
     #[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
@@ -413,38 +367,35 @@ mod tests {
 
     #[test]
     fn test_shadow_heap_creation() {
-        ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV)
-            .expect("failed to unmap block");
+        ShadowHeap::<TestProv>::new(&raw const DEFAULT_TEST_PROV);
     }
 
     #[test]
-    fn test_load_null_prov() -> AllocResult<()> {
-        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV)?;
+    fn test_load_null_prov() {
+        let heap = ShadowHeap::<TestProv>::new(&raw const DEFAULT_TEST_PROV);
         let prov = unsafe { *heap.get_src(18) };
         assert_eq!(prov, DEFAULT_TEST_PROV);
-        Ok(())
     }
 
     #[test]
-    fn test_store_and_load_prov() -> AllocResult<()> {
-        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV)?;
+    fn test_store_and_load_prov() {
+        let heap = ShadowHeap::<TestProv>::new(&raw const DEFAULT_TEST_PROV);
         let test_prov = TestProv { value: 42 };
         // Use an address that will split into non-zero indices for both L1 and L2
         let addr = 0x1234_5678_1234_5678;
         unsafe {
-            let dest = heap.get_dest(&DEFAULT_HOOKS, addr)?;
+            let dest = heap.get_dest(addr);
             *dest.as_ptr() = test_prov;
         }
         unsafe {
             let loaded_prov = *heap.get_src(addr);
             assert_eq!(loaded_prov.value, test_prov.value);
         }
-        Ok(())
     }
 
     #[test]
-    fn clear() -> AllocResult<()> {
-        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV)?;
+    fn clear() {
+        let heap = ShadowHeap::<TestProv>::new(&raw const DEFAULT_TEST_PROV);
         let src_address: usize = 0;
         let prov = TestProv { value: 81 };
 
@@ -453,21 +404,20 @@ mod tests {
         for offset in 0..max {
             let offset_bytes = offset * PTR_BYTES;
             unsafe {
-                let dest = heap.get_dest(&DEFAULT_HOOKS, src_address + offset_bytes)?;
+                let dest = heap.get_dest(src_address + offset_bytes);
                 *dest.as_ptr() = prov;
             }
         }
 
-        heap.clear(&DEFAULT_HOOKS, src_address, max * PTR_BYTES, TestProv::default()).unwrap();
+        heap.clear(src_address, max * PTR_BYTES, TestProv::default());
         for offset in 0..max {
             let offset_bytes = offset * PTR_BYTES;
             let compare_prov = unsafe { *heap.get_src(src_address + offset_bytes) };
             assert_eq!(compare_prov, TestProv::default())
         }
-        Ok(())
     }
 
-    fn inner_memcpy(heap: &ShadowHeap<TestProv>, max: usize) -> AllocResult<()> {
+    fn inner_memcpy(heap: &ShadowHeap<TestProv>, max: usize) {
         let halfmax = max / 2;
         let three_quarter_max = max - (max / 4);
 
@@ -480,12 +430,12 @@ mod tests {
         for offset in 0..three_quarter_max {
             let offset_bytes = offset * PTR_BYTES;
             unsafe {
-                *heap.get_dest(&DEFAULT_HOOKS, src_address + offset_bytes)?.as_ptr() = prov;
+                *heap.get_dest(src_address + offset_bytes).as_ptr() = prov;
             }
             let compare_prov = unsafe { *heap.get_src(src_address + offset_bytes) };
             assert_eq!(prov, compare_prov)
         }
-        heap.memcpy(&DEFAULT_HOOKS, src_address, dst_address, max * PTR_BYTES).unwrap();
+        heap.memcpy(src_address, dst_address, max * PTR_BYTES);
 
         for offset in 0..three_quarter_max {
             let offset_bytes = offset * PTR_BYTES;
@@ -498,31 +448,27 @@ mod tests {
             let compare_prov = unsafe { *heap.get_src(dst_address + offset_bytes) };
             assert_eq!(compare_prov, TestProv::default())
         }
-        Ok(())
     }
 
     #[bench]
     fn memcpy_bench(b: &mut test::Bencher) {
-        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV)
-            .expect("failed to create shadow heap");
-
+        let heap = ShadowHeap::<TestProv>::new(&raw const DEFAULT_TEST_PROV);
         b.iter(|| {
-            inner_memcpy(&heap, 1024 * 1024).unwrap();
+            inner_memcpy(&heap, 1024 * 1024);
         });
     }
 
     #[bench]
     fn create_memcpy_destroy(b: &mut test::Bencher) {
         b.iter(|| {
-            let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV)
-                .expect("failed to create shadow heap");
-            inner_memcpy(&heap, 1024 * 1024).unwrap();
+            let heap = ShadowHeap::<TestProv>::new(&raw const DEFAULT_TEST_PROV);
+            inner_memcpy(&heap, 1024 * 1024);
         });
     }
 
     #[test]
-    fn memcpy() -> AllocResult<()> {
-        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV)?;
+    fn memcpy() {
+        let heap = ShadowHeap::<TestProv>::new(&raw const DEFAULT_TEST_PROV);
         inner_memcpy(&heap, 40)
     }
 
@@ -538,8 +484,8 @@ mod tests {
         assert!(sub_one == root.sub(2).add(1));
     }
     #[test]
-    fn smoke() -> AllocResult<()> {
-        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, &raw const DEFAULT_TEST_PROV)?;
+    fn smoke() {
+        let heap = ShadowHeap::<TestProv>::new(&raw const DEFAULT_TEST_PROV);
         // Create test data
         const NUM_OPERATIONS: usize = 10;
         const BASE_ADDR: usize = 0x7FFF_FFFF_AA00;
@@ -552,7 +498,7 @@ mod tests {
         unsafe {
             for (i, test_value) in test_values.iter().enumerate().take(NUM_OPERATIONS) {
                 let addr = BASE_ADDR + (i * 8);
-                *heap.get_dest(&DEFAULT_HOOKS, addr)?.as_ptr() = *test_value;
+                *heap.get_dest(addr).as_ptr() = *test_value;
                 let prov = *heap.get_src(addr);
                 assert_eq!(prov.value, test_value.value);
             }
@@ -561,16 +507,12 @@ mod tests {
                 let addr = BASE_ADDR + (i * 8);
                 let prov = *heap.get_src(addr);
                 assert_eq!(prov.value, test_value.value);
-                *heap.get_dest(&DEFAULT_HOOKS, addr)?.as_ptr() = *test_value;
+                *heap.get_dest(addr).as_ptr() = *test_value;
             }
         }
-        Ok(())
     }
 
-    fn with_threads<F: Fn(u32) -> AllocResult<()> + Send + Sync + 'static>(
-        num_threads: u32,
-        test_fn: F,
-    ) -> AllocResult<()> {
+    fn with_threads<F: Fn(u32) + Send + Sync + 'static>(num_threads: u32, test_fn: F) {
         use std::sync::Arc;
         use std::thread;
 
@@ -579,31 +521,28 @@ mod tests {
 
         for thread_counter in 0..num_threads {
             let test_fn = Arc::clone(&test_fn);
-            let handle = thread::spawn(move || -> AllocResult<()> {
-                test_fn(thread_counter)?;
-                Ok(())
+            let handle = thread::spawn(move || {
+                test_fn(thread_counter);
             });
             handles.push(handle);
         }
 
         for (i, handle) in handles.into_iter().enumerate() {
-            handle.join().unwrap_or_else(|_| panic!("Thread {} panicked", i))?;
+            handle.join().unwrap_or_else(|_| panic!("Thread {} panicked", i));
         }
-
-        Ok(())
     }
 
     #[test]
-    fn concurrent_l2_allocation_same_entry() -> AllocResult<()> {
+    fn concurrent_l2_allocation_same_entry() {
         use std::sync::Arc;
         let test_prov = &DEFAULT_TEST_PROV as *const TestProv;
-        let heap = Arc::new(ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS, test_prov)?);
+        let heap = Arc::new(ShadowHeap::<TestProv>::new(test_prov));
         // Use the same L1 index to maximize collision probability
         const BASE_ADDR: usize = 0x1000_0000;
         const NUM_THREADS: u32 = 16;
         let barrier = Arc::new(std::sync::Barrier::new(NUM_THREADS as usize));
 
-        with_threads(NUM_THREADS, move |thread_id| -> AllocResult<()> {
+        with_threads(NUM_THREADS, move |thread_id| {
             let aligned_offset = thread_id as usize * PTR_BYTES;
             let addr = BASE_ADDR + aligned_offset;
             let test_value = TestProv { value: thread_id as u128 };
@@ -612,13 +551,12 @@ mod tests {
             barrier.wait();
 
             unsafe {
-                let dest = heap.get_dest(&DEFAULT_HOOKS, addr)?;
+                let dest = heap.get_dest(addr);
                 *dest.as_ptr() = test_value;
 
                 let loaded: TestProv = *heap.get_src(addr);
                 assert_eq!(loaded, test_value);
             }
-            Ok(())
         })
     }
 }

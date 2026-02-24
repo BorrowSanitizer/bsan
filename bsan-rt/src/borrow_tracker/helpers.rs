@@ -9,24 +9,11 @@ pub enum AccessKind {
     Write = 2,
 }
 
-#[allow(clippy::recursive_format_impl)]
 impl Display for AccessKind {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "AccessKind<{self}>")
-    }
-}
-
-impl AccessKind {
-    pub fn into_raw(val: Option<AccessKind>) -> u8 {
-        val.map(|v| v as u8).unwrap_or(0)
-    }
-
-    pub fn from_raw(val: u8) -> Option<Self> {
-        match val {
-            0 => None,
-            1 => Some(AccessKind::Read),
-            2 => Some(AccessKind::Write),
-            _ => None,
+        match self {
+            AccessKind::Read => write!(f, "read"),
+            AccessKind::Write => write!(f, "write"),
         }
     }
 }

@@ -10,19 +10,18 @@ use rustc_version::VersionMeta;
 
 use crate::arg::*;
 use crate::util::*;
-use crate::*;
 
 /// Performs the setup required to make `cargo bsan` work: Getting a custom-built libstd. Then sets
 /// `BSAN_SYSROOT`. Skipped if `BSAN_SYSROOT` is already set, in which case we expect the user has
 /// done all this already.
 pub fn setup_sysroot(
-    subcommand: &BSANCommand,
+    subcommand: &BsanCommand,
     target: &str,
     rustc_version: &VersionMeta,
     verbose: usize,
     quiet: bool,
 ) -> PathBuf {
-    let only_setup = matches!(subcommand, BSANCommand::Setup);
+    let only_setup = matches!(subcommand, BsanCommand::Setup);
     let ask_user = !only_setup;
     let print_rustflags = only_setup && has_arg_flag("--print-rustflags");
     let print_sysroot = only_setup && has_arg_flag("--print-sysroot"); // whether we just print the sysroot path
@@ -46,7 +45,7 @@ pub fn setup_sysroot(
         }
         None => {
             // Check for `rust-src` rustup component.
-            let rustup_src = rustc_build_sysroot::rustc_sysroot_src(bsan_for_host())
+            let rustup_src = rustc_build_sysroot::rustc_sysroot_src(rustc())
                 .expect("could not determine sysroot source directory");
             if !rustup_src.exists() {
                 // Ask the user to install the `rust-src` component, and use that.
@@ -106,15 +105,7 @@ pub fn setup_sysroot(
         // In that case we overwrite `RUSTC_REAL` instead which determines the rustc used
         // for target crates.
         let cargo_bsan_path = std::env::current_exe().expect("current executable path invalid");
-        if env::var_os("RUSTC_STAGE").is_some() {
-            assert!(
-                env::var_os("RUSTC").is_some() && env::var_os("RUSTC_WRAPPER").is_some(),
-                "cargo-bsan setup is running inside rustc bootstrap but RUSTC or RUST_WRAPPER is not set"
-            );
-            command.env("RUSTC_REAL", &cargo_bsan_path);
-        } else {
-            command.env("RUSTC", &cargo_bsan_path);
-        }
+        command.env("RUSTC", &cargo_bsan_path);
 
         command.env("BSAN_CALLED_FROM_SETUP", "1");
         // BSAN expects `BSAN_SYSROOT` to be set when invoked in target mode. Even if that directory is empty.

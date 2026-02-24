@@ -1,6 +1,5 @@
 use std::env;
 use std::ffi::OsString;
-use std::fs::File;
 use std::io::{self, Write};
 use std::ops::Not;
 use std::path::{Path, PathBuf};
@@ -12,7 +11,7 @@ use path_macro::path;
 use crate::arg::*;
 
 #[derive(Clone, Debug)]
-pub enum BSANCommand {
+pub enum BsanCommand {
     /// Our own special 'setup' command.
     Setup,
     /// A command to be forwarded to cargo.
@@ -62,32 +61,6 @@ pub fn find_library(default: &str, sysroot: &Path, libname: &str) -> Option<Path
     })
 }
 
-/// Returns the path to the `bsan-driver` binary
-pub fn find_bsan() -> PathBuf {
-    if let Some(path) = env::var_os("BSAN_DRIVER") {
-        return path.into();
-    }
-    // Assume it is in the same directory as ourselves.
-    let mut path = std::env::current_exe().expect("current executable path invalid");
-    path.set_file_name(format!("bsan-driver{}", env::consts::EXE_SUFFIX));
-    path
-}
-
-pub fn bsan() -> Command {
-    let mut cmd = Command::new(find_bsan());
-    // We never want to inherit this from the environment.
-    // However, this is sometimes set in the environment to work around build scripts that don't
-    // honor RUSTC_WRAPPER. So remove it again in case it is set.
-    cmd.env_remove("BSAN_BE_RUSTC");
-    cmd
-}
-
-pub fn bsan_for_host() -> Command {
-    let mut cmd = bsan();
-    cmd.env("BSAN_BE_RUSTC", "host");
-    cmd
-}
-
 /// Execute the `Command`, where possible by replacing the current process with a new process
 /// described by the `Command`. Then exit this process with the exit code of the new process.
 pub fn exec(mut cmd: Command) -> ! {
@@ -116,46 +89,20 @@ pub fn exec_stdout(mut cmd: Command) -> String {
         panic!("failed to run command: {output:?}")
     }
 }
-
+/// Execute the `Command`, then exit this process with the exit code of the new process.
+/// `input` is also piped to the new process's stdin.
 #[allow(unused)]
-pub fn exec_with_pipe<P>(mut cmd: Command, input: &[u8], path: P) -> !
-where
-    P: AsRef<Path>,
-{
-    #[cfg(unix)]
-    {
-        // Write the bytes we want to send to stdin out to a file
-        std::fs::write(&path, input).unwrap();
-        // Open the file for reading, and set our new stdin to it
-        let stdin = File::open(&path).unwrap();
-        cmd.stdin(stdin);
-        // Unlink the file so that it is fully cleaned up as soon as the new process exits
-        std::fs::remove_file(&path).unwrap();
-        // Finally, we can hand off control.
-        exec(cmd)
-    }
-    #[cfg(not(unix))]
-    {
-        drop(path); // We don't need the path, we can pipe the bytes directly
-        cmd.stdin(std::process::Stdio::piped());
-        let mut child = cmd.spawn().expect("failed to spawn process");
-        let child_stdin = child.stdin.take().unwrap();
-        // Write stdin in a background thread, as it may block.
-        let exit_status = std::thread::scope(|s| {
-            s.spawn(|| {
-                let mut child_stdin = child_stdin;
-                // Ignore failure, it is most likely due to the process having terminated.
-                let _ = child_stdin.write_all(input);
-            });
-            child.wait().expect("failed to run command")
-        });
-        std::process::exit(exit_status.code().unwrap_or(-1))
-    }
+pub fn exec_with_pipe(mut cmd: Command) -> ! {
+    // We can't use `exec` since then the background thread will stop running.
+    cmd.stdin(std::process::Stdio::inherit());
+    let mut child = cmd.spawn().expect("failed to spawn process");
+    let exit_status = child.wait().expect("failed to run command");
+    std::process::exit(exit_status.code().unwrap_or(-1))
 }
 
 /// Determines where the host sysroot of this execution is
 pub fn get_host_sysroot_dir(verbose: usize) -> PathBuf {
-    let mut cmd = bsan_for_host();
+    let mut cmd = rustc();
     cmd.args(["--print", "sysroot"]);
     debug_cmd("[cargo-bsan rustc]", verbose, &cmd);
     let libdir = exec_stdout(cmd);
@@ -273,10 +220,28 @@ pub fn clean_target_dir() {
     }
 }
 
-/// Escapes `s` in a way that is suitable for using it as a string literal in TOML syntax.
-pub fn escape_for_toml(s: &str) -> String {
-    // We want to surround this string in quotes `"`. So we first escape all quotes,
-    // and also all backslashes (that are used to escape quotes).
-    let s = s.replace('\\', r"\\").replace('"', r#"\""#);
-    format!("\"{s}\"")
+pub fn expect_env(key: &str) -> OsString {
+    env::var_os(key).unwrap_or_else(|| panic!("expected `{key}` to be set from a prior phase"))
+}
+
+pub fn expect_env_path(key: &str) -> PathBuf {
+    let path: PathBuf = expect_env(key).into();
+    if !path.exists() {
+        panic!("the path set for `{key}` does not exist: {}", path.display())
+    }
+    path
+}
+
+pub fn env_or_host(key: &str, binary: &str) -> PathBuf {
+    let path =
+        env::var_os(key).map(|p| Some(p.into())).unwrap_or_else(|| which::which(binary).ok());
+    path.expect("unable to locate `{binary}`")
+}
+
+pub fn rustc_path() -> PathBuf {
+    env_or_host("BSAN_ORIG_RUSTC", "rustc")
+}
+
+pub fn rustc() -> Command {
+    Command::new(rustc_path())
 }

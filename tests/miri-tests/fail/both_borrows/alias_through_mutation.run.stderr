@@ -1,22 +1,29 @@
-An error occurred: UndefinedBehavior (AliasingViolation)
-Access created with permissions Frozen at bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:6:14
-Last access at bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:15:5
+error: Undefined Behavior: read through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+      --> bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:16:16
+         |
+      16 | let _val = *target_alias;
+         |
 
-Run with `debug` feature (inst --debug) to view full TreeError
+help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this read
+    help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
+      --> bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:6:14
+         |
+       6 | *x = &mut *(target as *mut _);
+         |
 
-    #0 $HEX in alias_through_mutation::retarget::HASH bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:6:14
-    #1 $HEX in alias_through_mutation::main::HASH bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:13:5
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
+    help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
+      --> bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:15:5
+         |
+      15 | *target = 13;
+         |
 
-    #0 $HEX in alias_through_mutation::main::HASH bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:15:5
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
+    help: this transition corresponds to a loss of read permissions
 
-    #0 $HEX in alias_through_mutation::retarget::HASH bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:6:14
-    #1 $HEX in alias_through_mutation::main::HASH bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:13:5
-    #2 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-
-    #0 $HEX in alias_through_mutation::main::HASH bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:15:5
-    #1 $HEX in core::ops::function::FnOnce::call_once::HASH RUSTLIB/core/src/ops/function.rs:250:5
-    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::HASH RUSTLIB/std/src/sys/backtrace.rs:158:18
+backtrace:
+  0:
+    bsan/tests/miri-tests/fail/both_borrows/alias_through_mutation.rs:16:16
+  1:
+    RUSTLIB/core/src/ops/function.rs:250:5
+  2:
+    RUSTLIB/std/src/sys/backtrace.rs:166:18
 
