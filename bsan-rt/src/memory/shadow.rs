@@ -115,6 +115,25 @@ impl TableIndex {
     }
 }
 
+/// A two-level shadow memory heap implementation for tracking metadata about heap allocations.
+///
+/// This structure uses a sparse two-level page table to efficiently map heap addresses to
+/// shadow values of type `T`. It minimizes memory overhead by only allocating L2 pages on demand.
+///
+/// # Type Parameters
+///
+/// * `T` - The type of shadow value stored for each pointer-sized unit of memory. Must be `Sized`
+///   and `Copy` to allow efficient copying during memory operations.
+///
+/// # Fields
+///
+/// * `table` - Non-null pointer to the L1 page table array, allocated via mmap at initialization.
+/// * `default` - We need a stable address (const pointer) of the default shadow value used when no
+///   L2 page has been allocated for a given address. This allows querying unmapped memory regions
+///   without allocating L2 pages, reducing memory usage for sparse shadow memory. The default value is
+///   typically used to represent "uninitialized" or "unshadowed" memory locations.
+/// * `l2_blocks` - A thread-safe list of allocated L2 page indices, used for cleanup and
+///   iteration over populated shadow memory regions.
 #[repr(C)]
 #[derive(Debug)]
 pub struct ShadowHeap<T> {
@@ -133,9 +152,13 @@ impl<T: Sized> ShadowHeap<T> {
     const L2_SIZE: NonZero<usize> = NonZero::new(mem::size_of::<T>() * L2_LEN).unwrap();
 }
 
-impl<T: Sized + Default + Copy> ShadowHeap<T> {
+impl<T: Sized + Copy> ShadowHeap<T> {
     /// We assume that `new` is only called during program initialization, so only by the main thread.
     /// So there should be no deadlock / synchronization issues.
+    // TODO(obr): it seems like we need the `default` pointer only for the `get_src()` function because
+    // bsan-rt's API right now returns a pointer to the provenance entry for subsequent load/store operations.
+    // If we change the API to do load/store in one step, then we might be able to eliminate the need for a default pointer
+    // and just return the default value directly.
     pub fn new(default: *const T) -> Self {
         let table = mmap(Self::L1_SIZE).cast::<L1Array<T>>();
 
@@ -249,7 +272,7 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
                     for offset in 0..num_can_write {
                         ptr::write(
                             &raw mut (*l2_table_dst.as_ptr())[dst_index.l2_index + offset],
-                            T::default(), // FIXME: we should use *self.default here?
+                            *self.default,
                         );
                     }
                 }
