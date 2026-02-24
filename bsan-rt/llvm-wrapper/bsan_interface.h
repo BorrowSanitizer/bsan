@@ -11,14 +11,6 @@ typedef struct AllocInfo AllocInfo;
 typedef struct Provenance Provenance;
 typedef const usize *FramePtr;
 
-using namespace __sanitizer;
-using namespace __bsan;
-
-typedef usize BorTag;
-typedef struct AllocInfo AllocInfo;
-typedef struct Provenance Provenance;
-typedef const usize *FramePtr;
-
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_deinit();
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_init();
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_reportError();

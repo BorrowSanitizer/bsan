@@ -1,4 +1,4 @@
-error: Undefined Behavior: an access of size 4 at offset 4 is out of bounds for ALLOC of size 4.
+error: Undefined Behavior: an access of size 4 at offset 0x4 is out of bounds for ALLOC of size 0x4.
       --> RUSTLIB/core/src/ptr/mod.rs:1910:9
          |
     1910 | intrinsics::write_via_move(dst, src)

@@ -1,5 +1,5 @@
 fn main() {
-    println!("Hello, BorrowSanitizer!");
+    // println!("Hello, BorrowSanitizer!");
 }
 
 #[test]
