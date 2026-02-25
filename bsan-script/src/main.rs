@@ -1,12 +1,15 @@
 // Our build script combines many preexisting components from Miri's build script
 // and the Rust compiler's bootstrap script.
 #![feature(io_error_more)]
+
 use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
 use commands::Component;
-//mod commands;
+
+use crate::utils::BenchTool;
+
 mod commands;
 mod env;
 mod setup;
@@ -46,7 +49,7 @@ pub enum Command {
     /// Emits both LLVM IR (*.ll) and MIR
     Inst {
         file: String,
-        #[arg(long)]
+        #[arg(long, default_value_t = false)]
         debug: bool,
         #[arg(trailing_var_arg = true, allow_hyphen_values(true))]
         args: Vec<String>,
@@ -59,8 +62,8 @@ pub enum Command {
     },
     /// Format all sources and tests.
     Fmt {
-        /// Check that files are formatted.
-        #[arg(long)]
+        /// Check for formatting errors without modifying files.
+        #[arg(long, default_value_t = false)]
         check: bool,
     },
     /// Build BorrowSanitizer.
@@ -114,6 +117,21 @@ pub enum Command {
         #[arg(allow_hyphen_values(true), last(true))]
         args: Vec<String>,
     },
+    /// Runs differential benchmarking with Miri, ASAN, native on test programs
+    Bench {
+        /// Number of runs to benchmark on
+        #[arg(default_value_t = 15)]
+        runs: i32,
+        /// Number of warmup runs before executing each individual benchmark,
+        #[arg(default_value_t = 5)]
+        warmups: i32,
+        /// Tools to run differential benchmarks on
+        #[arg(value_enum, default_values_t = vec![BenchTool::MIRI, BenchTool::NATIVE])]
+        tools: Vec<BenchTool>,
+        /// Flags for Miri config
+        #[arg(allow_hyphen_values(true), last(true))]
+        miri_flags: Vec<String>,
+    },
     Miri {
         /// Components to test.
         #[arg(value_enum, hide_default_value(true), default_values_t = all_components!())]
@@ -128,9 +146,6 @@ pub enum Command {
 #[command(after_help = "Environment variables:
   CARGO_EXTRA_FLAGS: Pass extra flags to all cargo invocations")]
 pub struct Cli {
-    /// Path to the local directory where the toolchain will be installed.
-    #[arg(long)]
-    install_from: Option<PathBuf>,
     /// Silence build output
     #[arg(short, long)]
     quiet: bool,
@@ -139,7 +154,7 @@ pub struct Cli {
     skip: bool,
     /// Installs the toolchain into the given directory
     #[arg(long)]
-    toolchain_dir: Option<PathBuf>,
+    toolchain_dir: Option<String>,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -147,6 +162,6 @@ pub struct Cli {
 fn main() -> Result<()> {
     let args = std::env::args();
     let cli = Cli::parse_from(args);
-    cli.command.exec(cli.quiet, cli.skip, cli.toolchain_dir, cli.install_from)?;
+    cli.command.exec(cli.quiet, cli.skip, cli.toolchain_dir.map(PathBuf::from), None)?;
     Ok(())
 }

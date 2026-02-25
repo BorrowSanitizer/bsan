@@ -1,0 +1,7 @@
+{
+  "name": "github-actions-visualizer-preprocessor",
+  "version": "1.0.0",
+  "description": "Pre-processes benchmark data for the visualizer.",
+  "main": "prepare-data.js",
+  "dependencies": {}
+}

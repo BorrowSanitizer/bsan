@@ -1,0 +1,14 @@
+[bench]
+runs = 15
+warmups = 5
+tools = ["miri", "native"]
+
+[bench.miri]
+flags = [
+    "-Zmiri-tree-borrows",
+    "-Zmiri-ignore-leaks",
+    "-Zmiri-disable-alignment-check",
+    "-Zmiri-disable-data-race-detector",
+    "-Zmiri-disable-validation",
+    "-Zmiri-disable-weak-memory-emulation",
+]

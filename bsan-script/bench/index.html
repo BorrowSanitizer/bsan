@@ -1,0 +1,77 @@
+<!doctype html>
+<html>
+  <head>
+    <title>BorrowSanitizer Benchmarks</title>
+    <!-- It is very important that these versions are not changed. -->
+    <script src="https://cdn.jsdelivr.net/npm/vega@6.1.2/build/vega.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-lite@6.3.0/build/vega-lite.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-embed@7.0.2/build/vega-embed.min.js"></script>
+    <style>
+      body {
+        font-family: sans-serif;
+        padding: 20px;
+      }
+      #controls-container {
+        border: 1px solid #ccc;
+        padding: 20px;
+        border-radius: 5px;
+        margin-bottom: 20px;
+      }
+      #controls {
+        display: grid;
+        grid-template-columns: auto auto auto;
+        gap: 10px;
+        align-items: center;
+      }
+      select, button {
+        padding: 8px;
+        border-radius: 4px;
+        border: 1px solid #ccc;
+        font-size: 14px;
+      }
+      #charts {
+        display: flex;
+        justify-content: center;
+      }
+      #miri-toggle {
+        position: fixed;
+        bottom: 30px;
+        right: 30px;
+        width: 80px;
+        height: 80px;
+        border-radius: 50%;
+        background-color: #dc3545;
+        color: white;
+        border: none;
+        cursor: pointer;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>BorrowSanitizer Benchmarks</h1>
+    <div id="controls-container">
+      <div id="controls">
+        <select id="arch-select">
+          <option value="bench-results-aarch64-unknown-linux-gnu">aarch64-unknown-linux-gnu</option>
+          <option value="bench-results-x86_64-unknown-linux-gnu">x86_64-unknown-linux-gnu</option>
+        </select>
+        <select id="benchmark-select"></select>
+        <select id="chart-type-select">
+          <option value="box">Box Plot</option>
+          <option value="scatter">Scatter Plot</option>
+          <option value="time">Time Series</option>
+        </select>
+      </div>
+    </div>
+    <div id="charts"></div>
+    <button id="miri-toggle">Toggle Miri</button>
+
+    <script src="../dist/data.js"></script>
+    <script type="text/javascript" src="index.js"></script>
+  </body>
+</html>

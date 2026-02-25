@@ -11,3 +11,5 @@ CMakeFiles
 .toolchain
 .vscode
 .nix-rust
+bsan-script/dist/
+bsan-script/node_modules/
