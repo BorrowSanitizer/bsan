@@ -6,15 +6,15 @@
 using namespace __sanitizer;
 using namespace __bsan;
 
-typedef usize BorTag;
-typedef struct AllocInfo AllocInfo;
-typedef struct Provenance Provenance;
-typedef const usize *FramePtr;
+
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_deinit();
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_init();
-extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_reportError();
-
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_mark_tls();
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE void
+__bsan_validate_param_tls(uptr len);
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE void
+__bsan_validate_retval_tls(uptr len, uptr prev_marker);
 // Weak (de)init attributes
 extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_deinit();
 extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_init();
@@ -40,10 +40,6 @@ extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_write(void *ptr,
                                                       AllocInfo *alloc_info);
 extern "C" SANITIZER_WEAK_ATTRIBUTE void
 __bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info, bool weak);
-extern "C" SANITIZER_WEAK_ATTRIBUTE FramePtr __bsan_mark_tls();
-extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_validate_param_tls(usize len);
-extern "C" SANITIZER_WEAK_ATTRIBUTE void
-__bsan_validate_retval_tls(usize len, FramePtr prev_marker);
 extern "C" SANITIZER_WEAK_ATTRIBUTE void
 __bsan_shadow_copy(void *src, void *dest, usize access_size);
 extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_shadow_clear(void *dest,

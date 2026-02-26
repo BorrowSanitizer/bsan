@@ -1,5 +1,4 @@
 #include "bsan.h"
-#include "bsan_interface.h"
 #include "bsan_thread.h"
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_file.h"
@@ -15,6 +14,25 @@ using namespace __bsan;
 bool bsan_inited = false;
 bool bsan_init_is_running;
 bool bsan_deinit_is_running;
+THREADLOCAL uptr bsan_tls_marker = 0;
+
+const Provenance WILDCARD = {0, nullptr};
+
+SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance __BSAN_PARAM_TLS[100];
+SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance __BSAN_RETVAL_TLS[100];
+
+namespace __bsan {
+Provenance *GetArgSlot(uptr Idx) { return &__BSAN_PARAM_TLS[Idx]; }
+Provenance *GetRetValSlot(uptr Idx) { return &__BSAN_RETVAL_TLS[Idx]; }
+} // namespace __bsan
+
+uptr unwind(uptr bp, uptr len) {
+  if (!bp || len == 0) {
+    return bp;
+  } else {
+    return unwind(*(uptr *)bp, len - 1);
+  }
+}
 
 extern "C" {
 void __bsan_internal_init();
@@ -65,6 +83,53 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_deinit() {
   bsan_deinit_is_running = false;
   bsan_inited = false;
 }
+
+/// When we call a possibly uninstrumented function, we store our frame
+/// pointer in a thread-local variable, marking the "boundary" between
+/// instrumented and uninstrumented code. Once we enter a function that may have
+/// been called from uninstrumented code, we check to see if our caller's frame
+/// pointer matches this boundary marker to determine whether we can trust our
+/// thread-local provenance arrays.
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_mark_tls(uptr len) {
+  uptr prev_pc = bsan_tls_marker;
+  bsan_tls_marker = unwind(GET_CURRENT_FRAME(), 1);
+  return prev_pc;
+}
+
+/// Clears the parameter provenance array if the frame pointer of the
+/// caller of the current function does not match the boundary marker,
+/// indicating that we crossed into uninstrumented code. If it does match the
+/// boundary marker, then we reset the boundary marker to null, signaling that
+/// when we are back within the caller, we can trust the provenance array for
+/// the return value.
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE void
+__bsan_validate_param_tls(uptr len) {
+  uptr marker = unwind(GET_CURRENT_FRAME(), 2);
+  if (marker == bsan_tls_marker) {
+    bsan_tls_marker = 0;
+  } else {
+    for (uptr i = 0; i < len; ++i) {
+      *GetArgSlot(i) = WILDCARD;
+    }
+  }
+}
+
+/// Ensures that the provenance array for the return value is valid.
+/// If the boundary marker is null, then we called an instrumented function, so
+/// we can trust that the contents of the array is valid. Otherwise, we need to
+/// fill it with wildcard provenance values for each pointer being returned. We
+/// also need to restore the boundary marker to the value it had before the
+/// function that was called.
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE void
+__bsan_validate_retval_tls(uptr len, uptr prev_marker) {
+  if (bsan_tls_marker) {
+    for (uptr i = 0; i < len; ++i) {
+      *GetRetValSlot(i) = WILDCARD;
+    }
+  }
+  bsan_tls_marker = prev_marker;
+}
+
 
 void __sanitizer::BufferedStackTrace::UnwindImpl(uptr pc, uptr bp,
                                                  void *context,
@@ -193,12 +258,7 @@ extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_write(void *ptr,
                                                       AllocInfo *alloc_info) {}
 extern "C" SANITIZER_WEAK_ATTRIBUTE void
 __bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info, bool weak) {}
-extern "C" SANITIZER_WEAK_ATTRIBUTE FramePtr __bsan_mark_tls() {
-  return nullptr;
-}
-extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_validate_param_tls(usize len) {}
-extern "C" SANITIZER_WEAK_ATTRIBUTE void
-__bsan_validate_retval_tls(usize len, FramePtr prev_marker) {}
+
 extern "C" SANITIZER_WEAK_ATTRIBUTE void
 __bsan_shadow_copy(void *src, void *dest, usize access_size) {}
 extern "C" SANITIZER_WEAK_ATTRIBUTE void

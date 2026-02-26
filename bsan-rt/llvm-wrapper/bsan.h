@@ -1,19 +1,33 @@
 #ifndef BSAN_H
 #define BSAN_H
+#define BSAN_SANITIZER_TOOL_NAME "BorrowSanitizer"
+
 #include "sanitizer_common/sanitizer_internal_defs.h"
+
+using namespace __sanitizer;
+
 
 extern THREADLOCAL void *__BSAN_CURR_THREAD;
 
 extern bool bsan_inited;
 extern bool bsan_init_is_running;
 extern bool bsan_deinit_is_running;
+extern THREADLOCAL uptr bsan_tls_marker;
+extern THREADLOCAL void *bsan_current_thread;
 
-#define BSAN_SANITIZER_TOOL_NAME "BorrowSanitizer"
+typedef uptr BorTag;
+typedef const uptr FramePtr;
+struct AllocInfo;
+struct Provenance {
+  BorTag Tag;
+  AllocInfo *Info;
+};
 
-using namespace __sanitizer;
 namespace __bsan {
 void BsanTSDInit();
 void InitializeInterceptors();
+Provenance *GetArgSlot(uptr Idx);
+Provenance *GetRetValSlot(uptr Idx);
 } // namespace __bsan
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void

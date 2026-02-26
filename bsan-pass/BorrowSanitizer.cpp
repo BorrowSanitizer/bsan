@@ -932,6 +932,7 @@ private:
 
     if (!isRustShim(CB)) {
       if (isAllocLikeFn(&CB, TLI)) {
+        llvm::outs() << F.getName() << "\n";
         Value *Size = resolveAllocSize(After, CB);
         instrumentHeapAllocation(After, &CB, Size);
         return;

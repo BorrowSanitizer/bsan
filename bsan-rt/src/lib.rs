@@ -12,7 +12,7 @@ use core::fmt::Debug;
 use core::panic::PanicInfo;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use core::{ffi, fmt, ptr, slice};
+use core::{fmt, ptr, slice};
 
 use borrow_tracker::{AccessKind, RetagInfo, RetagPtrKind, Size};
 use libc_print::std_name::*;
@@ -38,43 +38,6 @@ mod memory;
 
 use crate::borrow_tracker::tree::Tree;
 use crate::span::FramePtr;
-
-/// The number of `Provenance` values stored in the thread
-/// local arrays for arguments and return values.
-static TLS_SIZE: usize = 100;
-
-/// A thread local array containing the provenance of pointers
-/// passed as arguments to a function.
-#[thread_local]
-#[unsafe(no_mangle)]
-pub static mut __BSAN_RETVAL_TLS: [Provenance; TLS_SIZE] = [Provenance::wildcard(); TLS_SIZE];
-
-/// A thread local array containing the provenance of pointers
-/// returned from a function.
-#[thread_local]
-#[unsafe(no_mangle)]
-pub static mut __BSAN_PARAM_TLS: [Provenance; TLS_SIZE] = [Provenance::wildcard(); TLS_SIZE];
-
-/// The frame pointer of the caller of the last instrumented function that
-/// called an uninstrumented function. When we enter an instrumented function
-/// from a possibly uninstrumented function, we check to see if our "grandparent"
-/// frame pointer matches this value. If so, we can trust that the contents of the
-/// parameter provenance array (`__BSAN_PARAM_TLS`) are correctly initialized.
-/// Otherwise, we clear the array. We set this marker to null to indicate to the
-/// caller that they can trust the contents of return value provenance array
-/// (`__BSAN_RETVAL_TLS`). If this marker is non-null when a function returns,
-/// then we clear the array.
-#[thread_local]
-#[unsafe(no_mangle)]
-pub static mut __BSAN_TLS_MARKER: FramePtr = FramePtr::null();
-
-/// A pointer to the local state of the current thread. This is
-/// managed by the LLVM wrapper, but we define it here, since thread-local
-/// symbols declared in a compiler-rt library do not appear to be relocatable,
-/// even when compilation is configured that way.
-#[thread_local]
-#[unsafe(no_mangle)]
-pub static mut __BSAN_CURR_THREAD: *mut ffi::c_void = ptr::null_mut();
 
 #[thread_local]
 #[unsafe(no_mangle)]
@@ -501,56 +464,6 @@ extern "C" fn __bsan_dealloc(
 
     if !weak && let Some(alloc_info) = NonNull::new(alloc_info) {
         unsafe { ctx.destroy_alloc_info(alloc_info) };
-    }
-}
-
-/// When we call a possibly uninstrumented function, we store our frame
-/// pointer in a thread-local variable, marking the "boundary" between instrumented
-/// and uninstrumented code. Once we enter a function that may have been called from
-/// uninstrumented code, we check to see if our caller's frame pointer matches this boundary
-/// marker to determine whether we can trust our thread-local provenance arrays.
-#[unsafe(no_mangle)]
-extern "C" fn __bsan_mark_tls() -> FramePtr {
-    let marker = &raw mut __BSAN_TLS_MARKER;
-    let prev_fp = unsafe { ptr::read(marker) };
-    // This needs to be volatile, otherwise it has a tendency to
-    // be optimized away on `aarch64` platforms. We unwind once to
-    // get the frame pointer of the function that called into this
-    // API endpoint.
-    unsafe { ptr::write_volatile(marker, fp!().unwind(1)) };
-    prev_fp
-}
-
-/// Clears the parameter provenance array if the frame pointer of the
-/// caller of the current function does not match the boundary marker, indicating
-/// that we crossed into uninstrumented code. If it does match the boundary marker,
-/// then we reset the boundary marker to null, signaling that when we are back within
-/// the caller, we can trust the provenance array for the return value.
-#[unsafe(no_mangle)]
-extern "C" fn __bsan_validate_param_tls(len: usize) {
-    unsafe {
-        // Unwind twice: once to get the frame pointer of the function that called
-        // into this API endpoint, and then again to get its caller.
-        if fp!().unwind(2) == __BSAN_TLS_MARKER {
-            ptr::write_volatile(&raw mut __BSAN_TLS_MARKER, FramePtr::null());
-        } else {
-            __BSAN_PARAM_TLS[0..len].fill(Provenance::wildcard());
-        }
-    }
-}
-
-/// Ensures that the provenance array for the return value is valid.
-/// If the boundary marker is null, then we called an instrumented function, so we
-/// can trust that the contents of the array is valid. Otherwise, we need to fill it
-/// with wildcard provenance values for each pointer being returned. We also need to
-/// restore the boundary marker to the value it had before the function that was called.
-#[unsafe(no_mangle)]
-extern "C" fn __bsan_validate_retval_tls(len: usize, prev_marker: FramePtr) {
-    unsafe {
-        if __BSAN_TLS_MARKER != FramePtr::null() {
-            __BSAN_RETVAL_TLS[0..len].fill(Provenance::wildcard());
-        }
-        ptr::write_volatile(&raw mut __BSAN_TLS_MARKER, prev_marker);
     }
 }
 
