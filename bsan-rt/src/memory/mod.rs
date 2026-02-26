@@ -36,6 +36,7 @@ impl Into<NonZero<usize>> for StackSize {
     }
 }
 
+#[allow(unused)]
 impl StackSize {
     pub fn bytes(&self) -> NonZero<usize> {
         self.0

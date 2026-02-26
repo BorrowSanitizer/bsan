@@ -24,6 +24,8 @@ public:
 private:
   uptr stack_top_;
   uptr stack_bottom_;
+  uptr *prov_stack;
+  uptr prov_stack_size;
   thread_callback_t start_routine_;
   void *arg_;
 };

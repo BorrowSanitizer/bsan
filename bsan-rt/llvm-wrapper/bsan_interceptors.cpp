@@ -3,9 +3,25 @@
 #include "bsan_thread.h"
 #include "interception/interception.h"
 #include "sanitizer_common/sanitizer_linux.h"
+#include "sanitizer_common/sanitizer_allocator.h"
+#include "sanitizer_common/sanitizer_allocator_dlsym.h"
+#include "sanitizer_common/sanitizer_allocator_interface.h"
 
 using namespace __sanitizer;
 using namespace __bsan;
+
+DECLARE_REAL(void*, malloc, SIZE_T)
+DECLARE_REAL(void, free, void *)
+
+bool inst_caller(uptr bp) {
+  bp = bp ? *((uptr *)bp) : bp;
+  bool is_inst = bp == bsan_tls_marker;
+  if (is_inst) {
+    bsan_tls_marker = 0;
+  }
+  return is_inst;
+}
+#define INST_CALLER() inst_caller(GET_CURRENT_FRAME())
 
 #define ENSURE_BSAN_INITED()                                                   \
   do {                                                                         \
@@ -17,6 +33,10 @@ using namespace __bsan;
 
 extern "C" int pthread_attr_init(void *attr);
 extern "C" int pthread_attr_destroy(void *attr);
+
+struct DlsymAlloc : public DlSymAllocator<DlsymAlloc> {
+  static bool UseImpl() { return !bsan_inited; }
+};
 
 static void *BsanThreadStartFunc(void *arg) {
   BsanThread *t = (BsanThread *)arg;
@@ -44,11 +64,86 @@ INTERCEPTOR(int, pthread_create, void *th, void *attr,
   return res;
 }
 
+extern "C" void *__crt_malloc(SIZE_T size) {
+    if (DlsymAlloc::Use())
+      return DlsymAlloc::Allocate(size);
+    return REAL(malloc)(size);
+}
+
+INTERCEPTOR(void *, malloc, SIZE_T size) {
+  if (DlsymAlloc::Use())
+    return DlsymAlloc::Allocate(size);
+  void *ptr = REAL(malloc)(size);
+  if (INST_CALLER()) {
+    Provenance *RetSlot = GetRetValSlot(0);
+    BorTag Tag = __bsan_new_bor_tag();
+    *RetSlot = {Tag, __bsan_alloc(ptr, size, Tag)};
+  }
+  return ptr;
+}
+
+extern "C" void __crt_free(void *ptr) {
+    if (UNLIKELY(!ptr))
+        return;
+    if (DlsymAlloc::PointerIsMine(ptr))
+      return DlsymAlloc::Free(ptr);
+    REAL(free)(ptr);
+}
+
+INTERCEPTOR(void, free, void *ptr) {
+    if (UNLIKELY(!ptr))
+        return;
+    if (DlsymAlloc::PointerIsMine(ptr))
+      return DlsymAlloc::Free(ptr);
+    if (INST_CALLER()) {
+        Provenance *Slot = GetArgSlot(0);
+        __bsan_dealloc(ptr, Slot->Tag, Slot->Info);
+    }
+  return REAL(free)(ptr);
+}
+
+INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
+  if (DlsymAlloc::Use())
+    return DlsymAlloc::Callocate(nmemb, size);
+  void *ptr = REAL(calloc)(nmemb, size);
+  Provenance *RetSlot = GetRetValSlot(0);
+  if (INST_CALLER()) {
+    BorTag Tag = __bsan_new_bor_tag();
+    *RetSlot = {Tag, __bsan_alloc(ptr, nmemb * size, Tag)};
+  }else{
+    *RetSlot = {0, nullptr};
+  }
+  return ptr;
+}
+
+INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
+  if (DlsymAlloc::Use() || DlsymAlloc::PointerIsMine(ptr))
+    return DlsymAlloc::Realloc(ptr, size);
+  bool is_inst = INST_CALLER();
+  if (is_inst) {
+    Provenance *Slot = GetArgSlot(0);
+    __bsan_dealloc(ptr, Slot->Tag, Slot->Info);
+  }
+  void *nptr = REAL(realloc)(ptr, size);
+  Provenance *RetSlot = GetRetValSlot(0);
+  if (is_inst) {
+    BorTag Tag = __bsan_new_bor_tag();
+    *RetSlot = {Tag, __bsan_alloc(nptr, size, Tag)};
+  }else{
+    *RetSlot = {0, nullptr};
+  }
+  return nptr;
+}
+
 namespace __bsan {
 
 void InitializeInterceptors() {
   __interception::DoesNotSupportStaticLinking();
   INTERCEPT_FUNCTION(pthread_create);
+  INTERCEPT_FUNCTION(free);
+  INTERCEPT_FUNCTION(malloc);
+  INTERCEPT_FUNCTION(calloc);
+  INTERCEPT_FUNCTION(realloc);
 }
 
 } // namespace __bsan

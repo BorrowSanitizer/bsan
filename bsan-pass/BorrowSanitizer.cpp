@@ -715,12 +715,6 @@ private:
             !BS.getAllocaSizeInBytes(AI).isZero());
   }
 
-  // Deallocates a pointer.
-  void instrumentDeallocation(IRBuilder<> &IRB, Value *Ptr) {
-    ProvenanceScalar Prov = assertProvenanceScalar(Ptr);
-    IRB.CreateCall(BS.BsanFuncDealloc, {Ptr, Prov.Tag, Prov.Info, BS.False});
-  }
-
   bool isRustShim(CallBase &CB) {
     if (Function *Callee = CB.getCalledFunction()) {
       if (isAllocationFn(&CB, TLI) || getFreedOperand(&CB, TLI)) {
@@ -930,26 +924,6 @@ private:
     // run-time calls.
     std::optional<APInt> AllocSize = getAllocSize(&CB, TLI);
 
-    if (!isRustShim(CB)) {
-      if (isAllocLikeFn(&CB, TLI)) {
-        llvm::outs() << F.getName() << "\n";
-        Value *Size = resolveAllocSize(After, CB);
-        instrumentHeapAllocation(After, &CB, Size);
-        return;
-      }
-
-      if (Value *Operand = getReallocatedOperand(&CB)) {
-        Value *Size = resolveAllocSize(After, CB);
-        instrumentHeapAllocation(After, &CB, Size);
-        instrumentDeallocation(After, Operand);
-        return;
-      }
-
-      if (Value *Operand = getFreedOperand(&CB, TLI)) {
-        instrumentDeallocation(Before, Operand);
-        return;
-      }
-    }
     Value *NumProvenanceValues = BS.Zero;
     SmallVector<std::pair<unsigned, ProvenancePointer>> ProvenancePointers;
 
@@ -1070,8 +1044,8 @@ private:
 
     ProvenanceScalar CurrentProv = getAllocaProvenance(CurrentBlock, AI);
     if (CurrentProv != BS.WildcardProvenance) {
-      IRB.CreateCall(BS.BsanFuncDealloc,
-                     {AI, CurrentProv.Tag, CurrentProv.Info, BS.True});
+      IRB.CreateCall(BS.BsanFuncDeallocStack,
+                     {AI, CurrentProv.Tag, CurrentProv.Info});
     }
     if (!shouldInstrumentAlloca(*AI))
       return;
@@ -1091,7 +1065,7 @@ private:
 
     ProvenanceScalar Root = assertProvenanceScalar(AI);
     if (Root != BS.WildcardProvenance) {
-      IRB.CreateCall(BS.BsanFuncDealloc, {AI, Root.Tag, Root.Info, BS.True});
+      IRB.CreateCall(BS.BsanFuncDeallocStack, {AI, Root.Tag, Root.Info});
     }
   }
 
@@ -1340,8 +1314,7 @@ private:
       for (AllocaInst *AI : StaticAllocaVec) {
         if (LifetimeInfo->isAliveAfter(AI, &I)) {
           ProvenanceScalar Root = assertProvenanceScalar(AI);
-          IRB.CreateCall(BS.BsanFuncDealloc,
-                         {AI, Root.Tag, Root.Info, BS.True});
+          IRB.CreateCall(BS.BsanFuncDeallocStack, {AI, Root.Tag, Root.Info});
           IRB.CreateCall(BS.BsanFuncDestroyStackSlot, {Root.Info});
         }
       }
@@ -1514,9 +1487,8 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncAllocStack =
       M.getOrInsertFunction(kBsanFuncAllocStackName, AL, IRB.getVoidTy(), PtrTy,
                             IntptrTy, IntptrTy, PtrTy);
-  BsanFuncDealloc =
-      M.getOrInsertFunction(kBsanFuncDeallocName, AL, IRB.getVoidTy(), PtrTy,
-                            IntptrTy, PtrTy, Int8Ty);
+  BsanFuncDeallocStack = M.getOrInsertFunction(
+      kBsanFuncDeallocStackName, AL, IRB.getVoidTy(), PtrTy, IntptrTy, PtrTy);
 
   BsanFuncMarkTLS = M.getOrInsertFunction(
       kBsanFuncMarkTLSName, FunctionType::get(PtrTy, /*isVarArg=*/false), AL);

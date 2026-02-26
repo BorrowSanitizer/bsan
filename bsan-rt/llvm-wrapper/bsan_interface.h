@@ -6,8 +6,6 @@
 using namespace __sanitizer;
 using namespace __bsan;
 
-
-
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_deinit();
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_init();
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_mark_tls();
@@ -15,14 +13,10 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE void
 __bsan_validate_param_tls(uptr len);
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void
 __bsan_validate_retval_tls(uptr len, uptr prev_marker);
+
 // Weak (de)init attributes
-extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_deinit();
-extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_init();
-extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_reportError();
 extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_internal_init();
 extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_internal_deinit();
-extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_local_init();
-extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_local_deinit();
 
 // Tagging operations
 extern "C" SANITIZER_WEAK_ATTRIBUTE BorTag
@@ -39,7 +33,9 @@ extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_write(void *ptr,
                                                       BorTag bor_tag,
                                                       AllocInfo *alloc_info);
 extern "C" SANITIZER_WEAK_ATTRIBUTE void
-__bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info, bool weak);
+__bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info);
+extern "C" SANITIZER_WEAK_ATTRIBUTE void
+__bsan_dealloc_stack(void *ptr, BorTag bor_tag, AllocInfo *alloc_info);
 extern "C" SANITIZER_WEAK_ATTRIBUTE void
 __bsan_shadow_copy(void *src, void *dest, usize access_size);
 extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_shadow_clear(void *dest,
@@ -49,6 +45,10 @@ extern "C" SANITIZER_WEAK_ATTRIBUTE AllocInfo *__bsan_reserve_stack_slot();
 // TODO: __bsan_shadow_store
 extern "C" SANITIZER_WEAK_ATTRIBUTE void
 __bsan_destroy_stack_slot(AllocInfo *slot);
+extern "C" SANITIZER_WEAK_ATTRIBUTE BorTag
+__bsan_new_bor_tag();
+extern "C" SANITIZER_WEAK_ATTRIBUTE AllocInfo*
+__bsan_alloc(void *base_addr, usize size, BorTag bor_tag);
 extern "C" SANITIZER_WEAK_ATTRIBUTE void
 __bsan_alloc_stack(void *base_addr, usize size, BorTag bor_tag,
                    AllocInfo *alloc_info);

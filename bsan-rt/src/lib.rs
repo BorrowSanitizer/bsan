@@ -21,7 +21,6 @@ use spin::Mutex;
 mod global;
 use global::*;
 mod helpers;
-mod local;
 mod sanitizer_common_interface;
 
 mod borrow_tracker;
@@ -336,16 +335,6 @@ unsafe extern "C-unwind" fn __bsan_internal_deinit() {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn __bsan_local_init() {
-    unsafe { global_ctx().init_local_ctx() };
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn __bsan_local_deinit() {
-    unsafe { global_ctx().deinit_local_ctx() };
-}
-
 /// Creates a new borrow tag for the given provenance object.
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_retag(
@@ -419,6 +408,11 @@ unsafe extern "C-unwind" fn __bsan_write(
     .unwrap_or_else(|err| ctx.handle_error(err, fp));
 }
 
+#[unsafe(no_mangle)]
+unsafe extern "C-unwind" fn __bsan_new_bor_tag() -> BorTag {
+    BorTag::default()
+}
+
 // Registers a heap allocation of size `size`, storing its provenance in the return pointer.
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_alloc(
@@ -427,7 +421,7 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     bor_tag: BorTag,
 ) -> NonNull<AllocInfo> {
     let ctx = unsafe { global_ctx() };
-    let span = unsafe { fp!().caller_span() };
+    let span = unsafe { fp!().prev().caller_span() };
 
     #[allow(clippy::let_and_return)]
     let alloc_info = ctx.create_alloc_info(AllocInfo::new(base_addr, size, bor_tag, span));
@@ -435,34 +429,33 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     alloc_info
 }
 
-/// Deregisters a heap allocation
-#[unsafe(no_mangle)]
-extern "C" fn __bsan_dealloc(
-    ptr: *mut c_void,
-    bor_tag: BorTag,
-    alloc_info: *mut AllocInfo,
-    weak: bool,
-) {
-    debug_bsan!("dealloc", ptr, bor_tag, alloc_info);
+extern "C" fn __bsan_dealloc_stack(ptr: *mut c_void, bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+    debug_bsan!("dealloc_stack", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov: Provenance = Provenance { bor_tag, alloc_info };
     let fp = unsafe { fp!() };
-    if weak {
-        if alloc_info.is_null() {
-            return;
-        }
-        if prov.bor_tag == BorTag::invalid() {
-            return;
-        }
-        if unsafe { (*prov.alloc_info).tree_lock.is_none() } {
-            return;
-        }
+    if alloc_info.is_null() {
+        return;
     }
-
+    if prov.bor_tag == BorTag::invalid() {
+        return;
+    }
+    if unsafe { (*prov.alloc_info).tree_lock.is_none() } {
+        return;
+    }
     BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, fp.caller_span()))
         .unwrap_or_else(|e| ctx.handle_error(e, fp));
-
-    if !weak && let Some(alloc_info) = NonNull::new(alloc_info) {
+}
+/// Deregisters a heap allocation
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_dealloc(ptr: *mut c_void, bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+    let fp = unsafe { fp!().prev() };
+    debug_bsan!("dealloc", ptr, bor_tag, alloc_info);
+    let ctx = unsafe { global_ctx() };
+    let prov: Provenance = Provenance { bor_tag, alloc_info };
+    BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, fp.caller_span()))
+        .unwrap_or_else(|e| ctx.handle_error(e, fp));
+    if let Some(alloc_info) = NonNull::new(alloc_info) {
         unsafe { ctx.destroy_alloc_info(alloc_info) };
     }
 }

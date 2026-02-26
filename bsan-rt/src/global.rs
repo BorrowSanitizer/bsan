@@ -8,7 +8,6 @@ use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::errors::{ErrorFormatContext, UBInfo};
 use crate::helpers::FxHashMap;
-use crate::local::{deinit_local_ctx, init_local_ctx, local_ctx, local_ctx_mut, LocalCtx};
 use crate::memory::{Heap, ShadowHeap};
 use crate::*;
 
@@ -68,7 +67,6 @@ pub struct GlobalCtx {
     protected_tags: RwLock<ProtectedTags>,
     shadow_heap: ShadowHeap<Provenance>,
     alloc_metadata_map: Heap<AllocInfo>,
-    threads: RwLock<FxHashMap<ThreadId, NonNull<LocalCtx>>>,
     snapshots: RwLock<FxHashMap<AllocId, Tree>>,
 }
 
@@ -78,7 +76,6 @@ impl GlobalCtx {
             protected_tags: RwLock::new(ProtectedTags::default()),
             alloc_metadata_map: Heap::new(),
             shadow_heap: ShadowHeap::new(&raw const __BSAN_WILDCARD_PROVENANCE),
-            threads: RwLock::new(FxHashMap::default()),
             snapshots: RwLock::new(FxHashMap::default()),
         }
     }
@@ -101,48 +98,12 @@ impl GlobalCtx {
         }
     }
 
-    #[allow(unused)]
-    pub fn local_ctx_mut<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut LocalCtx) -> R,
-    {
-        self.threads.read();
-        let local_ctx = unsafe { local_ctx_mut() };
-        f(local_ctx)
-    }
-
-    #[allow(unused)]
-    pub fn local_ctx<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&LocalCtx) -> R,
-    {
-        let local_ctx = unsafe { local_ctx() };
-        f(local_ctx)
-    }
-
     pub fn protected_tags<'a>(&'a self) -> ProtectedTagsRef<'a> {
         ProtectedTagsRef(self.protected_tags.read())
     }
 
     pub fn protected_tags_mut<'a>(&'a self) -> ProtectedTagsRefMut<'a> {
         ProtectedTagsRefMut(self.protected_tags.write())
-    }
-
-    pub fn init_local_ctx(&self) {
-        let tid = ThreadId::default();
-        unsafe { __BSAN_THREAD_ID = tid };
-        let local_ctx = unsafe { init_local_ctx(tid.is_main()) };
-        self.threads.write().insert(tid, local_ctx);
-    }
-
-    /// # Safety
-    /// This function must only be called once.
-    pub unsafe fn deinit_local_ctx(&self) {
-        unsafe {
-            let tid = __BSAN_THREAD_ID;
-            self.threads.write().remove(&tid);
-            deinit_local_ctx();
-        }
     }
 
     pub fn handle_error(&self, ub_info: UBInfo, fp: FramePtr) -> ! {
@@ -173,22 +134,44 @@ impl GlobalCtx {
 /// For now, this allocator will defer to libc malloc and free, but in the future, we can
 /// set its endpoints to immediately panic with an error message to help with debugging.
 mod global_alloc {
+    use core::ffi::c_void;
+
+    #[cfg(not(test))]
+    unsafe extern "C" {
+        fn __crt_malloc(size: usize) -> *mut core::ffi::c_void;
+        fn __crt_free(ptr: *mut core::ffi::c_void);
+    }
+
     use core::alloc::{GlobalAlloc, Layout};
 
     #[derive(Default)]
-    struct DummyAllocator;
+    struct Alloc;
 
-    unsafe impl GlobalAlloc for DummyAllocator {
+    unsafe impl GlobalAlloc for Alloc {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            unsafe { libc::malloc(layout.size()).cast::<u8>() }
+            #[cfg(test)]
+            unsafe {
+                libc::malloc(layout.size()).cast::<u8>()
+            }
+            #[cfg(not(test))]
+            unsafe {
+                __crt_malloc(layout.size()).cast::<u8>()
+            }
         }
         unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
-            unsafe { libc::free(ptr.cast::<libc::c_void>()) }
+            #[cfg(test)]
+            unsafe {
+                libc::free(ptr.cast::<c_void>());
+            }
+            #[cfg(not(test))]
+            unsafe {
+                __crt_free(ptr.cast::<c_void>());
+            }
         }
     }
 
     #[global_allocator]
-    static GLOBAL_ALLOCATOR: DummyAllocator = DummyAllocator;
+    static GLOBAL_ALLOCATOR: Alloc = Alloc;
 }
 
 struct GlobalCtxWrapper(UnsafeCell<MaybeUninit<GlobalCtx>>);

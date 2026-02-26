@@ -94,6 +94,7 @@ public:
   FunctionCallee BsanFuncAllocStack;
   FunctionCallee BsanFuncReserveStackSlot;
   FunctionCallee BsanFuncDestroyStackSlot;
+  FunctionCallee BsanFuncDeallocStack;
 
   FunctionCallee BsanFuncAssertProvenanceNull;
   FunctionCallee BsanFuncAssertProvenanceWildcard;

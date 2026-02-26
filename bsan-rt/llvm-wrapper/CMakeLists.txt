@@ -72,8 +72,6 @@ if(APPLE)
     PARENT_TARGET bsan)
 else()
   set(BSAN_CFLAGS ${BSAN_COMMON_CFLAGS})
-  append_list_if(COMPILER_RT_HAS_FPIE_FLAG -fPIE BSAN_CFLAGS)
-
   foreach(arch ${BSAN_SUPPORTED_ARCH})
     if(CAN_TARGET_${arch})
       add_compiler_rt_runtime(clang_rt.bsan
