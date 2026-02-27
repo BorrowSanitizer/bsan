@@ -6,8 +6,6 @@
 using namespace __sanitizer;
 using namespace __bsan;
 
-
-
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_deinit();
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_init();
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_mark_tls();

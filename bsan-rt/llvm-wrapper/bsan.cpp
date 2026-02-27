@@ -130,7 +130,6 @@ __bsan_validate_retval_tls(uptr len, uptr prev_marker) {
   bsan_tls_marker = prev_marker;
 }
 
-
 void __sanitizer::BufferedStackTrace::UnwindImpl(uptr pc, uptr bp,
                                                  void *context,
                                                  bool request_fast,

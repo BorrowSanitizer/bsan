@@ -6,7 +6,6 @@
 
 using namespace __sanitizer;
 
-
 extern THREADLOCAL void *__BSAN_CURR_THREAD;
 
 extern bool bsan_inited;
