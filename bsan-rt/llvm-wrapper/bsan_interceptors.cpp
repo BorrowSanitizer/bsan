@@ -25,8 +25,8 @@ bool inst_caller(uptr bp) {
 
 #define ENSURE_BSAN_INITED()                                                   \
   do {                                                                         \
-    CHECK(!bsan_init_is_running);                                              \
-    if (!bsan_inited) {                                                        \
+    CHECK(!BSAN_INIT_RUNNING);                                              \
+    if (!BSAN_INITED) {                                                        \
       __bsan_init();                                                           \
     }                                                                          \
   } while (0)
@@ -35,7 +35,7 @@ extern "C" int pthread_attr_init(void *attr);
 extern "C" int pthread_attr_destroy(void *attr);
 
 struct DlsymAlloc : public DlSymAllocator<DlsymAlloc> {
-  static bool UseImpl() { return !bsan_inited; }
+  static bool UseImpl() { return !BSAN_INITED; }
 };
 
 static void *BsanThreadStartFunc(void *arg) {

@@ -11,10 +11,10 @@
 using namespace __sanitizer;
 using namespace __bsan;
 
-bool bsan_inited = false;
-bool bsan_init_is_running;
-bool bsan_deinit_is_running;
-THREADLOCAL uptr bsan_tls_marker = 0;
+bool BSAN_INITED = false;
+bool BSAN_INIT_RUNNING;
+bool BSAN_DEINIT_RUNNING;
+THREADLOCAL uptr BSAN_TLS_MARKER = 0;
 
 const Provenance WILDCARD = {0, nullptr};
 
@@ -48,10 +48,10 @@ static void BsanInit() {
 static void BsanDeinit() { __bsan_internal_deinit(); }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_init() {
-  CHECK(!bsan_init_is_running);
-  if (bsan_inited)
+  CHECK(!BSAN_INIT_RUNNING);
+  if (BSAN_INITED)
     return;
-  bsan_init_is_running = true;
+  BSAN_INIT_RUNNING = true;
   BsanInit();
   InitializeInterceptors();
   SetCommonFlagsDefaults();
@@ -70,18 +70,18 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_init() {
   SetCurrentThread(main_thread);
   main_thread->Init();
 
-  bsan_init_is_running = false;
-  bsan_inited = true;
+  BSAN_INIT_RUNNING = false;
+  BSAN_INITED = true;
 }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_deinit() {
-  CHECK(!bsan_deinit_is_running);
-  if (!bsan_inited)
+  CHECK(!BSAN_DEINIT_RUNNING);
+  if (!BSAN_INITED)
     return;
-  bsan_deinit_is_running = true;
+  BSAN_DEINIT_RUNNING = true;
   BsanDeinit();
-  bsan_deinit_is_running = false;
-  bsan_inited = false;
+  BSAN_DEINIT_RUNNING = false;
+  BSAN_INITED = false;
 }
 
 /// When we call a possibly uninstrumented function, we store our frame
@@ -91,8 +91,8 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_deinit() {
 /// pointer matches this boundary marker to determine whether we can trust our
 /// thread-local provenance arrays.
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_mark_tls(uptr len) {
-  uptr prev_pc = bsan_tls_marker;
-  bsan_tls_marker = unwind(GET_CURRENT_FRAME(), 1);
+  uptr prev_pc = BSAN_TLS_MARKER;
+  BSAN_TLS_MARKER = unwind(GET_CURRENT_FRAME(), 1);
   return prev_pc;
 }
 
@@ -105,8 +105,8 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_mark_tls(uptr len) {
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void
 __bsan_validate_param_tls(uptr len) {
   uptr marker = unwind(GET_CURRENT_FRAME(), 2);
-  if (marker == bsan_tls_marker) {
-    bsan_tls_marker = 0;
+  if (marker == BSAN_TLS_MARKER) {
+    BSAN_TLS_MARKER = 0;
   } else {
     for (uptr i = 0; i < len; ++i) {
       *GetArgSlot(i) = WILDCARD;
@@ -122,12 +122,12 @@ __bsan_validate_param_tls(uptr len) {
 /// function that was called.
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void
 __bsan_validate_retval_tls(uptr len, uptr prev_marker) {
-  if (bsan_tls_marker) {
+  if (BSAN_TLS_MARKER) {
     for (uptr i = 0; i < len; ++i) {
       *GetRetValSlot(i) = WILDCARD;
     }
   }
-  bsan_tls_marker = prev_marker;
+  BSAN_TLS_MARKER = prev_marker;
 }
 
 
@@ -237,8 +237,6 @@ extern "C" void __bsan_free_buffer(char *buf, uptr size) {
 // Weak (de)init
 extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_internal_init() {}
 extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_internal_deinit() {}
-extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_local_init() {}
-extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_local_deinit() {}
 
 // Weak tagging operations
 extern "C" SANITIZER_WEAK_ATTRIBUTE BorTag
@@ -248,6 +246,7 @@ __bsan_retag(void *object_addr, usize access_size, u64 perm, BorTag bor_tag,
 }
 extern "C" SANITIZER_WEAK_ATTRIBUTE void
 __bsan_pop_frame(const Provenance *frame_start, usize protected_) {}
+
 extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_read(void *ptr,
                                                      usize access_size,
                                                      BorTag bor_tag,

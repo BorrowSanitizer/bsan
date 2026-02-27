@@ -240,9 +240,6 @@ impl Provenance {
 #[unsafe(no_mangle)]
 static __BSAN_WILDCARD_PROVENANCE: Provenance = Provenance::wildcard();
 
-#[unsafe(no_mangle)]
-static __BSAN_NULL_PROVENANCE: Provenance = Provenance::null();
-
 #[derive(Clone, Copy)]
 pub(crate) union FreeListAddrUnion {
     pub addr: usize,

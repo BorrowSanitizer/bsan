@@ -9,11 +9,11 @@ using namespace __sanitizer;
 
 extern THREADLOCAL void *__BSAN_CURR_THREAD;
 
-extern bool bsan_inited;
-extern bool bsan_init_is_running;
-extern bool bsan_deinit_is_running;
-extern THREADLOCAL uptr bsan_tls_marker;
-extern THREADLOCAL void *bsan_current_thread;
+extern bool BSAN_INITED;
+extern bool BSAN_INIT_RUNNING;
+extern bool BSAN_DEINIT_RUNNING;
+extern THREADLOCAL uptr BSAN_TLS_MARKER;
+extern THREADLOCAL void *BSAN_CURR_THREAD;
 
 typedef uptr BorTag;
 typedef const uptr FramePtr;
@@ -36,7 +36,7 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE void
 __bsan_print_stack_trace(u32 stackID);
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_get_top_frame_pc(uptr pc);
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE u32
-__bsan_StackDepotPut(uptr pc, uptr bp, u32 max_depth);
+__bsan_stack_depot_put(uptr pc, uptr bp, u32 max_depth);
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE u32 __bsan_symbolize_pc(
     uptr pc, char *file_buf, uptr file_buf_len, u32 *line, u32 *column);
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE uptr
