@@ -14,7 +14,6 @@ extern bool BSAN_INITED;
 extern bool BSAN_INIT_RUNNING;
 extern bool BSAN_DEINIT_RUNNING;
 
-
 typedef uptr BorTag;
 typedef const uptr FramePtr;
 struct AllocInfo;

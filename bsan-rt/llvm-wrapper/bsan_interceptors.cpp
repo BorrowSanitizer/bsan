@@ -9,7 +9,7 @@ using namespace __bsan;
 
 #define ENSURE_BSAN_INITED()                                                   \
   do {                                                                         \
-    CHECK(!BSAN_INIT_RUNNING);                                              \
+    CHECK(!BSAN_INIT_RUNNING);                                                 \
     if (!BSAN_INITED) {                                                        \
       __bsan_init();                                                           \
     }                                                                          \
