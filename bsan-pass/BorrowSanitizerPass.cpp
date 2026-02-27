@@ -44,15 +44,11 @@ PreservedAnalyses BorrowSanitizerPass::run(Module &M,
 static llvm::PassPluginLibraryInfo getBorrowSanitizerPluginInfo() {
   return {LLVM_PLUGIN_API_VERSION, "BorrowSanitizer", LLVM_VERSION_STRING,
           [](PassBuilder &PB) {
-            PB.registerPipelineParsingCallback(
-                [](StringRef Name, ModulePassManager &MPM,
-                   ArrayRef<PassBuilder::PipelineElement>) {
-                  if (Name == "bsan") {
-                    MPM.addPass(BorrowSanitizerPass(BorrowSanitizerOptions()));
-                    return true;
-                  }
-                  return false;
-                });
+            PB.registerOptimizerLastEPCallback([](ModulePassManager &MPM,
+                                                  OptimizationLevel Opt,
+                                                  ThinOrFullLTOPhase Phase) {
+              MPM.addPass(BorrowSanitizerPass(BorrowSanitizerOptions()));
+            });
           }};
 }
 
