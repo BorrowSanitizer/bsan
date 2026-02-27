@@ -1614,5 +1614,8 @@ bool BorrowSanitizer::instrumentFunction(Function &F,
 
   initializeCallbacks(*F.getParent(), TLI);
   BorrowSanitizerVisitor Visitor(F, *this, TLI, DT);
-  return Visitor.run();
+  Visitor.run();
+
+  F.addFnAttr(Attribute::DisableSanitizerInstrumentation);
+  return true;
 }
