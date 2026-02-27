@@ -1169,7 +1169,7 @@ private:
     Value *Ptr = LI.getPointerOperand();
 
     Value *Size =
-        IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeAllocSize(LI.getType()));
+        IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeStoreSize(LI.getType()));
     // Load provenance for the value from shadow memory.
     SmallVector<ProvenanceComponent> *Components =
         getProvenanceComponents(IRB, LI.getType());
@@ -1194,7 +1194,7 @@ private:
     Val = SI.getValueOperand();
 
     Value *Size = IRB.CreateTypeSize(BS.IntptrTy,
-                                     BS.DL->getTypeAllocSize(Val->getType()));
+                                     BS.DL->getTypeStoreSize(Val->getType()));
     insertWriteCheck(IRB, Ptr, Size);
 
     IRBuilder<> NextIRB(SI.getNextNode());
