@@ -15,9 +15,9 @@ DECLARE_REAL(void, free, void *)
 
 bool inst_caller(uptr bp) {
   bp = bp ? *((uptr *)bp) : bp;
-  bool is_inst = bp == bsan_tls_marker;
+  bool is_inst = bp == BSAN_TLS_MARKER;
   if (is_inst) {
-    bsan_tls_marker = 0;
+    BSAN_TLS_MARKER = 0;
   }
   return is_inst;
 }
