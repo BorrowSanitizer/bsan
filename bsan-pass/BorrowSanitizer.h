@@ -41,7 +41,7 @@ public:
   bool instrumentFunction(Function &F, FunctionAnalysisManager &FAM);
 
   void initializeCallbacks(Module &M, const TargetLibraryInfo &TLI);
-  void instrumentGlobals(IRBuilder<> &IRB, Module &M, bool *CtorComdat);
+  void instrumentGlobals(IRBuilder<> &IRB, Module &M, bool CtorComdat);
   Instruction *createBsanModuleDtor(Module &M);
 
   // Adds thread-local global variables for passing the provenance for

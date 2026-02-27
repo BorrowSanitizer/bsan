@@ -27,12 +27,6 @@
 
 using namespace llvm;
 
-// Command-line flags:
-static cl::opt<bool>
-    ClWithComdat("bsan-with-comdat",
-                 cl::desc("Place BSan constructors in comdat sections"),
-                 cl::Hidden, cl::init(true));
-
 class RetagInfo {
 public:
   Value *Ptr;
@@ -1439,10 +1433,9 @@ bool BorrowSanitizer::instrumentModule(Module &M) {
       M, kBsanModuleCtorName, kBsanFuncInitName, /*InitArgTypes=*/{},
       /*InitArgs=*/{}, "");
 
-  bool CtorComdat = true;
-
+  bool CtorComdat = false;
   IRBuilder<> IRB(BsanCtorFunction->getEntryBlock().getTerminator());
-  instrumentGlobals(IRB, M, &CtorComdat);
+  instrumentGlobals(IRB, M, CtorComdat);
 
   assert(BsanCtorFunction && BsanDtorFunction);
   const int Priority = 1;
@@ -1450,7 +1443,7 @@ bool BorrowSanitizer::instrumentModule(Module &M) {
   // Put the constructor and destructor in comdat if both
   // (1) global instrumentation is not TU-specific
   // (2) target is ELF.
-  if (CtorComdat && TargetTriple.isOSBinFormatELF() && CtorComdat) {
+  if (CtorComdat && TargetTriple.isOSBinFormatELF()) {
     BsanCtorFunction->setComdat(M.getOrInsertComdat(kBsanModuleCtorName));
     appendToGlobalCtors(M, BsanCtorFunction, Priority, BsanCtorFunction);
 
@@ -1479,7 +1472,7 @@ static Constant *getOrInsertGlobal(Module &M, StringRef Name, Type *Ty) {
 }
 
 void BorrowSanitizer::instrumentGlobals(IRBuilder<> &IRB, Module &M,
-                                        bool *CtorComdat) {
+                                        bool CtorComdat) {
   createBsanModuleDtor(M);
 }
 
