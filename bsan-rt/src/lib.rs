@@ -21,7 +21,6 @@ use spin::Mutex;
 mod global;
 use global::*;
 mod helpers;
-mod local;
 mod sanitizer_common_interface;
 
 mod borrow_tracker;
@@ -334,16 +333,6 @@ unsafe extern "C-unwind" fn __bsan_internal_deinit() {
     unsafe {
         deinit_global_ctx();
     }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn __bsan_local_init() {
-    unsafe { global_ctx().init_local_ctx() };
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn __bsan_local_deinit() {
-    unsafe { global_ctx().deinit_local_ctx() };
 }
 
 /// Creates a new borrow tag for the given provenance object.

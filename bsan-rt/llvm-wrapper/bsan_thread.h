@@ -26,6 +26,9 @@ private:
   uptr stack_bottom_;
   thread_callback_t start_routine_;
   void *arg_;
+
+  void *prov_stack_;
+  uptr prov_stack_size_;
 };
 
 BsanThread *GetCurrentThread();

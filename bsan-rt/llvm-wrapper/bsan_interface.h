@@ -19,8 +19,6 @@ extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_init();
 extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_reportError();
 extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_internal_init();
 extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_internal_deinit();
-extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_local_init();
-extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_local_deinit();
 
 // Tagging operations
 extern "C" SANITIZER_WEAK_ATTRIBUTE BorTag

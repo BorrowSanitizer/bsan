@@ -6,13 +6,14 @@
 
 using namespace __sanitizer;
 
-extern THREADLOCAL void *__BSAN_CURR_THREAD;
+extern THREADLOCAL void *__BSAN_PROV_STACK;
 
-extern bool bsan_inited;
-extern bool bsan_init_is_running;
-extern bool bsan_deinit_is_running;
-extern THREADLOCAL uptr bsan_tls_marker;
-extern THREADLOCAL void *bsan_current_thread;
+extern THREADLOCAL void *BSAN_CURR_THREAD;
+extern THREADLOCAL uptr BSAN_TLS_MARKER;
+extern bool BSAN_INITED;
+extern bool BSAN_INIT_RUNNING;
+extern bool BSAN_DEINIT_RUNNING;
+
 
 typedef uptr BorTag;
 typedef const uptr FramePtr;

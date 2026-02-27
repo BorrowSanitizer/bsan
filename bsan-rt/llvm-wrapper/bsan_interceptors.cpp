@@ -9,8 +9,8 @@ using namespace __bsan;
 
 #define ENSURE_BSAN_INITED()                                                   \
   do {                                                                         \
-    CHECK(!bsan_init_is_running);                                              \
-    if (!bsan_inited) {                                                        \
+    CHECK(!BSAN_INIT_RUNNING);                                              \
+    if (!BSAN_INITED) {                                                        \
       __bsan_init();                                                           \
     }                                                                          \
   } while (0)
