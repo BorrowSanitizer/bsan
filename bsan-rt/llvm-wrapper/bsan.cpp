@@ -130,7 +130,6 @@ __bsan_validate_retval_tls(uptr len, uptr prev_marker) {
   BSAN_TLS_MARKER = prev_marker;
 }
 
-
 void __sanitizer::BufferedStackTrace::UnwindImpl(uptr pc, uptr bp,
                                                  void *context,
                                                  bool request_fast,
@@ -272,9 +271,9 @@ extern "C" SANITIZER_WEAK_ATTRIBUTE void
 __bsan_alloc_stack(void *base_addr, usize size, BorTag bor_tag,
                    AllocInfo *alloc_info) {}
 
-extern "C" SANITIZER_WEAK_ATTRIBUTE AllocInfo*
+extern "C" SANITIZER_WEAK_ATTRIBUTE AllocInfo *
 __bsan_alloc(void *base_addr, usize size, BorTag bor_tag) {
-    return nullptr;
+  return nullptr;
 }
 // Weak Debugging
 extern "C" SANITIZER_WEAK_ATTRIBUTE void

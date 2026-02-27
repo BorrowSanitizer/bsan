@@ -45,9 +45,8 @@ extern "C" SANITIZER_WEAK_ATTRIBUTE AllocInfo *__bsan_reserve_stack_slot();
 // TODO: __bsan_shadow_store
 extern "C" SANITIZER_WEAK_ATTRIBUTE void
 __bsan_destroy_stack_slot(AllocInfo *slot);
-extern "C" SANITIZER_WEAK_ATTRIBUTE BorTag
-__bsan_new_bor_tag();
-extern "C" SANITIZER_WEAK_ATTRIBUTE AllocInfo*
+extern "C" SANITIZER_WEAK_ATTRIBUTE BorTag __bsan_new_bor_tag();
+extern "C" SANITIZER_WEAK_ATTRIBUTE AllocInfo *
 __bsan_alloc(void *base_addr, usize size, BorTag bor_tag);
 extern "C" SANITIZER_WEAK_ATTRIBUTE void
 __bsan_alloc_stack(void *base_addr, usize size, BorTag bor_tag,

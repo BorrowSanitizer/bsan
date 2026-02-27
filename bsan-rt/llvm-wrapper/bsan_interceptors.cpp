@@ -2,15 +2,15 @@
 #include "bsan_interface.h"
 #include "bsan_thread.h"
 #include "interception/interception.h"
-#include "sanitizer_common/sanitizer_linux.h"
 #include "sanitizer_common/sanitizer_allocator.h"
 #include "sanitizer_common/sanitizer_allocator_dlsym.h"
 #include "sanitizer_common/sanitizer_allocator_interface.h"
+#include "sanitizer_common/sanitizer_linux.h"
 
 using namespace __sanitizer;
 using namespace __bsan;
 
-DECLARE_REAL(void*, malloc, SIZE_T)
+DECLARE_REAL(void *, malloc, SIZE_T)
 DECLARE_REAL(void, free, void *)
 
 bool inst_caller(uptr bp) {
@@ -25,7 +25,7 @@ bool inst_caller(uptr bp) {
 
 #define ENSURE_BSAN_INITED()                                                   \
   do {                                                                         \
-    CHECK(!BSAN_INIT_RUNNING);                                              \
+    CHECK(!BSAN_INIT_RUNNING);                                                 \
     if (!BSAN_INITED) {                                                        \
       __bsan_init();                                                           \
     }                                                                          \
@@ -65,9 +65,9 @@ INTERCEPTOR(int, pthread_create, void *th, void *attr,
 }
 
 extern "C" void *__crt_malloc(SIZE_T size) {
-    if (DlsymAlloc::Use())
-      return DlsymAlloc::Allocate(size);
-    return REAL(malloc)(size);
+  if (DlsymAlloc::Use())
+    return DlsymAlloc::Allocate(size);
+  return REAL(malloc)(size);
 }
 
 INTERCEPTOR(void *, malloc, SIZE_T size) {
@@ -83,22 +83,22 @@ INTERCEPTOR(void *, malloc, SIZE_T size) {
 }
 
 extern "C" void __crt_free(void *ptr) {
-    if (UNLIKELY(!ptr))
-        return;
-    if (DlsymAlloc::PointerIsMine(ptr))
-      return DlsymAlloc::Free(ptr);
-    REAL(free)(ptr);
+  if (UNLIKELY(!ptr))
+    return;
+  if (DlsymAlloc::PointerIsMine(ptr))
+    return DlsymAlloc::Free(ptr);
+  REAL(free)(ptr);
 }
 
 INTERCEPTOR(void, free, void *ptr) {
-    if (UNLIKELY(!ptr))
-        return;
-    if (DlsymAlloc::PointerIsMine(ptr))
-      return DlsymAlloc::Free(ptr);
-    if (INST_CALLER()) {
-        Provenance *Slot = GetArgSlot(0);
-        __bsan_dealloc(ptr, Slot->Tag, Slot->Info);
-    }
+  if (UNLIKELY(!ptr))
+    return;
+  if (DlsymAlloc::PointerIsMine(ptr))
+    return DlsymAlloc::Free(ptr);
+  if (INST_CALLER()) {
+    Provenance *Slot = GetArgSlot(0);
+    __bsan_dealloc(ptr, Slot->Tag, Slot->Info);
+  }
   return REAL(free)(ptr);
 }
 
@@ -110,7 +110,7 @@ INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
   if (INST_CALLER()) {
     BorTag Tag = __bsan_new_bor_tag();
     *RetSlot = {Tag, __bsan_alloc(ptr, nmemb * size, Tag)};
-  }else{
+  } else {
     *RetSlot = {0, nullptr};
   }
   return ptr;
@@ -129,7 +129,7 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
   if (is_inst) {
     BorTag Tag = __bsan_new_bor_tag();
     *RetSlot = {Tag, __bsan_alloc(nptr, size, Tag)};
-  }else{
+  } else {
     *RetSlot = {0, nullptr};
   }
   return nptr;

@@ -9,7 +9,7 @@ static pthread_key_t TSD_KEY;
 static bool TSD_KEY_INITED = false;
 THREADLOCAL void *BSAN_CURR_THREAD = nullptr;
 
-BsanThread *GetCurrentThread() { return (BsanThread *) BSAN_CURR_THREAD; }
+BsanThread *GetCurrentThread() { return (BsanThread *)BSAN_CURR_THREAD; }
 
 void SetCurrentThread(BsanThread *t) {
   // Make sure we do not reset the current BsanThread.
