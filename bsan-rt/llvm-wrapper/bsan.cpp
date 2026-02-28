@@ -256,8 +256,9 @@ extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_write(void *ptr,
                                                       BorTag bor_tag,
                                                       AllocInfo *alloc_info) {}
 extern "C" SANITIZER_WEAK_ATTRIBUTE void
-__bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info, bool weak) {}
-
+__bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info) {}
+extern "C" SANITIZER_WEAK_ATTRIBUTE void
+__bsan_dealloc_stack(void *ptr, BorTag bor_tag, AllocInfo *alloc_info) {}
 extern "C" SANITIZER_WEAK_ATTRIBUTE void
 __bsan_shadow_copy(void *src, void *dest, usize access_size) {}
 extern "C" SANITIZER_WEAK_ATTRIBUTE void

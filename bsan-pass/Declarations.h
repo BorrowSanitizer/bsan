@@ -50,6 +50,8 @@ const char kBsanFuncAllocStackName[] = BSAN_FN("alloc_stack");
 const char kBsanFuncNewBorrowTagName[] = BSAN_FN("new_tag");
 const char kBsanFuncNewAllocIDName[] = BSAN_FN("new_alloc_id");
 const char kBsanFuncDeallocName[] = BSAN_FN("dealloc");
+const char kBsanFuncDeallocStackName[] = BSAN_FN("dealloc_stack");
+
 const char kBsanFuncExposeTagName[] = BSAN_FN("expose_tag");
 const char kBsanFuncReadName[] = BSAN_FN("read");
 const char kBsanFuncWriteName[] = BSAN_FN("write");

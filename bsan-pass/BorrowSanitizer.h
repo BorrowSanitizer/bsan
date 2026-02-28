@@ -79,6 +79,7 @@ public:
   FunctionCallee BsanFuncWrite;
   FunctionCallee BsanFuncAlloc;
   FunctionCallee BsanFuncDealloc;
+  FunctionCallee BsanFuncDeallocStack;
 
   FunctionCallee BsanFuncPopFrame;
 

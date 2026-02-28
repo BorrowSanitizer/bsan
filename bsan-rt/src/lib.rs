@@ -426,34 +426,43 @@ unsafe extern "C-unwind" fn __bsan_alloc(
 
 /// Deregisters a heap allocation
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_dealloc(
+extern "C" fn __bsan_dealloc(ptr: *mut c_void, bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+    debug_bsan!("dealloc", ptr, bor_tag, alloc_info);
+    let ctx = unsafe { global_ctx() };
+    let prov: Provenance = Provenance { bor_tag, alloc_info };
+    let fp = unsafe { fp!() };
+
+    BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, fp.caller_span()))
+        .unwrap_or_else(|e| ctx.handle_error(e, fp));
+
+    if let Some(alloc_info) = NonNull::new(alloc_info) {
+        unsafe { ctx.destroy_alloc_info(alloc_info) };
+    }
+}
+
+// Registers a heap allocation of size `size`, storing its provenance in the return pointer.
+#[unsafe(no_mangle)]
+unsafe extern "C-unwind" fn __bsan_dealloc_stack(
     ptr: *mut c_void,
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
-    weak: bool,
 ) {
     debug_bsan!("dealloc", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov: Provenance = Provenance { bor_tag, alloc_info };
     let fp = unsafe { fp!() };
-    if weak {
-        if alloc_info.is_null() {
-            return;
-        }
-        if prov.bor_tag == BorTag::invalid() {
-            return;
-        }
-        if unsafe { (*prov.alloc_info).tree_lock.is_none() } {
-            return;
-        }
+    if alloc_info.is_null() {
+        return;
+    }
+    if prov.bor_tag == BorTag::invalid() {
+        return;
+    }
+    if unsafe { (*prov.alloc_info).tree_lock.is_none() } {
+        return;
     }
 
     BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, fp.caller_span()))
         .unwrap_or_else(|e| ctx.handle_error(e, fp));
-
-    if !weak && let Some(alloc_info) = NonNull::new(alloc_info) {
-        unsafe { ctx.destroy_alloc_info(alloc_info) };
-    }
 }
 
 /// Copies the provenance stored in the range `[src_addr, src_addr + access_size)` within the shadow heap

@@ -712,7 +712,7 @@ private:
   // Deallocates a pointer.
   void instrumentDeallocation(IRBuilder<> &IRB, Value *Ptr) {
     ProvenanceScalar Prov = assertProvenanceScalar(Ptr);
-    IRB.CreateCall(BS.BsanFuncDealloc, {Ptr, Prov.Tag, Prov.Info, BS.False});
+    IRB.CreateCall(BS.BsanFuncDealloc, {Ptr, Prov.Tag, Prov.Info});
   }
 
   bool isRustShim(CallBase &CB) {
@@ -1063,8 +1063,8 @@ private:
 
     ProvenanceScalar CurrentProv = getAllocaProvenance(CurrentBlock, AI);
     if (CurrentProv != BS.WildcardProvenance) {
-      IRB.CreateCall(BS.BsanFuncDealloc,
-                     {AI, CurrentProv.Tag, CurrentProv.Info, BS.True});
+      IRB.CreateCall(BS.BsanFuncDeallocStack,
+                     {AI, CurrentProv.Tag, CurrentProv.Info});
     }
     if (!shouldInstrumentAlloca(*AI))
       return;
@@ -1084,7 +1084,7 @@ private:
 
     ProvenanceScalar Root = assertProvenanceScalar(AI);
     if (Root != BS.WildcardProvenance) {
-      IRB.CreateCall(BS.BsanFuncDealloc, {AI, Root.Tag, Root.Info, BS.True});
+      IRB.CreateCall(BS.BsanFuncDeallocStack, {AI, Root.Tag, Root.Info});
     }
   }
 
@@ -1333,8 +1333,7 @@ private:
       for (AllocaInst *AI : StaticAllocaVec) {
         if (LifetimeInfo->isAliveAfter(AI, &I)) {
           ProvenanceScalar Root = assertProvenanceScalar(AI);
-          IRB.CreateCall(BS.BsanFuncDealloc,
-                         {AI, Root.Tag, Root.Info, BS.True});
+          IRB.CreateCall(BS.BsanFuncDeallocStack, {AI, Root.Tag, Root.Info});
           IRB.CreateCall(BS.BsanFuncDestroyStackSlot, {Root.Info});
         }
       }
@@ -1506,9 +1505,10 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncAllocStack =
       M.getOrInsertFunction(kBsanFuncAllocStackName, AL, IRB.getVoidTy(), PtrTy,
                             IntptrTy, IntptrTy, PtrTy);
-  BsanFuncDealloc =
-      M.getOrInsertFunction(kBsanFuncDeallocName, AL, IRB.getVoidTy(), PtrTy,
-                            IntptrTy, PtrTy, Int8Ty);
+  BsanFuncDealloc = M.getOrInsertFunction(
+      kBsanFuncDeallocName, AL, IRB.getVoidTy(), PtrTy, IntptrTy, PtrTy);
+  BsanFuncDeallocStack = M.getOrInsertFunction(
+      kBsanFuncDeallocStackName, AL, IRB.getVoidTy(), PtrTy, IntptrTy, PtrTy);
 
   BsanFuncMarkTLS = M.getOrInsertFunction(
       kBsanFuncMarkTLSName, FunctionType::get(PtrTy, /*isVarArg=*/false), AL);
