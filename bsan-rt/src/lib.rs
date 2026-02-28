@@ -421,10 +421,11 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     bor_tag: BorTag,
 ) -> NonNull<AllocInfo> {
     let ctx = unsafe { global_ctx() };
-    let span = unsafe { fp!().caller_span() };
+    let fp = unsafe { fp!().prev() };
 
     #[allow(clippy::let_and_return)]
-    let alloc_info = ctx.create_alloc_info(AllocInfo::new(base_addr, size, bor_tag, span));
+    let alloc_info =
+        ctx.create_alloc_info(AllocInfo::new(base_addr, size, bor_tag, fp.caller_span()));
     debug_bsan!("alloc", base_addr, bor_tag, alloc_info.as_ptr());
     alloc_info
 }
@@ -435,7 +436,7 @@ extern "C" fn __bsan_dealloc(ptr: *mut c_void, bor_tag: BorTag, alloc_info: *mut
     debug_bsan!("dealloc", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov: Provenance = Provenance { bor_tag, alloc_info };
-    let fp = unsafe { fp!() };
+    let fp = unsafe { fp!().prev() };
 
     BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, fp.caller_span()))
         .unwrap_or_else(|e| ctx.handle_error(e, fp));
