@@ -1,5 +1,4 @@
 #include "bsan.h"
-#include "bsan_interface.h"
 #include "bsan_thread.h"
 #include "interception/interception.h"
 #include "sanitizer_common/sanitizer_allocator.h"

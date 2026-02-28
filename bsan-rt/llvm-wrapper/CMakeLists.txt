@@ -10,7 +10,6 @@ set(BSAN_SOURCES
 
 SET(BSAN_HEADERS
   bsan.h
-  bsan_interface.h
   bsan_thread.h
 )
 

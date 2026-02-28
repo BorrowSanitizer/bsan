@@ -36,25 +36,29 @@ uptr unwind(uptr bp, uptr len) {
   }
 }
 
+void __sanitizer::BufferedStackTrace::UnwindImpl(uptr pc, uptr bp,
+                                                 void *context,
+                                                 bool request_fast,
+                                                 u32 max_depth) {
+  BsanThread *t = GetCurrentThread();
+  if (!t) {
+    // The thread is still being created, or has already been destroyed.
+    size = 0;
+    return;
+  }
+  Unwind(max_depth, pc, bp, context, t->stack_top(), t->stack_bottom(),
+         request_fast);
+}
+
 extern "C" {
-void __bsan_internal_init();
-void __bsan_internal_deinit();
-}
-
-static void BsanInit() {
-  AvoidCVE_2016_2143();
-  __bsan_internal_init();
-  __sanitizer::InitializePlatformEarly();
-}
-
-static void BsanDeinit() { __bsan_internal_deinit(); }
-
-extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_init() {
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_init() {
   CHECK(!BSAN_INIT_RUNNING);
   if (BSAN_INITED)
     return;
   BSAN_INIT_RUNNING = true;
-  BsanInit();
+  AvoidCVE_2016_2143();
+  __bsan_internal_init();
+  InitializePlatformEarly();
   InitializeInterceptors();
   SetCommonFlagsDefaults();
   {
@@ -76,12 +80,12 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_init() {
   BSAN_INITED = true;
 }
 
-extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_deinit() {
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_deinit() {
   CHECK(!BSAN_DEINIT_RUNNING);
   if (!BSAN_INITED)
     return;
   BSAN_DEINIT_RUNNING = true;
-  BsanDeinit();
+  __bsan_internal_deinit();
   BSAN_DEINIT_RUNNING = false;
   BSAN_INITED = false;
 }
@@ -92,7 +96,7 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __bsan_deinit() {
 /// been called from uninstrumented code, we check to see if our caller's frame
 /// pointer matches this boundary marker to determine whether we can trust our
 /// thread-local provenance arrays.
-extern "C" SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_mark_tls(uptr len) {
+SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_mark_tls() {
   uptr prev_pc = BSAN_TLS_MARKER;
   BSAN_TLS_MARKER = unwind(GET_CURRENT_FRAME(), 1);
   return prev_pc;
@@ -104,8 +108,7 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_mark_tls(uptr len) {
 /// boundary marker, then we reset the boundary marker to null, signaling that
 /// when we are back within the caller, we can trust the provenance array for
 /// the return value.
-extern "C" SANITIZER_INTERFACE_ATTRIBUTE void
-__bsan_validate_param_tls(uptr len) {
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_validate_param_tls(uptr len) {
   uptr marker = unwind(GET_CURRENT_FRAME(), 2);
   if (marker == BSAN_TLS_MARKER) {
     BSAN_TLS_MARKER = 0;
@@ -122,7 +125,7 @@ __bsan_validate_param_tls(uptr len) {
 /// fill it with wildcard provenance values for each pointer being returned. We
 /// also need to restore the boundary marker to the value it had before the
 /// function that was called.
-extern "C" SANITIZER_INTERFACE_ATTRIBUTE void
+SANITIZER_INTERFACE_ATTRIBUTE void
 __bsan_validate_retval_tls(uptr len, uptr prev_marker) {
   if (BSAN_TLS_MARKER) {
     for (uptr i = 0; i < len; ++i) {
@@ -132,22 +135,7 @@ __bsan_validate_retval_tls(uptr len, uptr prev_marker) {
   BSAN_TLS_MARKER = prev_marker;
 }
 
-void __sanitizer::BufferedStackTrace::UnwindImpl(uptr pc, uptr bp,
-                                                 void *context,
-                                                 bool request_fast,
-                                                 u32 max_depth) {
-  BsanThread *t = GetCurrentThread();
-  if (!t) {
-    // The thread is still being created, or has already been destroyed.
-    size = 0;
-    return;
-  }
-  Unwind(max_depth, pc, bp, context, t->stack_top(), t->stack_bottom(),
-         request_fast);
-}
-
-extern "C" SANITIZER_INTERFACE_ATTRIBUTE void
-__bsan_print_current_stack_trace() {
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_print_current_stack_trace() {
   // Capture current stack trace
   GET_CURRENT_PC_BP; // This macro defines 'pc' and 'bp' variables
   BufferedStackTrace stack;
@@ -156,8 +144,7 @@ __bsan_print_current_stack_trace() {
   stack.Print();
 }
 
-extern "C" SANITIZER_INTERFACE_ATTRIBUTE void
-__bsan_print_stack_trace(u32 stackId) {
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_print_stack_trace(u32 stackId) {
   StackTrace stack = StackDepotGet(stackId);
   CHECK(stack.trace);
   stack.Print();
@@ -165,14 +152,14 @@ __bsan_print_stack_trace(u32 stackId) {
 
 // Get the top frame PC address from the current PC
 // Returns the previous instruction PC (adjusted for return addresses)
-extern "C" SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_get_top_frame_pc(uptr pc) {
+SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_get_top_frame_pc(uptr pc) {
   return StackTrace::GetPreviousInstructionPc(pc);
 }
 
 // FIXME: this function should only be used internally and does not need to be
 // visible in the binary. But we need to make it availabel to bsan-rt-core
-extern "C" SANITIZER_INTERFACE_ATTRIBUTE u32
-__bsan_StackDepotPut(uptr pc, uptr bp, u32 max_depth) {
+SANITIZER_INTERFACE_ATTRIBUTE u32 __bsan_StackDepotPut(uptr pc, uptr bp,
+                                                       u32 max_depth) {
   BufferedStackTrace stack;
   stack.Unwind(pc, bp, /*context=*/nullptr, /*request_fast=*/true,
                /*max_depth=*/max_depth);
@@ -181,8 +168,9 @@ __bsan_StackDepotPut(uptr pc, uptr bp, u32 max_depth) {
 
 // Symbolize a single PC into file:line:column, writing the file path into
 // the provided buffer. Returns 1 on success, 0 otherwise.
-extern "C" SANITIZER_INTERFACE_ATTRIBUTE u32 __bsan_symbolize_pc(
-    uptr pc, char *file_buf, uptr file_buf_len, u32 *line, u32 *column) {
+SANITIZER_INTERFACE_ATTRIBUTE u32 __bsan_symbolize_pc(uptr pc, char *file_buf,
+                                                      uptr file_buf_len,
+                                                      u32 *line, u32 *column) {
   __sanitizer::Symbolizer *sym = __sanitizer::Symbolizer::GetOrInit();
   if (!sym) {
     return 0;
@@ -208,8 +196,9 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE u32 __bsan_symbolize_pc(
 
 // Read the entire file at path into the buffer.
 // Returns the number of bytes read on success, 0 otherwise.
-extern "C" SANITIZER_INTERFACE_ATTRIBUTE uptr
-__bsan_read_file(const char *path, char **file_buf, uptr *file_buf_len) {
+SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_read_file(const char *path,
+                                                    char **file_buf,
+                                                    uptr *file_buf_len) {
   char *file = nullptr;
   uptr file_len = 0;
   uptr bytes_read = 0;
@@ -229,68 +218,69 @@ __bsan_read_file(const char *path, char **file_buf, uptr *file_buf_len) {
 }
 
 // Free the buffer allocated by __bsan_read_file
-extern "C" void __bsan_free_buffer(char *buf, uptr size) {
+void __bsan_free_buffer(char *buf, uptr size) {
   if (buf && size > 0) {
     UnmapOrDie(buf, size);
   }
 }
 
 // Weak (de)init
-extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_internal_init() {}
-extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_internal_deinit() {}
+SANITIZER_WEAK_ATTRIBUTE void __bsan_internal_init() {}
+SANITIZER_WEAK_ATTRIBUTE void __bsan_internal_deinit() {}
 
 // Weak tagging operations
-extern "C" SANITIZER_WEAK_ATTRIBUTE BorTag __bsan_new_bor_tag() { return 0; }
-extern "C" SANITIZER_WEAK_ATTRIBUTE BorTag
+SANITIZER_WEAK_ATTRIBUTE BorTag __bsan_new_bor_tag() { return 0; }
+SANITIZER_WEAK_ATTRIBUTE BorTag
 __bsan_retag(void *object_addr, usize access_size, u64 perm, BorTag bor_tag,
              AllocInfo *alloc_info, const usize im_data[2], usize im_len) {
   return bor_tag;
 }
-extern "C" SANITIZER_WEAK_ATTRIBUTE void
-__bsan_pop_frame(const Provenance *frame_start, usize protected_) {}
-extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_read(void *ptr,
-                                                     usize access_size,
-                                                     BorTag bor_tag,
-                                                     AllocInfo *alloc_info) {}
-extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_write(void *ptr,
-                                                      usize access_size,
-                                                      BorTag bor_tag,
-                                                      AllocInfo *alloc_info) {}
-extern "C" SANITIZER_WEAK_ATTRIBUTE void
-__bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info) {}
-extern "C" SANITIZER_WEAK_ATTRIBUTE void
-__bsan_dealloc_stack(void *ptr, BorTag bor_tag, AllocInfo *alloc_info) {}
-extern "C" SANITIZER_WEAK_ATTRIBUTE void
-__bsan_shadow_copy(void *src, void *dest, usize access_size) {}
-extern "C" SANITIZER_WEAK_ATTRIBUTE void
-__bsan_shadow_clear(void *dest, usize access_size) {}
-extern "C" SANITIZER_WEAK_ATTRIBUTE AllocInfo *__bsan_reserve_stack_slot() {
+SANITIZER_WEAK_ATTRIBUTE void __bsan_pop_frame(const Provenance *frame_start,
+                                               usize protected_) {}
+SANITIZER_WEAK_ATTRIBUTE void __bsan_read(void *ptr, usize access_size,
+                                          BorTag bor_tag,
+                                          AllocInfo *alloc_info) {}
+SANITIZER_WEAK_ATTRIBUTE void __bsan_write(void *ptr, usize access_size,
+                                           BorTag bor_tag,
+                                           AllocInfo *alloc_info) {}
+SANITIZER_WEAK_ATTRIBUTE void __bsan_dealloc(void *ptr, BorTag bor_tag,
+                                             AllocInfo *alloc_info) {}
+SANITIZER_WEAK_ATTRIBUTE void __bsan_dealloc_stack(void *ptr, BorTag bor_tag,
+                                                   AllocInfo *alloc_info) {}
+SANITIZER_WEAK_ATTRIBUTE void __bsan_shadow_copy(void *src, void *dest,
+                                                 usize access_size) {}
+SANITIZER_WEAK_ATTRIBUTE void __bsan_shadow_clear(void *dest,
+                                                  usize access_size) {}
+SANITIZER_WEAK_ATTRIBUTE AllocInfo *__bsan_reserve_stack_slot() {
   return nullptr;
 }
-extern "C" SANITIZER_WEAK_ATTRIBUTE void
-__bsan_destroy_stack_slot(AllocInfo *slot) {}
-extern "C" SANITIZER_WEAK_ATTRIBUTE AllocInfo *
-__bsan_alloc(void *base_addr, usize size, BorTag bor_tag) {
+SANITIZER_WEAK_ATTRIBUTE void __bsan_destroy_stack_slot(AllocInfo *slot) {}
+
+SANITIZER_WEAK_ATTRIBUTE AllocInfo *__bsan_alloc(void *base_addr, usize size,
+                                                 BorTag bor_tag) {
   return nullptr;
 }
-extern "C" SANITIZER_WEAK_ATTRIBUTE void
-__bsan_alloc_stack(void *base_addr, usize size, BorTag bor_tag,
-                   AllocInfo *alloc_info) {}
+SANITIZER_WEAK_ATTRIBUTE void __bsan_alloc_stack(void *base_addr, usize size,
+                                                 BorTag bor_tag,
+                                                 AllocInfo *alloc_info) {}
 
 // Weak Debugging
-extern "C" SANITIZER_WEAK_ATTRIBUTE void
-__bsan_debug_assert_null(BorTag bor_tag, AllocInfo *alloc_info) {}
-extern "C" SANITIZER_WEAK_ATTRIBUTE void
+SANITIZER_WEAK_ATTRIBUTE void __bsan_debug_assert_null(BorTag bor_tag,
+                                                       AllocInfo *alloc_info) {}
+SANITIZER_WEAK_ATTRIBUTE void
 __bsan_debug_assert_wildcard(BorTag bor_tag, AllocInfo *alloc_info) {}
-extern "C" SANITIZER_WEAK_ATTRIBUTE void
-__bsan_debug_assert_valid(BorTag bor_tag, AllocInfo *alloc_info) {}
-extern "C" SANITIZER_WEAK_ATTRIBUTE void
+SANITIZER_WEAK_ATTRIBUTE void __bsan_debug_assert_valid(BorTag bor_tag,
+                                                        AllocInfo *alloc_info) {
+}
+SANITIZER_WEAK_ATTRIBUTE void
 __bsan_debug_assert_invalid(BorTag bor_tag, AllocInfo *alloc_info) {}
-extern "C" SANITIZER_WEAK_ATTRIBUTE void
-__bsan_debug_print(BorTag bor_tag, AllocInfo *alloc_info) {}
-extern "C" SANITIZER_WEAK_ATTRIBUTE void
+SANITIZER_WEAK_ATTRIBUTE void __bsan_debug_print(BorTag bor_tag,
+                                                 AllocInfo *alloc_info) {}
+SANITIZER_WEAK_ATTRIBUTE void
 __bsan_debug_print_borrow_state(BorTag bor_tag, AllocInfo *alloc_info) {}
-extern "C" SANITIZER_WEAK_ATTRIBUTE void
-__bsan_debug_tree_size(BorTag bor_tag, AllocInfo *alloc_info) {}
-extern "C" SANITIZER_WEAK_ATTRIBUTE void
-__bsan_debug_print_diff(BorTag bor_tag, AllocInfo *alloc_info) {}
+SANITIZER_WEAK_ATTRIBUTE void __bsan_debug_tree_size(BorTag bor_tag,
+                                                     AllocInfo *alloc_info) {}
+SANITIZER_WEAK_ATTRIBUTE void __bsan_debug_print_diff(BorTag bor_tag,
+                                                      AllocInfo *alloc_info) {}
+
+} // extern "C"
