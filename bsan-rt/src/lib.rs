@@ -335,6 +335,11 @@ unsafe extern "C-unwind" fn __bsan_internal_deinit() {
     }
 }
 
+#[unsafe(no_mangle)]
+unsafe extern "C-unwind" fn __bsan_new_bor_tag() -> BorTag {
+    BorTag::default()
+}
+
 /// Creates a new borrow tag for the given provenance object.
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_retag(

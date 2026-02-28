@@ -16,11 +16,11 @@ __bsan_validate_retval_tls(uptr len, uptr prev_marker);
 // Weak (de)init attributes
 extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_deinit();
 extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_init();
-extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_reportError();
 extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_internal_init();
 extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_internal_deinit();
 
 // Tagging operations
+extern "C" SANITIZER_WEAK_ATTRIBUTE BorTag __bsan_new_bor_tag();
 extern "C" SANITIZER_WEAK_ATTRIBUTE BorTag
 __bsan_retag(void *object_addr, usize access_size, u64 perm, BorTag bor_tag,
              AllocInfo *alloc_info, const usize im_data[2], usize im_len);
@@ -34,6 +34,8 @@ extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_write(void *ptr,
                                                       usize access_size,
                                                       BorTag bor_tag,
                                                       AllocInfo *alloc_info);
+extern "C" SANITIZER_WEAK_ATTRIBUTE AllocInfo *
+__bsan_alloc(void *base_addr, usize size, BorTag bor_tag);
 extern "C" SANITIZER_WEAK_ATTRIBUTE void
 __bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info);
 extern "C" SANITIZER_WEAK_ATTRIBUTE void

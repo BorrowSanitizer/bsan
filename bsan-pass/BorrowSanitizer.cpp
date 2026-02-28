@@ -924,25 +924,6 @@ private:
     // run-time calls.
     std::optional<APInt> AllocSize = getAllocSize(&CB, TLI);
 
-    if (!isRustShim(CB)) {
-      if (isAllocLikeFn(&CB, TLI)) {
-        Value *Size = resolveAllocSize(After, CB);
-        instrumentHeapAllocation(After, &CB, Size);
-        return;
-      }
-
-      if (Value *Operand = getReallocatedOperand(&CB)) {
-        Value *Size = resolveAllocSize(After, CB);
-        instrumentHeapAllocation(After, &CB, Size);
-        instrumentDeallocation(After, Operand);
-        return;
-      }
-
-      if (Value *Operand = getFreedOperand(&CB, TLI)) {
-        instrumentDeallocation(Before, Operand);
-        return;
-      }
-    }
     Value *NumProvenanceValues = BS.Zero;
     SmallVector<std::pair<unsigned, ProvenancePointer>> ProvenancePointers;
 

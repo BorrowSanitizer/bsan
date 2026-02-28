@@ -240,6 +240,7 @@ extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_internal_init() {}
 extern "C" SANITIZER_WEAK_ATTRIBUTE void __bsan_internal_deinit() {}
 
 // Weak tagging operations
+extern "C" SANITIZER_WEAK_ATTRIBUTE BorTag __bsan_new_bor_tag() { return 0; }
 extern "C" SANITIZER_WEAK_ATTRIBUTE BorTag
 __bsan_retag(void *object_addr, usize access_size, u64 perm, BorTag bor_tag,
              AllocInfo *alloc_info, const usize im_data[2], usize im_len) {
@@ -268,6 +269,10 @@ extern "C" SANITIZER_WEAK_ATTRIBUTE AllocInfo *__bsan_reserve_stack_slot() {
 }
 extern "C" SANITIZER_WEAK_ATTRIBUTE void
 __bsan_destroy_stack_slot(AllocInfo *slot) {}
+extern "C" SANITIZER_WEAK_ATTRIBUTE AllocInfo *
+__bsan_alloc(void *base_addr, usize size, BorTag bor_tag) {
+  return nullptr;
+}
 extern "C" SANITIZER_WEAK_ATTRIBUTE void
 __bsan_alloc_stack(void *base_addr, usize size, BorTag bor_tag,
                    AllocInfo *alloc_info) {}

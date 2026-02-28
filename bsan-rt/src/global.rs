@@ -134,22 +134,44 @@ impl GlobalCtx {
 /// For now, this allocator will defer to libc malloc and free, but in the future, we can
 /// set its endpoints to immediately panic with an error message to help with debugging.
 mod global_alloc {
+    use core::ffi::c_void;
+
+    #[cfg(not(test))]
+    unsafe extern "C" {
+        fn __crt_malloc(size: usize) -> *mut core::ffi::c_void;
+        fn __crt_free(ptr: *mut core::ffi::c_void);
+    }
+
     use core::alloc::{GlobalAlloc, Layout};
 
     #[derive(Default)]
-    struct DummyAllocator;
+    struct Alloc;
 
-    unsafe impl GlobalAlloc for DummyAllocator {
+    unsafe impl GlobalAlloc for Alloc {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            unsafe { libc::malloc(layout.size()).cast::<u8>() }
+            #[cfg(test)]
+            unsafe {
+                libc::malloc(layout.size()).cast::<u8>()
+            }
+            #[cfg(not(test))]
+            unsafe {
+                __crt_malloc(layout.size()).cast::<u8>()
+            }
         }
         unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
-            unsafe { libc::free(ptr.cast::<libc::c_void>()) }
+            #[cfg(test)]
+            unsafe {
+                libc::free(ptr.cast::<c_void>());
+            }
+            #[cfg(not(test))]
+            unsafe {
+                __crt_free(ptr.cast::<c_void>());
+            }
         }
     }
 
     #[global_allocator]
-    static GLOBAL_ALLOCATOR: DummyAllocator = DummyAllocator;
+    static GLOBAL_ALLOCATOR: Alloc = Alloc;
 }
 
 struct GlobalCtxWrapper(UnsafeCell<MaybeUninit<GlobalCtx>>);
