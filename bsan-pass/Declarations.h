@@ -29,14 +29,12 @@ const char kBsanFuncPushAllocaFrameName[] = BSAN_FN("push_alloca_frame");
 const char kBsanFuncPopAllocaFrameName[] = BSAN_FN("pop_alloca_frame");
 const char kBsanFuncRemoveProtectedTags[] = BSAN_FN("remove_protected_tags");
 
-const char kBsanFuncShadowCopyName[] = BSAN_FN("shadow_copy");
-const char kBsanFuncShadowClearName[] = BSAN_FN("shadow_clear");
+const char kBsanFuncMemMoveName[] = BSAN_FN("memmove");
+const char kBsanFuncMemCpyName[] = BSAN_FN("memcpy");
+const char kBsanFuncMemSetName[] = BSAN_FN("memset");
 
 const char kBsanFuncGetShadowDestName[] = BSAN_FN("shadow_dest");
 const char kBsanFuncGetShadowSrcName[] = BSAN_FN("shadow_src");
-
-const char kBsanFuncShadowLoadVectorName[] = BSAN_FN("shadow_load_vector");
-const char kBsanFuncShadowStoreVectorName[] = BSAN_FN("shadow_store_vector");
 
 const char kBsanFuncRetagName[] = BSAN_FN("retag");
 const char kBsanFuncAllocName[] = BSAN_FN("alloc");

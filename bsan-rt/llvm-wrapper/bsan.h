@@ -23,6 +23,14 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_init();
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_deinit();
 
+SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_memmove(void *dest, const void *src,
+                                                   uptr n);
+
+SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_memcpy(void *dest, const void *src,
+                                                  uptr n);
+
+SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_memset(void *s, int c, uptr n);
+
 SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_mark_tls();
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_validate_param_tls(uptr len);
@@ -79,8 +87,8 @@ SANITIZER_WEAK_ATTRIBUTE void __bsan_alloc_stack(void *base_addr, uptr size,
 SANITIZER_WEAK_ATTRIBUTE void __bsan_dealloc_stack(void *ptr, BorTag bor_tag,
                                                    AllocInfo *alloc_info);
 
-SANITIZER_WEAK_ATTRIBUTE void __bsan_shadow_copy(void *src, void *dest,
-                                                 uptr access_size);
+SANITIZER_WEAK_ATTRIBUTE void
+__bsan_shadow_transfer(void *dest, const void *src, uptr access_size);
 
 SANITIZER_WEAK_ATTRIBUTE void __bsan_shadow_clear(void *dest, uptr access_size);
 

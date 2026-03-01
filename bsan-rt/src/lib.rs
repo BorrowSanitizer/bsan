@@ -475,22 +475,22 @@ unsafe extern "C-unwind" fn __bsan_dealloc_stack(
 /// to the address `dst_addr`. This function will silently fail, so it should only be called in conjunction with
 /// `bsan_read` and `bsan_write` or as part of an interceptor.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_shadow_copy(
-    src: *mut c_void,
+unsafe extern "C-unwind" fn __bsan_shadow_transfer(
     dst: *mut c_void,
-    access_size: usize,
+    src: *const c_void,
+    size: usize,
 ) {
     let ctx = unsafe { global_ctx() };
     let heap = ctx.shadow_heap();
-    heap.memcpy(src.addr(), dst.addr(), access_size)
+    heap.memcpy(dst.addr(), src.addr(), size)
 }
 
 /// Clears the provenance stored in the range `[dst_addr, dst_addr + access_size)` within the
 /// shadow heap.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_shadow_clear(dst: *mut c_void, access_size: usize) {
+unsafe extern "C-unwind" fn __bsan_shadow_clear(dst: *mut c_void, size: usize) {
     let ctx = unsafe { global_ctx() };
-    ctx.shadow_heap().clear(dst.addr(), access_size, __BSAN_WILDCARD_PROVENANCE)
+    ctx.shadow_heap().clear(dst.addr(), size, __BSAN_WILDCARD_PROVENANCE)
 }
 
 /// Loads the provenance of a given address from shadow memory and stores

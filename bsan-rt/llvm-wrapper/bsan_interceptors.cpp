@@ -135,6 +135,45 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
   return nptr;
 }
 
+extern "C" {
+
+SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_memset(void *dest, int c, uptr n) {
+  if (!BSAN_INITED)
+    return internal_memset(dest, c, n);
+  if (BSAN_INIT_RUNNING)
+    return internal_memset(dest, c, n);
+  ENSURE_BSAN_INITED();
+  void *res = internal_memset(dest, c, n);
+  __bsan_shadow_clear(dest, n);
+  return res;
+}
+
+SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_memmove(void *dest, const void *src,
+                                                   uptr n) {
+  if (!BSAN_INITED)
+    return internal_memmove(dest, src, n);
+  if (BSAN_INIT_RUNNING)
+    return internal_memmove(dest, src, n);
+  ENSURE_BSAN_INITED();
+  __bsan_shadow_transfer(dest, src, n);
+  void *res = internal_memmove(dest, src, n);
+  return res;
+}
+
+SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_memcpy(void *dest, const void *src,
+                                                  uptr n) {
+  if (!BSAN_INITED)
+    return internal_memcpy(dest, src, n);
+  if (BSAN_INIT_RUNNING)
+    return internal_memcpy(dest, src, n);
+  ENSURE_BSAN_INITED();
+  void *res = internal_memcpy(dest, src, n);
+  __bsan_shadow_transfer(dest, src, n);
+  return res;
+}
+
+} // extern "C"
+
 namespace __bsan {
 
 void InitializeInterceptors() {

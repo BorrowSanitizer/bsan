@@ -192,10 +192,11 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
     }
 
     /// Copy provenance values within a given range from the source to the destination.
-    pub fn memcpy(&self, src: usize, dst: usize, num_bytes: usize) {
-        if num_bytes < PTR_BYTES {
+    pub fn memcpy(&self, dst: usize, src: usize, num_bytes: usize) {
+        if num_bytes < PTR_BYTES || src == dst {
             return;
         }
+
         // We do not want to write partial provenance values, so we round the
         // starting index (L2) up to the nearest provenance value
         let mut src_index = TableIndex::new(src + PTR_BYTES).sub(1);
@@ -386,7 +387,7 @@ mod tests {
             let compare_prov = unsafe { *heap.get_src(src_address + offset_bytes) };
             assert_eq!(prov, compare_prov)
         }
-        heap.memcpy(src_address, dst_address, max * PTR_BYTES);
+        heap.memcpy(dst_address, src_address, max * PTR_BYTES);
 
         for offset in 0..three_quarter_max {
             let offset_bytes = offset * PTR_BYTES;

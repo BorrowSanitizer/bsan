@@ -87,10 +87,12 @@ public:
   FunctionCallee BsanFuncValidateRetvalTLS;
   FunctionCallee BsanFuncValidateParamTLS;
 
-  FunctionCallee BsanFuncShadowCopy;
-  FunctionCallee BsanFuncShadowClear;
   FunctionCallee BsanFuncGetShadowSrc;
   FunctionCallee BsanFuncGetShadowDest;
+
+  FunctionCallee BsanFuncMemSet;
+  FunctionCallee BsanFuncMemMove;
+  FunctionCallee BsanFuncMemCpy;
 
   FunctionCallee BsanFuncAllocStack;
   FunctionCallee BsanFuncReserveStackSlot;

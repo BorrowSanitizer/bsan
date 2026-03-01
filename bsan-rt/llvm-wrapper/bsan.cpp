@@ -158,8 +158,8 @@ SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_get_top_frame_pc(uptr pc) {
 
 // FIXME: this function should only be used internally and does not need to be
 // visible in the binary. But we need to make it availabel to bsan-rt-core
-SANITIZER_INTERFACE_ATTRIBUTE u32 __bsan_StackDepotPut(uptr pc, uptr bp,
-                                                       u32 max_depth) {
+SANITIZER_INTERFACE_ATTRIBUTE u32 __bsan_stack_depot_put(uptr pc, uptr bp,
+                                                         u32 max_depth) {
   BufferedStackTrace stack;
   stack.Unwind(pc, bp, /*context=*/nullptr, /*request_fast=*/true,
                /*max_depth=*/max_depth);
@@ -247,10 +247,10 @@ SANITIZER_WEAK_ATTRIBUTE void __bsan_dealloc(void *ptr, BorTag bor_tag,
                                              AllocInfo *alloc_info) {}
 SANITIZER_WEAK_ATTRIBUTE void __bsan_dealloc_stack(void *ptr, BorTag bor_tag,
                                                    AllocInfo *alloc_info) {}
-SANITIZER_WEAK_ATTRIBUTE void __bsan_shadow_copy(void *src, void *dest,
-                                                 usize access_size) {}
+SANITIZER_WEAK_ATTRIBUTE void
+__bsan_shadow_transfer(void *dest, const void *src, uptr access_size) {}
 SANITIZER_WEAK_ATTRIBUTE void __bsan_shadow_clear(void *dest,
-                                                  usize access_size) {}
+                                                  uptr access_size) {}
 SANITIZER_WEAK_ATTRIBUTE AllocInfo *__bsan_reserve_stack_slot() {
   return nullptr;
 }

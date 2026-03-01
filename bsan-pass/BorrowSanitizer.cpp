@@ -1068,24 +1068,37 @@ private:
       IRB.CreateCall(BS.BsanFuncDeallocStack, {AI, Root.Tag, Root.Info});
     }
   }
-
   // Whenever we memset, we need to clear the corresponding shadow memory
   // section This should be removed when interceptors are implemented.
   void visitMemSetInst(MemSetInst &I) {
     IRBuilder<> IRB(&I);
+    Value *Val = IRB.CreateIntCast(I.getValue(), IRB.getInt32Ty(), false);
     Value *Size = IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false);
     insertWriteCheck(IRB, I.getDest(), Size);
-    IRB.CreateCall(BS.BsanFuncShadowClear, {I.getDest(), Size});
+    IRB.CreateCall(BS.BsanFuncMemSet, {I.getDest(), Val, Size});
+    I.eraseFromParent();
   }
 
   // Whenever we memcpy, we need to copy the corresponding shadow memory section
   // This should be removed when interceptors are implemented.
-  void visitMemTransferInst(MemTransferInst &I) {
+  void visitMemMoveInst(MemMoveInst &I) {
     IRBuilder<> IRB(&I);
     Value *Size = IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false);
     insertReadCheck(IRB, I.getSource(), Size);
     insertWriteCheck(IRB, I.getDest(), Size);
-    IRB.CreateCall(BS.BsanFuncShadowCopy, {I.getSource(), I.getDest(), Size});
+    IRB.CreateCall(BS.BsanFuncMemMove, {I.getDest(), I.getSource(), Size});
+    I.eraseFromParent();
+  }
+
+  // Whenever we memcpy, we need to copy the corresponding shadow memory section
+  // This should be removed when interceptors are implemented.
+  void visitMemCpyInst(MemCpyInst &I) {
+    IRBuilder<> IRB(&I);
+    Value *Size = IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false);
+    insertReadCheck(IRB, I.getSource(), Size);
+    insertWriteCheck(IRB, I.getDest(), Size);
+    IRB.CreateCall(BS.BsanFuncMemCpy, {I.getDest(), I.getSource(), Size});
+    I.eraseFromParent();
   }
 
   // Inserts a check to validate a read access.
@@ -1500,17 +1513,20 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncValidateRetvalTLS = M.getOrInsertFunction(
       kBsanFuncValidateRetvalTLSName, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
 
-  BsanFuncShadowCopy = M.getOrInsertFunction(
-      kBsanFuncShadowCopyName, AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
-
-  BsanFuncShadowClear = M.getOrInsertFunction(kBsanFuncShadowClearName, AL,
-                                              IRB.getVoidTy(), PtrTy, IntptrTy);
-
   BsanFuncGetShadowSrc =
       M.getOrInsertFunction(kBsanFuncGetShadowSrcName, AL, PtrTy, PtrTy);
 
   BsanFuncGetShadowDest =
       M.getOrInsertFunction(kBsanFuncGetShadowDestName, AL, PtrTy, PtrTy);
+
+  BsanFuncMemCpy = M.getOrInsertFunction(kBsanFuncMemCpyName, AL, PtrTy, PtrTy,
+                                         PtrTy, IntptrTy);
+
+  BsanFuncMemMove = M.getOrInsertFunction(kBsanFuncMemMoveName, AL, PtrTy,
+                                          PtrTy, PtrTy, IntptrTy);
+
+  BsanFuncMemSet = M.getOrInsertFunction(kBsanFuncMemSetName, AL, PtrTy, PtrTy,
+                                         Int32Ty, IntptrTy);
 
   BsanFuncReserveStackSlot =
       M.getOrInsertFunction(kBsanFuncReserveStackSlotName,
