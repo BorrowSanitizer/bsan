@@ -3,14 +3,12 @@
 
 #define BSAN_PREFIX "__bsan_"
 #define RUST_PREFIX "__rust_"
-#define RUST_RDL_PREFIX "__rdl_"
 
 #define BSAN_FN(name) BSAN_PREFIX name
 #define BSAN_DEBUG_PREFIX BSAN_FN("debug_")
 
 #define BSAN_DEBUG_FN(name) BSAN_DEBUG_PREFIX name
 #define RUST_FN(name) RUST_PREFIX name
-#define RUST_RDL_FN(name) RUST_RDL_PREFIX name
 
 // @__rust_retag(ptr, ptr, i64, i64)
 const char kBsanRustIntrinsicRetagPrefix[] = RUST_FN("retag");
@@ -82,19 +80,5 @@ const char kBsanBorTagCounterName[] = "__BSAN_BOR_TAG_CTR";
 const char kBsanAllocIdCounterName[] = "__BSAN_ALLOC_ID_CTR";
 
 static const unsigned kTLSSize = 100;
-
-const char *kRustAllocFns[] = {
-    RUST_FN("alloc"),
-    RUST_FN("dealloc"),
-    RUST_FN("realloc"),
-    RUST_FN("alloc_zeroed"),
-};
-
-const char *kRustAllocShimFns[] = {
-    RUST_RDL_FN("alloc"),
-    RUST_RDL_FN("dealloc"),
-    RUST_RDL_FN("realloc"),
-    RUST_RDL_FN("alloc_zeroed"),
-};
 
 #endif // BORROWSANITIZER_DECLARATIONS

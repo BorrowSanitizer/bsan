@@ -715,19 +715,6 @@ private:
     IRB.CreateCall(BS.BsanFuncDealloc, {Ptr, Prov.Tag, Prov.Info});
   }
 
-  bool isRustShim(CallBase &CB) {
-    if (Function *Callee = CB.getCalledFunction()) {
-      if (isAllocationFn(&CB, TLI) || getFreedOperand(&CB, TLI)) {
-        for (const char *Name : kRustAllocFns) {
-          if (Callee->getName().ends_with(Name)) {
-            return true;
-          }
-        }
-      }
-    }
-    return false;
-  }
-
   bool isRetag(CallBase *CB) {
     Function *Callee = CB->getCalledFunction();
     return CB->arg_size() == 7 && Callee &&
@@ -773,34 +760,6 @@ private:
 
     IRB.CreateCall(Callee, {Prov.Tag, Prov.Info});
     CB.eraseFromParent();
-  }
-
-  Value *resolveAllocSize(IRBuilder<> &IRB, CallBase &CB) {
-    Value *AllocSize;
-    // The function `getAllocSize` will only return a value if the allocation
-    // function is being called with a constant integer. If not, then we need to
-    // resolve the allocation size manually based on the semantics of
-    // `allocsize`.
-    std::optional<APInt> OptAllocSize = getAllocSize(&CB, TLI);
-    if (OptAllocSize.has_value()) {
-      AllocSize =
-          ConstantInt::get(BS.IntptrTy, OptAllocSize.value().getZExtValue());
-    } else {
-      Attribute Attr = CB.getFnAttr(Attribute::AllocSize);
-      if (Attr == Attribute()) {
-        report_fatal_error(
-            "Unable to resolve `allocsize` attribute for function with "
-            "`allockind(\"alloc\")`");
-      }
-      std::pair<unsigned, std::optional<unsigned>> Args =
-          Attr.getAllocSizeArgs();
-      AllocSize = CB.getArgOperand(Args.first);
-
-      if (Args.second.has_value())
-        AllocSize =
-            IRB.CreateMul(AllocSize, CB.getArgOperand(Args.second.value()));
-    }
-    return AllocSize;
   }
 
   void instrumentRetagMem(CallBase &CB) {
