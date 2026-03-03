@@ -1,4 +1,5 @@
-//@run
+//@run:0
+//miri: @compile-flags: -Zmiri-tree-borrows
 
 // These tests fail Stacked Borrows, but pass Tree Borrows.
 

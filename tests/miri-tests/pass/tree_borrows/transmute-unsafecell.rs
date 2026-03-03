@@ -1,4 +1,5 @@
-//@run
+//@run:0
+//miri: @compile-flags: -Zmiri-tree-borrows
 
 //! Testing `mem::transmute` between types with and without interior mutability.
 //! All transmutations should work, as long as we don't do any actual accesses

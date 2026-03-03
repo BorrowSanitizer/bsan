@@ -1,8 +1,10 @@
+//@run:0
 //! This test represents a core part of `SmallVec`'s `extend_impl`.
 //! What makes it interesting as a test is that it relies on Stacked Borrow's "quirk"
 //! in a fundamental, hard-to-fix-without-full-trees way.
 
-//@run
+//miri: @revisions: stack tree
+//miri: @[tree]compile-flags: -Zmiri-tree-borrows
 
 use std::marker::PhantomData;
 use std::mem::{ManuallyDrop, MaybeUninit};
