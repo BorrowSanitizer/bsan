@@ -17,34 +17,34 @@ use super::{mmap, munmap};
 /// Armv8-A spec allows addressing 52 or 56 bits as well. No processors
 /// implement this yet, though, so we can use target_pointer_width.
 #[cfg(target_pointer_width = "64")]
-static VA_BITS: u32 = 48;
+const VA_BITS: u32 = 48;
 
 #[cfg(target_pointer_width = "32")]
-static VA_BITS: u32 = 32;
+const VA_BITS: u32 = 32;
 
 #[cfg(target_pointer_width = "16")]
-static VA_BITS: u32 = 16;
+const VA_BITS: u32 = 16;
 
 // The power of the number of bytes in a pointer
-static PTR_BYTES: usize = mem::size_of::<usize>();
-static PTR_BYTES_POWER: u32 = PTR_BYTES.ilog2();
+const PTR_BYTES: usize = mem::size_of::<usize>();
+const PTR_BYTES_POWER: u32 = PTR_BYTES.ilog2();
 
 // The number of addressable, word-aligned, pointer-sized chunks
-static NUM_ADDR_CHUNKS: u32 = VA_BITS - PTR_BYTES_POWER;
+const NUM_ADDR_CHUNKS: u32 = VA_BITS - PTR_BYTES_POWER;
 
 // We have 2^L2_POWER entries in the second level of the page table
 // Adding 1 ensures that we have more second-level entries than first
 // level entries if the number of addressable chunks is odd.
-static L2_POWER: u32 = NUM_ADDR_CHUNKS.strict_add(1).strict_div(2);
+const L2_POWER: u32 = NUM_ADDR_CHUNKS.strict_add(1).strict_div(2);
 
 // We have 2^L1_POWER entries in the first level of the page table
-static L1_POWER: u32 = NUM_ADDR_CHUNKS.strict_div(2);
+const L1_POWER: u32 = NUM_ADDR_CHUNKS.strict_div(2);
 
 // The number of entries in the second level of the page table
-static L2_LEN: usize = 2_usize.pow(L2_POWER);
+const L2_LEN: usize = 2_usize.pow(L2_POWER);
 
 // The number of entries in the first level of the page table
-static L1_LEN: usize = 2_usize.pow(L1_POWER);
+const L1_LEN: usize = 2_usize.pow(L1_POWER);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TableIndex {
@@ -52,8 +52,16 @@ pub struct TableIndex {
     l2_index: usize,
 }
 
-type L2Array<T> = [T; L2_LEN];
-type L1Array<T> = [RwLock<*mut L2Array<T>>; L1_LEN];
+use bytemuck::Zeroable;
+struct ZeroableRwLock<T: Zeroable> {
+    pub inner: RwLock<T>,
+}
+unsafe impl<T: Zeroable> Zeroable for ZeroableRwLock<T> {}
+
+type L1Entry<T> = ZeroableRwLock<Option<NonNull<L2Array<T>>>>;
+type L2Entry<T> = T;
+type L2Array<T> = [L2Entry<T>; L2_LEN];
+type L1Array<T> = [L1Entry<T>; L1_LEN];
 
 impl TableIndex {
     fn new(address: usize) -> Self {
@@ -100,66 +108,79 @@ impl TableIndex {
     }
 }
 
+/// A two-level shadow memory heap implementation for tracking metadata about heap allocations.
+///
+/// This structure uses a sparse two-level page table to efficiently map memory addresses to
+/// shadow values of type `T`. It minimizes memory overhead by only allocating L2 pages on demand.
+/// Allocation is done via `mmap`. Therefore `T` must be `Sized` to ensure that we can calculate
+/// the size of the allocated pages.
 #[repr(C)]
 #[derive(Debug)]
 pub struct ShadowHeap<T> {
+    /// Non-null pointer to the L1 page table array, allocated via mmap at initialization.
     table: NonNull<L1Array<T>>,
+    /// Stable address (const pointer) of the default shadow value used when no L2 page has been allocated for a given address.
     default: *const T,
+    /// Thread-safe list of allocated L2 page indices, used for cleanup and iteration over populated shadow memory regions.
     l2_blocks: RwLock<Vec<usize>>,
 }
 
 unsafe impl<T> Sync for ShadowHeap<T> {}
 unsafe impl<T> Send for ShadowHeap<T> {}
 
-impl<T: Sized + Default + Copy> ShadowHeap<T> {
+impl<T: Sized> ShadowHeap<T> {
+    // Size of L1 and L2 tables in bytes
+    // The check for non-zero is done at compile time, hence the unwrap is safe.
+    const L1_SIZE: NonZero<usize> = NonZero::new(mem::size_of::<L1Array<T>>()).unwrap();
+    const L2_SIZE: NonZero<usize> = NonZero::new(mem::size_of::<T>() * L2_LEN).unwrap();
+}
+
+impl<T: Sized + Copy> ShadowHeap<T> {
     /// We assume that `new` is only called during program initialization, so only by the main thread.
     /// So there should be no deadlock / synchronization issues.
+    // TODO(obr): it seems like we need the `default` pointer only for the `get_src()` function because
+    // bsan-rt's API right now returns a pointer to the provenance entry for subsequent load/store operations.
+    // If we change the API to do load/store in one step, then we might be able to eliminate the need for a default pointer
+    // and just return the default value directly.
     pub fn new(default: *const T) -> Self {
-        unsafe {
-            // RwLock is safe to assume initialized, since the pages returned by mmap are zeroed.
-            // TODO: enforce this using an unsafe trait.
-            let table = {
-                let size_bytes = NonZero::new_unchecked(mem::size_of::<L1Array<T>>());
-                mmap(size_bytes).cast::<L1Array<T>>()
-            };
-            Self { table, default, l2_blocks: RwLock::new(Vec::<usize>::new()) }
-        }
+        let table = mmap(Self::L1_SIZE).cast::<L1Array<T>>();
+
+        // We can skip initialzation of each L1Entry because mmap returns a zeroed page and
+        // we use ZeroableRwLock which is zero-initialized as RwLock::new(None)
+
+        Self { table, default, l2_blocks: RwLock::new(Vec::<usize>::new()) }
     }
 
     #[inline]
     fn get_l2(&self, idx: TableIndex) -> Option<NonNull<L2Array<T>>> {
-        unsafe {
-            let l1_entry = &(*self.table.as_ptr())[idx.l1_index];
-            let read_guard = l1_entry.read();
-            let l2_page_ptr = *read_guard;
-            NonNull::new(l2_page_ptr)
-        }
+        // SAFETY: `self.table` should always be a valid pointer to an mmap'd L1Array
+        let l1_entry = unsafe { &(*self.table.as_ptr())[idx.l1_index] };
+
+        let read_guard = l1_entry.inner.read();
+        *read_guard
     }
 
     fn ensure_l2(&self, idx: TableIndex) -> NonNull<L2Array<T>> {
-        unsafe {
-            let l1_entry = &(*self.table.as_ptr())[idx.l1_index];
+        // SAFETY: `self.table` should always be a valid pointer to an mmap'd L1Array
+        let l1_entry = unsafe { &(*self.table.as_ptr())[idx.l1_index] };
 
-            // Fast path: check with read lock (non-blocking for readers)
-            let read_guard = l1_entry.upgradeable_read();
-            let l2_ptr = *read_guard;
-            if !l2_ptr.is_null() {
-                return NonNull::new_unchecked(l2_ptr);
-            }
-
-            // Slow path: upgrade to write lock for mmap allocation
-            // With an upgradable lock we don't need to double-check that l2_ptr is
-            // still null because the lock prevents other writers.
-            let mut write_guard = read_guard.upgrade();
-            let size_bytes = NonZero::new_unchecked(mem::size_of::<T>() * L2_LEN);
-            let l2_page = mmap(size_bytes).cast::<L2Array<T>>();
-
-            *write_guard = l2_page.as_ptr();
-            drop(write_guard); // release lock early and prevent deadlocks
-
-            self.l2_blocks.write().push(idx.l1_index);
-            l2_page
+        // Fast path: check with read lock (non-blocking for readers)
+        let read_guard = l1_entry.inner.upgradeable_read();
+        let l2_ptr = *read_guard;
+        if let Some(l2_ptr) = l2_ptr {
+            return l2_ptr;
         }
+
+        // Slow path: upgrade to write lock for mmap allocation
+        // With an upgradeable lock we don't need to double-check that l2_ptr is still None because the lock prevents other writers.
+        let mut write_guard = read_guard.upgrade();
+        let l2_page = mmap(Self::L2_SIZE).cast::<L2Array<T>>();
+
+        *write_guard = Some(l2_page);
+        drop(write_guard); // release lock early and prevent deadlocks
+
+        self.l2_blocks.write().push(idx.l1_index);
+        l2_page
     }
 
     pub fn clear(&self, dst: usize, num_bytes: usize, value: T) {
@@ -234,7 +255,7 @@ impl<T: Sized + Default + Copy> ShadowHeap<T> {
                     for offset in 0..num_can_write {
                         ptr::write(
                             &raw mut (*l2_table_dst.as_ptr())[dst_index.l2_index + offset],
-                            T::default(), // FIXME: we should use *self.default here?
+                            *self.default,
                         );
                     }
                 }
@@ -269,24 +290,20 @@ impl<T> Drop for ShadowHeap<T> {
     /// We assume that `drop()` is only called during program deinit, so only by the main thread.
     /// So there should be no deadlock / synchronization issues.
     fn drop(&mut self) {
-        unsafe {
-            // Free all L2 tables
-            let mut l2_blocks_guard = self.l2_blocks.write();
-            for i in l2_blocks_guard.drain(..) {
-                let l1_entry = &(*self.table.as_ptr())[i];
-                let mut l1_entry_guard = l1_entry.write();
-                let l2_table = *l1_entry_guard;
-                if !l2_table.is_null() {
-                    let l2_table_size = NonZero::new_unchecked(mem::size_of::<T>() * L2_LEN);
-                    let l2_table = NonNull::new_unchecked(l2_table);
-                    munmap(l2_table, l2_table_size);
-                    *l1_entry_guard = ptr::null_mut();
-                }
+        // Free all L2 tables
+        let mut l2_blocks_guard = self.l2_blocks.write();
+        for i in l2_blocks_guard.drain(..) {
+            // SAFETY: `self.table` should always be a valid pointer to an mmap'd L1Array
+            let l1_entry = unsafe { &(*self.table.as_ptr())[i] };
+            let mut l1_entry_guard = l1_entry.inner.write();
+            let l2_table = *l1_entry_guard;
+            if let Some(l2_table) = l2_table {
+                unsafe { munmap(l2_table, Self::L2_SIZE) }
+                *l1_entry_guard = None;
             }
-            // Free the L1 table (RwLocks will be dropped automatically)
-            let size_bytes = NonZero::new_unchecked(mem::size_of::<L1Array<T>>());
-            munmap::<L1Array<T>>(self.table, size_bytes);
         }
+        // Free the L1 table (RwLocks will be dropped automatically)
+        unsafe { munmap::<L1Array<T>>(self.table, Self::L1_SIZE) }
     }
 }
 
@@ -301,6 +318,30 @@ mod tests {
     }
 
     static DEFAULT_TEST_PROV: TestProv = TestProv { value: 0 };
+
+    #[test]
+    fn assert_rwlock_zero_init_valid() {
+        use core::mem;
+        let zeroed: L1Entry<crate::Provenance> = unsafe { mem::zeroed() };
+        let explicit: L1Entry<crate::Provenance> = ZeroableRwLock { inner: RwLock::new(None) };
+
+        // Compare byte representation
+        let zeroed_bytes: &[u8] = unsafe {
+            core::slice::from_raw_parts(&zeroed as *const _ as *const u8, mem::size_of_val(&zeroed))
+        };
+        let explicit_bytes: &[u8] = unsafe {
+            core::slice::from_raw_parts(
+                &explicit as *const _ as *const u8,
+                mem::size_of_val(&explicit),
+            )
+        };
+
+        assert_eq!(
+            zeroed_bytes, explicit_bytes,
+            "an L1 entry implicitly zero-initialized (by mmap) should be identical to \
+            an L1 entry explicitly initialized as ZeroableRwLock {{ inner: RwLock::new(None) }}"
+        );
+    }
 
     #[test]
     fn test_indices() {
@@ -509,5 +550,17 @@ mod tests {
                 assert_eq!(loaded, test_value);
             }
         })
+    }
+
+    /// Check for noticing if we increase the size of L1Entry during refactoring
+    #[test]
+    fn check_l1_entry_size() {
+        type OldL2Array<T> = [T; L2_LEN];
+        type OldL1Entry<T> = RwLock<*mut OldL2Array<T>>;
+        // We have a RwLock<T> containing an AtomicUsize lock (8 bytes on 64-bit systems) + UnsafeCell<T> where T is a pointer (8 bytes on 64-bit systems) to an L2Array.
+        use crate::Provenance;
+        const _: () = assert!(size_of::<OldL1Entry<Provenance>>() == 16);
+        const _: () =
+            assert!(size_of::<L1Entry<Provenance>>() <= size_of::<OldL1Entry<Provenance>>());
     }
 }

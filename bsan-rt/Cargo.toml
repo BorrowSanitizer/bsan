@@ -9,6 +9,7 @@ hashbrown = { version = "0.15.5", default-features = false, features = ["default
 rustc-hash = { version = "2.1.1", default-features = false }
 libc-print = { version = "0.1.23" }
 spin = "0.10.0"
+bytemuck = { version = "1.21", default-features = false }
 smallvec = "1.15.1"
 
 [lib]
