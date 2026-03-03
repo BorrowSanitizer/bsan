@@ -63,13 +63,6 @@ type L2Entry<T> = T;
 type L2Array<T> = [L2Entry<T>; L2_LEN];
 type L1Array<T> = [L1Entry<T>; L1_LEN];
 
-// Prevent that we increase the size of L1Entry during refactoring
-type OldL1Entry<T> = RwLock<*mut L2Array<T>>;
-// We have a RwLock<T> containing a AtomicUsize pointer (8 bytes on 64-bit systems) + UnsafeCell<T> where T is a pointer (8 bytes on 64-bit systems).
-use crate::Provenance;
-const _: () = assert!(size_of::<OldL1Entry<Provenance>>() == 16);
-const _: () = assert!(size_of::<L1Entry<Provenance>>() <= size_of::<OldL1Entry<Provenance>>());
-
 impl TableIndex {
     fn new(address: usize) -> Self {
         let address: usize = address.shr(PTR_BYTES_POWER);
@@ -117,28 +110,18 @@ impl TableIndex {
 
 /// A two-level shadow memory heap implementation for tracking metadata about heap allocations.
 ///
-/// This structure uses a sparse two-level page table to efficiently map heap addresses to
+/// This structure uses a sparse two-level page table to efficiently map memory addresses to
 /// shadow values of type `T`. It minimizes memory overhead by only allocating L2 pages on demand.
-///
-/// # Type Parameters
-///
-/// * `T` - The type of shadow value stored for each pointer-sized unit of memory. Must be `Sized`
-///   and `Copy` to allow efficient copying during memory operations.
-///
-/// # Fields
-///
-/// * `table` - Non-null pointer to the L1 page table array, allocated via mmap at initialization.
-/// * `default` - We need a stable address (const pointer) of the default shadow value used when no
-///   L2 page has been allocated for a given address. This allows querying unmapped memory regions
-///   without allocating L2 pages, reducing memory usage for sparse shadow memory. The default value is
-///   typically used to represent "uninitialized" or "unshadowed" memory locations.
-/// * `l2_blocks` - A thread-safe list of allocated L2 page indices, used for cleanup and
-///   iteration over populated shadow memory regions.
+/// Allocation is done via `mmap`. Therefore `T` must be `Sized` to ensure that we can calculate
+/// the size of the allocated pages.
 #[repr(C)]
 #[derive(Debug)]
 pub struct ShadowHeap<T> {
+    /// Non-null pointer to the L1 page table array, allocated via mmap at initialization.
     table: NonNull<L1Array<T>>,
+    /// Stable address (const pointer) of the default shadow value used when no L2 page has been allocated for a given address.
     default: *const T,
+    /// Thread-safe list of allocated L2 page indices, used for cleanup and iteration over populated shadow memory regions.
     l2_blocks: RwLock<Vec<usize>>,
 }
 
@@ -343,10 +326,10 @@ mod tests {
         let explicit: L1Entry<crate::Provenance> = ZeroableRwLock { inner: RwLock::new(None) };
 
         // Compare byte representation
-        let zeroed_bytes = unsafe {
+        let zeroed_bytes: &[u8] = unsafe {
             core::slice::from_raw_parts(&zeroed as *const _ as *const u8, mem::size_of_val(&zeroed))
         };
-        let explicit_bytes = unsafe {
+        let explicit_bytes: &[u8] = unsafe {
             core::slice::from_raw_parts(
                 &explicit as *const _ as *const u8,
                 mem::size_of_val(&explicit),
@@ -355,7 +338,8 @@ mod tests {
 
         assert_eq!(
             zeroed_bytes, explicit_bytes,
-            "Zero-initialized RwLock<Option<NonNull<T>>> must equal RwLock::new(None)"
+            "an L1 entry implicitly zero-initialized (by mmap) should be identical to \
+            an L1 entry explicitly initialized as ZeroableRwLock {{ inner: RwLock::new(None) }}"
         );
     }
 
@@ -566,5 +550,17 @@ mod tests {
                 assert_eq!(loaded, test_value);
             }
         })
+    }
+
+    /// Check for noticing if we increase the size of L1Entry during refactoring
+    #[test]
+    fn check_l1_entry_size() {
+        type OldL2Array<T> = [T; L2_LEN];
+        type OldL1Entry<T> = RwLock<*mut OldL2Array<T>>;
+        // We have a RwLock<T> containing an AtomicUsize lock (8 bytes on 64-bit systems) + UnsafeCell<T> where T is a pointer (8 bytes on 64-bit systems) to an L2Array.
+        use crate::Provenance;
+        const _: () = assert!(size_of::<OldL1Entry<Provenance>>() == 16);
+        const _: () =
+            assert!(size_of::<L1Entry<Provenance>>() <= size_of::<OldL1Entry<Provenance>>());
     }
 }
