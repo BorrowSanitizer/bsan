@@ -1,0 +1,19 @@
+error: Undefined Behavior: write through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/shr_frozen_violation1.rs:19:9
+   |
+19 | *(x as *const i32 as *mut i32) = 7;
+   |
+   = help: the accessed tag <TAG>(StrongProtector) has state Frozen which forbids this write
+help: the accessed tag <TAG>(StrongProtector) was created here, in the initial state Frozen
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/shr_frozen_violation1.rs:17:0
+   |
+17 | fn unknown_code(x: &i32) {
+   |
+
+stack backtrace:
+0: shr_frozen_violation1::unknown_code
+ at bsan/tests/miri-tests/fail/aliasing/both_borrows/shr_frozen_violation1.rs:19:9
+1: shr_frozen_violation1::foo
+ at bsan/tests/miri-tests/fail/aliasing/both_borrows/shr_frozen_violation1.rs:9:5
+2: shr_frozen_violation1::main
+ at bsan/tests/miri-tests/fail/aliasing/both_borrows/shr_frozen_violation1.rs:14:20

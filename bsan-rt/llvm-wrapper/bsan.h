@@ -46,13 +46,13 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_init();
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_deinit();
 
-SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_memmove(void *dest, const void *src,
-                                                   uptr n);
-
-SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_memcpy(void *dest, const void *src,
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memmove(void *dest, const void *src,
                                                   uptr n);
 
-SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_memset(void *s, int c, uptr n);
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memcpy(void *dest, const void *src,
+                                                 uptr n);
+
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memset(void *s, int c, uptr n);
 
 SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_mark_tls();
 

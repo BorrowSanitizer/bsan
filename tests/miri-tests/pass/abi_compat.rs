@@ -139,11 +139,11 @@ fn main() {
     test_abi_newtype::<[u32; 32]>();
     test_abi_newtype::<Option<i32>>();
     test_abi_newtype::<Option<num::NonZero<u32>>>();
-     
+
     // Extra test for assumptions made by arbitrary-self-dyn-receivers.
     // This is interesting since these types are not `repr(transparent)`. So this is not part of our
     // public ABI guarantees, but is relied on by the compiler.
     let rc = Rc::new(0);
     let rc_ptr: *mut i32 = unsafe { mem::transmute_copy(&rc) };
-    test_abi_compat(rc, rc_ptr);*/
+    test_abi_compat(rc, rc_ptr);
 }

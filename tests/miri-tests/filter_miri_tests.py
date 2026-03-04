@@ -12,7 +12,7 @@ MIRIFLAGS = [
     "-Zmiri-permissive-provenance",
     # we want to ensure that all alignment errors are caught and
     # excluded
-    "-Zmiri-symbolic-alignment-check"
+    "-Zmiri-symbolic-alignment-check",
 ]
 
 TARGETS = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
@@ -38,6 +38,7 @@ def is_baseline_ub(txt: str):
 def had_ub(txt: str):
     return UB_TEXT in txt
 
+
 TO_EXCLUDE = [
     # we do not have the same utility functions as Miri.
     "mod utils;",
@@ -45,8 +46,10 @@ TO_EXCLUDE = [
     "-Zmiri-deterministic-concurrency",
 ]
 
+
 def test_is_valid(txt: str):
     all(excl not in txt for excl in TO_EXCLUDE)
+
 
 def prepare_file(exit_code: int, file_path: Path) -> str:
     lines = file_path.read_text().splitlines()
