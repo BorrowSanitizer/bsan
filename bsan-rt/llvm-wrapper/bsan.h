@@ -6,7 +6,8 @@ using __sanitizer::u32;
 using __sanitizer::u64;
 using __sanitizer::uptr;
 
-extern THREADLOCAL void *__BSAN_PROV_STACK;
+extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __BSAN_TRUST;
+extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_PROV_STACK;
 
 typedef uptr BorTag;
 typedef const uptr FramePtr;

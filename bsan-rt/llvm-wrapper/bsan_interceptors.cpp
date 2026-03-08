@@ -18,7 +18,7 @@ bool inst_caller(uptr bp) {
   if (is_inst) {
     BSAN_TLS_MARKER = 0;
   }
-  return is_inst;
+  return __BSAN_TRUST == 1;
 }
 
 #define INST_CALLER() inst_caller(GET_CURRENT_FRAME())

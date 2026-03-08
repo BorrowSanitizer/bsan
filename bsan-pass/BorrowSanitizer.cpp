@@ -820,6 +820,16 @@ private:
             Callee->hasExternalWeakLinkage() || Callee->hasAddressTaken());
   }
 
+  bool shouldTrustCallee(CallBase *CB) {
+    return isAllocationFn(CB, TLI) || getFreedOperand(CB, TLI);
+  }
+
+  void trustCallee(IRBuilder<> &IRB) { IRB.CreateStore(BS.One, BS.TrustFlag); }
+
+  void untrustCallee(IRBuilder<> &IRB) {
+    IRB.CreateStore(BS.Zero, BS.TrustFlag);
+  }
+
   using InstVisitor<BorrowSanitizerVisitor>::visit;
 
   void visitCallBase(CallBase &CB) {
@@ -850,6 +860,10 @@ private:
     // then read the provenance for the return value.
     IRBuilder<> Before(&CB);
 
+    bool Trust = shouldTrustCallee(&CB);
+    if (Trust) {
+      trustCallee(Before);
+    }
     // Store the provenance for each argument into the thread-local storage for
     // parameters. The process for computing provenance components is
     // deterministic, so we can guarantee that the callee will expect a
@@ -877,11 +891,12 @@ private:
     // We need to do some extra work here to compute where to insert our
     // instructions, since some function calls occur within terminators.
     IRBuilder<> After = switchToInsertionPointAfterCall(&CB);
-
+    if (Trust) {
+      untrustCallee(After);
+    }
     // If we're calling a heap allocation or deallocation function,
     // then we can skip handling argument provenance and defer to our
     // run-time calls.
-    std::optional<APInt> AllocSize = getAllocSize(&CB, TLI);
 
     Value *NumProvenanceValues = BS.Zero;
     SmallVector<std::pair<unsigned, ProvenancePointer>> ProvenancePointers;
@@ -1538,6 +1553,7 @@ void BorrowSanitizer::createUserspaceApi(Module &M,
   ParamTLS = getOrInsertTLSGlobal(M, kBsanParamTLSName,
                                   ArrayType::get(PL.ProvenanceTy, kTLSSize));
   ProvStack = getOrInsertTLSGlobal(M, kBsanProvStackName, PtrTy);
+  TrustFlag = getOrInsertTLSGlobal(M, kBsanTrustFlagName, IntptrTy);
   BorTagCounter = getOrInsertGlobal(M, kBsanBorTagCounterName, IntptrTy);
 }
 
