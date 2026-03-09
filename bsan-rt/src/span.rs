@@ -25,6 +25,7 @@ impl fmt::Display for Symbol {
     }
 }
 
+#[repr(transparent)]
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct Span(pub usize);
 

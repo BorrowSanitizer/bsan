@@ -5,6 +5,7 @@
 #include "sanitizer_common/sanitizer_allocator_dlsym.h"
 #include "sanitizer_common/sanitizer_allocator_interface.h"
 #include "sanitizer_common/sanitizer_linux.h"
+#include "sanitizer_common/sanitizer_stacktrace.h"
 #include "sanitizer_common/sanitizer_vector.h"
 
 using namespace __sanitizer;
@@ -14,8 +15,6 @@ DECLARE_REAL(void *, malloc, SIZE_T)
 DECLARE_REAL(void, free, void *)
 
 bool inst_caller() { return __BSAN_TRUST == 1; }
-
-#define INST_CALLER() inst_caller()
 
 #define ENSURE_BSAN_INITED()                                                   \
   do {                                                                         \
@@ -35,12 +34,10 @@ struct DlsymAlloc : public DlSymAllocator<DlsymAlloc> {
 typedef int (*MainFn)(int, char **, char **);
 
 struct InterceptorContext {
-  Mutex atexit_mu;
-  Mutex thread_atexit_mu;
+  Mutex AtExitLock;
   Vector<struct BSanAtExitRecord *> AtExitStack;
-  Vector<struct BSanAtExitRecord *> ThreadAtExitStack;
   MainFn Entrypoint = nullptr;
-  InterceptorContext() : AtExitStack(), ThreadAtExitStack() {}
+  InterceptorContext() : AtExitStack() {}
 };
 
 alignas(64) static char ictx[sizeof(InterceptorContext)];
@@ -81,11 +78,11 @@ extern "C" void *__crt_malloc(SIZE_T size) {
 }
 
 INTERCEPTOR(void *, malloc, SIZE_T size) {
-  GET_CURRENT_FRAME();
+  GET_CALLER_PC_BP;
   if (DlsymAlloc::Use())
     return DlsymAlloc::Allocate(size);
   void *ptr = REAL(malloc)(size);
-  if (INST_CALLER()) {
+  if (inst_caller()) {
     Provenance *RetSlot = GetRetValSlot(0);
     BorTag Tag = __bsan_new_bor_tag();
     *RetSlot = {Tag, __bsan_alloc(ptr, size, Tag)};
@@ -102,12 +99,12 @@ extern "C" void __crt_free(void *ptr) {
 }
 
 INTERCEPTOR(void, free, void *ptr) {
-  GET_CURRENT_FRAME();
+  GET_CALLER_PC_BP;
   if (UNLIKELY(!ptr))
     return;
   if (DlsymAlloc::PointerIsMine(ptr))
     return DlsymAlloc::Free(ptr);
-  if (INST_CALLER()) {
+  if (inst_caller()) {
     Provenance *Slot = GetArgSlot(0);
     __bsan_dealloc(ptr, Slot->Tag, Slot->Info);
   }
@@ -118,9 +115,9 @@ INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
   if (DlsymAlloc::Use())
     return DlsymAlloc::Callocate(nmemb, size);
   void *ptr = REAL(calloc)(nmemb, size);
-  GET_CURRENT_FRAME();
+  GET_CALLER_PC_BP;
   Provenance *RetSlot = GetRetValSlot(0);
-  if (INST_CALLER()) {
+  if (inst_caller()) {
     BorTag Tag = __bsan_new_bor_tag();
     *RetSlot = {Tag, __bsan_alloc(ptr, nmemb * size, Tag)};
   } else {
@@ -132,15 +129,14 @@ INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
 INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
   if (DlsymAlloc::Use() || DlsymAlloc::PointerIsMine(ptr))
     return DlsymAlloc::Realloc(ptr, size);
-  GET_CURRENT_FRAME();
-  bool is_inst = INST_CALLER();
-  if (is_inst) {
+  GET_CALLER_PC_BP;
+  if (inst_caller()) {
     Provenance *Slot = GetArgSlot(0);
     __bsan_dealloc(ptr, Slot->Tag, Slot->Info);
   }
   void *nptr = REAL(realloc)(ptr, size);
   Provenance *RetSlot = GetRetValSlot(0);
-  if (is_inst) {
+  if (inst_caller()) {
     BorTag Tag = __bsan_new_bor_tag();
     *RetSlot = {Tag, __bsan_alloc(nptr, size, Tag)};
   } else {
@@ -196,7 +192,7 @@ struct BSanAtExitRecord {
 void BSanAtExitWrapper() {
   BSanAtExitRecord *r;
   {
-    Lock l(&interceptor_ctx()->atexit_mu);
+    Lock l(&interceptor_ctx()->AtExitLock);
 
     uptr element = interceptor_ctx()->AtExitStack.Size() - 1;
     r = interceptor_ctx()->AtExitStack[element];
@@ -256,7 +252,7 @@ static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso) {
     // NetBSD does not preserve the 2nd argument if dso is equal to 0
     // Store ctx in a local stack-like structure
 
-    Lock l(&interceptor_ctx()->atexit_mu);
+    Lock l(&interceptor_ctx()->AtExitLock);
 
     res = REAL(__cxa_atexit)((void (*)(void *a))BSanAtExitWrapper, 0, 0);
     if (!res) {
