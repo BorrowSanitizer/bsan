@@ -578,29 +578,31 @@ private:
     }
   }
 
+  bool isCalledFromUninstContext(Function &F) {
+    return BS.ExternCalledFns.contains(&F);
+  }
+
   // Populates the array of argument provenance pointers and initializes the
   // start and end of the function prologue.
   void initStack(IRBuilder<> &EntryIRB) {
-    Value *TotalNumProvenanceValues = BS.Zero;
-    for (auto &Arg : F.args()) {
-      SmallVector<ProvenanceComponent> *Components =
-          getProvenanceComponents(EntryIRB, Arg.getType());
-      for (auto &C : *Components) {
-        Value *CurrentArrayByteOffset =
-            EntryIRB.CreateMul(TotalNumProvenanceValues, BS.PL.ProvenanceSize);
-        Value *CurrentArraySlot =
-            addPointer(EntryIRB, BS.DL, BS.ParamTLS, CurrentArrayByteOffset);
-        ProvenancePointer Ptr =
-            C.getPointerToProvenance(EntryIRB, BS.PL, CurrentArraySlot);
-        ArgumentProvenance[&Arg].push_back(Ptr);
-        TotalNumProvenanceValues =
-            EntryIRB.CreateAdd(TotalNumProvenanceValues, C.NumProvenanceValues);
-      }
-    }
+    if (!isCalledFromUninstContext(F)) {
+      Value *TotalNumProvenanceValues = BS.Zero;
 
-    if (needsTLSValidation(&F)) {
-      EntryIRB.CreateCall(BS.BsanFuncValidateParamTLS,
-                          {TotalNumProvenanceValues});
+      for (auto &Arg : F.args()) {
+        SmallVector<ProvenanceComponent> *Components =
+            getProvenanceComponents(EntryIRB, Arg.getType());
+        for (auto &C : *Components) {
+          Value *CurrentArrayByteOffset = EntryIRB.CreateMul(
+              TotalNumProvenanceValues, BS.PL.ProvenanceSize);
+          Value *CurrentArraySlot =
+              addPointer(EntryIRB, BS.DL, BS.ParamTLS, CurrentArrayByteOffset);
+          ProvenancePointer Ptr =
+              C.getPointerToProvenance(EntryIRB, BS.PL, CurrentArraySlot);
+          ArgumentProvenance[&Arg].push_back(Ptr);
+          TotalNumProvenanceValues = EntryIRB.CreateAdd(
+              TotalNumProvenanceValues, C.NumProvenanceValues);
+        }
+      }
     }
 
     FrameTop = EntryIRB.CreateLoad(BS.PtrTy, BS.ProvStack, true);
@@ -891,12 +893,10 @@ private:
     // We need to do some extra work here to compute where to insert our
     // instructions, since some function calls occur within terminators.
     IRBuilder<> After = switchToInsertionPointAfterCall(&CB);
+
     if (Trust) {
       untrustCallee(After);
     }
-    // If we're calling a heap allocation or deallocation function,
-    // then we can skip handling argument provenance and defer to our
-    // run-time calls.
 
     Value *NumProvenanceValues = BS.Zero;
     SmallVector<std::pair<unsigned, ProvenancePointer>> ProvenancePointers;
@@ -925,19 +925,19 @@ private:
         NumProvenanceValues =
             Before.CreateAdd(NumProvenanceValues, Comp.NumProvenanceValues);
       }
-    }
-    // We need to validate thread-local storage before we load provenance
-    // values from it, but we also need to know the number of provenance
-    // values associated with the return value to perform initialization.
-    if (needsTLSValidation(Callee)) {
-      Value *Prev = Before.CreateCall(BS.BsanFuncMarkTLS, {});
-      if (NumProvenanceValues != BS.Zero) {
-        After.CreateCall(BS.BsanFuncValidateRetvalTLS,
-                         {NumProvenanceValues, Prev});
+      // We need to validate thread-local storage before we load provenance
+      // values from it, but we also need to know the number of provenance
+      // values associated with the return value to perform initialization.
+      if (!Trust && needsTLSValidation(Callee)) {
+        if (NumProvenanceValues != BS.Zero) {
+          After.CreateMemSet(BS.RetvalTLS, ConstantInt::get(BS.Int8Ty, 0),
+                             RetvalByteWidth, MaybeAlign(1));
+        }
       }
-    }
-    for (auto &[Idx, Ptr] : ProvenancePointers) {
-      setProvenance({&CB, Idx}, Provenance::load(After, BS.PL, Ptr));
+
+      for (auto &[Idx, Ptr] : ProvenancePointers) {
+        setProvenance({&CB, Idx}, Provenance::load(After, BS.PL, Ptr));
+      }
     }
   }
 
@@ -1288,7 +1288,26 @@ private:
     }
   }
 
-  void popFrame(IRBuilder<> &IRB, Instruction &I) {
+  void popFrame(IRBuilder<> &IRB, Instruction &I, Value *RetVal) {
+    if (RetVal && !isCalledFromUninstContext(F)) {
+      SmallVector<ProvenanceComponent> *Components =
+          getProvenanceComponents(IRB, RetVal->getType());
+
+      Value *RetvalByteWidth = BS.Zero;
+      for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
+        Value *Slot = addPointer(IRB, BS.DL, BS.RetvalTLS, RetvalByteWidth);
+
+        Provenance Prov = assertProvenance(IRB, Comp, {RetVal, Idx});
+        ProvenancePointer Dest =
+            ProvenancePointer(IRB, BS.PL, Slot, Comp.Elems, Prov.Kind);
+        Prov.store(IRB, BS.PL, Dest);
+
+        Value *ByteWidth =
+            IRB.CreateMul(Comp.NumProvenanceValues, BS.PL.ProvenanceSize);
+        RetvalByteWidth = IRB.CreateAdd(RetvalByteWidth, ByteWidth);
+      }
+    }
+
     if (NumFnEntryRetags) {
       Value *FrameBottom = IRB.CreateLoad(BS.PtrTy, BS.ProvStack, true);
       Value *FrameLen =
@@ -1310,48 +1329,12 @@ private:
 
   void visitReturnInst(ReturnInst &I) {
     IRBuilder<> IRB(&I);
-    if (Value *RetVal = I.getReturnValue()) {
-      SmallVector<ProvenanceComponent> *Components =
-          getProvenanceComponents(IRB, RetVal->getType());
-
-      Value *RetvalByteWidth = BS.Zero;
-      for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
-        Value *Slot = addPointer(IRB, BS.DL, BS.RetvalTLS, RetvalByteWidth);
-
-        Provenance Prov = assertProvenance(IRB, Comp, {RetVal, Idx});
-        ProvenancePointer Dest =
-            ProvenancePointer(IRB, BS.PL, Slot, Comp.Elems, Prov.Kind);
-        Prov.store(IRB, BS.PL, Dest);
-
-        Value *ByteWidth =
-            IRB.CreateMul(Comp.NumProvenanceValues, BS.PL.ProvenanceSize);
-        RetvalByteWidth = IRB.CreateAdd(RetvalByteWidth, ByteWidth);
-      }
-    }
-    popFrame(IRB, I);
+    popFrame(IRB, I, I.getReturnValue());
   }
 
   void visitResumeInst(ResumeInst &I) {
     IRBuilder<> IRB(&I);
-    if (Value *RetVal = I.getValue()) {
-      SmallVector<ProvenanceComponent> *Components =
-          getProvenanceComponents(IRB, RetVal->getType());
-
-      Value *RetvalByteWidth = BS.Zero;
-      for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
-        Value *Slot = addPointer(IRB, BS.DL, BS.RetvalTLS, RetvalByteWidth);
-
-        Provenance Prov = assertProvenance(IRB, Comp, {RetVal, Idx});
-        ProvenancePointer Dest =
-            ProvenancePointer(IRB, BS.PL, Slot, Comp.Elems, Prov.Kind);
-        Prov.store(IRB, BS.PL, Dest);
-
-        Value *ByteWidth =
-            IRB.CreateMul(Comp.NumProvenanceValues, BS.PL.ProvenanceSize);
-        RetvalByteWidth = IRB.CreateAdd(RetvalByteWidth, ByteWidth);
-      }
-    }
-    popFrame(IRB, I);
+    popFrame(IRB, I, I.getValue());
   }
 
   IRBuilder<> switchToInsertionPointAfterCall(CallBase *CB) {
@@ -1380,6 +1363,8 @@ Instruction *BorrowSanitizer::createBsanModuleDtor(Module &M) {
       0, kBsanModuleDtorName, &M);
   BsanDtorFunction->addFnAttr(Attribute::NoUnwind);
 
+  ExternCalledFns.insert(BsanDtorFunction);
+
   BasicBlock *BsanDtorBB = BasicBlock::Create(*C, "", BsanDtorFunction);
   ReturnInst *BsanDtorRet = ReturnInst::Create(*C, BsanDtorBB);
 
@@ -1400,11 +1385,16 @@ bool BorrowSanitizer::instrumentModule(Module &M) {
       /*InitArgs=*/{}, "");
 
   bool CtorComdat = false;
+  createBsanModuleDtor(M);
+
   IRBuilder<> IRB(BsanCtorFunction->getEntryBlock().getTerminator());
   instrumentGlobals(IRB, M, CtorComdat);
 
   assert(BsanCtorFunction && BsanDtorFunction);
   const int Priority = 1;
+
+  BsanCtorFunction->addFnAttr(Attribute::DisableSanitizerInstrumentation);
+  BsanDtorFunction->addFnAttr(Attribute::DisableSanitizerInstrumentation);
 
   // Put the constructor and destructor in comdat if both
   // (1) global instrumentation is not TU-specific
@@ -1437,9 +1427,67 @@ static Constant *getOrInsertGlobal(Module &M, StringRef Name, Type *Ty) {
   });
 }
 
+BorrowSanitizer::GlobalDescription
+BorrowSanitizer::getGlobalDescription(GlobalVariable *G) const {
+  GlobalDescription Skip = {true, std::nullopt};
+  Type *Ty = G->getValueType();
+
+  if (G->hasSection()) {
+    StringRef Section = G->getSection();
+    if (Section.starts_with(".preinit_array") ||
+        Section.starts_with(".init_array") ||
+        Section.starts_with(".fini_array")) {
+      Constant *Init = G->getInitializer()->stripPointerCasts();
+      if (Function *F = dyn_cast<Function>(Init)) {
+        return {true, F};
+      }
+    }
+  }
+
+  if (!G->hasInitializer())
+    return Skip;
+
+  if (auto *Init = G->getInitializer()) {
+    Value *Func = Init->stripPointerCasts();
+    if (auto *F = dyn_cast<Function>(Func)) {
+      Skip.AssocFn = F;
+    }
+  }
+  if (!Ty->isSized())
+    return Skip;
+  if (G->isThreadLocal())
+    return Skip;
+  return {true, Skip.AssocFn};
+}
+
 void BorrowSanitizer::instrumentGlobals(IRBuilder<> &IRB, Module &M,
                                         bool CtorComdat) {
-  createBsanModuleDtor(M);
+  for (auto &G : M.globals()) {
+    GlobalDescription GD = getGlobalDescription(&G);
+    if (GD.AssocFn.has_value()) {
+      ExternCalledFns.insert(GD.AssocFn.value());
+    }
+  }
+
+  auto RecordExternCalled = [&](Constant *C) {
+    // Elements of LLVM's @llvm.global_ctors and @llvm.global_dtors
+    // arrays are structs with three fields: the priority, a function pointer,
+    // and the data passed to the function. At the moment, we only care about
+    // the second operand: the function. We need to indicate to the
+    // instrumentation pass that all parameters to this function will have
+    // wildcard provenance.
+    // TODO: When can we trust the data that is passed to a constructor or
+    // destructor?
+    if (ConstantStruct *CS = dyn_cast<ConstantStruct>(C)) {
+      if (Function *F = dyn_cast<Function>(CS->getOperand(1))) {
+        ExternCalledFns.insert(F);
+      }
+    }
+    return C;
+  };
+
+  transformGlobalCtors(M, RecordExternCalled);
+  transformGlobalDtors(M, RecordExternCalled);
 }
 
 void BorrowSanitizer::initializeCallbacks(Module &M,

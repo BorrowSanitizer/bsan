@@ -41,6 +41,13 @@ public:
   bool instrumentFunction(Function &F, FunctionAnalysisManager &FAM);
 
   void initializeCallbacks(Module &M, const TargetLibraryInfo &TLI);
+
+  struct GlobalDescription {
+    bool ShouldInstrument;
+    std::optional<Function *> AssocFn;
+  };
+  GlobalDescription getGlobalDescription(GlobalVariable *G) const;
+
   void instrumentGlobals(IRBuilder<> &IRB, Module &M, bool CtorComdat);
   Instruction *createBsanModuleDtor(Module &M);
 
@@ -127,6 +134,8 @@ public:
 
   Constant *True = nullptr;
   Constant *False = nullptr;
+
+  DenseSet<Function *> ExternCalledFns;
 };
 
 } // namespace llvm

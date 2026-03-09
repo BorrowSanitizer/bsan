@@ -5,6 +5,7 @@
 #include "sanitizer_common/sanitizer_allocator_dlsym.h"
 #include "sanitizer_common/sanitizer_allocator_interface.h"
 #include "sanitizer_common/sanitizer_linux.h"
+#include "sanitizer_common/sanitizer_vector.h"
 
 using namespace __sanitizer;
 using namespace __bsan;
@@ -12,16 +13,9 @@ using namespace __bsan;
 DECLARE_REAL(void *, malloc, SIZE_T)
 DECLARE_REAL(void, free, void *)
 
-bool inst_caller(uptr bp) {
-  bp = bp ? *((uptr *)bp) : bp;
-  bool is_inst = bp == BSAN_TLS_MARKER;
-  if (is_inst) {
-    BSAN_TLS_MARKER = 0;
-  }
-  return __BSAN_TRUST == 1;
-}
+bool inst_caller() { return __BSAN_TRUST == 1; }
 
-#define INST_CALLER() inst_caller(GET_CURRENT_FRAME())
+#define INST_CALLER() inst_caller()
 
 #define ENSURE_BSAN_INITED()                                                   \
   do {                                                                         \
@@ -37,6 +31,22 @@ extern "C" int pthread_attr_destroy(void *attr);
 struct DlsymAlloc : public DlSymAllocator<DlsymAlloc> {
   static bool UseImpl() { return !BSAN_INITED; }
 };
+
+typedef int (*MainFn)(int, char **, char **);
+
+struct InterceptorContext {
+  Mutex atexit_mu;
+  Mutex thread_atexit_mu;
+  Vector<struct BSanAtExitRecord *> AtExitStack;
+  Vector<struct BSanAtExitRecord *> ThreadAtExitStack;
+  MainFn Entrypoint = nullptr;
+  InterceptorContext() : AtExitStack(), ThreadAtExitStack() {}
+};
+
+alignas(64) static char ictx[sizeof(InterceptorContext)];
+InterceptorContext *interceptor_ctx() {
+  return reinterpret_cast<InterceptorContext *>(&ictx[0]);
+}
 
 static void *BsanThreadStartFunc(void *arg) {
   BsanThread *t = (BsanThread *)arg;
@@ -71,6 +81,7 @@ extern "C" void *__crt_malloc(SIZE_T size) {
 }
 
 INTERCEPTOR(void *, malloc, SIZE_T size) {
+  GET_CURRENT_FRAME();
   if (DlsymAlloc::Use())
     return DlsymAlloc::Allocate(size);
   void *ptr = REAL(malloc)(size);
@@ -91,6 +102,7 @@ extern "C" void __crt_free(void *ptr) {
 }
 
 INTERCEPTOR(void, free, void *ptr) {
+  GET_CURRENT_FRAME();
   if (UNLIKELY(!ptr))
     return;
   if (DlsymAlloc::PointerIsMine(ptr))
@@ -106,6 +118,7 @@ INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
   if (DlsymAlloc::Use())
     return DlsymAlloc::Callocate(nmemb, size);
   void *ptr = REAL(calloc)(nmemb, size);
+  GET_CURRENT_FRAME();
   Provenance *RetSlot = GetRetValSlot(0);
   if (INST_CALLER()) {
     BorTag Tag = __bsan_new_bor_tag();
@@ -119,6 +132,7 @@ INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
 INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
   if (DlsymAlloc::Use() || DlsymAlloc::PointerIsMine(ptr))
     return DlsymAlloc::Realloc(ptr, size);
+  GET_CURRENT_FRAME();
   bool is_inst = INST_CALLER();
   if (is_inst) {
     Provenance *Slot = GetArgSlot(0);
@@ -174,6 +188,86 @@ SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_memcpy(void *dest, const void *src,
 
 } // extern "C"
 
+struct BSanAtExitRecord {
+  void (*func)(void *arg);
+  void *arg;
+};
+
+void BSanAtExitWrapper() {
+  BSanAtExitRecord *r;
+  {
+    Lock l(&interceptor_ctx()->atexit_mu);
+
+    uptr element = interceptor_ctx()->AtExitStack.Size() - 1;
+    r = interceptor_ctx()->AtExitStack[element];
+    interceptor_ctx()->AtExitStack.PopBack();
+  }
+
+  ClearArgSlot(0);
+  ((void (*)())r->func)();
+  InternalFree(r);
+}
+
+void BSanCxaAtExitWrapper(void *arg) {
+  ClearArgSlot(0);
+  BSanAtExitRecord *r = (BSanAtExitRecord *)arg;
+  // libc before 2.27 had race which caused occasional double handler execution
+  // https://sourceware.org/ml/libc-alpha/2017-08/msg01204.html
+  if (!r->func)
+    return;
+  r->func(r->arg);
+  r->func = nullptr;
+}
+
+static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso);
+
+// Unpoison argument shadow for C++ module destructors.
+INTERCEPTOR(int, __cxa_thread_atexit_impl, void (*func)(void *), void *arg,
+            void *dso_handle) {
+  if (BSAN_INIT_RUNNING)
+    return REAL(__cxa_thread_atexit_impl)(func, arg, dso_handle);
+  return setup_at_exit_wrapper((void (*)())func, arg, dso_handle);
+}
+
+// Unpoison argument shadow for C++ module destructors.
+INTERCEPTOR(int, __cxa_atexit, void (*func)(void *), void *arg,
+            void *dso_handle) {
+  if (BSAN_INIT_RUNNING)
+    return REAL(__cxa_atexit)(func, arg, dso_handle);
+  return setup_at_exit_wrapper((void (*)())func, arg, dso_handle);
+}
+
+// Unpoison argument shadow for C++ module destructors.
+INTERCEPTOR(int, atexit, void (*func)()) {
+  // Avoid calling real atexit as it is unreachable on at least on Linux.
+  if (BSAN_INIT_RUNNING)
+    return REAL(__cxa_atexit)((void (*)(void *a))func, 0, 0);
+  return setup_at_exit_wrapper((void (*)())func, 0, 0);
+}
+
+static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso) {
+  ENSURE_BSAN_INITED();
+  BSanAtExitRecord *r =
+      (BSanAtExitRecord *)InternalAlloc(sizeof(BSanAtExitRecord));
+  r->func = (void (*)(void *a))f;
+  r->arg = arg;
+  int res;
+  if (!dso) {
+    // NetBSD does not preserve the 2nd argument if dso is equal to 0
+    // Store ctx in a local stack-like structure
+
+    Lock l(&interceptor_ctx()->atexit_mu);
+
+    res = REAL(__cxa_atexit)((void (*)(void *a))BSanAtExitWrapper, 0, 0);
+    if (!res) {
+      interceptor_ctx()->AtExitStack.PushBack(r);
+    }
+  } else {
+    res = REAL(__cxa_atexit)(BSanCxaAtExitWrapper, r, dso);
+  }
+  return res;
+}
+
 namespace __bsan {
 
 void InitializeInterceptors() {
@@ -183,6 +277,9 @@ void InitializeInterceptors() {
   INTERCEPT_FUNCTION(malloc);
   INTERCEPT_FUNCTION(calloc);
   INTERCEPT_FUNCTION(realloc);
+  INTERCEPT_FUNCTION(atexit);
+  INTERCEPT_FUNCTION(__cxa_atexit);
+  INTERCEPT_FUNCTION(__cxa_thread_atexit_impl);
 }
 
 } // namespace __bsan

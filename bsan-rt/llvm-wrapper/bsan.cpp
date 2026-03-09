@@ -17,7 +17,6 @@ SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance
     __BSAN_RETVAL_TLS[TLS_SIZE];
 
 SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __BSAN_TRUST = 0;
-
 THREADLOCAL uptr BSAN_TLS_MARKER = 0;
 bool BSAN_INITED = false;
 bool BSAN_INIT_RUNNING;
@@ -28,6 +27,8 @@ const Provenance WILDCARD = {0, nullptr};
 namespace __bsan {
 Provenance *GetArgSlot(uptr Idx) { return &__BSAN_PARAM_TLS[Idx]; }
 Provenance *GetRetValSlot(uptr Idx) { return &__BSAN_RETVAL_TLS[Idx]; }
+void ClearArgSlot(uptr Idx) { __BSAN_PARAM_TLS[Idx] = WILDCARD; }
+void ClearRetValSlot(uptr Idx) { __BSAN_RETVAL_TLS[Idx] = WILDCARD; }
 } // namespace __bsan
 
 uptr unwind(uptr bp, uptr len) {
@@ -77,7 +78,6 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_init() {
   BsanThread *main_thread = BsanThread::Create(nullptr, nullptr);
   SetCurrentThread(main_thread);
   main_thread->Init();
-
   BSAN_INIT_RUNNING = false;
   BSAN_INITED = true;
 }
@@ -115,6 +115,12 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_validate_param_tls(uptr len) {
   if (marker == BSAN_TLS_MARKER) {
     BSAN_TLS_MARKER = 0;
   } else {
+    Printf("Uninstrumented!\n");
+    GET_CURRENT_PC_BP; // This macro defines 'pc' and 'bp' variables
+    BufferedStackTrace stack;
+    stack.Unwind(pc, bp, /*context=*/nullptr, /*request_fast=*/true,
+                 /*max_depth=*/kStackTraceMax);
+    stack.Print();
     for (uptr i = 0; i < len; ++i) {
       *GetArgSlot(i) = WILDCARD;
     }
@@ -133,6 +139,12 @@ __bsan_validate_retval_tls(uptr len, uptr prev_marker) {
     for (uptr i = 0; i < len; ++i) {
       *GetRetValSlot(i) = WILDCARD;
     }
+    Printf("Uninstrumented!\n");
+    GET_CURRENT_PC_BP; // This macro defines 'pc' and 'bp' variables
+    BufferedStackTrace stack;
+    stack.Unwind(pc, bp, /*context=*/nullptr, /*request_fast=*/true,
+                 /*max_depth=*/kStackTraceMax);
+    stack.Print();
   }
   BSAN_TLS_MARKER = prev_marker;
 }

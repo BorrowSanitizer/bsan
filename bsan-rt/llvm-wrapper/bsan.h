@@ -5,7 +5,6 @@
 using __sanitizer::u32;
 using __sanitizer::u64;
 using __sanitizer::uptr;
-
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __BSAN_TRUST;
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_PROV_STACK;
 
@@ -127,6 +126,8 @@ void BsanTSDInit();
 void InitializeInterceptors();
 Provenance *GetArgSlot(uptr Idx);
 Provenance *GetRetValSlot(uptr Idx);
+void ClearArgSlot(uptr Idx);
+void ClearRetValSlot(uptr Idx);
 } // namespace __bsan
 
 #endif // BSAN_H
