@@ -84,8 +84,7 @@ public:
   FunctionCallee BsanFuncRetag;
   FunctionCallee BsanFuncRead;
   FunctionCallee BsanFuncWrite;
-  FunctionCallee BsanFuncAlloc;
-  FunctionCallee BsanFuncDealloc;
+  FunctionCallee BsanFuncAllocStack;
   FunctionCallee BsanFuncDeallocStack;
 
   FunctionCallee BsanFuncPopFrame;
@@ -101,7 +100,6 @@ public:
   FunctionCallee BsanFuncMemMove;
   FunctionCallee BsanFuncMemCpy;
 
-  FunctionCallee BsanFuncAllocStack;
   FunctionCallee BsanFuncReserveStackSlot;
   FunctionCallee BsanFuncDestroyStackSlot;
 

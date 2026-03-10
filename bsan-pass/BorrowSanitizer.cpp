@@ -692,16 +692,6 @@ private:
                                std::nullopt, AtomicOrdering::Monotonic);
   }
 
-  // Allocates object metadata for a stack or heap allocation.
-  ProvenanceScalar instrumentHeapAllocation(IRBuilder<> &IRB, Value *Address,
-                                            Value *Size) {
-    Value *Tag = newBorrowTag(IRB);
-    Value *Info = IRB.CreateCall(BS.BsanFuncAlloc, {Address, Size, Tag});
-    ProvenanceScalar Prov = ProvenanceScalar(Tag, Info);
-    setProvenance(Address, Prov);
-    return Prov;
-  }
-
   // We only instrument allocations that have a non-zero size.
   bool shouldInstrumentAlloca(AllocaInst &AI) {
     // Although Rust emits retags for ZSTs, tracking
@@ -709,12 +699,6 @@ private:
     // due to interactions with lowering.
     return (AI.getAllocatedType()->isSized() &&
             !BS.getAllocaSizeInBytes(AI).isZero());
-  }
-
-  // Deallocates a pointer.
-  void instrumentDeallocation(IRBuilder<> &IRB, Value *Ptr) {
-    ProvenanceScalar Prov = assertProvenanceScalar(Ptr);
-    IRB.CreateCall(BS.BsanFuncDealloc, {Ptr, Prov.Tag, Prov.Info});
   }
 
   bool isRetag(CallBase *CB) {
@@ -1515,14 +1499,9 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncWrite = M.getOrInsertFunction(kBsanFuncWriteName, AL, IRB.getVoidTy(),
                                         PtrTy, IntptrTy, IntptrTy, PtrTy);
 
-  BsanFuncAlloc = M.getOrInsertFunction(kBsanFuncAllocName, AL, PtrTy, PtrTy,
-                                        IntptrTy, IntptrTy);
-
   BsanFuncAllocStack =
       M.getOrInsertFunction(kBsanFuncAllocStackName, AL, IRB.getVoidTy(), PtrTy,
                             IntptrTy, IntptrTy, PtrTy);
-  BsanFuncDealloc = M.getOrInsertFunction(
-      kBsanFuncDeallocName, AL, IRB.getVoidTy(), PtrTy, IntptrTy, PtrTy);
   BsanFuncDeallocStack = M.getOrInsertFunction(
       kBsanFuncDeallocStackName, AL, IRB.getVoidTy(), PtrTy, IntptrTy, PtrTy);
 

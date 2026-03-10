@@ -23,10 +23,6 @@ const char kBsanPrefix[] = BSAN_FN();
 const char kBsanFuncInitName[] = BSAN_FN("init");
 const char kBsanFuncDeinitName[] = BSAN_FN("deinit");
 
-const char kBsanFuncPushAllocaFrameName[] = BSAN_FN("push_alloca_frame");
-const char kBsanFuncPopAllocaFrameName[] = BSAN_FN("pop_alloca_frame");
-const char kBsanFuncRemoveProtectedTags[] = BSAN_FN("remove_protected_tags");
-
 const char kBsanFuncMemMoveName[] = BSAN_FN("memmove");
 const char kBsanFuncMemCpyName[] = BSAN_FN("memcpy");
 const char kBsanFuncMemSetName[] = BSAN_FN("memset");
@@ -42,10 +38,6 @@ const char kBsanFuncPopFrame[] = BSAN_FN("pop_frame");
 const char kBsanFuncReserveStackSlotName[] = BSAN_FN("reserve_stack_slot");
 const char kBsanFuncDestroyStackSlotName[] = BSAN_FN("destroy_stack_slot");
 const char kBsanFuncAllocStackName[] = BSAN_FN("alloc_stack");
-
-const char kBsanFuncNewBorrowTagName[] = BSAN_FN("new_tag");
-const char kBsanFuncNewAllocIDName[] = BSAN_FN("new_alloc_id");
-const char kBsanFuncDeallocName[] = BSAN_FN("dealloc");
 const char kBsanFuncDeallocStackName[] = BSAN_FN("dealloc_stack");
 
 const char kBsanFuncExposeTagName[] = BSAN_FN("expose_tag");
