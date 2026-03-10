@@ -292,7 +292,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_write(void *ptr, uptr access_size,
   Location loc = LOCATION();
   UNINITIALIZED BufferedStackTrace stack;
   stack.Unwind(loc.pc, loc.bp, /*context=*/nullptr, /*request_fast=*/true,
-               /*max_depth=*/10);
+               /*max_depth=*/5);
   stack.Print();
   __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, loc);
 }
