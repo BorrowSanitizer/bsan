@@ -152,7 +152,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_print_stack_trace(Location loc,
     const SymbolizedStack *frame = symbolized_stack.get();
     if (frame) {
       StackTracePrinter::GetOrInit()->RenderFrame(
-          &frame_desc, "  %n: %f\n      at %S", 0, frame->info.address,
+          &frame_desc, "  %n: %f\n      at %S", i, frame->info.address,
           &frame->info, common_flags()->symbolize_vs_style,
           common_flags()->strip_path_prefix);
       Printf("%s\n", frame_desc.data());
