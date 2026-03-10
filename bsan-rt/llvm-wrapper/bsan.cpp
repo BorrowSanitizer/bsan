@@ -143,7 +143,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_print_stack_trace(Location loc,
   Printf("backtrace:\n");
   InternalScopedString frame_desc;
   BufferedStackTrace stack;
-  stack.Unwind(loc.pc, loc.bp, /*context=*/nullptr, /*request_fast=*/true,
+  stack.Unwind(loc.pc, loc.bp, /*context=*/nullptr, /*request_fast=*/false,
                /*max_depth=*/depth);
   for (uptr i = 0; i < stack.size; ++i) {
     uptr pc = stack.trace[i];
