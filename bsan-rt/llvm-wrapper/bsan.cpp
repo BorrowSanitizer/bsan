@@ -155,9 +155,9 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_print_stack_trace(Location loc,
           &frame_desc, "  %n: %f\n      at %S", 0, frame->info.address,
           &frame->info, common_flags()->symbolize_vs_style,
           common_flags()->strip_path_prefix);
+      Printf("%s\n", frame_desc.data());
+      frame_desc.clear();
     }
-    Printf("%s\n", frame_desc.data());
-    frame_desc.clear();
   }
 }
 
