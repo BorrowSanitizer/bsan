@@ -20,7 +20,7 @@ help: the protected tag <TAG>(StrongProtector) was created here, in the initial 
 backtrace:
   0: core::mem::replace
  at RUSTLIB/core/src/mem/mod.rs:901:9
-  0: <core::cell::Cell<i32>>::replace
+  1: <core::cell::Cell<i32>>::replace
  at RUSTLIB/core/src/cell.rs:513:9
-  0: <core::cell::Cell<i32>>::set
+  2: <core::cell::Cell<i32>>::set
  at RUSTLIB/core/src/cell.rs:437:14

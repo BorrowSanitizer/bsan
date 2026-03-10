@@ -13,7 +13,7 @@ help: the accessed tag <TAG>(unprotected) was created here, in the initial state
 backtrace:
   0: frozen_write::foo
  at bsan/tests/fail/frozen_write.rs:9:14
-  0: frozen_write::main
+  1: frozen_write::main
  at bsan/tests/fail/frozen_write.rs:5:5
-  0: <fn() as core::ops::function::FnOnce<()>>::call_once
+  2: <fn() as core::ops::function::FnOnce<()>>::call_once
  at RUSTLIB/core/src/ops/function.rs:250:5

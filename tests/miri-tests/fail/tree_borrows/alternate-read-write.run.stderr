@@ -25,7 +25,7 @@ help: this transition corresponds to a loss of write permissions
 backtrace:
   0: alternate_read_write::main
  at bsan/tests/miri-tests/fail/tree_borrows/alternate-read-write.rs:17:5
-  0: <fn() as core::ops::function::FnOnce<()>>::call_once
+  1: <fn() as core::ops::function::FnOnce<()>>::call_once
  at RUSTLIB/core/src/ops/function.rs:250:5
-  0: std::sys::backtrace::__rust_begin_short_backtrace
+  2: std::sys::backtrace::__rust_begin_short_backtrace
  at RUSTLIB/std/src/sys/backtrace.rs:166:18

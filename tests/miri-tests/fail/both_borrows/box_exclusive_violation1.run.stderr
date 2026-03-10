@@ -19,7 +19,7 @@ help: this transition corresponds to a loss of read permissions
 backtrace:
   0: box_exclusive_violation1::unknown_code_2
  at bsan/tests/miri-tests/fail/both_borrows/box_exclusive_violation1.rs:29:9
-  0: box_exclusive_violation1::demo_box_advanced_unique
+  1: box_exclusive_violation1::demo_box_advanced_unique
  at bsan/tests/miri-tests/fail/both_borrows/box_exclusive_violation1.rs:10:5
-  0: box_exclusive_violation1::main
+  2: box_exclusive_violation1::main
  at bsan/tests/miri-tests/fail/both_borrows/box_exclusive_violation1.rs:36:5

@@ -7,7 +7,7 @@ error: Undefined Behavior: an access of size 4 at offset 4 is out of bounds for 
 backtrace:
   0: core::ptr::write
  at RUSTLIB/core/src/ptr/mod.rs:1910:9
-  0: <*mut i32>::write
+  1: <*mut i32>::write
  at RUSTLIB/core/src/ptr/mut_ptr.rs:1418:18
-  0: access_oob::foo
+  2: access_oob::foo
  at bsan/tests/fail/access_oob.rs:10:23

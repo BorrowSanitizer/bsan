@@ -20,7 +20,7 @@ help: the protected tag <TAG>(StrongProtector) was created here, in the initial 
 backtrace:
   0: invalidate_against_protector2::inner
  at bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector2.rs:7:14
-  0: invalidate_against_protector2::main
+  1: invalidate_against_protector2::main
  at bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector2.rs:16:5
-  0: <fn() as core::ops::function::FnOnce<()>>::call_once
+  2: <fn() as core::ops::function::FnOnce<()>>::call_once
  at RUSTLIB/core/src/ops/function.rs:250:5

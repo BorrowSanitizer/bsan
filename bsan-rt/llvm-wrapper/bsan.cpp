@@ -141,16 +141,20 @@ __bsan_validate_retval_tls(uptr len, uptr prev_marker) {
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_print_stack_trace(Location loc,
                                                             uptr depth) {
   Printf("backtrace:\n");
+  
   InternalScopedString frame_desc;
+
   BufferedStackTrace stack;
-  stack.Unwind(loc.pc, loc.bp, /*context=*/nullptr, /*request_fast=*/false,
-               /*max_depth=*/depth);
-  stack.Print();
+  stack.Unwind(loc.pc, loc.bp, nullptr, true, depth);
+
   for (uptr i = 0; i < stack.size; ++i) {
-    uptr pc = stack.trace[i];
+    uptr record = stack.trace[i];
+    uptr pc_mask = (1ULL << 48) - 1;
+    uptr pc = record & pc_mask;
     SymbolizedStackHolder symbolized_stack(
         Symbolizer::GetOrInit()->SymbolizePC(pc));
     const SymbolizedStack *frame = symbolized_stack.get();
+
     if (frame) {
       StackTracePrinter::GetOrInit()->RenderFrame(
           &frame_desc, "  %n: %f\n      at %S", i, frame->info.address,

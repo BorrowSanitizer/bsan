@@ -26,7 +26,7 @@ help: this transition corresponds to the first write to a 2-phase borrowed mutab
 backtrace:
   0: illegal_write6::foo
  at bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:12:14
-  0: illegal_write6::main
+  1: illegal_write6::main
  at bsan/tests/miri-tests/fail/both_borrows/illegal_write6.rs:6:5
-  0: <fn() as core::ops::function::FnOnce<()>>::call_once
+  2: <fn() as core::ops::function::FnOnce<()>>::call_once
  at RUSTLIB/core/src/ops/function.rs:250:5
