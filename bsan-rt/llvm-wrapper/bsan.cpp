@@ -145,6 +145,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_print_stack_trace(Location loc,
   BufferedStackTrace stack;
   stack.Unwind(loc.pc, loc.bp, /*context=*/nullptr, /*request_fast=*/false,
                /*max_depth=*/depth);
+  stack.Print();
   for (uptr i = 0; i < stack.size; ++i) {
     uptr pc = stack.trace[i];
     SymbolizedStackHolder symbolized_stack(
