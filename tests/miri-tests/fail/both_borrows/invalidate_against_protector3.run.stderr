@@ -1,25 +1,23 @@
 error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is forbidden
       --> bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector3.rs:9:14
-         |
-       9 | unsafe { *x = 0 };
-         |
-
-help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
-help: this write would cause the protected tag <TAG>(StrongProtector) (currently Frozen) to become Disabled
-help: protected tags must never be Disabled
-    help: the accessed tag <TAG>(unprotected) was created here
+       |
+     9 | unsafe { *x = 0 };
+       |
+         = help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
+         = help: this write would cause the protected tag <TAG>(StrongProtector) (currently Frozen) to become Disabled
+         = help: protected tags must never be Disabled
+help: the accessed tag <TAG>(unprotected) was created here
       --> RUSTLIB/std/src/sys/alloc/PLATFORM.rs:l:c
-    help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Frozen
+help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Frozen
       --> bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector3.rs:5:0
-         |
-       5 | fn inner(x: *mut i32, _y: &i32) {
-         |
+       |
+     5 | fn inner(x: *mut i32, _y: &i32) {
+       |
 
 backtrace:
-  0:
-    bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector3.rs:9:14
-  1:
-    bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector3.rs:17:9
-  2:
-    RUSTLIB/core/src/ops/function.rs:250:5
-
+  0: invalidate_against_protector3::inner
+ at bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector3.rs:9:14
+  0: invalidate_against_protector3::main
+ at bsan/tests/miri-tests/fail/both_borrows/invalidate_against_protector3.rs:17:9
+  0: <fn() as core::ops::function::FnOnce<()>>::call_once
+ at RUSTLIB/core/src/ops/function.rs:250:5

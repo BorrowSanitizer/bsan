@@ -21,22 +21,18 @@ use spin::Mutex;
 mod global;
 use global::*;
 mod helpers;
-mod sanitizer_common_interface;
+mod sanitizer_common;
 
 mod borrow_tracker;
 use borrow_tracker::*;
 
 mod diagnostics;
 
-#[macro_use]
-mod span;
-use span::Span;
-
 mod errors;
 mod memory;
 
 use crate::borrow_tracker::tree::Tree;
-use crate::span::FramePtr;
+use crate::sanitizer_common::{Location, Span};
 
 #[thread_local]
 #[unsafe(no_mangle)]
@@ -342,7 +338,7 @@ unsafe extern "C-unwind" fn __bsan_new_bor_tag() -> BorTag {
 
 /// Creates a new borrow tag for the given provenance object.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_retag(
+unsafe extern "C-unwind" fn __bsan_retag_impl(
     object_addr: *mut c_void,
     access_size: usize,
     is_protected: u8,
@@ -353,64 +349,67 @@ unsafe extern "C-unwind" fn __bsan_retag(
     im_len: usize,
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
+    loc: Location,
 ) -> BorTag {
     debug_bsan!("retag", object_addr, bor_tag, alloc_info);
-    let fp = unsafe { fp!() };
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
     let retag_info = unsafe {
         RetagInfo::from_raw(access_size, is_protected, ty_is_freeze, ptr_kind, im_data, im_len)
     };
-    BorrowTracker::retag(ctx, prov, object_addr, access_size, retag_info, fp.caller_span())
-        .unwrap_or_else(|err| ctx.handle_error(err, fp))
+    BorrowTracker::retag(ctx, prov, object_addr, access_size, retag_info, loc.pc)
+        .unwrap_or_else(|err| ctx.handle_error(err, loc))
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_pop_frame(frame_start: *const Provenance, protected: usize) {
+extern "C" fn __bsan_pop_frame_impl(
+    frame_start: *const Provenance,
+    protected: usize,
+    loc: Location,
+) {
     let ctx = unsafe { global_ctx() };
     let provenance = unsafe { slice::from_raw_parts(frame_start, protected) };
-    let span = unsafe { fp!().caller_span() };
     for prov in provenance {
-        let _ = BorrowTracker::for_alloc(*prov, |mut bt| bt.protector_end(ctx, span));
+        let _ = BorrowTracker::for_alloc(*prov, |mut bt| bt.protector_end(ctx, loc.pc));
         ctx.protected_tags_mut().remove_protector(prov.bor_tag);
     }
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_read(
+unsafe extern "C-unwind" fn __bsan_read_impl(
     ptr: *mut c_void,
     access_size: usize,
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
+    loc: Location,
 ) {
     debug_bsan!("read", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-    let fp = unsafe { fp!() };
     BorrowTracker::for_access(prov, ptr, Some(access_size), |mut bt| {
-        bt.access(ctx, AccessKind::Read, fp.caller_span())
+        bt.access(ctx, AccessKind::Read, loc.pc)
     })
-    .unwrap_or_else(|err| ctx.handle_error(err, fp));
+    .unwrap_or_else(|err| ctx.handle_error(err, loc));
 }
 
 /// Records a write access of size `access_size` at the given address `addr` using the provenance `prov`.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_write(
+unsafe extern "C-unwind" fn __bsan_write_impl(
     ptr: *mut c_void,
     access_size: usize,
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
+    loc: Location,
 ) {
     debug_bsan!("write", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-    let fp = unsafe { fp!() };
 
     BorrowTracker::for_access(prov, ptr, Some(access_size), |mut bt| {
-        bt.access(ctx, AccessKind::Write, fp.caller_span())
+        bt.access(ctx, AccessKind::Write, loc.pc)
     })
-    .unwrap_or_else(|err| ctx.handle_error(err, fp));
+    .unwrap_or_else(|err| ctx.handle_error(err, loc));
 }
 
 // Registers a heap allocation of size `size`, storing its provenance in the return pointer.
@@ -419,27 +418,28 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     base_addr: *mut c_void,
     size: usize,
     bor_tag: BorTag,
+    loc: Location,
 ) -> NonNull<AllocInfo> {
     let ctx = unsafe { global_ctx() };
-    let fp = unsafe { fp!().prev() };
-
     #[allow(clippy::let_and_return)]
-    let alloc_info =
-        ctx.create_alloc_info(AllocInfo::new(base_addr, size, bor_tag, fp.caller_span()));
+    let alloc_info = ctx.create_alloc_info(AllocInfo::new(base_addr, size, bor_tag, loc.pc));
     debug_bsan!("alloc", base_addr, bor_tag, alloc_info.as_ptr());
     alloc_info
 }
 
 /// Deregisters a heap allocation
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_dealloc(ptr: *mut c_void, bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+extern "C" fn __bsan_dealloc(
+    ptr: *mut c_void,
+    bor_tag: BorTag,
+    alloc_info: *mut AllocInfo,
+    loc: Location,
+) {
     debug_bsan!("dealloc", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov: Provenance = Provenance { bor_tag, alloc_info };
-    let fp = unsafe { fp!().prev() };
-
-    BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, fp.caller_span()))
-        .unwrap_or_else(|e| ctx.handle_error(e, fp));
+    BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, loc.pc))
+        .unwrap_or_else(|e| ctx.handle_error(e, loc));
 
     if let Some(alloc_info) = NonNull::new(alloc_info) {
         unsafe { ctx.destroy_alloc_info(alloc_info) };
@@ -448,15 +448,15 @@ extern "C" fn __bsan_dealloc(ptr: *mut c_void, bor_tag: BorTag, alloc_info: *mut
 
 // Registers a heap allocation of size `size`, storing its provenance in the return pointer.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_dealloc_stack(
+unsafe extern "C-unwind" fn __bsan_dealloc_stack_impl(
     ptr: *mut c_void,
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
+    loc: Location,
 ) {
     debug_bsan!("dealloc", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov: Provenance = Provenance { bor_tag, alloc_info };
-    let fp = unsafe { fp!() };
     if alloc_info.is_null() {
         return;
     }
@@ -467,8 +467,8 @@ unsafe extern "C-unwind" fn __bsan_dealloc_stack(
         return;
     }
 
-    BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, fp.caller_span()))
-        .unwrap_or_else(|e| ctx.handle_error(e, fp));
+    BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, loc.pc))
+        .unwrap_or_else(|e| ctx.handle_error(e, loc));
 }
 
 /// Copies the provenance stored in the range `[src_addr, src_addr + access_size)` within the shadow heap
@@ -524,16 +524,16 @@ unsafe extern "C" fn __bsan_destroy_stack_slot(slot: NonNull<AllocInfo>) {
 
 /// Initializes stack allocation metadata in-place.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_alloc_stack(
+unsafe extern "C" fn __bsan_alloc_stack_impl(
     base_addr: *mut c_void,
     size: usize,
     bor_tag: BorTag,
     alloc_info: NonNull<AllocInfo>,
+    loc: Location,
 ) {
     debug_bsan!("alloc_stack", base_addr, bor_tag, alloc_info.as_ptr().cast::<AllocInfo>());
-    let span = unsafe { fp!().caller_span() };
     unsafe {
-        alloc_info.write(AllocInfo::new(base_addr, size, bor_tag, span));
+        alloc_info.write(AllocInfo::new(base_addr, size, bor_tag, loc.pc));
     }
 }
 

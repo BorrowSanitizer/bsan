@@ -9,6 +9,7 @@ use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use crate::errors::{ErrorFormatContext, UBInfo};
 use crate::helpers::FxHashMap;
 use crate::memory::{Heap, ShadowHeap};
+use crate::sanitizer_common::SanitizerCommon;
 use crate::*;
 
 #[derive(Default)]
@@ -106,14 +107,10 @@ impl GlobalCtx {
         ProtectedTagsRefMut(self.protected_tags.write())
     }
 
-    pub fn handle_error(&self, ub_info: UBInfo, fp: FramePtr) -> ! {
+    pub fn handle_error(&self, ub_info: UBInfo, loc: Location) -> ! {
         let mut ctx = ErrorFormatContext::default();
-        crate::eprint!("error: {}", ctx.display_ub(ub_info, fp.caller_span()));
-        crate::eprintln!("backtrace:");
-        for (i, frame) in fp.take(3).enumerate() {
-            crate::eprintln!("  {i}:\n    {}", frame.symbolize());
-        }
-        crate::eprint!("\n");
+        crate::eprint!("error: {}", ctx.display_ub(ub_info, loc.pc));
+        SanitizerCommon::print_current_stack_trace(loc, 3);
         self.exit(1)
     }
 

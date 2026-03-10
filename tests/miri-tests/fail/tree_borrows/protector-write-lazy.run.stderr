@@ -1,29 +1,25 @@
 error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x0] is forbidden
       --> bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:34:14
-         |
-      34 | unsafe { println!("Value of funky: {}", *funky_ptr_lazy_on_fst_elem) }
-         |
-
-help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow
-    help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
+       |
+    34 | unsafe { println!("Value of funky: {}", *funky_ptr_lazy_on_fst_elem) }
+       |
+         = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow
+help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
       --> bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:17:18
-         |
-      17 | unsafe { (&mut *(ptr_to_vec.wrapping_add(1))) as *mut i32 }.wrapping_sub(1);
-         |
-
-    help: the accessed tag <TAG>(unprotected) later transitioned due to a protector release (acting as a foreign write)
+       |
+    17 | unsafe { (&mut *(ptr_to_vec.wrapping_add(1))) as *mut i32 }.wrapping_sub(1);
+       |
+help: the accessed tag <TAG>(unprotected) later transitioned due to a protector release (acting as a foreign write)
       --> bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:22:2
-         |
-      22 | }
-         |
-
-    help: this transition corresponds to a loss of read and write permissions
+       |
+    22 | }
+       |
+help: this transition corresponds to a loss of read and write permissions
 
 backtrace:
-  0:
-    bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:34:14
-  1:
-    RUSTLIB/core/src/ops/function.rs:250:5
-  2:
-    RUSTLIB/std/src/sys/backtrace.rs:166:18
-
+  0: protector_write_lazy::main
+ at bsan/tests/miri-tests/fail/tree_borrows/protector-write-lazy.rs:34:14
+  0: <fn() as core::ops::function::FnOnce<()>>::call_once
+ at RUSTLIB/core/src/ops/function.rs:250:5
+  0: std::sys::backtrace::__rust_begin_short_backtrace
+ at RUSTLIB/std/src/sys/backtrace.rs:166:18

@@ -8,8 +8,7 @@ use hashbrown::HashMap;
 
 use crate::borrow_tracker::Permission;
 use crate::diagnostics::{AccessCause, HistoryData, NodeDebugInfo};
-use crate::sanitizer_common_interface::SanitizerCommon;
-use crate::span::{Span, Symbol};
+use crate::sanitizer_common::{SanitizerCommon, Span, Symbol};
 use crate::AllocId;
 
 pub type TreeTransitionResult<T> = core::result::Result<T, TransitionError>;
@@ -68,9 +67,9 @@ pub struct ErrorFormatContext {
 }
 
 impl ErrorFormatContext {
-    pub fn display_ub(&mut self, info: UBInfo, current_span: Span) -> String {
+    pub fn display_ub(&mut self, info: UBInfo, span: Span) -> String {
+        let symbol = SanitizerCommon::symbolize(span);
         let mut result = String::new();
-        let symbol = current_span.symbolize();
         result.push_str("Undefined Behavior: ");
         match info {
             UBInfo::UseAfterFree => {
@@ -169,19 +168,18 @@ impl ErrorFormatContext {
         buffer.push_str(&title);
         buffer.push('\n');
         buffer.push_str(&self.format_symbol(symbol));
-        buffer.push('\n');
         for detail in details {
-            buffer.push_str(&format!("help: {}\n", detail));
+            buffer.push_str(&format!("         = help: {}\n", detail));
         }
 
         for event in history.events {
-            buffer.push_str(&format!("    help: {}\n", event.1));
+            buffer.push_str(&format!("help: {}\n", event.1));
             if let Some(span) = event.0 {
-                let symbol = span.symbolize();
+                let symbol = SanitizerCommon::symbolize(span);
                 buffer.push_str(&self.format_symbol(symbol));
             }
-            buffer.push('\n');
         }
+        buffer.push('\n');
         buffer
     }
 
@@ -194,9 +192,9 @@ impl ErrorFormatContext {
                 .entry(path.clone())
                 .or_insert_with(|| SanitizerCommon::read_file(&path).unwrap_or_default());
             if let Some(content) = SanitizerCommon::get_source_line(file, line) {
-                buffer.push_str("         |\n");
-                buffer.push_str(&format!("{:>8} | {}\n", line, content));
-                buffer.push_str("         |\n");
+                buffer.push_str("       |\n");
+                buffer.push_str(&format!("{:>6} | {}\n", line, content));
+                buffer.push_str("       |\n");
             }
         }
         buffer

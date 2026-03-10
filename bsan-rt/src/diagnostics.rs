@@ -18,7 +18,8 @@ use crate::borrow_tracker::unimap::UniIndex;
 use crate::borrow_tracker::Size;
 use crate::errors::{TransitionError, UBResult};
 use crate::global::ProtectedTagsRef;
-use crate::{println, AllocId, BorTag, Span};
+use crate::sanitizer_common::Span;
+use crate::{println, AllocId, BorTag};
 
 /// Cause of an access: either a real access or one
 /// inserted by Tree Borrows due to a reborrow or a deallocation.
