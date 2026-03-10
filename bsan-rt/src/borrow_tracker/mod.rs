@@ -7,7 +7,7 @@ use tree::{AllocRange, Tree};
 use crate::borrow_tracker::tree::{ChildParams, LocationState};
 use crate::diagnostics::{print_tree_diff, AccessCause, PrintTree};
 use crate::errors::{UBInfo, UBResult};
-use crate::span::Span;
+use crate::sanitizer_common::Span;
 use crate::{AllocId, BorTag, GlobalCtx, Provenance};
 
 mod foreign_access_skipping;

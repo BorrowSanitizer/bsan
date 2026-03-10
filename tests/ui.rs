@@ -75,7 +75,8 @@ fn bsan_config(
             "dependencies",
             DependencyBuilder {
                 program: CommandBuilder {
-                    // Set the `cargo-bsan` binary, which we expect to be in the same folder as the `bsan-driver` binary.
+                    // Set the `cargo-bsan` binary, which we expect to be in the same
+                    // folder as the `bsan-driver` binary.
                     // (It's a separate crate, so we don't get an env var from cargo.)
                     program: path_from_env("CARGO_BSAN"),
                     // There is no `cargo bsan build` so we just use `cargo bsan run`.

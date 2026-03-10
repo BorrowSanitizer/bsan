@@ -3,10 +3,7 @@
 using namespace __sanitizer;
 using namespace __bsan;
 
-extern "C" {
-void __bsan_local_init();
-void __bsan_local_deinit();
-}
+SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_PROV_STACK = nullptr;
 
 BsanThread *BsanThread::Create(thread_callback_t start_routine, void *arg) {
   uptr PageSize = GetPageSizeCached();
@@ -20,7 +17,9 @@ BsanThread *BsanThread::Create(thread_callback_t start_routine, void *arg) {
 
 void BsanThread::Init() {
   GetThreadStackTopAndBottom(IsMainThread(), &stack_top_, &stack_bottom_);
-  __bsan_local_init();
+  prov_stack_size_ = stack_top_ - stack_bottom_;
+  prov_stack_ = MmapOrDie(prov_stack_size_, __func__);
+  __BSAN_PROV_STACK = (void *)(((u8 *)prov_stack_) + prov_stack_size_);
 }
 
 void BsanThread::TSDDtor(void *tsd) {
@@ -29,7 +28,7 @@ void BsanThread::TSDDtor(void *tsd) {
 }
 
 void BsanThread::Destroy() {
-  __bsan_local_deinit();
+  UnmapOrDie(prov_stack_, prov_stack_size_);
   uptr size = RoundUpTo(sizeof(BsanThread), GetPageSizeCached());
   UnmapOrDie(this, size);
 }

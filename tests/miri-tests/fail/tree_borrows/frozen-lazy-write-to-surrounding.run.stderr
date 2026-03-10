@@ -1,21 +1,19 @@
 error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-      --> RUSTLIB/core/src/ptr/mod.rs:1910:9
-         |
-    1910 | intrinsics::write_via_move(dst, src)
-         |
+    --> RUSTLIB/core/src/ptr/mod.rs:1910:9
+     |
+1910 | intrinsics::write_via_move(dst, src)
+     |
+     = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this write
+help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
+    --> bsan/tests/miri-tests/fail/tree_borrows/frozen-lazy-write-to-surrounding.rs:6:13
+     |
+   6 | let x = &pair.0;
+     |
 
-help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this write
-    help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-      --> bsan/tests/miri-tests/fail/tree_borrows/frozen-lazy-write-to-surrounding.rs:6:13
-         |
-       6 | let x = &pair.0;
-         |
-
-backtrace:
-  0:
-    RUSTLIB/core/src/ptr/mod.rs:1910:9
-  1:
-    RUSTLIB/core/src/ptr/mut_ptr.rs:1418:18
-  2:
-    bsan/tests/miri-tests/fail/tree_borrows/frozen-lazy-write-to-surrounding.rs:8:18
-
+stack backtrace:
+0: core::ptr::write
+ at RUSTLIB/core/src/ptr/mod.rs:1910:9
+1: <*mut i32>::write
+ at RUSTLIB/core/src/ptr/mut_ptr.rs:1418:18
+2: frozen_lazy_write_to_surrounding::main
+ at bsan/tests/miri-tests/fail/tree_borrows/frozen-lazy-write-to-surrounding.rs:8:18
