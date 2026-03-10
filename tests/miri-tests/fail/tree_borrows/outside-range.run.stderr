@@ -1,26 +1,26 @@
 error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x3] is forbidden
-      --> bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:21:5
-       |
-    21 | *y.add(3) = 42;
-       |
-         = help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
-         = help: this write would cause the protected tag <TAG>(StrongProtector) (currently Reserved) to become Disabled
-         = help: protected tags must never be Disabled
+   --> bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:21:5
+    |
+ 21 | *y.add(3) = 42;
+    |
+    = help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
+    = help: this write would cause the protected tag <TAG>(StrongProtector) (currently Reserved) to become Disabled
+    = help: protected tags must never be Disabled
 help: the accessed tag <TAG>(unprotected) was created here
-      --> RUSTLIB/core/src/slice/mod.rs:757:0
-       |
-   757 | pub const fn as_mut_ptr(&mut self) -> *mut T {
-       |
+   --> RUSTLIB/core/src/slice/mod.rs:757:0
+    |
+757 | pub const fn as_mut_ptr(&mut self) -> *mut T {
+    |
 help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
-      --> bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:13:0
-       |
-    13 | unsafe fn stuff(x: &mut u8, y: *mut u8) {
-       |
+   --> bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:13:0
+    |
+ 13 | unsafe fn stuff(x: &mut u8, y: *mut u8) {
+    |
 
-backtrace:
-  0: outside_range::stuff
+stack backtrace:
+0: outside_range::stuff
  at bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:21:5
-  1: outside_range::main
+1: outside_range::main
  at bsan/tests/miri-tests/fail/tree_borrows/outside-range.rs:9:9
-  2: <fn() as core::ops::function::FnOnce<()>>::call_once
+2: <fn() as core::ops::function::FnOnce<()>>::call_once
  at RUSTLIB/core/src/ops/function.rs:250:5

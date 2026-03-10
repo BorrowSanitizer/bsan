@@ -1,19 +1,19 @@
 error: Undefined Behavior: write through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
-      --> bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:17:9
-       |
-    17 | *(x as *const i32 as *mut i32) = 7;
-       |
-         = help: the accessed tag <TAG>(StrongProtector) has state Frozen which forbids this write
+  --> bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:17:9
+   |
+17 | *(x as *const i32 as *mut i32) = 7;
+   |
+   = help: the accessed tag <TAG>(StrongProtector) has state Frozen which forbids this write
 help: the accessed tag <TAG>(StrongProtector) was created here, in the initial state Frozen
-      --> bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:15:0
-       |
-    15 | fn unknown_code(x: &i32) {
-       |
+  --> bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:15:0
+   |
+15 | fn unknown_code(x: &i32) {
+   |
 
-backtrace:
-  0: shr_frozen_violation1::unknown_code
+stack backtrace:
+0: shr_frozen_violation1::unknown_code
  at bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:17:9
-  1: shr_frozen_violation1::foo
+1: shr_frozen_violation1::foo
  at bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:7:5
-  2: shr_frozen_violation1::main
+2: shr_frozen_violation1::main
  at bsan/tests/miri-tests/fail/both_borrows/shr_frozen_violation1.rs:12:20

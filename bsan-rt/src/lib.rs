@@ -36,6 +36,10 @@ use crate::sanitizer_common::{Location, Span};
 
 #[thread_local]
 #[unsafe(no_mangle)]
+pub static mut __BSAN_HAD_ERROR: usize = 0;
+
+#[thread_local]
+#[unsafe(no_mangle)]
 pub static mut __BSAN_THREAD_ID: ThreadId = ThreadId(0);
 
 /// A struct for summarizing debug information about memory operations
@@ -357,8 +361,12 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
     let retag_info = unsafe {
         RetagInfo::from_raw(access_size, is_protected, ty_is_freeze, ptr_kind, im_data, im_len)
     };
-    BorrowTracker::retag(ctx, prov, object_addr, access_size, retag_info, loc.pc)
-        .unwrap_or_else(|err| ctx.handle_error(err, loc))
+    BorrowTracker::retag(ctx, prov, object_addr, access_size, retag_info, loc.pc).unwrap_or_else(
+        |err| {
+            ctx.handle_error(err, loc);
+            bor_tag
+        },
+    )
 }
 
 #[unsafe(no_mangle)]
@@ -390,7 +398,10 @@ unsafe extern "C-unwind" fn __bsan_read_impl(
     BorrowTracker::for_access(prov, ptr, Some(access_size), |mut bt| {
         bt.access(ctx, AccessKind::Read, loc.pc)
     })
-    .unwrap_or_else(|err| ctx.handle_error(err, loc));
+    .unwrap_or_else(|err| {
+        let _: () = ctx.handle_error(err, loc);
+        ().into()
+    });
 }
 
 /// Records a write access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -409,7 +420,10 @@ unsafe extern "C-unwind" fn __bsan_write_impl(
     BorrowTracker::for_access(prov, ptr, Some(access_size), |mut bt| {
         bt.access(ctx, AccessKind::Write, loc.pc)
     })
-    .unwrap_or_else(|err| ctx.handle_error(err, loc));
+    .unwrap_or_else(|err| {
+        let _: () = ctx.handle_error(err, loc);
+        ().into()
+    });
 }
 
 // Registers a heap allocation of size `size`, storing its provenance in the return pointer.
@@ -438,9 +452,12 @@ extern "C" fn __bsan_dealloc(
     debug_bsan!("dealloc", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov: Provenance = Provenance { bor_tag, alloc_info };
-    BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, loc.pc))
-        .unwrap_or_else(|e| ctx.handle_error(e, loc));
-
+    BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, loc.pc)).unwrap_or_else(
+        |err| {
+            let _: () = ctx.handle_error(err, loc);
+            ().into()
+        },
+    );
     if let Some(alloc_info) = NonNull::new(alloc_info) {
         unsafe { ctx.destroy_alloc_info(alloc_info) };
     }
@@ -466,9 +483,12 @@ unsafe extern "C-unwind" fn __bsan_dealloc_stack_impl(
     if unsafe { (*prov.alloc_info).tree_lock.is_none() } {
         return;
     }
-
-    BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, loc.pc))
-        .unwrap_or_else(|e| ctx.handle_error(e, loc));
+    BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, loc.pc)).unwrap_or_else(
+        |err| {
+            let _: () = ctx.handle_error(err, loc);
+            ().into()
+        },
+    );
 }
 
 /// Copies the provenance stored in the range `[src_addr, src_addr + access_size)` within the shadow heap

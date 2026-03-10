@@ -82,10 +82,10 @@ INTERCEPTOR(void *, malloc, SIZE_T size) {
     return DlsymAlloc::Allocate(size);
   void *ptr = REAL(malloc)(size);
   if (inst_caller()) {
-    Location Loc = LOCATION();
+    Location loc = LOCATION();
     Provenance *RetSlot = GetRetValSlot(0);
     BorTag Tag = __bsan_new_bor_tag();
-    *RetSlot = {Tag, __bsan_alloc(ptr, size, Tag, Loc)};
+    *RetSlot = {Tag, __bsan_alloc(ptr, size, Tag, loc)};
   }
   return ptr;
 }
@@ -104,9 +104,10 @@ INTERCEPTOR(void, free, void *ptr) {
   if (DlsymAlloc::PointerIsMine(ptr))
     return DlsymAlloc::Free(ptr);
   if (inst_caller()) {
-    Location Loc = LOCATION();
+    Location loc = LOCATION();
     Provenance *Slot = GetArgSlot(0);
-    __bsan_dealloc(ptr, Slot->Tag, Slot->Info, Loc);
+    __bsan_dealloc(ptr, Slot->Tag, Slot->Info, loc);
+    HANDLE_ERROR(loc);
   }
   return REAL(free)(ptr);
 }
@@ -117,9 +118,9 @@ INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
   void *ptr = REAL(calloc)(nmemb, size);
   Provenance *RetSlot = GetRetValSlot(0);
   if (inst_caller()) {
-    Location Loc = LOCATION();
+    Location loc = LOCATION();
     BorTag Tag = __bsan_new_bor_tag();
-    *RetSlot = {Tag, __bsan_alloc(ptr, nmemb * size, Tag, Loc)};
+    *RetSlot = {Tag, __bsan_alloc(ptr, nmemb * size, Tag, loc)};
   } else {
     *RetSlot = {0, nullptr};
   }
@@ -129,16 +130,17 @@ INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
 INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
   if (DlsymAlloc::Use() || DlsymAlloc::PointerIsMine(ptr))
     return DlsymAlloc::Realloc(ptr, size);
-  Location Loc = LOCATION();
+  Location loc = LOCATION();
   if (inst_caller()) {
     Provenance *Slot = GetArgSlot(0);
-    __bsan_dealloc(ptr, Slot->Tag, Slot->Info, Loc);
+    __bsan_dealloc(ptr, Slot->Tag, Slot->Info, loc);
+    HANDLE_ERROR(loc);
   }
   void *nptr = REAL(realloc)(ptr, size);
   Provenance *RetSlot = GetRetValSlot(0);
   if (inst_caller()) {
     BorTag Tag = __bsan_new_bor_tag();
-    *RetSlot = {Tag, __bsan_alloc(nptr, size, Tag, Loc)};
+    *RetSlot = {Tag, __bsan_alloc(nptr, size, Tag, loc)};
   } else {
     *RetSlot = {0, nullptr};
   }

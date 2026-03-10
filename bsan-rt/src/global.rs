@@ -9,7 +9,6 @@ use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use crate::errors::{ErrorFormatContext, UBInfo};
 use crate::helpers::FxHashMap;
 use crate::memory::{Heap, ShadowHeap};
-use crate::sanitizer_common::SanitizerCommon;
 use crate::*;
 
 #[derive(Default)]
@@ -107,11 +106,12 @@ impl GlobalCtx {
         ProtectedTagsRefMut(self.protected_tags.write())
     }
 
-    pub fn handle_error(&self, ub_info: UBInfo, loc: Location) -> ! {
+    pub fn handle_error(&self, ub_info: UBInfo, loc: Location) {
         let mut ctx = ErrorFormatContext::default();
         crate::eprint!("error: {}", ctx.display_ub(ub_info, loc.pc));
-        SanitizerCommon::print_current_stack_trace(loc, 3);
-        self.exit(1)
+        unsafe {
+            __BSAN_HAD_ERROR = 1;
+        }
     }
 
     pub fn take_snapshot(&self, alloc_id: AllocId, tree: Tree) {

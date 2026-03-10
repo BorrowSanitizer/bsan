@@ -11,6 +11,12 @@ pub struct FramePtr(usize);
 #[derive(Clone, Copy, Debug)]
 pub struct Span(usize);
 
+impl Span {
+    pub const fn dummy() -> Self {
+        Self(0)
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct Location {
@@ -22,6 +28,21 @@ pub struct Location {
 pub enum Symbol {
     Resolved { file: String, line: u32, col: u32 },
     Unknown,
+}
+
+impl Symbol {
+    pub fn line_length(&self) -> usize {
+        match self {
+            Symbol::Resolved { file: _, line, col: _ } => {
+                if *line > 0 {
+                    line.ilog10() as usize + 1
+                } else {
+                    1
+                }
+            }
+            Symbol::Unknown => 0,
+        }
+    }
 }
 
 impl fmt::Display for Symbol {
@@ -52,10 +73,6 @@ impl SanitizerCommon {
             }
         }
         Symbol::Unknown
-    }
-
-    pub fn print_current_stack_trace(loc: Location, depth: usize) {
-        unsafe { __bsan_print_stack_trace(loc, depth) }
     }
 
     /// Read entire file into a String
@@ -89,9 +106,6 @@ impl SanitizerCommon {
 }
 
 unsafe extern "C" {
-
-    fn __bsan_print_stack_trace(loc: Location, depth: usize);
-
     /// Symbolize a single PC into "file:line:column" and returns 1 on success.
     fn __bsan_symbolize_pc(
         pc: usize,

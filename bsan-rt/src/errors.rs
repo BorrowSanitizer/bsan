@@ -1,7 +1,8 @@
 // Components in this file were ported from Miri, and then modified by our team.
 use alloc::boxed::Box;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::cmp::max;
 use core::fmt::Debug;
 
 use hashbrown::HashMap;
@@ -74,14 +75,14 @@ impl ErrorFormatContext {
         match info {
             UBInfo::UseAfterFree => {
                 result.push_str("trying to access an allocation that has been freed.\n");
-                result.push_str(&self.format_symbol(symbol));
+                result.push_str(&self.format_symbol_standalone(symbol));
                 result.push('\n');
             }
             UBInfo::AccessOutOfBounds { alloc_id, access_size, alloc_size, offset } => {
                 result.push_str(&format!(
                     "an access of size {access_size} at offset {offset:x} is out of bounds for {alloc_id:?} of size {alloc_size:x}.\n"
                 ));
-                result.push_str(&self.format_symbol(symbol));
+                result.push_str(&self.format_symbol_standalone(symbol));
                 result.push('\n');
             }
             UBInfo::AliasingViolation(error) => {
@@ -165,36 +166,56 @@ impl ErrorFormatContext {
             true,
         );
 
+        let mut max_indentation = symbol.line_length();
+        let event_symbols: Vec<(Symbol, String)> = history
+            .events
+            .drain(..)
+            .map(|evt| {
+                let symbol = SanitizerCommon::symbolize(evt.0.unwrap_or(Span::dummy()));
+                max_indentation = max_indentation.max(symbol.line_length());
+                (symbol, evt.1)
+            })
+            .collect();
+
         buffer.push_str(&title);
         buffer.push('\n');
-        buffer.push_str(&self.format_symbol(symbol));
+
+        buffer.push_str(&self.format_symbol(symbol, max_indentation));
+
         for detail in details {
-            buffer.push_str(&format!("         = help: {}\n", detail));
+            buffer.push_str(&format!("{} = help: {}\n", " ".repeat(max_indentation), detail));
         }
 
-        for event in history.events {
-            buffer.push_str(&format!("help: {}\n", event.1));
-            if let Some(span) = event.0 {
-                let symbol = SanitizerCommon::symbolize(span);
-                buffer.push_str(&self.format_symbol(symbol));
-            }
+        for (symbol, msg) in event_symbols {
+            buffer.push_str(&format!("help: {}\n", msg));
+            buffer.push_str(&self.format_symbol(symbol, max_indentation));
         }
         buffer.push('\n');
         buffer
     }
 
-    fn format_symbol(&mut self, symbol: Symbol) -> String {
+    fn format_symbol_standalone(&mut self, symbol: Symbol) -> String {
+        let length = symbol.line_length();
+        self.format_symbol(symbol, length)
+    }
+
+    fn format_symbol(&mut self, symbol: Symbol, indentation: usize) -> String {
         let mut buffer = String::new();
-        buffer.push_str(&format!("      --> {}\n", symbol));
-        if let Symbol::Resolved { file: path, line, col: _ } = symbol {
+        if let Symbol::Resolved { file: path, line, col } = symbol {
+            let max_indent = " ".repeat(indentation);
+            buffer.push_str(&format!("{max_indent}--> {path}:{line}:{col}\n"));
             let file = self
                 .file_cache
                 .entry(path.clone())
                 .or_insert_with(|| SanitizerCommon::read_file(&path).unwrap_or_default());
             if let Some(content) = SanitizerCommon::get_source_line(file, line) {
-                buffer.push_str("       |\n");
-                buffer.push_str(&format!("{:>6} | {}\n", line, content));
-                buffer.push_str("       |\n");
+                let line = line.to_string();
+                let line_indent_len = max(indentation, line.len()) - line.len();
+                let line_indent = " ".repeat(line_indent_len);
+
+                buffer.push_str(&format!("{max_indent} |\n",));
+                buffer.push_str(&format!("{line_indent}{line} | {content}\n"));
+                buffer.push_str(&format!("{max_indent} |\n",));
             }
         }
         buffer

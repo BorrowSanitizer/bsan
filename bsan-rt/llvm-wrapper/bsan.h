@@ -1,12 +1,15 @@
 #ifndef BSAN_H
 #define BSAN_H
 #include "sanitizer_common/sanitizer_internal_defs.h"
+#include "sanitizer_common/sanitizer_stacktrace.h"
 
+using __sanitizer::StackTrace;
 using __sanitizer::u32;
 using __sanitizer::u64;
 using __sanitizer::u8;
 using __sanitizer::uptr;
 
+extern THREADLOCAL uptr __BSAN_HAD_ERROR;
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __BSAN_TRUST;
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_PROV_STACK;
 
@@ -19,6 +22,15 @@ typedef struct Location {
 } Location;
 
 #define LOCATION() {.pc = GET_CALLER_PC(), .bp = GET_CURRENT_FRAME()}
+
+#define HANDLE_ERROR(loc)                                                      \
+  if (__BSAN_HAD_ERROR) {                                                      \
+    UNINITIALIZED BufferedStackTrace stack;                                    \
+    stack.Unwind(loc.pc, loc.bp, nullptr,                                      \
+                 common_flags()->fast_unwind_on_fatal, 3);                     \
+    PrintStackTrace(stack);                                                    \
+    Die();                                                                     \
+  }
 
 typedef uptr BorTag;
 struct AllocInfo;
@@ -170,6 +182,7 @@ Provenance *GetArgSlot(uptr Idx);
 Provenance *GetRetValSlot(uptr Idx);
 void ClearArgSlot(uptr Idx);
 void ClearRetValSlot(uptr Idx);
+void PrintStackTrace(StackTrace &stack);
 } // namespace __bsan
 
 #endif // BSAN_H
