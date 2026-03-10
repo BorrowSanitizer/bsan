@@ -141,10 +141,10 @@ __bsan_validate_retval_tls(uptr len, uptr prev_marker) {
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_print_stack_trace(Location loc,
                                                             uptr depth) {
   Printf("backtrace:\n");
-  
+
   InternalScopedString frame_desc;
 
-  BufferedStackTrace stack;
+  UNINITIALIZED BufferedStackTrace stack;
   stack.Unwind(loc.pc, loc.bp, nullptr, true, depth);
 
   for (uptr i = 0; i < stack.size; ++i) {
@@ -176,7 +176,7 @@ SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_get_top_frame_pc(uptr pc) {
 // visible in the binary. But we need to make it available to bsan-rt-core
 SANITIZER_INTERFACE_ATTRIBUTE u32 __bsan_stack_depot_put(uptr pc, uptr bp,
                                                          u32 max_depth) {
-  BufferedStackTrace stack;
+  UNINITIALIZED BufferedStackTrace stack;
   stack.Unwind(pc, bp, /*context=*/nullptr, /*request_fast=*/true,
                /*max_depth=*/max_depth);
   return StackDepotPut(stack);
@@ -290,6 +290,10 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_write(void *ptr, uptr access_size,
                                                 BorTag bor_tag,
                                                 AllocInfo *alloc_info) {
   Location loc = LOCATION();
+  UNINITIALIZED BufferedStackTrace stack;
+  stack.Unwind(loc.pc, loc.bp, /*context=*/nullptr, /*request_fast=*/true,
+               /*max_depth=*/10);
+  stack.Print();
   __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, loc);
 }
 
