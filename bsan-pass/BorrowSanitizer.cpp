@@ -29,14 +29,13 @@
 using namespace llvm;
 
 /*
-* CLI Argument for handling inline assembly
-*/
+ * CLI Argument for handling inline assembly
+ */
 static cl::opt<bool> ClHandleAsmConservative(
-  "bsan-asm-conservative",
-  cl::desc("Conservatively handle inline assembly by setting all pointer outputs to wildcard Provenance"),
-  cl::Hidden,
-  cl::init(true)
-);
+    "bsan-asm-conservative",
+    cl::desc("Conservatively handle inline assembly by setting all pointer "
+             "outputs to wildcard Provenance"),
+    cl::Hidden, cl::init(true));
 
 class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   friend class InstVisitor<BorrowSanitizerVisitor>;
@@ -833,11 +832,10 @@ private:
       }
     }
 
-    if (CB.isInlineAsm())
-    {
+    if (CB.isInlineAsm()) {
       if (ClHandleAsmConservative) {
-          visitAsmInstruction(CB);
-      } else 
+        visitAsmInstruction(CB);
+      } else
         // TODO: What is the difference in our case?
         visitAsmInstruction(CB);
     }
@@ -947,12 +945,13 @@ private:
     int NumOutputs = getNumOutputArgs(IA, CB);
 
     // Get the output arguments
-    for (int i = 0; i < NumOutputs; i++) {
-      Value *Operand = CB->getOperand(i);
+    for (int I = 0; I < NumOutputs; I++) {
+      Value *Operand = CB->getOperand(I);
 
       Type *OpType = Operand->getType();
 
-      if (!OpType->isPointerTy()) return;
+      if (!OpType->isPointerTy())
+        return;
 
       // Set provenance as wildcard for each output pointer
       setProvenance(Operand, BS.WildcardProvenance);
