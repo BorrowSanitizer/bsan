@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::num::NonZero;
 use core::ops::{BitAnd, Shr};
@@ -127,6 +128,8 @@ pub struct ShadowHeap<T> {
 
 unsafe impl<T> Sync for ShadowHeap<T> {}
 unsafe impl<T> Send for ShadowHeap<T> {}
+
+pub type AtomicGuard<'a, T> = spin::RwLockWriteGuard<'a, Option<NonNull<L2Array<T>>>>;
 
 impl<T: Sized> ShadowHeap<T> {
     // Size of L1 and L2 tables in bytes
@@ -284,6 +287,21 @@ impl<T: Sized + Copy> ShadowHeap<T> {
             let ptr = &raw mut (*l2_page.as_ptr())[idx.l2_index];
             NonNull::new_unchecked(ptr)
         }
+    }
+
+    /// Lock for instrumenting atomic operations. Returns an opaque pointer to the lock guard that must be passed to `atomic_unlock`.
+    pub fn atomic_lock(&self, addr: usize) -> Box<AtomicGuard<'_, T>> {
+        let idx = TableIndex::new(addr);
+        let l1_entry = unsafe { &(*self.table.as_ptr())[idx.l1_index] };
+        let write_guard = l1_entry.inner.write();
+        // Box the guard and return as opaque pointer for FFI
+        Box::new(write_guard)
+    }
+
+    /// Unlock after atomic operations. Must be called with the pointer returned from `atomic_lock`.
+    pub fn atomic_unlock(&self, guard: Box<AtomicGuard<'_, T>>) {
+        // Dropping the Box will automatically release the lock
+        drop(guard);
     }
 }
 
@@ -563,5 +581,30 @@ mod tests {
         const _: () = assert!(size_of::<OldL1Entry<Provenance>>() == 16);
         const _: () =
             assert!(size_of::<L1Entry<Provenance>>() <= size_of::<OldL1Entry<Provenance>>());
+    }
+
+    /// Test for locking/unlocking before/after atomic operations
+    #[test]
+    fn atomic_locking() {
+        use std::sync::Arc;
+        let test_prov = &DEFAULT_TEST_PROV as *const TestProv;
+        let heap = Arc::new(ShadowHeap::<TestProv>::new(test_prov));
+        const NUM_THREADS: u32 = 16;
+        const ADDR: usize = 0x1000_0000;
+        with_threads(NUM_THREADS, move |thread_id| {
+            let test_value = TestProv { value: thread_id as u128 };
+
+            let prov_location = heap.get_dest(ADDR);
+            let guard = heap.atomic_lock(ADDR);
+            // Simulate some work while holding the lock
+            unsafe {
+                *prov_location.as_ptr() = test_value;
+            }
+            let loaded = unsafe { *prov_location.as_ptr() };
+            heap.atomic_unlock(guard);
+
+            // between the lock, no other thread should have been able to modify the provenance value
+            assert_eq!(loaded, test_value);
+        });
     }
 }

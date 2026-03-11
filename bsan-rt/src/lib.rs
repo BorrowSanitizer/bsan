@@ -6,6 +6,7 @@
 #![feature(test)]
 #[macro_use]
 extern crate alloc;
+use alloc::boxed::Box;
 use core::ffi::c_void;
 use core::fmt::Debug;
 #[cfg(not(test))]
@@ -482,6 +483,22 @@ unsafe extern "C-unwind" fn __bsan_shadow_load(addr: *mut c_void, dest: NonNull<
     }
 }
 
+/// Atomic version of `__bsan_shadow_load`. Locks the shadow memory for atomic loads operations in the application
+/// `__bsan_shadow_atomic_unlock` must be called after the application's atomic load
+#[unsafe(no_mangle)]
+unsafe extern "C-unwind" fn __bsan_shadow_load_atomic(
+    addr: *mut c_void,
+    dest: NonNull<Provenance>,
+) -> *mut c_void {
+    unsafe {
+        let ctx = global_ctx();
+        let prov = ctx.shadow_heap().get_src(addr.addr()).read();
+        let guard_ptr = ctx.shadow_heap().atomic_lock(addr.addr());
+        dest.write(prov);
+        Box::into_raw(guard_ptr) as *mut c_void
+    }
+}
+
 /// Stores the given provenance value into shadow memory at the location for the given address.
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_shadow_store(
@@ -493,6 +510,29 @@ unsafe extern "C-unwind" fn __bsan_shadow_store(
     let prov = Provenance { bor_tag, alloc_info };
     let dest = ctx.shadow_heap().get_dest(ptr.addr());
     unsafe { dest.write(prov) };
+}
+
+/// Atomic version of `__bsan_shadow_store`. Locks the shadow memory for atomic store operations in the application
+/// `__bsan_shadow_atomic_unlock` must be called after the application's atomic store
+#[unsafe(no_mangle)]
+unsafe extern "C-unwind" fn __bsan_shadow_store_atomic(
+    bor_tag: BorTag,
+    alloc_info: *mut AllocInfo,
+    ptr: *mut c_void,
+) -> *mut c_void {
+    let ctx: &GlobalCtx = unsafe { global_ctx() };
+    let prov = Provenance { bor_tag, alloc_info };
+    let dest = ctx.shadow_heap().get_dest(ptr.addr());
+    let guard_ptr = ctx.shadow_heap().atomic_lock(ptr.addr());
+    unsafe { dest.write(prov) };
+    Box::into_raw(guard_ptr) as *mut c_void
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C-unwind" fn __bsan_shadow_atomic_unlock(guard: *mut c_void) {
+    let ctx = unsafe { global_ctx() };
+    let guard = unsafe { Box::from_raw(guard as _) };
+    ctx.shadow_heap().atomic_unlock(guard);
 }
 
 /// Reserves a stack slot for allocation metadata.
