@@ -107,8 +107,9 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     }
 
     let llvm_tools = LlvmTools::new(&rustc_version, &host_sysroot);
-    let deps =
-        Deps::setup(&subcommand, &rustc_version, &host_sysroot, target_sysroot, verbose, quiet);
+    let deps = Deps::setup(&host_sysroot);
+
+    setup_sysroot(&subcommand, &rustc_version, &target_sysroot, verbose, quiet);
 
     let cargo_cmd = match subcommand {
         BsanCommand::Forward(s) => s,
@@ -186,7 +187,7 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     cmd.env("RUSTDOC", &cargo_bsan_path);
 
     cmd.env("BSAN_SYMBOLIZER", llvm_tools.llvm_symbolizer);
-    cmd.env("BSAN_SYSROOT", &deps.target_sysroot.as_os_str());
+    cmd.env("BSAN_SYSROOT", &target_sysroot.as_os_str());
 
     // Run cargo.
     debug_cmd("[cargo-bsan rustc]", verbose, &cmd);
@@ -220,12 +221,16 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
     // Arguments are treated very differently depending on whether this crate needs to be
     // instrumented by BorrowSanitizer or if it's for a build script / proc macro.
     if target_crate {
-        if phase != RustcPhase::Setup && phase != RustcPhase::Rustdoc {
-            // Set the sysroot -- except during setup, where we don't have an existing sysroot yet
-            // and where the bootstrap wrapper adds its own `--sysroot` flag so we can't set ours.
+        if phase == RustcPhase::Build {
+            // We only set the sysroot during an explicit build step.
+            // During setup, where we don't have an existing sysroot yet
+            // and the bootstrap wrapper adds its own `--sysroot` flag, so we can't set ours.
+            // Rustdoc already receives the sysroot via its dedicated phase, so we do not want
+            // to set it twice.
             cmd.arg("--sysroot").arg(expect_env("BSAN_SYSROOT"));
         }
-        // During setup, patch the panic runtime for `libpanic_abort` (mirroring what bootstrap usually does).
+        // During setup, patch the panic runtime for `libpanic_abort`
+        // (mirroring what bootstrap usually does).
         if phase == RustcPhase::Setup
             && get_arg_flag_value("--crate-name").as_deref() == Some("panic_abort")
         {
@@ -245,7 +250,7 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
     debug_cmd("[cargo-bsan rustc]", verbose, &cmd);
     if in_rustdoc {
         if verbose > 0 {
-            eprintln!("[cargo-miri rustc inside rustdoc] going to run:\n{cmd:?}");
+            eprintln!("[cargo-miri rustc inside rustdoc]");
         }
         exec_with_pipe(cmd);
     } else {

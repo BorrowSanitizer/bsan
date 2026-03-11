@@ -13,20 +13,12 @@ use crate::arg::*;
 use crate::util::*;
 
 pub struct Deps {
-    pub target_sysroot: Sysroot,
     pub runtime: PathBuf,
     pub llvm_pass: PathBuf,
 }
 
 impl Deps {
-    pub fn setup(
-        subcommand: &BsanCommand,
-        rustc_version: &VersionMeta,
-        host_sysroot: &Sysroot,
-        target_sysroot: Sysroot,
-        verbose: usize,
-        quiet: bool,
-    ) -> Self {
+    pub fn setup(host_sysroot: &Sysroot) -> Self {
         let ensure_library_var = |var: &str, sysroot: &Sysroot, libname: &str| {
             env::var_os(var).map(|o| o.into()).or_else(|| {
                 let plugin: PathBuf = (*sysroot).join("lib").join(libname).to_path_buf();
@@ -53,16 +45,13 @@ impl Deps {
             );
         };
 
-        setup_sysroot(subcommand, rustc_version, &target_sysroot, verbose, quiet);
-
-        Self { target_sysroot, runtime, llvm_pass }
+        Self { runtime, llvm_pass }
     }
 
     pub fn from_env() -> Self {
-        let target_sysroot = Sysroot::target();
         let runtime = expect_env_path("BSAN_RT");
         let llvm_pass = expect_env_path("BSAN_PLUGIN");
-        Self { target_sysroot, runtime, llvm_pass }
+        Self { runtime, llvm_pass }
     }
 }
 
