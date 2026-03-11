@@ -8,6 +8,43 @@ use crate::setup::*;
 use crate::util::*;
 use crate::*;
 
+const CARGO_BSAN_HELP: &str = r"Runs binary crates and tests with BorrowSanitizer enabled.
+
+Usage:
+    cargo bsan [subcommand] [<cargo options>...] [--] [<program/test suite options>...]
+
+Subcommands:
+    run, r                   Run binaries
+    test, t                  Run tests
+    nextest                  Run tests with nextest (requires cargo-nextest installed)
+    setup                    Only perform automatic setup, but without asking questions (for getting a proper libstd)
+    clean                    Clean the BorrowSanitizer cache & target directory
+
+The cargo options are exactly the same as for `cargo run` and `cargo test`, respectively.
+
+Examples:
+    cargo bsan run
+    cargo bsan test -- test-suite-filter
+
+    cargo bsan setup --print-sysroot
+        This will print the path to the generated sysroot (and nothing else) on stdout.
+        stderr will still contain progress information about how the build is doing.
+";
+
+fn show_help() {
+    println!("{CARGO_BSAN_HELP}");
+}
+
+fn show_version() {
+    print!("bsan {}", env!("CARGO_PKG_VERSION"));
+    let version = format!("{} {}", env!("GIT_HASH"), env!("COMMIT_DATE"));
+    if version.len() > 1 {
+        // If there is actually something here, print it.
+        print!(" ({version})");
+    }
+    println!();
+}
+
 pub const BSAN_DEFAULT_ARGS: &[&str] = &[
     "--cfg=bsan",
     "-Copt-level=0",
@@ -85,6 +122,12 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
         }
     };
 
+    let cargo_bsan_path = env::current_exe()
+        .expect("current executable path invalid")
+        .into_os_string()
+        .into_string()
+        .expect("current executable path is not valid UTF-8");
+
     let mut cmd = Cargo::cmd();
     cmd.arg(&cargo_cmd);
     // In nextest we have to also forward the main `verb`.
@@ -114,6 +157,13 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     }
     cmd.args(args);
 
+    if env::var_os("RUSTC_WRAPPER").is_some() {
+        println!(
+            "WARNING: Ignoring `RUSTC_WRAPPER` environment variable, BSAN does not support wrapping."
+        );
+    }
+    cmd.env("RUSTC_WRAPPER", &cargo_bsan_path);
+
     // If both RUSTC_WORKSPACE_WRAPPER and RUSTC_WRAPPER are set,
     // then both are executed in succession. Providing an independent
     // workspace-level wrapper is not supported, so we clear this variable.
@@ -130,14 +180,10 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
 
     llvm_tools.populate_env(&mut cmd);
 
+    cmd.env("RUSTC", rustc_path());
+
     cmd.env("BSAN_SYMBOLIZER", llvm_tools.llvm_symbolizer);
-
-    let mut rustflags = bsan_rustflags(&deps);
-    let sysroot_flag = format!("--sysroot={}", deps.target_sysroot.display());
-    rustflags.push(sysroot_flag.clone());
-
-    cmd.env("RUSTFLAGS", rustflags.join(" "));
-    cmd.env("RUSTDOCFLAGS", sysroot_flag);
+    cmd.env("BSAN_SYSROOT", &deps.target_sysroot.as_os_str());
 
     // Run cargo.
     debug_cmd("[cargo-bsan rustc]", verbose, &cmd);
