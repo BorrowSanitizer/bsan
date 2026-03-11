@@ -1,4 +1,5 @@
-//@run
+//@run:0
+//miri: @compile-flags: -Zmiri-tree-borrows
 
 // copy_nonoverlapping works regardless of the order in which we construct
 // the arguments.

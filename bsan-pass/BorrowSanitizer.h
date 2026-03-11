@@ -41,7 +41,14 @@ public:
   bool instrumentFunction(Function &F, FunctionAnalysisManager &FAM);
 
   void initializeCallbacks(Module &M, const TargetLibraryInfo &TLI);
-  void instrumentGlobals(IRBuilder<> &IRB, Module &M, bool *CtorComdat);
+
+  struct GlobalDescription {
+    bool ShouldInstrument;
+    std::optional<Function *> AssocFn;
+  };
+  GlobalDescription getGlobalDescription(GlobalVariable *G) const;
+
+  void instrumentGlobals(IRBuilder<> &IRB, Module &M, bool CtorComdat);
   Instruction *createBsanModuleDtor(Module &M);
 
   // Adds thread-local global variables for passing the provenance for
@@ -77,8 +84,8 @@ public:
   FunctionCallee BsanFuncRetag;
   FunctionCallee BsanFuncRead;
   FunctionCallee BsanFuncWrite;
-  FunctionCallee BsanFuncAlloc;
-  FunctionCallee BsanFuncDealloc;
+  FunctionCallee BsanFuncAllocStack;
+  FunctionCallee BsanFuncDeallocStack;
 
   FunctionCallee BsanFuncPopFrame;
 
@@ -86,15 +93,16 @@ public:
   FunctionCallee BsanFuncValidateRetvalTLS;
   FunctionCallee BsanFuncValidateParamTLS;
 
-  FunctionCallee BsanFuncShadowCopy;
-  FunctionCallee BsanFuncShadowClear;
   FunctionCallee BsanFuncGetShadowSrc;
   FunctionCallee BsanFuncGetShadowDest;
 
   FunctionCallee BsanFuncShadowLoad;
   FunctionCallee BsanFuncShadowStore;
 
-  FunctionCallee BsanFuncAllocStack;
+  FunctionCallee BsanFuncMemSet;
+  FunctionCallee BsanFuncMemMove;
+  FunctionCallee BsanFuncMemCpy;
+
   FunctionCallee BsanFuncReserveStackSlot;
   FunctionCallee BsanFuncDestroyStackSlot;
 
@@ -118,6 +126,7 @@ public:
   Value *ParamTLS = nullptr;
   Value *RetvalTLS = nullptr;
   Value *ProvStack = nullptr;
+  Value *TrustFlag = nullptr;
   Value *AllocIdCounter = nullptr;
   Value *BorTagCounter = nullptr;
 
@@ -126,6 +135,8 @@ public:
 
   Constant *True = nullptr;
   Constant *False = nullptr;
+
+  DenseSet<Function *> ExternCalledFns;
 };
 
 } // namespace llvm

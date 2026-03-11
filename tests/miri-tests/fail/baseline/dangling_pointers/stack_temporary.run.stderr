@@ -1,0 +1,13 @@
+error: Undefined Behavior: trying to access an allocation that has been freed.
+  --> bsan/tests/miri-tests/fail/baseline/dangling_pointers/stack_temporary.rs:12:19
+   |
+12 | let val = *x; //miri: ~ ERROR: has been freed
+   |
+
+stack backtrace:
+0: stack_temporary::main
+ at bsan/tests/miri-tests/fail/baseline/dangling_pointers/stack_temporary.rs:12:19
+1: <fn() as core::ops::function::FnOnce<()>>::call_once
+ at RUSTLIB/core/src/ops/function.rs:250:5
+2: std::sys::backtrace::__rust_begin_short_backtrace
+ at RUSTLIB/std/src/sys/backtrace.rs:166:18

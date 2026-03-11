@@ -1,0 +1,25 @@
+error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+  --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/raw_tracking.rs:11:14
+   |
+11 | unsafe { *raw2 = 13 };
+   |
+   = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this write
+help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
+  --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/raw_tracking.rs:7:16
+   |
+ 7 | let raw2 = &mut l as *mut _; // invalidates raw1
+   |
+help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
+  --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/raw_tracking.rs:10:14
+   |
+10 | unsafe { *raw1 = 13 }; //miri: ~ ERROR: /write access .* tag does not exist in the borrow stack/
+   |
+help: this transition corresponds to a loss of read and write permissions
+
+stack backtrace:
+0: raw_tracking::main
+ at bsan/tests/miri-tests/fail/aliasing/stacked_borrows/raw_tracking.rs:11:14
+1: <fn() as core::ops::function::FnOnce<()>>::call_once
+ at RUSTLIB/core/src/ops/function.rs:250:5
+2: std::sys::backtrace::__rust_begin_short_backtrace
+ at RUSTLIB/std/src/sys/backtrace.rs:166:18

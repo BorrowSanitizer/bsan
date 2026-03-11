@@ -36,15 +36,8 @@ impl Into<NonZero<usize>> for StackSize {
     }
 }
 
+#[allow(unused)]
 impl StackSize {
-    pub fn bytes(&self) -> NonZero<usize> {
-        self.0
-    }
-
-    pub fn bytes_usize(&self) -> usize {
-        self.0.get()
-    }
-
     pub fn from_rlimit() -> Self {
         let mut limits = MaybeUninit::<rlimit>::uninit();
 

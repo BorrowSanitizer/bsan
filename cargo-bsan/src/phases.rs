@@ -11,7 +11,6 @@ pub const BSAN_DEFAULT_ARGS: &[&str] = &[
     "--cfg=bsan",
     "-Copt-level=0",
     "-Zmir-opt-level=0",
-    "-Cpasses=bsan",
     "-Zcodegen-emit-retag=true",
     "-Cforce-frame-pointers=yes",
     "-Zmir-preserve-ub",

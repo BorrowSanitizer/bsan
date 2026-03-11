@@ -3,14 +3,12 @@
 
 #define BSAN_PREFIX "__bsan_"
 #define RUST_PREFIX "__rust_"
-#define RUST_RDL_PREFIX "__rdl_"
 
 #define BSAN_FN(name) BSAN_PREFIX name
 #define BSAN_DEBUG_PREFIX BSAN_FN("debug_")
 
 #define BSAN_DEBUG_FN(name) BSAN_DEBUG_PREFIX name
 #define RUST_FN(name) RUST_PREFIX name
-#define RUST_RDL_FN(name) RUST_RDL_PREFIX name
 
 // @__rust_retag(ptr, ptr, i64, i64)
 const char kBsanRustIntrinsicRetagPrefix[] = RUST_FN("retag");
@@ -25,12 +23,9 @@ const char kBsanPrefix[] = BSAN_FN();
 const char kBsanFuncInitName[] = BSAN_FN("init");
 const char kBsanFuncDeinitName[] = BSAN_FN("deinit");
 
-const char kBsanFuncPushAllocaFrameName[] = BSAN_FN("push_alloca_frame");
-const char kBsanFuncPopAllocaFrameName[] = BSAN_FN("pop_alloca_frame");
-const char kBsanFuncRemoveProtectedTags[] = BSAN_FN("remove_protected_tags");
-
-const char kBsanFuncShadowCopyName[] = BSAN_FN("shadow_copy");
-const char kBsanFuncShadowClearName[] = BSAN_FN("shadow_clear");
+const char kBsanFuncMemMoveName[] = BSAN_FN("memmove");
+const char kBsanFuncMemCpyName[] = BSAN_FN("memcpy");
+const char kBsanFuncMemSetName[] = BSAN_FN("memset");
 
 const char kBsanFuncGetShadowDestName[] = BSAN_FN("shadow_dest");
 const char kBsanFuncGetShadowSrcName[] = BSAN_FN("shadow_src");
@@ -46,10 +41,8 @@ const char kBsanFuncPopFrame[] = BSAN_FN("pop_frame");
 const char kBsanFuncReserveStackSlotName[] = BSAN_FN("reserve_stack_slot");
 const char kBsanFuncDestroyStackSlotName[] = BSAN_FN("destroy_stack_slot");
 const char kBsanFuncAllocStackName[] = BSAN_FN("alloc_stack");
+const char kBsanFuncDeallocStackName[] = BSAN_FN("dealloc_stack");
 
-const char kBsanFuncNewBorrowTagName[] = BSAN_FN("new_tag");
-const char kBsanFuncNewAllocIDName[] = BSAN_FN("new_alloc_id");
-const char kBsanFuncDeallocName[] = BSAN_FN("dealloc");
 const char kBsanFuncExposeTagName[] = BSAN_FN("expose_tag");
 const char kBsanFuncReadName[] = BSAN_FN("read");
 const char kBsanFuncWriteName[] = BSAN_FN("write");
@@ -78,23 +71,11 @@ const char kBsanFuncDebugRetvalTLS[] = BSAN_DEBUG_FN("retval_tls");
 const char kBsanProvStackName[] = "__BSAN_PROV_STACK";
 const char kBsanParamTLSName[] = "__BSAN_PARAM_TLS";
 const char kBsanRetvalTLSName[] = "__BSAN_RETVAL_TLS";
+const char kBsanTrustFlagName[] = "__BSAN_TRUST";
+
 const char kBsanBorTagCounterName[] = "__BSAN_BOR_TAG_CTR";
 const char kBsanAllocIdCounterName[] = "__BSAN_ALLOC_ID_CTR";
 
 static const unsigned kTLSSize = 100;
-
-const char *kRustAllocFns[] = {
-    RUST_FN("alloc"),
-    RUST_FN("dealloc"),
-    RUST_FN("realloc"),
-    RUST_FN("alloc_zeroed"),
-};
-
-const char *kRustAllocShimFns[] = {
-    RUST_RDL_FN("alloc"),
-    RUST_RDL_FN("dealloc"),
-    RUST_RDL_FN("realloc"),
-    RUST_RDL_FN("alloc_zeroed"),
-};
 
 #endif // BORROWSANITIZER_DECLARATIONS

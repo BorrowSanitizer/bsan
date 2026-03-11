@@ -1,0 +1,31 @@
+error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+  --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/alternate-read-write.rs:18:5
+   |
+18 | *y += 1; // Failure
+   |
+   = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this write
+help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
+  --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/alternate-read-write.rs:8:22
+   |
+ 8 | let y = unsafe { &mut *(x as *mut u8) };
+   |
+help: the accessed tag <TAG>(unprotected) later transitioned due to a child write
+  --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/alternate-read-write.rs:13:5
+   |
+13 | *y += 1; // Success
+   |
+help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
+help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign read
+  --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/alternate-read-write.rs:15:16
+   |
+15 | let _val = *x;
+   |
+help: this transition corresponds to a loss of write permissions
+
+stack backtrace:
+0: alternate_read_write::main
+ at bsan/tests/miri-tests/fail/aliasing/tree_borrows/alternate-read-write.rs:18:5
+1: <fn() as core::ops::function::FnOnce<()>>::call_once
+ at RUSTLIB/core/src/ops/function.rs:250:5
+2: std::sys::backtrace::__rust_begin_short_backtrace
+ at RUSTLIB/std/src/sys/backtrace.rs:166:18

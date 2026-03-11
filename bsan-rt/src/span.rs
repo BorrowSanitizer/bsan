@@ -25,6 +25,7 @@ impl fmt::Display for Symbol {
     }
 }
 
+#[repr(transparent)]
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct Span(pub usize);
 
@@ -43,13 +44,6 @@ impl FramePtr {
         self.0.addr()
     }
 
-    pub fn unwind(mut self, num: usize) -> Self {
-        for _ in 0..num {
-            self = self.prev();
-        }
-        self
-    }
-
     pub fn caller_span(&self) -> Span {
         Span(unsafe { ptr::read(self.0.add(1)) })
     }
@@ -62,10 +56,6 @@ impl FramePtr {
             let prev_fp = unsafe { ptr::read(fp) };
             Self(prev_fp)
         }
-    }
-
-    pub const fn null() -> Self {
-        Self(ptr::null())
     }
 }
 

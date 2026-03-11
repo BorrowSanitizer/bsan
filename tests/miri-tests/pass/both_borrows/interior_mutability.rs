@@ -1,4 +1,6 @@
-//@run
+//@run:0
+//miri: @revisions: stack tree
+//miri: @[tree]compile-flags: -Zmiri-tree-borrows
 #![allow(dangerous_implicit_autorefs)]
 
 use std::cell::{Cell, Ref, RefCell, RefMut, UnsafeCell};
