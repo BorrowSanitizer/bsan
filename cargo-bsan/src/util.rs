@@ -26,6 +26,8 @@ pub enum RustcPhase {
     Setup,
     /// Regular build
     Build,
+    /// Rustdoc build
+    Rustdoc,
 }
 
 pub fn show_error_(msg: &impl std::fmt::Display) -> ! {
@@ -194,6 +196,14 @@ pub fn rustc_path() -> PathBuf {
 
 pub fn rustc() -> Command {
     Command::new(rustc_path())
+}
+
+pub fn rustdoc_path() -> PathBuf {
+    env_or_host("BSAN_ORIG_RUSTDOC", "rustdoc")
+}
+
+pub fn rustdoc() -> Command {
+    Command::new(rustdoc_path())
 }
 
 pub fn try_get_host_binary(sysroot: &Sysroot, binary: &str) -> Option<PathBuf> {

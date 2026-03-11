@@ -16,7 +16,7 @@ Usage:
 Subcommands:
     run, r                   Run binaries
     test, t                  Run tests
-    nextest                  Run tests with nextest (requires cargo-nextest installed)
+    nextest                  Run tests with nextest (requires `cargo-nextest` to be installed)
     setup                    Only perform automatic setup, but without asking questions (for getting a proper libstd)
     clean                    Clean the BorrowSanitizer cache & target directory
 
@@ -39,7 +39,6 @@ fn show_version() {
     print!("bsan {}", env!("CARGO_PKG_VERSION"));
     let version = format!("{} {}", env!("GIT_HASH"), env!("COMMIT_DATE"));
     if version.len() > 1 {
-        // If there is actually something here, print it.
         print!(" ({version})");
     }
     println!();
@@ -181,6 +180,10 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     llvm_tools.populate_env(&mut cmd);
 
     cmd.env("RUSTC", rustc_path());
+    if let Some(orig_rustdoc) = env::var_os("RUSTDOC") {
+        cmd.env("BSAN_ORIG_RUSTDOC", orig_rustdoc);
+    }
+    cmd.env("RUSTDOC", &cargo_bsan_path);
 
     cmd.env("BSAN_SYMBOLIZER", llvm_tools.llvm_symbolizer);
     cmd.env("BSAN_SYSROOT", &deps.target_sysroot.as_os_str());
@@ -217,7 +220,7 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
     // Arguments are treated very differently depending on whether this crate needs to be
     // instrumented by BorrowSanitizer or if it's for a build script / proc macro.
     if target_crate {
-        if phase != RustcPhase::Setup {
+        if phase != RustcPhase::Setup && phase != RustcPhase::Rustdoc {
             // Set the sysroot -- except during setup, where we don't have an existing sysroot yet
             // and where the bootstrap wrapper adds its own `--sysroot` flag so we can't set ours.
             cmd.arg("--sysroot").arg(expect_env("BSAN_SYSROOT"));
@@ -230,6 +233,8 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
         }
     }
 
+    let in_rustdoc = phase == RustcPhase::Rustdoc;
+
     if target_crate {
         cmd.args(bsan_rustflags(&deps));
     }
@@ -237,11 +242,18 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
     // Forward everything else.
     cmd.args(args);
 
-    if verbose > 0 {
-        eprintln!("[cargo-bsan rustc] target_crate={target_crate}");
-    }
     debug_cmd("[cargo-bsan rustc]", verbose, &cmd);
-    exec(cmd);
+    if in_rustdoc {
+        if verbose > 0 {
+            eprintln!("[cargo-miri rustc inside rustdoc] going to run:\n{cmd:?}");
+        }
+        exec_with_pipe(cmd);
+    } else {
+        if verbose > 0 {
+            eprintln!("[cargo-bsan rustc] target_crate={target_crate}");
+        }
+        exec(cmd);
+    }
 }
 
 fn bsan_rustflags(deps: &Deps) -> Vec<String> {
@@ -251,4 +263,36 @@ fn bsan_rustflags(deps: &Deps) -> Vec<String> {
     additional_args.push(format!("-L{}", rt_dir.display()));
     additional_args.push("-lstatic=bsan_rt".to_string());
     additional_args
+}
+
+pub fn phase_rustdoc(args: impl Iterator<Item = String>) {
+    let verbose = env::var("BSAN_VERBOSE")
+        .map_or(0, |verbose| verbose.parse().expect("verbosity flag must be an integer"));
+    let mut cmd = rustdoc();
+    cmd.args(args);
+
+    // For each doctest, rustdoc starts two child processes: first the test is compiled,
+    // then the produced executable is invoked. We want to reroute both of these to cargo-miri,
+    // such that the first time we'll enter phase_cargo_rustc, and phase_cargo_runner second.
+    //
+    // rustdoc invokes the test-builder by forwarding most of its own arguments, which makes
+    // it difficult to determine when phase_cargo_rustc should run instead of phase_cargo_rustdoc.
+    // Furthermore, the test code is passed via stdin, rather than a temporary file, so we need
+    // to let phase_cargo_rustc know to expect that. We'll use this environment variable as a flag:
+    cmd.env("BSAN_CALLED_FROM_RUSTDOC", "1");
+
+    // The `--test-builder` is an unstable rustdoc features,
+    // which is disabled by default. We first need to enable them explicitly:
+    cmd.arg("-Zunstable-options");
+
+    // rustdoc needs to know the right sysroot.
+    cmd.arg("--sysroot").arg(env::var_os("BSAN_SYSROOT").unwrap());
+
+    // Make rustdoc call us back for the build.
+    // (cargo already sets `--test-runtool` to us since we are the cargo test runner.)
+    let cargo_bsan_path = env::current_exe().expect("current executable path invalid");
+    cmd.arg("--test-builder").arg(&cargo_bsan_path); // invoked by forwarding most arguments
+
+    debug_cmd("[cargo-bsan rustdoc]", verbose, &cmd);
+    exec(cmd)
 }

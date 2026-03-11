@@ -17,6 +17,3 @@ cfg-if = "1.0.4"
 
 [build-dependencies]
 rustc_tools_util = "0.4"
-
-[package.metadata.rust-analyzer]
-rustc_private = true
