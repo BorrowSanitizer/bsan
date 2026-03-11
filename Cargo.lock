@@ -202,10 +202,12 @@ name = "cargo-bsan"
 version = "0.1.0"
 dependencies = [
  "cargo_metadata 0.21.0",
+ "cfg-if",
  "directories",
  "env_logger",
  "log",
  "path_macro",
+ "regex",
  "rustc-build-sysroot",
  "rustc_tools_util",
  "rustc_version",

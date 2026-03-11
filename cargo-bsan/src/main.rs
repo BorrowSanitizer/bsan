@@ -1,6 +1,7 @@
 #![feature(rustc_private)]
 
 mod arg;
+mod llvm;
 mod phases;
 mod setup;
 mod util;

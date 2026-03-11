@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use cargo_metadata::{Metadata, MetadataCommand};
-use path_macro::path;
+use rustc_version::VersionMeta;
 
 use crate::arg::*;
 
@@ -45,22 +45,6 @@ pub fn debug_cmd(prefix: &str, verbose: usize, cmd: &Command) {
         eprintln!("{prefix} running command: {cmd:?}");
     }
 }
-
-pub fn cargo() -> Command {
-    Command::new(env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")))
-}
-
-pub fn find_library(default: &str, sysroot: &Path, libname: &str) -> Option<PathBuf> {
-    env::var_os(default).map(|o| o.into()).or_else(|| {
-        let plugin: PathBuf = path!(sysroot / "lib" / libname);
-        if plugin.exists() {
-            Some(plugin)
-        } else {
-            None
-        }
-    })
-}
-
 /// Execute the `Command`, where possible by replacing the current process with a new process
 /// described by the `Command`. Then exit this process with the exit code of the new process.
 pub fn exec(mut cmd: Command) -> ! {
@@ -123,17 +107,6 @@ pub fn get_target_sysroot_dir() -> PathBuf {
     }
 }
 
-pub fn get_host_sysroot_binary(binary: &str, verbose: usize) -> PathBuf {
-    let bsan_sysroot = get_host_sysroot_dir(verbose);
-    let sysroot_bindir = Path::new(&bsan_sysroot).join("bin");
-    let symbolizer_path = sysroot_bindir.join(binary);
-    if symbolizer_path.exists() {
-        symbolizer_path
-    } else {
-        show_error!("Unable to locate `{binary}` within the host sysroot ({sysroot_bindir:?}).");
-    }
-}
-
 pub fn ask_to_run(mut cmd: Command, ask: bool, text: &str) {
     // Disable interactive prompts in CI (GitHub Actions, Travis, AppVeyor, etc).
     // Azure doesn't set `CI` though (nothing to see here, just Microsoft being Microsoft),
@@ -171,39 +144,49 @@ pub fn get_target_dir(meta: &Metadata) -> PathBuf {
     output
 }
 
-// Computes the extra flags that need to be passed to cargo to make it behave like the current
-// cargo invocation.
-fn cargo_extra_flags() -> Vec<String> {
-    let mut flags = Vec::new();
-    // Forward `--config` flags.
-    let config_flag = "--config";
-    for arg in get_arg_flag_values(config_flag) {
-        flags.push(config_flag.to_string());
-        flags.push(arg);
+pub struct Cargo;
+
+impl Cargo {
+    pub fn cmd() -> Command {
+        // Honor the `CARGO` env var if set, otherwise look for `cargo` in PATH.
+        let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+        Command::new(cargo)
     }
 
-    // Forward `--manifest-path`.
-    let manifest_flag = "--manifest-path";
-    if let Some(manifest) = get_arg_flag_value(manifest_flag) {
-        flags.push(manifest_flag.to_string());
-        flags.push(manifest);
+    pub fn metadata() -> Metadata {
+        // This will honor the `CARGO` env var the same way our `cargo()` does.
+        MetadataCommand::new().no_deps().other_options(Self::extra_flags()).exec().unwrap_or_else(
+            |err| {
+                if let cargo_metadata::Error::CargoMetadata { stderr } = err {
+                    show_error!("{stderr}")
+                } else {
+                    show_error!("{err}")
+                }
+            },
+        )
     }
 
-    // Forwarding `--target-dir` would make sense, but `cargo metadata` does not support that flag.
-    flags
-}
+    // Computes the extra flags that need to be passed to cargo to make it behave like the current
+    // cargo invocation.
+    fn extra_flags() -> Vec<String> {
+        let mut flags = Vec::new();
+        // Forward `--config` flags.
+        let config_flag = "--config";
+        for arg in get_arg_flag_values(config_flag) {
+            flags.push(config_flag.to_string());
+            flags.push(arg);
+        }
 
-pub fn get_cargo_metadata() -> Metadata {
-    // This will honor the `CARGO` env var the same way our `cargo()` does.
-    MetadataCommand::new().no_deps().other_options(cargo_extra_flags()).exec().unwrap_or_else(
-        |err| {
-            if let cargo_metadata::Error::CargoMetadata { stderr } = err {
-                show_error!("{stderr}")
-            } else {
-                show_error!("{err}")
-            }
-        },
-    )
+        // Forward `--manifest-path`.
+        let manifest_flag = "--manifest-path";
+        if let Some(manifest) = get_arg_flag_value(manifest_flag) {
+            flags.push(manifest_flag.to_string());
+            flags.push(manifest);
+        }
+
+        // Forwarding `--target-dir` would make sense, but `cargo metadata` does not support that flag.
+        flags
+    }
 }
 
 pub fn clean_sysroot_dir() {
@@ -214,7 +197,7 @@ pub fn clean_sysroot_dir() {
 }
 
 pub fn clean_target_dir() {
-    let target_dir = get_target_dir(&get_cargo_metadata());
+    let target_dir = get_target_dir(&Cargo::metadata());
     if target_dir.exists() {
         std::fs::remove_dir_all(&target_dir).unwrap();
     }
@@ -244,4 +227,32 @@ pub fn rustc_path() -> PathBuf {
 
 pub fn rustc() -> Command {
     Command::new(rustc_path())
+}
+
+pub fn try_get_host_binary(binary: &str, verbose: usize) -> Option<PathBuf> {
+    try_get_host_sysroot_binary(binary, verbose).or_else(|| which::which(binary).ok())
+}
+
+pub fn try_get_host_sysroot_binary(binary: &str, verbose: usize) -> Option<PathBuf> {
+    let bsan_sysroot = get_host_sysroot_dir(verbose);
+    let sysroot_bindir = Path::new(&bsan_sysroot).join("bin");
+    let symbolizer_path = sysroot_bindir.join(binary);
+    symbolizer_path.exists().then_some(symbolizer_path)
+}
+
+pub fn assert_host_binary(binary: &str, verbose: usize) -> PathBuf {
+    try_get_host_binary(binary, verbose)
+        .unwrap_or_else(|| show_error!("failed to find `{}`", binary))
+}
+
+pub fn get_sysroot_target_dir(version_meta: &VersionMeta, verbose: usize) -> PathBuf {
+    let mut sysroot_target_dir = get_host_sysroot_dir(verbose);
+    sysroot_target_dir.push("lib");
+    sysroot_target_dir.push("rustlib");
+    sysroot_target_dir.push(&version_meta.host);
+    if sysroot_target_dir.exists() {
+        sysroot_target_dir
+    } else {
+        panic!("Target sysroot directory does not exist: {:?}", sysroot_target_dir);
+    }
 }

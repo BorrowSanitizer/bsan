@@ -1,15 +1,72 @@
 //! Implements `cargo bsan setup`.
 //! This was copied directly from cargo-miri, with only small changes
 //! to comments and the names of environment variables.
+use std::env;
 use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::process::{self, Command};
 
+use path_macro::path;
 use rustc_build_sysroot::{BuildMode, SysrootBuilder, SysrootConfig, SysrootStatus};
 use rustc_version::VersionMeta;
 
 use crate::arg::*;
 use crate::util::*;
+
+pub struct Deps {
+    pub target_sysroot: PathBuf,
+    pub runtime: PathBuf,
+    pub llvm_pass: PathBuf,
+}
+
+impl Deps {
+    pub fn setup(
+        subcommand: &BsanCommand,
+        rustc_version: &VersionMeta,
+        verbose: usize,
+        quiet: bool,
+    ) -> Self {
+        let host_sysroot = get_host_sysroot_dir(verbose);
+
+        let ensure_library_var = |var: &str, sysroot: &PathBuf, libname: &str| {
+            env::var_os(var).map(|o| o.into()).or_else(|| {
+                let plugin: PathBuf = path!(sysroot / "lib" / libname);
+                if plugin.exists() {
+                    unsafe { env::set_var(var, &plugin) };
+                    Some(plugin)
+                } else {
+                    None
+                }
+            })
+        };
+
+        let Some(llvm_pass) = ensure_library_var("BSAN_PLUGIN", &host_sysroot, "libbsan_plugin.so")
+        else {
+            show_error!(
+                "failed to locate the BorrowSanitizer LLVM plugin (libbsan_plugin.so) within the host sysroot: {}",
+                    host_sysroot.display()
+            );
+        };
+
+        let Some(runtime) = ensure_library_var("BSAN_RT", &host_sysroot, "libbsan_rt.a") else {
+            show_error!(
+                "failed to locate the BorrowSanitizer runtime (libbsan_rt.a) within the host sysroot."
+            );
+        };
+
+        let target_sysroot =
+            setup_sysroot(subcommand, rustc_version.host.as_str(), rustc_version, verbose, quiet);
+
+        Self { target_sysroot, runtime, llvm_pass }
+    }
+
+    pub fn from_env() -> Self {
+        let target_sysroot = expect_env_path("BSAN_SYSROOT");
+        let runtime = expect_env_path("BSAN_RT");
+        let llvm_pass = expect_env_path("BSAN_PLUGIN");
+        Self { target_sysroot, runtime, llvm_pass }
+    }
+}
 
 /// Performs the setup required to make `cargo bsan` work: Getting a custom-built libstd. Then sets
 /// `BSAN_SYSROOT`. Skipped if `BSAN_SYSROOT` is already set, in which case we expect the user has
@@ -95,7 +152,7 @@ pub fn setup_sysroot(
         }
     };
     let cargo_cmd = {
-        let mut command = cargo();
+        let mut command = Cargo::cmd();
         // Use Miri as rustc to build a libstd compatible with us (and use the right flags).
         // We set ourselves (`cargo-bsan`) instead of bsan directly to be able to patch the flags
         // for `libpanic_abort` (usually this is done by bootstrap but we have to do it ourselves).
@@ -188,6 +245,8 @@ pub fn setup_sysroot(
         // Print just the sysroot and nothing else to stdout; this way we do not need any escaping.
         println!("{}", sysroot_dir.display());
     }
+
+    unsafe { env::set_var("BSAN_SYSROOT", &sysroot_dir) }
 
     sysroot_dir
 }

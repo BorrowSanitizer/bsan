@@ -1,8 +1,7 @@
-use std::path::PathBuf;
-
 use rustc_version::VersionMeta;
 
 use crate::arg::*;
+use crate::llvm::LlvmTools;
 use crate::setup::*;
 use crate::util::*;
 use crate::*;
@@ -49,7 +48,7 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
 
     // Determine the involved architectures.
     let rustc_version = VersionMeta::for_command(rustc())
-        .unwrap_or_else(|err| panic!("failed to determine underlying rustc version:\n{err:?}"));
+        .unwrap_or_else(|err| show_error!("Unknown `rustc` version: {err:?}"));
 
     let targets = get_arg_flag_values("--target").collect::<Vec<_>>();
 
@@ -67,21 +66,22 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
         return;
     }
 
-    let bsan_sysroot = ensure_sysroot(&subcommand, &rustc_version, verbose, quiet);
+    let llvm_tools = LlvmTools::new(&rustc_version, verbose);
+    let deps = Deps::setup(&subcommand, &rustc_version, verbose, quiet);
 
     let cargo_cmd = match subcommand {
         BsanCommand::Forward(s) => s,
         BsanCommand::Clean => unreachable!(),
         BsanCommand::Setup => {
             if has_arg_flag("--print-rustflags") {
-                println!("{}", bsan_rustflags().join(" "))
+                println!("{}", bsan_rustflags(&deps).join(" "))
             }
             return;
         }
     };
 
-    let metadata = get_cargo_metadata();
-    let mut cmd = cargo();
+    let metadata = Cargo::metadata();
+    let mut cmd = Cargo::cmd();
     cmd.arg(&cargo_cmd);
     // In nextest we have to also forward the main `verb`.
     if cargo_cmd == "nextest" {
@@ -117,22 +117,21 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     }
     cmd.env_remove("RUSTC_WORKSPACE_WRAPPER");
 
-    // At this point, we've completed setup, so we have a sysroot.
-    cmd.env("BSAN_SYSROOT", &bsan_sysroot);
-
     if verbose > 0 {
         cmd.env("BSAN_VERBOSE", verbose.to_string()); // This makes the other phases verbose.
     }
 
-    let llvm_symbolizer = get_host_sysroot_binary("llvm-symbolizer", verbose);
-    cmd.env("BSAN_SYMBOLIZER", llvm_symbolizer);
+    llvm_tools.populate_env(&mut cmd);
 
-    let mut rustflags = bsan_rustflags();
-    let sysroot_flag = format!("--sysroot={}", bsan_sysroot.display());
-    rustflags.push(format!("--sysroot={}", bsan_sysroot.display()));
+    cmd.env("BSAN_SYMBOLIZER", llvm_tools.llvm_symbolizer);
+
+    let mut rustflags = bsan_rustflags(&deps);
+    let sysroot_flag = format!("--sysroot={}", deps.target_sysroot.display());
+    rustflags.push(sysroot_flag.clone());
 
     cmd.env("RUSTFLAGS", rustflags.join(" "));
     cmd.env("RUSTDOCFLAGS", sysroot_flag);
+
     // Run cargo.
     debug_cmd("[cargo-bsan rustc]", verbose, &cmd);
     exec(cmd)
@@ -152,6 +151,8 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
     fn is_target_crate() -> bool {
         get_arg_flag_value("--target").is_some()
     }
+
+    let deps = Deps::from_env();
 
     let verbose = env::var("BSAN_VERBOSE")
         .map_or(0, |verbose| verbose.parse().expect("verbosity flag must be an integer"));
@@ -177,7 +178,7 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
     }
 
     if target_crate {
-        cmd.args(bsan_rustflags());
+        cmd.args(bsan_rustflags(&deps));
     }
 
     // Forward everything else.
@@ -190,42 +191,10 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
     exec(cmd);
 }
 
-fn ensure_sysroot(
-    subcommand: &BsanCommand,
-    rustc_version: &VersionMeta,
-    verbose: usize,
-    quiet: bool,
-) -> PathBuf {
-    let host_sysroot = get_host_sysroot_dir(verbose);
-    let Some(bsan_plugin) = find_library("BSAN_PLUGIN", &host_sysroot, "libbsan_plugin.so") else {
-        show_error!(
-            "failed to locate the BorrowSanitizer LLVM plugin (libbsan_plugin.so) within the host sysroot: {}",
-                host_sysroot.display()
-        );
-    };
-    unsafe {
-        env::set_var("BSAN_PLUGIN", bsan_plugin);
-    }
-
-    let Some(runtime_dir) = find_library("BSAN_RT", &host_sysroot, "libbsan_rt.a") else {
-        show_error!(
-            "failed to locate the BorrowSanitizer runtime (libbsan_rt.a) within the host sysroot."
-        );
-    };
-    unsafe {
-        env::set_var("BSAN_RT", runtime_dir);
-    }
-
-    setup_sysroot(subcommand, rustc_version.host.as_str(), rustc_version, verbose, quiet);
-    get_target_sysroot_dir()
-}
-
-fn bsan_rustflags() -> Vec<String> {
-    let rt = expect_env_path("BSAN_RT");
-    let plugin = expect_env_path("BSAN_PLUGIN");
-    let rt_dir = rt.parent().unwrap();
+fn bsan_rustflags(deps: &Deps) -> Vec<String> {
+    let rt_dir = deps.runtime.parent().unwrap();
     let mut additional_args = BSAN_DEFAULT_ARGS.iter().map(ToString::to_string).collect::<Vec<_>>();
-    additional_args.push(format!("-Zllvm-plugins={}", plugin.display()));
+    additional_args.push(format!("-Zllvm-plugins={}", deps.llvm_pass.display()));
     additional_args.push(format!("-L{}", rt_dir.display()));
     additional_args.push("-lstatic=bsan_rt".to_string());
     additional_args
