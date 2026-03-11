@@ -1,0 +1,9 @@
+error: Undefined Behavior: trying to access an allocation that has been freed.
+  --> RUSTLIB/std/src/sys/alloc/PLATFORM.rs:l:c
+stack backtrace:
+0: <std::alloc::System as core::alloc::global::GlobalAlloc>::realloc
+ at RUSTLIB/std/src/sys/alloc/PLATFORM.rs:l:c
+1: __rustc::__rdl_realloc
+ at RUSTLIB/std/src/alloc.rs:479:6
+2: alloc::alloc::realloc
+ at RUSTLIB/alloc/src/alloc.rs:135:14

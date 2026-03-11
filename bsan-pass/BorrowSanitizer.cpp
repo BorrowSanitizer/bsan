@@ -109,8 +109,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // values have the same semantics as invalid ones, so we can still detect UB
   // for accesses outside of the lifetime. This is necessary; otherwise,
   // ~thousands~ of PHI nodes can be emitted for certain edge-case functions.
-  DenseMap<AllocaInst *, std::pair<Value *, ProvenanceScalar>>
-      SingletonAllocaMap;
+  DenseMap<Value *, std::pair<Value *, ProvenanceScalar>> SingletonAllocaMap;
 
   // If an `alloca` has multiple `lifetime.start` instructions, then we need to
   // track each one separately, because any access might be mutually dominated
@@ -129,6 +128,14 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // necessary for the edge cases where the `alloca` has multiple
   // `lifetime.start`.
   DenseMap<Value *, AllocaInst *> AllocaAliases;
+
+  // Pointer-type arguments with the `byval` attribute point to a different
+  // allocation than was originally allocated for the argument in the calling
+  // context. This means that provenance passed by the caller will not be valid.
+  // Instead, we treat this similar to an `alloca` and ignore our caller's
+  // provenance. However, we still need to account for it when assigning slots
+  // in our thread-local storage.
+  SmallVector<Value *, 2> ByValArgs;
 
   // If a PHI node is a pointer or a vector of pointers, then we need to emit
   // corresponding "shadow" PHI nodes for its provenance. To emit these PHI
@@ -525,8 +532,8 @@ private:
   // Loads a provenance value into shadow memory
   // starting at the given object address.
   Provenance loadProvenanceFromShadow(IRBuilder<> &IRB,
-                                      ProvenanceComponent &Comp, Value *ObjAddr,
-                                      AtomicOrdering Ordering) {
+                                      ProvenanceComponent &Comp,
+                                      Value *ObjAddr) {
     ProvenancePointer ProvPtr;
     if (Comp.isVector()) {
       report_fatal_error("Vectors are not supported.");
@@ -534,7 +541,7 @@ private:
       Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncGetShadowSrc, {ObjAddr});
       ProvPtr = ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
     }
-    return Provenance::load(IRB, BS.PL, ProvPtr, Ordering);
+    return Provenance::load(IRB, BS.PL, ProvPtr);
   }
 
   void populateBlocks(IRBuilder<> &IRB) {
@@ -587,20 +594,32 @@ private:
   void initStack(IRBuilder<> &EntryIRB) {
     if (!isCalledFromUninstContext(F)) {
       Value *TotalNumProvenanceValues = BS.Zero;
-
       for (auto &Arg : F.args()) {
-        SmallVector<ProvenanceComponent> *Components =
-            getProvenanceComponents(EntryIRB, Arg.getType());
-        for (auto &C : *Components) {
-          Value *CurrentArrayByteOffset = EntryIRB.CreateMul(
-              TotalNumProvenanceValues, BS.PL.ProvenanceSize);
-          Value *CurrentArraySlot =
-              addPointer(EntryIRB, BS.DL, BS.ParamTLS, CurrentArrayByteOffset);
-          ProvenancePointer Ptr =
-              C.getPointerToProvenance(EntryIRB, BS.PL, CurrentArraySlot);
-          ArgumentProvenance[&Arg].push_back(Ptr);
-          TotalNumProvenanceValues = EntryIRB.CreateAdd(
-              TotalNumProvenanceValues, C.NumProvenanceValues);
+        if (Arg.hasAttribute(Attribute::ByVal)) {
+          Type *Ty = Arg.getParamByValType();
+          TypeSize TS = BS.DL->getTypeAllocSize(Ty);
+          Value *Size = EntryIRB.CreateTypeSize(BS.IntptrTy, TS);
+          Value *Tag = newBorrowTag(EntryIRB);
+          Value *Info = EntryIRB.CreateCall(BS.BsanFuncReserveStackSlot, {});
+          EntryIRB.CreateCall(BS.BsanFuncAllocStack, {&Arg, Size, Tag, Info});
+          setProvenance(&Arg, ProvenanceScalar(Tag, Info));
+          ByValArgs.push_back(&Arg);
+          TotalNumProvenanceValues =
+              EntryIRB.CreateAdd(TotalNumProvenanceValues, BS.One);
+        } else {
+          SmallVector<ProvenanceComponent> *Components =
+              getProvenanceComponents(EntryIRB, Arg.getType());
+          for (auto &C : *Components) {
+            Value *CurrentArrayByteOffset = EntryIRB.CreateMul(
+                TotalNumProvenanceValues, BS.PL.ProvenanceSize);
+            Value *CurrentArraySlot = addPointer(EntryIRB, BS.DL, BS.ParamTLS,
+                                                 CurrentArrayByteOffset);
+            ProvenancePointer Ptr =
+                C.getPointerToProvenance(EntryIRB, BS.PL, CurrentArraySlot);
+            ArgumentProvenance[&Arg].push_back(Ptr);
+            TotalNumProvenanceValues = EntryIRB.CreateAdd(
+                TotalNumProvenanceValues, C.NumProvenanceValues);
+          }
         }
       }
     }
@@ -1075,40 +1094,6 @@ private:
     }
   }
 
-  AtomicOrdering addReleaseOrdering(AtomicOrdering AT) {
-    switch (AT) {
-    case AtomicOrdering::NotAtomic:
-      return AtomicOrdering::NotAtomic;
-    case AtomicOrdering::Unordered:
-    case AtomicOrdering::Monotonic:
-    case AtomicOrdering::Release:
-      return AtomicOrdering::Release;
-    case AtomicOrdering::Acquire:
-    case AtomicOrdering::AcquireRelease:
-      return AtomicOrdering::AcquireRelease;
-    case AtomicOrdering::SequentiallyConsistent:
-      return AtomicOrdering::SequentiallyConsistent;
-    }
-    llvm_unreachable("Unknown ordering");
-  }
-
-  AtomicOrdering addAcquireOrdering(AtomicOrdering AT) {
-    switch (AT) {
-    case AtomicOrdering::NotAtomic:
-      return AtomicOrdering::NotAtomic;
-    case AtomicOrdering::Unordered:
-    case AtomicOrdering::Monotonic:
-    case AtomicOrdering::Acquire:
-      return AtomicOrdering::Acquire;
-    case AtomicOrdering::Release:
-    case AtomicOrdering::AcquireRelease:
-      return AtomicOrdering::AcquireRelease;
-    case AtomicOrdering::SequentiallyConsistent:
-      return AtomicOrdering::SequentiallyConsistent;
-    }
-    llvm_unreachable("Unknown ordering");
-  }
-
   void visitLoadInst(LoadInst &LI) {
     if (LI.isAtomic())
       return;
@@ -1117,7 +1102,7 @@ private:
     Value *Ptr = LI.getPointerOperand();
 
     Value *Size =
-        IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeAllocSize(LI.getType()));
+        IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeStoreSize(LI.getType()));
     // Load provenance for the value from shadow memory.
     SmallVector<ProvenanceComponent> *Components =
         getProvenanceComponents(IRB, LI.getType());
@@ -1125,8 +1110,7 @@ private:
     for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
       ShadowFootprint Footprint = Comp.Footprint;
       Value *ObjAddr = addPointer(IRB, BS.DL, Base, Footprint.ByteOffset);
-      Provenance Prov = loadProvenanceFromShadow(
-          IRB, Comp, ObjAddr, addAcquireOrdering(LI.getOrdering()));
+      Provenance Prov = loadProvenanceFromShadow(IRB, Comp, ObjAddr);
       setProvenance({&LI, Idx}, Prov);
     }
     insertReadCheck(IRB, Ptr, Size);
@@ -1142,7 +1126,7 @@ private:
     Val = SI.getValueOperand();
 
     Value *Size = IRB.CreateTypeSize(BS.IntptrTy,
-                                     BS.DL->getTypeAllocSize(Val->getType()));
+                                     BS.DL->getTypeStoreSize(Val->getType()));
     insertWriteCheck(IRB, Ptr, Size);
 
     IRBuilder<> NextIRB(SI.getNextNode());
@@ -1162,8 +1146,7 @@ private:
       } else {
         Prov = assertProvenanceScalar(Key);
       }
-      storeProvenanceToShadow(NextIRB, ObjAddr, Prov,
-                              addReleaseOrdering(SI.getOrdering()));
+      storeProvenanceToShadow(NextIRB, ObjAddr, Prov, SI.getOrdering());
     }
   }
 
@@ -1302,12 +1285,17 @@ private:
 
     if (StaticAllocaVec.size() > 0) {
       for (AllocaInst *AI : StaticAllocaVec) {
+        ProvenanceScalar Root = assertProvenanceScalar(AI);
         if (LifetimeInfo->isAliveAfter(AI, &I)) {
-          ProvenanceScalar Root = assertProvenanceScalar(AI);
           IRB.CreateCall(BS.BsanFuncDeallocStack, {AI, Root.Tag, Root.Info});
           IRB.CreateCall(BS.BsanFuncDestroyStackSlot, {Root.Info});
         }
       }
+    }
+    for (auto &Ptr : ByValArgs) {
+      ProvenanceScalar Root = assertProvenanceScalar(Ptr);
+      IRB.CreateCall(BS.BsanFuncDeallocStack, {Ptr, Root.Tag, Root.Info});
+      IRB.CreateCall(BS.BsanFuncDestroyStackSlot, {Root.Info});
     }
   }
 
@@ -1520,14 +1508,14 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncGetShadowDest =
       M.getOrInsertFunction(kBsanFuncGetShadowDestName, AL, PtrTy, PtrTy);
 
-  BsanFuncMemCpy = M.getOrInsertFunction(kBsanFuncMemCpyName, AL, PtrTy, PtrTy,
-                                         PtrTy, IntptrTy);
+  BsanFuncMemCpy = M.getOrInsertFunction(
+      kBsanFuncMemCpyName, AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
 
-  BsanFuncMemMove = M.getOrInsertFunction(kBsanFuncMemMoveName, AL, PtrTy,
-                                          PtrTy, PtrTy, IntptrTy);
+  BsanFuncMemMove = M.getOrInsertFunction(
+      kBsanFuncMemMoveName, AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
 
-  BsanFuncMemSet = M.getOrInsertFunction(kBsanFuncMemSetName, AL, PtrTy, PtrTy,
-                                         Int32Ty, IntptrTy);
+  BsanFuncMemSet = M.getOrInsertFunction(
+      kBsanFuncMemSetName, AL, IRB.getVoidTy(), PtrTy, Int32Ty, IntptrTy);
 
   BsanFuncReserveStackSlot =
       M.getOrInsertFunction(kBsanFuncReserveStackSlotName,

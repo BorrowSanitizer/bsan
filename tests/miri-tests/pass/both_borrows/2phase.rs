@@ -1,4 +1,6 @@
-//@run
+//@run:0
+//miri: @revisions: stack tree
+//miri: @[tree]compile-flags: -Zmiri-tree-borrows
 
 trait S: Sized {
     fn tpb(&mut self, _s: Self) {}

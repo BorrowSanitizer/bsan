@@ -1,4 +1,5 @@
-//@run
+//@run:0
+//miri: @compile-flags: -Zmiri-tree-borrows
 #![feature(allocator_api)]
 
 use std::{mem, ptr};
