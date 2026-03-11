@@ -6,6 +6,7 @@
 #![feature(test)]
 #[macro_use]
 extern crate alloc;
+use alloc::boxed::Box;
 use core::ffi::c_void;
 use core::fmt::Debug;
 #[cfg(not(test))]
@@ -526,6 +527,20 @@ unsafe extern "C-unwind" fn __bsan_shadow_src(addr: *mut c_void) -> *const Prove
 unsafe extern "C-unwind" fn __bsan_shadow_dest(ptr: *mut c_void) -> NonNull<Provenance> {
     let ctx = unsafe { global_ctx() };
     ctx.shadow_heap().get_dest(ptr.addr())
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C-unwind" fn __bsan_shadow_atomic_lock(addr: *mut c_void) -> *mut c_void {
+    let ctx = unsafe { global_ctx() };
+    let guard = ctx.shadow_heap().atomic_lock(addr.addr());
+    Box::into_raw(guard) as *mut c_void
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C-unwind" fn __bsan_shadow_atomic_unlock(guard: *mut c_void) {
+    let ctx = unsafe { global_ctx() };
+    let guard = unsafe { Box::from_raw(guard as _) };
+    ctx.shadow_heap().atomic_unlock(guard);
 }
 
 /// Reserves a stack slot for allocation metadata.
