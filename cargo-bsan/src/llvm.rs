@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 use rustc_version::{LlvmVersion, VersionMeta};
 
-use crate::util::{assert_host_binary, show_error, Sysroot};
+use crate::util::{assert_host_binary, expect_env_path, show_error, Sysroot};
 
 fn rustc_lld(sysroot_target_bindir: &Path) -> PathBuf {
     let lld_binary = |prefix: &str| format!("{}.lld", prefix);
@@ -21,7 +21,6 @@ fn rustc_lld(sysroot_target_bindir: &Path) -> PathBuf {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct LlvmTools {
-    pub version: LlvmVersion,
     pub clang: PathBuf,
     pub llvm_symbolizer: PathBuf,
     pub lld: PathBuf,
@@ -63,13 +62,21 @@ impl LlvmTools {
             );
         }
 
-        LlvmTools { version: rustc_llvm_version, clang, llvm_symbolizer, lld }
+        LlvmTools { clang, llvm_symbolizer, lld }
     }
 
     pub fn populate_env(&self, cmd: &mut Command) {
         cmd.env("CC", &self.clang);
         cmd.env("CXX", &self.clang);
+        cmd.env("LLVM_SYMBOLIZER", &self.clang);
         cmd.env("LLD", &self.lld);
+    }
+
+    pub fn from_env() -> Self {
+        let clang = expect_env_path("CC");
+        let llvm_symbolizer = expect_env_path("LLVM_SYMBOLIZER");
+        let lld = expect_env_path("LLD");
+        Self { clang, llvm_symbolizer, lld }
     }
 
     #[allow(unused)]

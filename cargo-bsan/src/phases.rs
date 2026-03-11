@@ -107,16 +107,16 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     }
 
     let llvm_tools = LlvmTools::new(&rustc_version, &host_sysroot);
-    let deps = Deps::setup(&host_sysroot);
+    let deps = Dependencies::setup(&host_sysroot);
 
-    setup_sysroot(&subcommand, &rustc_version, &target_sysroot, verbose, quiet);
+    setup_sysroot(&subcommand, &rustc_version, &deps, &llvm_tools, &target_sysroot, verbose, quiet);
 
     let cargo_cmd = match subcommand {
         BsanCommand::Forward(s) => s,
         BsanCommand::Clean => unreachable!(),
         BsanCommand::Setup => {
             if has_arg_flag("--print-rustflags") {
-                println!("{}", bsan_rustflags(&deps).join(" "))
+                println!("{}", bsan_rustflags(&deps, &llvm_tools).join(" "))
             }
             return;
         }
@@ -179,6 +179,7 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     }
 
     llvm_tools.populate_env(&mut cmd);
+    deps.populate_env(&mut cmd);
 
     cmd.env("RUSTC", rustc_path());
     if let Some(orig_rustdoc) = env::var_os("RUSTDOC") {
@@ -209,7 +210,8 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
         get_arg_flag_value("--target").is_some()
     }
 
-    let deps = Deps::from_env();
+    let deps = Dependencies::from_env();
+    let llvm_tools = LlvmTools::from_env();
 
     let verbose = env::var("BSAN_VERBOSE")
         .map_or(0, |verbose| verbose.parse().expect("verbosity flag must be an integer"));
@@ -241,7 +243,7 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
     let in_rustdoc = phase == RustcPhase::Rustdoc;
 
     if target_crate {
-        cmd.args(bsan_rustflags(&deps));
+        cmd.args(bsan_rustflags(&deps, &llvm_tools));
     }
 
     // Forward everything else.
@@ -261,12 +263,14 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
     }
 }
 
-fn bsan_rustflags(deps: &Deps) -> Vec<String> {
+fn bsan_rustflags(deps: &Dependencies, llvm_tools: &LlvmTools) -> Vec<String> {
     let rt_dir = deps.runtime.parent().unwrap();
     let mut additional_args = BSAN_DEFAULT_ARGS.iter().map(ToString::to_string).collect::<Vec<_>>();
     additional_args.push(format!("-Zllvm-plugins={}", deps.llvm_pass.display()));
     additional_args.push(format!("-L{}", rt_dir.display()));
     additional_args.push("-lstatic=bsan_rt".to_string());
+    additional_args.push(format!("-Clinker={}", llvm_tools.clang.display()));
+    additional_args.push(format!("-Clink-arg=-fuse-ld={}", llvm_tools.lld.display()));
     additional_args
 }
 

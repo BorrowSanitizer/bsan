@@ -10,20 +10,20 @@ use rustc_build_sysroot::{BuildMode, SysrootBuilder, SysrootConfig, SysrootStatu
 use rustc_version::VersionMeta;
 
 use crate::arg::*;
+use crate::llvm::LlvmTools;
 use crate::util::*;
 
-pub struct Deps {
+pub struct Dependencies {
     pub runtime: PathBuf,
     pub llvm_pass: PathBuf,
 }
 
-impl Deps {
+impl Dependencies {
     pub fn setup(host_sysroot: &Sysroot) -> Self {
         let ensure_library_var = |var: &str, sysroot: &Sysroot, libname: &str| {
             env::var_os(var).map(|o| o.into()).or_else(|| {
                 let plugin: PathBuf = (*sysroot).join("lib").join(libname).to_path_buf();
                 if plugin.exists() {
-                    unsafe { env::set_var(var, &plugin) };
                     Some(plugin)
                 } else {
                     None
@@ -48,6 +48,11 @@ impl Deps {
         Self { runtime, llvm_pass }
     }
 
+    pub fn populate_env(&self, cmd: &mut Command) {
+        cmd.env("BSAN_RT", &self.runtime);
+        cmd.env("BSAN_PLUGIN", &self.llvm_pass);
+    }
+
     pub fn from_env() -> Self {
         let runtime = expect_env_path("BSAN_RT");
         let llvm_pass = expect_env_path("BSAN_PLUGIN");
@@ -61,6 +66,8 @@ impl Deps {
 pub fn setup_sysroot(
     subcommand: &BsanCommand,
     rustc_version: &VersionMeta,
+    deps: &Dependencies,
+    llvm_tools: &LlvmTools,
     sysroot_dir: &Sysroot,
     verbose: usize,
     quiet: bool,
@@ -171,7 +178,8 @@ pub fn setup_sysroot(
                 command.arg("--quiet");
             }
         }
-
+        deps.populate_env(&mut command);
+        llvm_tools.populate_env(&mut command);
         command
     };
     // Disable debug assertions in the standard library -- Miri is already slow enough.
