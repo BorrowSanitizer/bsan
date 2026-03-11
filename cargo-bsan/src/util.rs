@@ -1,7 +1,7 @@
 use std::env;
 use std::ffi::OsString;
 use std::io::{self, Write};
-use std::ops::Not;
+use std::ops::{Deref, Not};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -84,29 +84,6 @@ pub fn exec_with_pipe(mut cmd: Command) -> ! {
     std::process::exit(exit_status.code().unwrap_or(-1))
 }
 
-/// Determines where the host sysroot of this execution is
-pub fn get_host_sysroot_dir(verbose: usize) -> PathBuf {
-    let mut cmd = rustc();
-    cmd.args(["--print", "sysroot"]);
-    debug_cmd("[cargo-bsan rustc]", verbose, &cmd);
-    let libdir = exec_stdout(cmd);
-    PathBuf::from(libdir.trim())
-}
-
-/// Determines where the sysroot of this execution is
-///
-/// Either in a user-specified spot by an envar, or in a default cache location.
-pub fn get_target_sysroot_dir() -> PathBuf {
-    match std::env::var_os("BSAN_SYSROOT") {
-        Some(dir) => PathBuf::from(dir),
-        None => {
-            let user_dirs =
-                directories::ProjectDirs::from("org", "borrowsanitizer", "bsan").unwrap();
-            user_dirs.cache_dir().to_owned()
-        }
-    }
-}
-
 pub fn ask_to_run(mut cmd: Command, ask: bool, text: &str) {
     // Disable interactive prompts in CI (GitHub Actions, Travis, AppVeyor, etc).
     // Azure doesn't set `CI` though (nothing to see here, just Microsoft being Microsoft),
@@ -132,21 +109,12 @@ pub fn ask_to_run(mut cmd: Command, ask: bool, text: &str) {
     }
 }
 
-/// Get the target directory for bsan output.
-///
-/// Either in an argument passed-in, or from cargo metadata.
-pub fn get_target_dir(meta: &Metadata) -> PathBuf {
-    let mut output = match get_arg_flag_value("--target-dir") {
-        Some(dir) => PathBuf::from(dir),
-        None => meta.target_directory.clone().into_std_path_buf(),
-    };
-    output.push("bsan");
-    output
-}
-
 pub struct Cargo;
 
 impl Cargo {
+    pub fn get_target_dir() -> PathBuf {
+        Self::metadata().target_directory.clone().into_std_path_buf().join("bsan")
+    }
     pub fn cmd() -> Command {
         // Honor the `CARGO` env var if set, otherwise look for `cargo` in PATH.
         let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
@@ -189,15 +157,14 @@ impl Cargo {
     }
 }
 
-pub fn clean_sysroot_dir() {
-    let sysroot = get_target_sysroot_dir();
-    if sysroot.exists() {
-        std::fs::remove_dir_all(&sysroot).unwrap();
+pub fn clean_sysroot_dir(sysroot: &Sysroot) {
+    if sysroot.root.exists() {
+        std::fs::remove_dir_all(&sysroot.root).unwrap();
     }
 }
 
 pub fn clean_target_dir() {
-    let target_dir = get_target_dir(&Cargo::metadata());
+    let target_dir = Cargo::get_target_dir();
     if target_dir.exists() {
         std::fs::remove_dir_all(&target_dir).unwrap();
     }
@@ -229,30 +196,70 @@ pub fn rustc() -> Command {
     Command::new(rustc_path())
 }
 
-pub fn try_get_host_binary(binary: &str, verbose: usize) -> Option<PathBuf> {
-    try_get_host_sysroot_binary(binary, verbose).or_else(|| which::which(binary).ok())
+pub fn try_get_host_binary(sysroot: &Sysroot, binary: &str) -> Option<PathBuf> {
+    sysroot.binary(binary).or_else(|| which::which(binary).ok())
 }
 
-pub fn try_get_host_sysroot_binary(binary: &str, verbose: usize) -> Option<PathBuf> {
-    let bsan_sysroot = get_host_sysroot_dir(verbose);
-    let sysroot_bindir = Path::new(&bsan_sysroot).join("bin");
-    let symbolizer_path = sysroot_bindir.join(binary);
-    symbolizer_path.exists().then_some(symbolizer_path)
-}
-
-pub fn assert_host_binary(binary: &str, verbose: usize) -> PathBuf {
-    try_get_host_binary(binary, verbose)
+pub fn assert_host_binary(sysroot: &Sysroot, binary: &str) -> PathBuf {
+    try_get_host_binary(sysroot, binary)
         .unwrap_or_else(|| show_error!("failed to find `{}`", binary))
 }
 
-pub fn get_sysroot_target_dir(version_meta: &VersionMeta, verbose: usize) -> PathBuf {
-    let mut sysroot_target_dir = get_host_sysroot_dir(verbose);
-    sysroot_target_dir.push("lib");
-    sysroot_target_dir.push("rustlib");
-    sysroot_target_dir.push(&version_meta.host);
-    if sysroot_target_dir.exists() {
-        sysroot_target_dir
-    } else {
-        panic!("Target sysroot directory does not exist: {:?}", sysroot_target_dir);
+pub struct Sysroot {
+    root: PathBuf,
+}
+
+impl Sysroot {
+    pub fn host(verbose: usize) -> Self {
+        let mut cmd = rustc();
+        cmd.args(["--print", "sysroot"]);
+        debug_cmd("[cargo-bsan rustc]", verbose, &cmd);
+        let libdir = exec_stdout(cmd);
+        Self { root: PathBuf::from(libdir.trim()) }
+    }
+
+    pub fn target() -> Self {
+        let root = match std::env::var_os("BSAN_SYSROOT") {
+            Some(dir) => PathBuf::from(dir),
+            None => {
+                let user_dirs =
+                    directories::ProjectDirs::from("org", "borrowsanitizer", "bsan").unwrap();
+                user_dirs.cache_dir().to_owned()
+            }
+        };
+        Self { root }
+    }
+
+    pub fn bin(&self) -> PathBuf {
+        self.root.join("bin")
+    }
+
+    pub fn binary(&self, binary: &str) -> Option<PathBuf> {
+        let path = self.bin().join(binary);
+        path.exists().then_some(path)
+    }
+
+    pub fn target_dir(&self, version_meta: &VersionMeta) -> PathBuf {
+        let mut target_dir = self.root.clone();
+        target_dir.push("lib");
+        target_dir.push("rustlib");
+        target_dir.push(&version_meta.host);
+        if target_dir.exists() {
+            target_dir
+        } else {
+            panic!(
+                "The host sysroot `{}` does not contain a target directory for target `{}`.",
+                self.root.display(),
+                version_meta.host
+            );
+        }
+    }
+}
+
+impl Deref for Sysroot {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        &self.root
     }
 }

@@ -6,7 +6,6 @@ use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::process::{self, Command};
 
-use path_macro::path;
 use rustc_build_sysroot::{BuildMode, SysrootBuilder, SysrootConfig, SysrootStatus};
 use rustc_version::VersionMeta;
 
@@ -14,7 +13,7 @@ use crate::arg::*;
 use crate::util::*;
 
 pub struct Deps {
-    pub target_sysroot: PathBuf,
+    pub target_sysroot: Sysroot,
     pub runtime: PathBuf,
     pub llvm_pass: PathBuf,
 }
@@ -23,14 +22,14 @@ impl Deps {
     pub fn setup(
         subcommand: &BsanCommand,
         rustc_version: &VersionMeta,
+        host_sysroot: &Sysroot,
+        target_sysroot: Sysroot,
         verbose: usize,
         quiet: bool,
     ) -> Self {
-        let host_sysroot = get_host_sysroot_dir(verbose);
-
-        let ensure_library_var = |var: &str, sysroot: &PathBuf, libname: &str| {
+        let ensure_library_var = |var: &str, sysroot: &Sysroot, libname: &str| {
             env::var_os(var).map(|o| o.into()).or_else(|| {
-                let plugin: PathBuf = path!(sysroot / "lib" / libname);
+                let plugin: PathBuf = (*sysroot).join("lib").join(libname).to_path_buf();
                 if plugin.exists() {
                     unsafe { env::set_var(var, &plugin) };
                     Some(plugin)
@@ -54,14 +53,13 @@ impl Deps {
             );
         };
 
-        let target_sysroot =
-            setup_sysroot(subcommand, rustc_version.host.as_str(), rustc_version, verbose, quiet);
+        setup_sysroot(subcommand, rustc_version, &target_sysroot, verbose, quiet);
 
         Self { target_sysroot, runtime, llvm_pass }
     }
 
     pub fn from_env() -> Self {
-        let target_sysroot = expect_env_path("BSAN_SYSROOT");
+        let target_sysroot = Sysroot::target();
         let runtime = expect_env_path("BSAN_RT");
         let llvm_pass = expect_env_path("BSAN_PLUGIN");
         Self { target_sysroot, runtime, llvm_pass }
@@ -73,11 +71,11 @@ impl Deps {
 /// done all this already.
 pub fn setup_sysroot(
     subcommand: &BsanCommand,
-    target: &str,
     rustc_version: &VersionMeta,
+    sysroot_dir: &Sysroot,
     verbose: usize,
     quiet: bool,
-) -> PathBuf {
+) {
     let only_setup = matches!(subcommand, BsanCommand::Setup);
     let ask_user = !only_setup;
     let print_rustflags = only_setup && has_arg_flag("--print-rustflags");
@@ -89,7 +87,7 @@ pub fn setup_sysroot(
         if print_sysroot {
             println!("{}", sysroot.display());
         }
-        return sysroot.into();
+        return;
     }
 
     // Determine where the rust sources are located.  The env var trumps auto-detection.
@@ -128,8 +126,7 @@ pub fn setup_sysroot(
         );
     }
 
-    // Determine where to put the sysroot.
-    let sysroot_dir = get_target_sysroot_dir();
+    let target = rustc_version.host.as_str();
 
     // Sysroot configuration and build details.
     let no_std = match std::env::var_os("BSAN_NO_STD") {
@@ -166,7 +163,7 @@ pub fn setup_sysroot(
 
         command.env("BSAN_CALLED_FROM_SETUP", "1");
         // BSAN expects `BSAN_SYSROOT` to be set when invoked in target mode. Even if that directory is empty.
-        command.env("BSAN_SYSROOT", &sysroot_dir);
+        command.env("BSAN_SYSROOT", sysroot_dir.as_os_str());
         // Make sure there are no other wrappers getting in our way (Cc
         // https://github.com/rust-lang/miri/issues/1421,
         // https://github.com/rust-lang/miri/issues/2429). Looks like setting
@@ -246,7 +243,5 @@ pub fn setup_sysroot(
         println!("{}", sysroot_dir.display());
     }
 
-    unsafe { env::set_var("BSAN_SYSROOT", &sysroot_dir) }
-
-    sysroot_dir
+    unsafe { env::set_var("BSAN_SYSROOT", &sysroot_dir.as_os_str()) }
 }

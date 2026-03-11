@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use rustc_version::VersionMeta;
 
 use crate::arg::*;
@@ -56,18 +58,21 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     if targets.len() > 1 || targets.iter().any(|t| t != &rustc_version.host) {
         show_error!("Cross-compilation is not supported.");
     }
+    let target_sysroot = Sysroot::target();
+    let host_sysroot = Sysroot::host(verbose);
 
     // If cleaning the target directory & sysroot cache,
     // delete them then exit. There is no reason to setup a new
     // sysroot in this execution.
     if let BsanCommand::Clean = subcommand {
-        clean_sysroot_dir();
+        clean_sysroot_dir(&target_sysroot);
         clean_target_dir();
         return;
     }
 
-    let llvm_tools = LlvmTools::new(&rustc_version, verbose);
-    let deps = Deps::setup(&subcommand, &rustc_version, verbose, quiet);
+    let llvm_tools = LlvmTools::new(&rustc_version, &host_sysroot);
+    let deps =
+        Deps::setup(&subcommand, &rustc_version, &host_sysroot, target_sysroot, verbose, quiet);
 
     let cargo_cmd = match subcommand {
         BsanCommand::Forward(s) => s,
@@ -80,7 +85,6 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
         }
     };
 
-    let metadata = Cargo::metadata();
     let mut cmd = Cargo::cmd();
     cmd.arg(&cargo_cmd);
     // In nextest we have to also forward the main `verb`.
@@ -95,7 +99,10 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     cmd.arg(&rustc_version.host);
 
     // Set `--target-dir` to `bsan` inside the original target directory.
-    let target_dir = get_target_dir(&metadata);
+    let target_dir = match get_arg_flag_value("--target-dir") {
+        Some(dir) => PathBuf::from(dir),
+        None => Cargo::get_target_dir(),
+    };
     cmd.arg("--target-dir").arg(target_dir);
 
     // *After* we set all the flags that need setting, forward everything else. Make sure to skip

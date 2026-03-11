@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 use rustc_version::{LlvmVersion, VersionMeta};
 
-use crate::util::{assert_host_binary, get_sysroot_target_dir, show_error};
+use crate::util::{assert_host_binary, show_error, Sysroot};
 
 fn rustc_lld(sysroot_target_bindir: &Path) -> PathBuf {
     let lld_binary = |prefix: &str| format!("{}.lld", prefix);
@@ -28,13 +28,14 @@ pub struct LlvmTools {
 }
 
 impl LlvmTools {
-    pub fn new(rustc_version: &VersionMeta, verbose: usize) -> Self {
+    pub fn new(rustc_version: &VersionMeta, host_sysroot: &Sysroot) -> Self {
         let rustc_llvm_version = rustc_version.llvm_version.clone().unwrap_or_else(|| {
             show_error!("Unable to resolve the LLVM version for the current `rustc`.")
         });
 
-        let clang = assert_host_binary(&format!("clang-{}", rustc_llvm_version.major), verbose);
-        let llvm_symbolizer = assert_host_binary("llvm-symbolizer", verbose);
+        let clang =
+            assert_host_binary(host_sysroot, &format!("clang-{}", rustc_llvm_version.major));
+        let llvm_symbolizer = assert_host_binary(host_sysroot, "llvm-symbolizer");
 
         let clang_llvm_version = assert_llvm_version(&clang);
 
@@ -46,7 +47,7 @@ impl LlvmTools {
             );
         }
 
-        let sysroot_target_dir = get_sysroot_target_dir(rustc_version, verbose);
+        let sysroot_target_dir = host_sysroot.target_dir(rustc_version);
 
         let sysroot_target_bindir = sysroot_target_dir.join("bin");
 
