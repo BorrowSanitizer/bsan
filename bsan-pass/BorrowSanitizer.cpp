@@ -833,11 +833,10 @@ private:
     }
 
     if (CB.isInlineAsm()) {
-      if (ClHandleAsmConservative) {
+      if (ClHandleAsmConservative)
         visitAsmInstruction(CB);
-      } else
-        // TODO: What is the difference in our case?
-        visitAsmInstruction(CB);
+      else
+        return;
     }
 
     // If we've made it here, then we don't have a hard-coded way to handle this
@@ -925,36 +924,24 @@ private:
   }
 
   void visitAsmInstruction(Instruction &I) {
-    // Conservative inline assembly handling: check for poisoned shadow of
-    // asm() arguments, then unpoison the result and all the memory locations
-    // pointed to by those arguments.
-    // An inline asm() statement in C++ contains lists of input and output
-    // arguments used by the assembly code. These are mapped to operands of the
-    // CallInst as follows:
-    //  - nR register outputs ("=r) are returned by value in a single structure
-    //  (SSA value of the CallInst);
-    //  - nO other outputs ("=m" and others) are returned by pointer as first
-    // nO operands of the CallInst;
-    //  - nI inputs ("r", "m" and others) are passed to CallInst as the
-    // remaining nI operands.
-    // The total number of asm() arguments in the source is nR+nO+nI, and the
-    // corresponding CallInst has nO+nI+1 operands (the last operand is the
-    // function to be called).
     CallBase *CB = cast<CallBase>(&I);
+    IRBuilder<> IRB(&I);
     InlineAsm *IA = cast<InlineAsm>(CB->getCalledOperand());
     int NumOutputs = getNumOutputArgs(IA, CB);
 
     // Get the output arguments
-    for (int I = 0; I < NumOutputs; I++) {
-      Value *Operand = CB->getOperand(I);
+    for (int J = 0; J < NumOutputs; J++) {
+      Value *Operand = CB->getOperand(J);
 
       Type *OpType = Operand->getType();
 
-      if (!OpType->isPointerTy())
-        return;
+      // Handle aggregate values
+      SmallVector<ProvenanceComponent> *Components =
+          getProvenanceComponents(IRB, OpType);
 
-      // Set provenance as wildcard for each output pointer
-      setProvenance(Operand, BS.WildcardProvenance);
+      for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
+        setProvenance({Operand, Idx}, BS.WildcardProvenance);
+      }
     }
   }
 
