@@ -513,6 +513,18 @@ private:
     }
   }
 
+  Instruction *insertionPointAfterAppAccess(IRBuilder<> &IRB) {
+    auto InsertPoint = IRB.GetInsertPoint();
+    Instruction *NextNode = InsertPoint->getNextNode();
+    if (NextNode == nullptr) {
+      errs() << "Error: There seems to be no next node of Instruction "
+             << *InsertPoint << "  In Function \n"
+             << *IRB.GetInsertBlock()->getParent() << "\n";
+      report_fatal_error("Invalid IRBuilder insert point.");
+    }
+    return NextNode;
+  }
+
   // Stores a provenance value into shadow memory, starting at the given object
   // address.
   void storeProvenanceToShadow(IRBuilder<> &IRB, Value *ObjAddr,
@@ -527,9 +539,16 @@ private:
           ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
 
       if (Ordering != AtomicOrdering::NotAtomic) {
+        // We lock the shadow memory before performing the shadow memory
+        // operation
         Value *Guard = IRB.CreateCall(BS.BsanFuncShadowAtomicLock, {ObjAddr});
         Prov.store(IRB, BS.PL, Dest, Ordering);
-        IRB.CreateCall(BS.BsanFuncShadowAtomicUnlock, {Guard});
+        // and we unlock it AFTER the APPLICATION's atomic LOAD/STORE
+        // instruction has finished. Therefore accessing provenance metadata and
+        // accessing the actual application's pointer value is done in one block
+        // with no interleaving modifications from other threads.
+        IRBuilder<> AfterAccessIRB(insertionPointAfterAppAccess(IRB));
+        AfterAccessIRB.CreateCall(BS.BsanFuncShadowAtomicUnlock, {Guard});
       } else {
         Prov.store(IRB, BS.PL, Dest, Ordering);
       }
@@ -551,9 +570,15 @@ private:
 
     Provenance Prov;
     if (Ordering != AtomicOrdering::NotAtomic) {
+      // We lock the shadow memory before performing the shadow memory operation
       Value *Guard = IRB.CreateCall(BS.BsanFuncShadowAtomicLock, {ObjAddr});
-      Prov = Provenance::load(IRB, BS.PL, ProvPtr);
-      IRB.CreateCall(BS.BsanFuncShadowAtomicUnlock, {Guard});
+      Prov = Provenance::load(IRB, BS.PL, ProvPtr, Ordering);
+      // and we unlock it AFTER the APPLICATION's atomic LOAD/STORE instruction
+      // has finished. Therefore accessing provenance metadata and accessing the
+      // actual application's pointer value is done in one block with no
+      // interleaving modifications from other threads.;
+      IRBuilder<> AfterAccessIRB(insertionPointAfterAppAccess(IRB));
+      AfterAccessIRB.CreateCall(BS.BsanFuncShadowAtomicUnlock, {Guard});
     } else {
       Prov = Provenance::load(IRB, BS.PL, ProvPtr);
     }
@@ -1142,24 +1167,24 @@ private:
                                      BS.DL->getTypeStoreSize(Val->getType()));
     insertWriteCheck(IRB, Ptr, Size);
 
-    IRBuilder<> NextIRB(SI.getNextNode());
-    // Store provenance for the value into shadow memory.
+    // IRBuilder<> NextIRB(SI.getNextNode());
+    //  Store provenance for the value into shadow memory.
     Value *Base = SI.getPointerOperand();
     SmallVector<ProvenanceComponent> *Components =
-        getProvenanceComponents(NextIRB, Val->getType());
+        getProvenanceComponents(IRB, Val->getType());
 
     for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
       ShadowFootprint Footprint = Comp.Footprint;
-      Value *ObjAddr = addPointer(NextIRB, BS.DL, Base, Footprint.ByteOffset);
+      Value *ObjAddr = addPointer(IRB, BS.DL, Base, Footprint.ByteOffset);
 
       Provenance Prov;
       ProvenanceKey Key = {SI.getValueOperand(), Idx};
       if (Comp.isVector()) {
-        Prov = assertProvenanceVector(NextIRB, Key, Comp.Elems);
+        Prov = assertProvenanceVector(IRB, Key, Comp.Elems);
       } else {
         Prov = assertProvenanceScalar(Key);
       }
-      storeProvenanceToShadow(NextIRB, ObjAddr, Prov, SI.getOrdering());
+      storeProvenanceToShadow(IRB, ObjAddr, Prov, SI.getOrdering());
     }
   }
 
