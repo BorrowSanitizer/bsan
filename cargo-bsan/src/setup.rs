@@ -13,6 +13,40 @@ use crate::arg::*;
 use crate::llvm::LlvmTools;
 use crate::util::*;
 
+pub struct EnvConfig {
+    pub verbose: bool,
+    pub quiet: bool,
+    pub lto: bool,
+}
+
+impl EnvConfig {
+    pub fn from_args() -> Self {
+        let verbose = has_arg_flag("-v");
+        let quiet = has_arg_flag("-q") || has_arg_flag("--quiet");
+        let lto = has_arg_flag("--lto");
+        Self { verbose, quiet, lto }
+    }
+
+    pub fn from_env() -> Self {
+        let verbose = env::var_os("BSAN_VERBOSE").is_some();
+        let quiet = env::var_os("BSAN_QUIET").is_some();
+        let lto = env::var_os("BSAN_LTO").is_some();
+        Self { verbose, quiet, lto }
+    }
+
+    pub fn populate_env(&self, cmd: &mut Command) {
+        if self.verbose {
+            cmd.env("BSAN_VERBOSE", "1");
+        }
+        if self.quiet {
+            cmd.env("BSAN_QUIET", "1");
+        }
+        if self.lto {
+            cmd.env("BSAN_LTO", "1");
+        }
+    }
+}
+
 pub struct Dependencies {
     pub runtime: PathBuf,
     pub llvm_pass: PathBuf,
@@ -31,7 +65,7 @@ impl Dependencies {
             })
         };
 
-        let Some(llvm_pass) = ensure_library_var("BSAN_PLUGIN", &host_sysroot, "libbsan_plugin.so")
+        let Some(llvm_pass) = ensure_library_var("BSAN_PLUGIN", host_sysroot, "libbsan_plugin.so")
         else {
             show_error!(
                 "failed to locate the BorrowSanitizer LLVM plugin (libbsan_plugin.so) within the host sysroot: {}",
@@ -39,7 +73,7 @@ impl Dependencies {
             );
         };
 
-        let Some(runtime) = ensure_library_var("BSAN_RT", &host_sysroot, "libbsan_rt.a") else {
+        let Some(runtime) = ensure_library_var("BSAN_RT", host_sysroot, "libbsan_rt.a") else {
             show_error!(
                 "failed to locate the BorrowSanitizer runtime (libbsan_rt.a) within the host sysroot."
             );
@@ -69,8 +103,7 @@ pub fn setup_sysroot(
     deps: &Dependencies,
     llvm_tools: &LlvmTools,
     sysroot_dir: &Sysroot,
-    verbose: usize,
-    quiet: bool,
+    env: &EnvConfig,
 ) {
     let only_setup = matches!(subcommand, BsanCommand::Setup);
     let ask_user = !only_setup;
@@ -171,28 +204,30 @@ pub fn setup_sysroot(
             // Forward output. Even make it verbose, if requested.
             command.stdout(process::Stdio::inherit());
             command.stderr(process::Stdio::inherit());
-            for _ in 0..verbose {
+            if env.verbose {
                 command.arg("-v");
             }
-            if quiet {
+            if env.quiet {
                 command.arg("--quiet");
             }
         }
         deps.populate_env(&mut command);
         llvm_tools.populate_env(&mut command);
+        env.populate_env(&mut command);
         command
     };
     // Disable debug assertions in the standard library -- Miri is already slow enough.
     // But keep the overflow checks, they are cheap. This completely overwrites flags
     // the user might have set, which is consistent with normal `cargo build` that does
     // not apply `RUSTFLAGS` to the sysroot either.
-    let rustflags = &["-Cdebug-assertions=off", "-Coverflow-checks=on", "-Cdebuginfo=2"];
+    let rustflags =
+        &["-Cdebug-assertions=off", "-Coverflow-checks=on", "-Cdebuginfo=2", "-Cembed-bitcode"];
 
     let mut after_build_output = String::new(); // what should be printed when the build is done.
     let notify = || {
-        if !quiet {
+        if !env.quiet {
             eprint!("Preparing a sysroot for BorrowSanitizer (target: {target})");
-            if verbose > 0 {
+            if env.verbose {
                 eprint!(" in {}", sysroot_dir.display());
             }
             if show_setup {
@@ -211,7 +246,7 @@ pub fn setup_sysroot(
     };
 
     // Do the build.
-    let status = SysrootBuilder::new(&sysroot_dir, target)
+    let status = SysrootBuilder::new(sysroot_dir, target)
         .build_mode(BuildMode::Build)
         .rustc_version(rustc_version.clone())
         .sysroot_config(sysroot_config)
@@ -219,9 +254,10 @@ pub fn setup_sysroot(
         .cargo(cargo_cmd)
         .when_build_required(notify)
         .build_from_source(&rust_src);
+
     match status {
         Ok(SysrootStatus::AlreadyCached) => {
-            if !quiet && show_setup {
+            if !env.quiet && show_setup {
                 eprintln!(
                     "A sysroot for BorrowSanitizer is already available in `{}`.",
                     sysroot_dir.display()
@@ -240,5 +276,5 @@ pub fn setup_sysroot(
         println!("{}", sysroot_dir.display());
     }
 
-    unsafe { env::set_var("BSAN_SYSROOT", &sysroot_dir.as_os_str()) }
+    unsafe { env::set_var("BSAN_SYSROOT", sysroot_dir.as_os_str()) }
 }

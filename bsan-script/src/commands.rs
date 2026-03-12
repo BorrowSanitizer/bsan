@@ -151,10 +151,11 @@ impl Command {
             let cargo_bsan = env.build_artifact(CargoBsan, &[])?;
             let sysroot_dir = path!(&env.build_dir / "sysroot");
 
-            let mut env_guards = vec![];
-            env_guards.push(env.sh.push_env("BSAN_PLUGIN", &plugin));
-            env_guards.push(env.sh.push_env("BSAN_RT", &runtime));
-            env_guards.push(env.sh.push_env("BSAN_SYSROOT", &sysroot_dir));
+            let env_guards = vec![
+                env.sh.push_env("BSAN_PLUGIN", &plugin),
+                env.sh.push_env("BSAN_RT", &runtime),
+                env.sh.push_env("BSAN_SYSROOT", &sysroot_dir),
+            ];
 
             cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
             let flags = cmd!(env.sh, "{cargo_bsan} bsan setup --print-rustflags").output()?;
@@ -167,6 +168,8 @@ impl Command {
                 .arg(format!("--sysroot={}", sysroot_dir.display()))
                 .quiet()
                 .run()?;
+
+            drop(env_guards);
 
             Ok(())
         })
@@ -393,10 +396,9 @@ impl CompilerRt {
 impl Buildable for CompilerRt {
     fn artifact(&self, env: &BsanEnv) -> String {
         let host = &env.toolchain_config.meta.host;
-        let arch = host
-            .split("-")
-            .next()
-            .expect(&format!("Invalid target triple: `{}`", env.toolchain_config.meta.host));
+        let arch = host.split("-").next().unwrap_or_else(|| {
+            panic!("Invalid target triple: `{}`", env.toolchain_config.meta.host)
+        });
         format!("libclang_rt.bsan-{}.a", arch)
     }
 
@@ -438,7 +440,7 @@ impl Buildable for BsanRtCore {
     }
 
     fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.with_flags("RUSTFLAGS", &RT_FLAGS, |env| env.test("bsan-rt", args))
+        env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.test("bsan-rt", args))
     }
 
     fn clippy(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {

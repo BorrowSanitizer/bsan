@@ -49,6 +49,15 @@ static llvm::PassPluginLibraryInfo getBorrowSanitizerPluginInfo() {
                                                   ThinOrFullLTOPhase Phase) {
               MPM.addPass(BorrowSanitizerPass(BorrowSanitizerOptions()));
             });
+            PB.registerPipelineParsingCallback(
+                [](StringRef Name, ModulePassManager &MPM,
+                   ArrayRef<PassBuilder::PipelineElement>) {
+                  if (Name == "bsan") {
+                    MPM.addPass(BorrowSanitizerPass(BorrowSanitizerOptions()));
+                    return true;
+                  }
+                  return false;
+                });
           }};
 }
 

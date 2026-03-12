@@ -62,10 +62,12 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
         show_help();
         return;
     }
+
     if has_arg_flag("--version") || has_arg_flag("-V") {
         show_version();
         return;
     }
+
     let Some(subcommand) = args.next() else {
         show_error!(
             "`cargo bsan` needs to be called with a subcommand (e.g `run`, `test`, `clean`)"
@@ -81,8 +83,7 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
         ),
     };
 
-    let verbose = num_arg_flag("-v");
-    let quiet = has_arg_flag("-q") || has_arg_flag("--quiet");
+    let env = EnvConfig::from_args();
 
     // Determine the involved architectures.
     let rustc_version = VersionMeta::for_command(rustc())
@@ -94,8 +95,8 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     if targets.len() > 1 || targets.iter().any(|t| t != &rustc_version.host) {
         show_error!("Cross-compilation is not supported.");
     }
-    let target_sysroot = Sysroot::target();
-    let host_sysroot = Sysroot::host(verbose);
+    let target_sysroot = Sysroot::target(&env);
+    let host_sysroot = Sysroot::host(&env);
 
     // If cleaning the target directory & sysroot cache,
     // delete them then exit. There is no reason to setup a new
@@ -109,14 +110,14 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     let llvm_tools = LlvmTools::new(&rustc_version, &host_sysroot);
     let deps = Dependencies::setup(&host_sysroot);
 
-    setup_sysroot(&subcommand, &rustc_version, &deps, &llvm_tools, &target_sysroot, verbose, quiet);
+    setup_sysroot(&subcommand, &rustc_version, &deps, &llvm_tools, &target_sysroot, &env);
 
     let cargo_cmd = match subcommand {
         BsanCommand::Forward(s) => s,
         BsanCommand::Clean => unreachable!(),
         BsanCommand::Setup => {
             if has_arg_flag("--print-rustflags") {
-                println!("{}", bsan_rustflags(&deps, &llvm_tools).join(" "))
+                println!("{}", bsan_rustflags(&env, &deps, &llvm_tools).join(" "))
             }
             return;
         }
@@ -174,12 +175,17 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     }
     cmd.env_remove("RUSTC_WORKSPACE_WRAPPER");
 
-    if verbose > 0 {
-        cmd.env("BSAN_VERBOSE", verbose.to_string()); // This makes the other phases verbose.
+    if env.verbose {
+        cmd.env("BSAN_VERBOSE", env.verbose.to_string()); // This makes the other phases verbose.
+    }
+
+    if env.lto {
+        cmd.env("BSAN_LTO", "1");
     }
 
     llvm_tools.populate_env(&mut cmd);
     deps.populate_env(&mut cmd);
+    env.populate_env(&mut cmd);
 
     cmd.env("RUSTC", rustc_path());
     if let Some(orig_rustdoc) = env::var_os("RUSTDOC") {
@@ -188,10 +194,10 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     cmd.env("RUSTDOC", &cargo_bsan_path);
 
     cmd.env("BSAN_SYMBOLIZER", llvm_tools.llvm_symbolizer);
-    cmd.env("BSAN_SYSROOT", &target_sysroot.as_os_str());
+    cmd.env("BSAN_SYSROOT", target_sysroot.as_os_str());
 
     // Run cargo.
-    debug_cmd("[cargo-bsan rustc]", verbose, &cmd);
+    debug_cmd("[cargo-bsan rustc]", env.verbose, &cmd);
     exec(cmd)
 }
 
@@ -212,6 +218,7 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
 
     let deps = Dependencies::from_env();
     let llvm_tools = LlvmTools::from_env();
+    let env = EnvConfig::from_env();
 
     let verbose = env::var("BSAN_VERBOSE")
         .map_or(0, |verbose| verbose.parse().expect("verbosity flag must be an integer"));
@@ -243,13 +250,13 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
     let in_rustdoc = phase == RustcPhase::Rustdoc;
 
     if target_crate {
-        cmd.args(bsan_rustflags(&deps, &llvm_tools));
+        cmd.args(bsan_rustflags(&env, &deps, &llvm_tools));
     }
 
     // Forward everything else.
     cmd.args(args);
 
-    debug_cmd("[cargo-bsan rustc]", verbose, &cmd);
+    debug_cmd("[cargo-bsan rustc]", env.verbose, &cmd);
     if in_rustdoc {
         if verbose > 0 {
             eprintln!("[cargo-miri rustc inside rustdoc]");
@@ -263,20 +270,27 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
     }
 }
 
-fn bsan_rustflags(deps: &Dependencies, llvm_tools: &LlvmTools) -> Vec<String> {
+fn bsan_rustflags(env: &EnvConfig, deps: &Dependencies, llvm_tools: &LlvmTools) -> Vec<String> {
     let rt_dir = deps.runtime.parent().unwrap();
     let mut additional_args = BSAN_DEFAULT_ARGS.iter().map(ToString::to_string).collect::<Vec<_>>();
-    additional_args.push(format!("-Zllvm-plugins={}", deps.llvm_pass.display()));
     additional_args.push(format!("-L{}", rt_dir.display()));
-    additional_args.push("-lstatic=bsan_rt".to_string());
+    additional_args.push(String::from("-lstatic=bsan_rt"));
     additional_args.push(format!("-Clinker={}", llvm_tools.clang.display()));
     additional_args.push(format!("-Clink-arg=-fuse-ld={}", llvm_tools.lld.display()));
+    if env.lto {
+        additional_args.push(String::from("-Clinker-plugin-lto"));
+        additional_args
+            .push(format!("-Clink-arg=-Wl,--load-pass-plugin={}", deps.llvm_pass.display()));
+        additional_args.push(String::from("-Clink-arg=-Wl,--lto-newpm-passes=bsan"));
+        additional_args.push(String::from("-Clink-arg=-Wl,--lto-O0"));
+    } else {
+        additional_args.push(format!("-Zllvm-plugins={}", deps.llvm_pass.display()));
+    }
     additional_args
 }
 
 pub fn phase_rustdoc(args: impl Iterator<Item = String>) {
-    let verbose = env::var("BSAN_VERBOSE")
-        .map_or(0, |verbose| verbose.parse().expect("verbosity flag must be an integer"));
+    let config = EnvConfig::from_env();
     let mut cmd = rustdoc();
     cmd.args(args);
 
@@ -302,6 +316,6 @@ pub fn phase_rustdoc(args: impl Iterator<Item = String>) {
     let cargo_bsan_path = env::current_exe().expect("current executable path invalid");
     cmd.arg("--test-builder").arg(&cargo_bsan_path); // invoked by forwarding most arguments
 
-    debug_cmd("[cargo-bsan rustdoc]", verbose, &cmd);
+    debug_cmd("[cargo-bsan rustdoc]", config.verbose, &cmd);
     exec(cmd)
 }

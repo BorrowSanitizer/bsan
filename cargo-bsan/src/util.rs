@@ -9,6 +9,7 @@ use cargo_metadata::{Metadata, MetadataCommand};
 use rustc_version::VersionMeta;
 
 use crate::arg::*;
+use crate::setup::EnvConfig;
 
 #[derive(Clone, Debug)]
 pub enum BsanCommand {
@@ -42,8 +43,8 @@ macro_rules! show_error {
 pub(crate) use show_error;
 
 /// Debug-print a command that is going to be run.
-pub fn debug_cmd(prefix: &str, verbose: usize, cmd: &Command) {
-    if verbose != 0 {
+pub fn debug_cmd(prefix: &str, verbose: bool, cmd: &Command) {
+    if verbose {
         eprintln!("{prefix} running command: {cmd:?}");
     }
 }
@@ -220,20 +221,22 @@ pub struct Sysroot {
 }
 
 impl Sysroot {
-    pub fn host(verbose: usize) -> Self {
+    pub fn host(env: &EnvConfig) -> Self {
         let mut cmd = rustc();
         cmd.args(["--print", "sysroot"]);
-        debug_cmd("[cargo-bsan rustc]", verbose, &cmd);
+        debug_cmd("[cargo-bsan rustc]", env.verbose, &cmd);
         let libdir = exec_stdout(cmd);
         Self { root: PathBuf::from(libdir.trim()) }
     }
 
-    pub fn target() -> Self {
+    pub fn target(config: &EnvConfig) -> Self {
         let root = match std::env::var_os("BSAN_SYSROOT") {
             Some(dir) => PathBuf::from(dir),
             None => {
+                let target_prefix = if config.lto { "bsan-lto" } else { "bsan" };
                 let user_dirs =
-                    directories::ProjectDirs::from("org", "borrowsanitizer", "bsan").unwrap();
+                    directories::ProjectDirs::from("org", "borrowsanitizer", target_prefix)
+                        .unwrap();
                 user_dirs.cache_dir().to_owned()
             }
         };
