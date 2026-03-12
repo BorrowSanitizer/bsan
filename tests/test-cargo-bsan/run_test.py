@@ -72,7 +72,7 @@ def test(
     ## Call `cargo bsan`, capture all output
     (stdout, stderr, returncode) = execute(cmd, env)
     stdout_matches = check_output(stdout, stdout_ref, stdout_regex, "stdout")
-    if name =="`cargo bsan test`":
+    if name == "`cargo bsan test`":
         stderr = normalize_stderr(stderr)
     stderr_matches = check_output(stderr, stderr_ref, stderr_regex, "stderr")
     if returncode == 0 and stdout_matches and stderr_matches:
