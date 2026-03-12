@@ -95,6 +95,8 @@ public:
 
   FunctionCallee BsanFuncGetShadowSrc;
   FunctionCallee BsanFuncGetShadowDest;
+  FunctionCallee BsanFuncShadowAtomicLock;
+  FunctionCallee BsanFuncShadowAtomicUnlock;
 
   FunctionCallee BsanFuncMemSet;
   FunctionCallee BsanFuncMemMove;
