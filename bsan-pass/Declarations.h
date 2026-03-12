@@ -30,6 +30,9 @@ const char kBsanFuncMemSetName[] = BSAN_FN("memset");
 const char kBsanFuncShadowClearName[] = BSAN_FN("shadow_clear");
 const char kBsanFuncGetShadowLoadName[] = BSAN_FN("shadow_load");
 const char kBsanFuncGetShadowStoreName[] = BSAN_FN("shadow_store");
+const char kBsanFuncGetShadowLoadAtomicName[] = BSAN_FN("shadow_load_atomic");
+const char kBsanFuncGetShadowStoreAtomicName[] = BSAN_FN("shadow_store_atomic");
+const char kBsanFuncShadowAtomicUnlockName[] = BSAN_FN("shadow_atomic_unlock");
 
 const char kBsanFuncRetagName[] = BSAN_FN("retag");
 const char kBsanFuncAllocName[] = BSAN_FN("alloc");

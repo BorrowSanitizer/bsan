@@ -502,6 +502,18 @@ private:
     }
   }
 
+  Instruction *insertionPointAfterAppAccess(IRBuilder<> &IRB) {
+    auto InsertPoint = IRB.GetInsertPoint();
+    Instruction *NextNode = InsertPoint->getNextNode();
+    if (NextNode == nullptr) {
+      errs() << "Error: There seems to be no next node of Instruction "
+             << *InsertPoint << "  In Function \n"
+             << *IRB.GetInsertBlock()->getParent() << "\n";
+      report_fatal_error("Invalid IRBuilder insert point.");
+    }
+    return NextNode;
+  }
+
   // Stores a provenance value into shadow memory, starting at the given object
   // address.
   void storeProvenanceToShadow(IRBuilder<> &IRB, Value *ObjAddr,
@@ -511,8 +523,15 @@ private:
       report_fatal_error("Vectors are not supported.");
     } else {
       ProvenanceScalar Scalar = Prov.assertScalar();
-      Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncShadowStore,
-                                            {Scalar.Tag, Scalar.Info, ObjAddr});
+      if (Ordering != AtomicOrdering::NotAtomic) {
+        Value *Guard = IRB.CreateCall(BS.BsanFuncShadowStoreAtomic,
+                                      {Scalar.Tag, Scalar.Info, ObjAddr});
+        IRBuilder<> After(insertionPointAfterAppAccess(IRB));
+        After.CreateCall(BS.BsanFuncShadowAtomicUnlock, {Guard});
+      } else {
+        IRB.CreateCall(BS.BsanFuncShadowStore,
+                       {Scalar.Tag, Scalar.Info, ObjAddr});
+      }
     }
   }
 
@@ -520,13 +539,21 @@ private:
   // starting at the given object address via a
   // temporary buffer
   Provenance loadProvenanceFromShadow(IRBuilder<> &IRB,
-                                      ProvenanceComponent &Comp,
-                                      Value *ObjAddr) {
+                                      ProvenanceComponent &Comp, Value *ObjAddr,
+                                      AtomicOrdering Ordering) {
+    ProvenancePointer ProvPtr;
     if (Comp.isVector()) {
       report_fatal_error("Vectors are not supported.");
     } else {
       Value *Tmp = IRB.CreateAlloca(BS.PL.ProvenanceTy, nullptr);
-      IRB.CreateCall(BS.BsanFuncShadowLoad, {ObjAddr, Tmp});
+      if (Ordering != AtomicOrdering::NotAtomic) {
+        Value *Guard =
+            IRB.CreateCall(BS.BsanFuncShadowLoadAtomic, {ObjAddr, Tmp});
+        IRBuilder<> After(insertionPointAfterAppAccess(IRB));
+        After.CreateCall(BS.BsanFuncShadowAtomicUnlock, {Guard});
+      } else {
+        IRB.CreateCall(BS.BsanFuncShadowLoad, {ObjAddr, Tmp});
+      }
       ProvenancePointerScalar ProvPtr(IRB, BS.PL, Tmp);
       return Provenance::load(IRB, BS.PL, ProvPtr);
     }
@@ -1131,14 +1158,14 @@ private:
   }
 
   void visitLoadInst(LoadInst &LI) {
-    if (LI.isAtomic())
-      return;
 
     IRBuilder<> IRB(&LI);
     Value *Ptr = LI.getPointerOperand();
 
     Value *Size =
         IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeStoreSize(LI.getType()));
+    insertReadCheck(IRB, Ptr, Size);
+
     // Load provenance for the value from shadow memory.
     SmallVector<ProvenanceComponent> *Components =
         getProvenanceComponents(IRB, LI.getType());
@@ -1147,10 +1174,9 @@ private:
       ShadowFootprint Footprint = Comp.Footprint;
       Value *ByteOffset = Footprint.ByteOffset.getValue(IRB, BS.IntptrTy);
       Value *ObjAddr = addPointer(IRB, BS.DL, Base, ByteOffset);
-      Provenance Prov = loadProvenanceFromShadow(IRB, Comp, ObjAddr);
+      Provenance Prov = loadProvenanceFromShadow(IRB, Comp, ObjAddr, LI.getOrdering());
       setProvenance({&LI, Idx}, Prov);
     }
-    insertReadCheck(IRB, Ptr, Size);
   }
 
   bool shouldClearProvenance(IRBuilder<> &IRB, StoreInst &SI) {
@@ -1169,8 +1195,6 @@ private:
   }
 
   void visitStoreInst(StoreInst &SI) {
-    if (SI.isAtomic())
-      return;
 
     IRBuilder<> IRB(&SI);
     Value *Ptr, *Val;
@@ -1188,7 +1212,7 @@ private:
     // Store provenance for the value into shadow memory.
     Value *Base = SI.getPointerOperand();
     SmallVector<ProvenanceComponent> *Components =
-        getProvenanceComponents(NextIRB, Val->getType());
+        getProvenanceComponents(IRB, Val->getType());
 
     DynSize Offset = DynSize(BS.Zero);
     for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
@@ -1207,11 +1231,11 @@ private:
       Provenance Prov;
       ProvenanceKey Key = {SI.getValueOperand(), Idx};
       if (Comp.isVector()) {
-        Prov = assertProvenanceVector(NextIRB, Key, Comp.Elems);
+        Prov = assertProvenanceVector(IRB, Key, Comp.Elems);
       } else {
         Prov = assertProvenanceScalar(Key);
       }
-      storeProvenanceToShadow(NextIRB, ObjAddr, Prov, SI.getOrdering());
+      storeProvenanceToShadow(IRB, ObjAddr, Prov, SI.getOrdering());
     }
     if (Clear) {
       Value *OffsetVal = Offset.getValue(NextIRB, BS.IntptrTy);
@@ -1588,6 +1612,14 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   BsanFuncShadowClear = M.getOrInsertFunction(kBsanFuncShadowClearName, AL,
                                               IRB.getVoidTy(), PtrTy, IntptrTy);
+  BsanFuncShadowLoadAtomic = M.getOrInsertFunction(
+      kBsanFuncGetShadowLoadAtomicName, AL, PtrTy, PtrTy, PtrTy);
+
+  BsanFuncShadowStoreAtomic = M.getOrInsertFunction(
+      kBsanFuncGetShadowStoreAtomicName, AL, PtrTy, IntptrTy, PtrTy, PtrTy);
+
+  BsanFuncShadowAtomicUnlock = M.getOrInsertFunction(
+      kBsanFuncShadowAtomicUnlockName, AL, IRB.getVoidTy(), PtrTy);
 
   BsanFuncMemCpy = M.getOrInsertFunction(
       kBsanFuncMemCpyName, AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);

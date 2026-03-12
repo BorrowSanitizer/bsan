@@ -94,7 +94,8 @@ Provenance Provenance::load(IRBuilder<> &IRB, const ProvenanceLayout &PL,
 
   LoadInst *Tag = IRB.CreateLoad(IntTy, ProvPtr.TagPtr, true);
   LoadInst *Info = IRB.CreateLoad(PtrTy, ProvPtr.InfoPtr, true);
-  Info->setAtomic(Ordering);
+  // Info->setAtomic(Ordering);  // TODO: Tag and Info should be loaded
+  // atomically together as U128
 
   return Provenance(Tag, Info, ProvPtr.Elems, ProvPtr.Kind);
 }
@@ -124,7 +125,8 @@ void Provenance::store(IRBuilder<> &IRB, const ProvenanceLayout &PL,
 
   StoreInst *Tag = IRB.CreateStore(this->Tag, Dest.TagPtr, true);
   StoreInst *Info = IRB.CreateStore(this->Info, Dest.InfoPtr, true);
-  Info->setOrdering(Ordering);
+  // Info->setAtomic(Ordering);  // TODO: Tag and Info should be loaded
+  // atomically together as U128
 }
 
 Provenance Provenance::wildcard(IRBuilder<> &IRB, const ProvenanceLayout &PL,

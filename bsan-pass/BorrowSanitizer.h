@@ -95,6 +95,9 @@ public:
 
   FunctionCallee BsanFuncShadowLoad;
   FunctionCallee BsanFuncShadowStore;
+  FunctionCallee BsanFuncShadowLoadAtomic;
+  FunctionCallee BsanFuncShadowStoreAtomic;
+  FunctionCallee BsanFuncShadowAtomicUnlock;
 
   FunctionCallee BsanFuncMemSet;
   FunctionCallee BsanFuncMemMove;
