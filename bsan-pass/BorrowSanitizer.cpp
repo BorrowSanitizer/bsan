@@ -528,18 +528,19 @@ private:
   }
 
   // Loads a provenance value into shadow memory
-  // starting at the given object address.
+  // starting at the given object address via a
+  // temporary buffer
   Provenance loadProvenanceFromShadow(IRBuilder<> &IRB,
                                       ProvenanceComponent &Comp,
                                       Value *ObjAddr) {
-    ProvenancePointer ProvPtr;
     if (Comp.isVector()) {
       report_fatal_error("Vectors are not supported.");
     } else {
-      Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncGetShadowSrc, {ObjAddr});
-      ProvPtr = ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
+      Value *Tmp = IRB.CreateAlloca(BS.PL.ProvenanceTy, nullptr);
+      IRB.CreateCall(BS.BsanFuncShadowLoad, {ObjAddr, Tmp});
+      ProvenancePointerScalar ProvPtr(IRB, BS.PL, Tmp);
+      return Provenance::load(IRB, BS.PL, ProvPtr);
     }
-    return Provenance::load(IRB, BS.PL, ProvPtr);
   }
 
   void populateBlocks(IRBuilder<> &IRB) {
@@ -769,6 +770,10 @@ private:
     IRBuilder<> IRB(&CB);
     Value *Operand = CB.getOperand(0);
     Value *SrcAddr = IRB.CreateLoad(BS.PtrTy, Operand, true);
+    // ProvenanceScalar SrcProv = assertProvenanceScalar(SrcAddr);
+    // ProvenanceScalar RetaggedProv = instrumentRetag(IRB, CB, SrcAddr,
+    // SrcProv); IRB.CreateCall(BS.BsanFuncShadowStore,
+    //                {RetaggedProv.Tag, RetaggedProv.Info, Operand});
     Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncGetShadowDest, {Operand});
     ProvenancePointerScalar ProvPtr =
         ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
@@ -1500,8 +1505,8 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncValidateRetvalTLS = M.getOrInsertFunction(
       kBsanFuncValidateRetvalTLSName, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
 
-  // BsanFuncShadowLoad = M.getOrInsertFunction(kBsanFuncGetShadowLoadName, AL,
-  // PtrTy, PtrTy);
+  BsanFuncShadowLoad = M.getOrInsertFunction(kBsanFuncGetShadowLoadName, AL,
+                                             IRB.getVoidTy(), PtrTy, PtrTy);
 
   BsanFuncShadowStore = M.getOrInsertFunction(
       kBsanFuncGetShadowStoreName, AL, IRB.getVoidTy(), IntptrTy, PtrTy, PtrTy);

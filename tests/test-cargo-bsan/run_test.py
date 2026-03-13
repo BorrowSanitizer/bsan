@@ -29,11 +29,6 @@ def normalize_stdout(val):
     )  # the time keeps changing, obviously
     return val
 
-def normalize_stderr(val):
-    lines = val.splitlines(keepends=True)
-    lines = [l for l in lines if not re.match(r'\s*(Compiling|Running|Finished)\s', l)]
-    return "".join(lines)
-
 def check_output(actual, path, regex, name):
     if ARGS.bless:
         # Write the output only if bless is set
@@ -72,8 +67,6 @@ def test(
     ## Call `cargo bsan`, capture all output
     (stdout, stderr, returncode) = execute(cmd, env)
     stdout_matches = check_output(stdout, stdout_ref, stdout_regex, "stdout")
-    if name == "`cargo bsan test`":
-        stderr = normalize_stderr(stderr)
     stderr_matches = check_output(stderr, stderr_ref, stderr_regex, "stderr")
     if returncode == 0 and stdout_matches and stderr_matches:
         # All good!
@@ -161,7 +154,7 @@ def test_cargo_bsan_run():
 def test_cargo_bsan_test():
     test(
         "`cargo bsan test`",
-        cargo_bsan("test", quiet=False),
+        cargo_bsan("test"),
         stdout_ref="test.stdout.ref",
     )
 
