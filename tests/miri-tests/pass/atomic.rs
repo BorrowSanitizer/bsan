@@ -14,7 +14,7 @@ fn main() {
     atomic_all_ops();
     atomic_fences();
     atomic_ptr();
-    weak_sometimes_fails();
+    // weak_sometimes_fails();  // Commented out, see end of the file.
 
     #[cfg(target_has_atomic = "64")]
     atomic_u64();
@@ -185,9 +185,10 @@ fn atomic_ptr() {
     unsafe { assert_eq!(*ptr.load(SeqCst), 9) }; // after XORing twice with the same thing, we get our ptr back
 }
 
+/* Comment(obraunsdorf): This test relies on Miri's feature to artificially increase the probability of compare_exchange_weak failing (https://github.com/rust-lang/miri/blob/4258718a8c4c07fd53e438c1704f1b4d8112c0b4/README.md?plain=1#L412). BSAN has no way of doing that.
 fn weak_sometimes_fails() {
     let atomic = AtomicBool::new(false);
-    let tries = 100;
+    let tries = 100000;
     for _ in 0..tries {
         let cur = atomic.load(Relaxed);
         // Try (weakly) to flip the flag.
@@ -197,4 +198,4 @@ fn weak_sometimes_fails() {
         }
     }
     panic!("compare_exchange_weak succeeded {} tries in a row", tries);
-}
+} */ 
