@@ -27,9 +27,6 @@ const char kBsanFuncMemMoveName[] = BSAN_FN("memmove");
 const char kBsanFuncMemCpyName[] = BSAN_FN("memcpy");
 const char kBsanFuncMemSetName[] = BSAN_FN("memset");
 
-const char kBsanFuncGetShadowDestName[] = BSAN_FN("shadow_dest");
-const char kBsanFuncGetShadowSrcName[] = BSAN_FN("shadow_src");
-
 const char kBsanFuncGetShadowLoadName[] = BSAN_FN("shadow_load");
 const char kBsanFuncGetShadowStoreName[] = BSAN_FN("shadow_store");
 

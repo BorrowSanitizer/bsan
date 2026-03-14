@@ -524,18 +524,6 @@ unsafe extern "C-unwind" fn __bsan_shadow_load(addr: *mut c_void, dest: NonNull<
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_shadow_src(addr: *mut c_void) -> *const Provenance {
-    let ctx = unsafe { global_ctx() };
-    ctx.shadow_heap().get_src(addr.addr())
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_shadow_dest(ptr: *mut c_void) -> NonNull<Provenance> {
-    let ctx = unsafe { global_ctx() };
-    ctx.shadow_heap().get_dest(ptr.addr())
-}
-
 /// Stores the given provenance value into shadow memory at the location for the given address.
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_shadow_store(

@@ -770,17 +770,16 @@ private:
     IRBuilder<> IRB(&CB);
     Value *Operand = CB.getOperand(0);
     Value *SrcAddr = IRB.CreateLoad(BS.PtrTy, Operand, true);
-    // ProvenanceScalar SrcProv = assertProvenanceScalar(SrcAddr);
-    // ProvenanceScalar RetaggedProv = instrumentRetag(IRB, CB, SrcAddr,
-    // SrcProv); IRB.CreateCall(BS.BsanFuncShadowStore,
-    //                {RetaggedProv.Tag, RetaggedProv.Info, Operand});
-    Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncGetShadowDest, {Operand});
-    ProvenancePointerScalar ProvPtr =
-        ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
-    ProvenanceScalar SrcProv =
-        Provenance::loadScalar(IRB, BS.PL, ProvPtr, AtomicOrdering::NotAtomic);
+
+    Value *Tmp = IRB.CreateAlloca(BS.PL.ProvenanceTy, nullptr);
+    IRB.CreateCall(BS.BsanFuncShadowLoad, {Operand, Tmp});
+    ProvenancePointerScalar SrcProvPtr(IRB, BS.PL, Tmp);
+    ProvenanceScalar SrcProv = Provenance::loadScalar(
+        IRB, BS.PL, SrcProvPtr, AtomicOrdering::NotAtomic);
+
     ProvenanceScalar RetaggedProv = instrumentRetag(IRB, CB, SrcAddr, SrcProv);
-    RetaggedProv.store(IRB, BS.PL, ProvPtr);
+    IRB.CreateCall(BS.BsanFuncShadowStore,
+                   {RetaggedProv.Tag, RetaggedProv.Info, Operand});
   }
 
   void instrumentRetagReg(CallBase &CB) {
@@ -1510,12 +1509,6 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   BsanFuncShadowStore = M.getOrInsertFunction(
       kBsanFuncGetShadowStoreName, AL, IRB.getVoidTy(), IntptrTy, PtrTy, PtrTy);
-
-  BsanFuncGetShadowSrc =
-      M.getOrInsertFunction(kBsanFuncGetShadowSrcName, AL, PtrTy, PtrTy);
-
-  BsanFuncGetShadowDest =
-      M.getOrInsertFunction(kBsanFuncGetShadowDestName, AL, PtrTy, PtrTy);
 
   BsanFuncMemCpy = M.getOrInsertFunction(
       kBsanFuncMemCpyName, AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
