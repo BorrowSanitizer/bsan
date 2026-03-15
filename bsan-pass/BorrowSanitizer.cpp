@@ -1,6 +1,7 @@
 #include "BorrowSanitizer.h"
 #include "Declarations.h"
 #include "Provenance.h"
+#include "Retag.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
@@ -27,27 +28,6 @@
 
 using namespace llvm;
 
-class RetagInfo {
-public:
-  Value *Ptr;
-  Value *ImArray;
-  ConstantInt *Size;
-  ConstantInt *IsProtected;
-  ConstantInt *IsFreeze;
-  ConstantInt *IsUnpin;
-  ConstantInt *PtrKind;
-  RetagInfo(CallBase *CB) {
-    assert(CB->arg_size() == 7);
-    Ptr = CB->getOperand(0);
-    ImArray = CB->getOperand(1);
-    Size = cast<ConstantInt>(CB->getOperand(2));
-    IsProtected = cast<ConstantInt>(CB->getOperand(3));
-    IsFreeze = cast<ConstantInt>(CB->getOperand(4));
-    IsUnpin = cast<ConstantInt>(CB->getOperand(5));
-    PtrKind = cast<ConstantInt>(CB->getOperand(6));
-  }
-};
-
 class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   friend class InstVisitor<BorrowSanitizerVisitor>;
   BorrowSanitizer &BS;
@@ -70,6 +50,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // metadata for the provenance of stack allocations.
   SmallVector<std::tuple<BasicBlock *, SmallVector<Instruction *>>>
       Instructions;
+
   // If a stack allocation does not have a dedicated `lifetime.start`, then we
   // allocate metadata for it within the entry block. We use a liveness pass to
   // determine which allocations need to be freed, so no additional handling is
@@ -213,7 +194,6 @@ public:
     patchShadowPHINodes();
     patchAllocaPHINodes();
     removeRetagIntrinsics();
-
     return true;
   }
 
@@ -718,20 +698,6 @@ private:
     // due to interactions with lowering.
     return (AI.getAllocatedType()->isSized() &&
             !BS.getAllocaSizeInBytes(AI).isZero());
-  }
-
-  bool isRetag(CallBase *CB) {
-    Function *Callee = CB->getCalledFunction();
-    return CB->arg_size() == 7 && Callee &&
-           Callee->getName().starts_with(kBsanRustIntrinsicRetagPrefix);
-  }
-
-  bool isFnEntryRetag(CallBase *CB) {
-    if (isRetag(CB)) {
-      RetagInfo RI(CB);
-      return RI.IsProtected->getZExtValue() != 0;
-    }
-    return false;
   }
 
   void handleDebugFunction(CallBase &CB, Function *F) {
@@ -1364,9 +1330,6 @@ bool BorrowSanitizer::instrumentModule(Module &M) {
 
   assert(BsanCtorFunction && BsanDtorFunction);
   const int Priority = 1;
-
-  BsanCtorFunction->addFnAttr(Attribute::DisableSanitizerInstrumentation);
-  BsanDtorFunction->addFnAttr(Attribute::DisableSanitizerInstrumentation);
 
   // Put the constructor and destructor in comdat if both
   // (1) global instrumentation is not TU-specific
