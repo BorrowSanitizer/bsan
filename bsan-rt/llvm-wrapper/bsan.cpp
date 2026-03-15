@@ -64,8 +64,6 @@ uptr unwind(uptr bp, uptr len) {
   }
 }
 
-
-
 void __sanitizer::BufferedStackTrace::UnwindImpl(uptr pc, uptr bp,
                                                  void *context,
                                                  bool request_fast,
