@@ -19,6 +19,9 @@ using namespace llvm;
 
 PreservedAnalyses BorrowSanitizerPass::run(Module &M,
                                            ModuleAnalysisManager &MAM) {
+  if (checkIfAlreadyInstrumented(M, "nosanitize_borrow"))
+    return PreservedAnalyses::all();
+
   BorrowSanitizer ModuleSanitizer(M, MAM);
 
   bool Modified = false;
