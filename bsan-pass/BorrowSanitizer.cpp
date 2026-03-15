@@ -28,6 +28,16 @@
 
 using namespace llvm;
 
+/*
+* CLI Argument for handling inline assembly
+*/
+static cl::opt<bool> ClHandleAsmConservative(
+  "bsan-asm-conservative",
+  cl::desc("Conservatively handle inline assembly by setting all pointer outputs to wildcard Provenance"),
+  cl::Hidden,
+  cl::init(true)
+);
+
 class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   friend class InstVisitor<BorrowSanitizerVisitor>;
   BorrowSanitizer &BS;
@@ -824,7 +834,13 @@ private:
     }
 
     if (CB.isInlineAsm())
-      return;
+    {
+      if (ClHandleAsmConservative) {
+          visitAsmInstruction(CB);
+      } else 
+        // TODO: What is the difference in our case?
+        visitAsmInstruction(CB);
+    }
 
     // If we've made it here, then we don't have a hard-coded way to handle this
     // function. We need to pass its arguments into our thread-local array and
@@ -910,6 +926,65 @@ private:
     }
   }
 
+  void visitAsmInstruction(Instruction &I) {
+    // Conservative inline assembly handling: check for poisoned shadow of
+    // asm() arguments, then unpoison the result and all the memory locations
+    // pointed to by those arguments.
+    // An inline asm() statement in C++ contains lists of input and output
+    // arguments used by the assembly code. These are mapped to operands of the
+    // CallInst as follows:
+    //  - nR register outputs ("=r) are returned by value in a single structure
+    //  (SSA value of the CallInst);
+    //  - nO other outputs ("=m" and others) are returned by pointer as first
+    // nO operands of the CallInst;
+    //  - nI inputs ("r", "m" and others) are passed to CallInst as the
+    // remaining nI operands.
+    // The total number of asm() arguments in the source is nR+nO+nI, and the
+    // corresponding CallInst has nO+nI+1 operands (the last operand is the
+    // function to be called).
+    CallBase *CB = cast<CallBase>(&I);
+    InlineAsm *IA = cast<InlineAsm>(CB->getCalledOperand());
+    int NumOutputs = getNumOutputArgs(IA, CB);
+
+    // Get the output arguments
+    for (int i = 0; i < NumOutputs; i++) {
+      Value *Operand = CB->getOperand(i);
+
+      Type *OpType = Operand->getType();
+
+      if (!OpType->isPointerTy()) return;
+
+      // Set provenance as wildcard for each output pointer
+      setProvenance(Operand, BS.WildcardProvenance);
+    }
+  }
+
+  // Ported from MSAN
+  /// Get the number of output arguments returned by pointers.
+  int getNumOutputArgs(InlineAsm *IA, CallBase *CB) {
+    int NumRetOutputs = 0;
+    int NumOutputs = 0;
+    Type *RetTy = cast<Value>(CB)->getType();
+    if (!RetTy->isVoidTy()) {
+      // Register outputs are returned via the CallInst return value.
+      auto *ST = dyn_cast<StructType>(RetTy);
+      if (ST)
+        NumRetOutputs = ST->getNumElements();
+      else
+        NumRetOutputs = 1;
+    }
+    InlineAsm::ConstraintInfoVector Constraints = IA->ParseConstraints();
+    for (const InlineAsm::ConstraintInfo &Info : Constraints) {
+      switch (Info.Type) {
+      case InlineAsm::isOutput:
+        NumOutputs++;
+        break;
+      default:
+        break;
+      }
+    }
+    return NumOutputs - NumRetOutputs;
+  }
   ProvenanceScalar
   createScalarProvenancePHI(IRBuilder<> &IRB,
                             iterator_range<pred_iterator> Blocks) {
