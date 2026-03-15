@@ -50,7 +50,15 @@ static llvm::PassPluginLibraryInfo getBorrowSanitizerPluginInfo() {
             PB.registerOptimizerLastEPCallback([](ModulePassManager &MPM,
                                                   OptimizationLevel Level,
                                                   ThinOrFullLTOPhase Phase) {
-              MPM.addPass(BorrowSanitizerPass(BorrowSanitizerOptions()));
+              switch (Phase) {
+              case ThinOrFullLTOPhase::FullLTOPreLink:
+              case ThinOrFullLTOPhase::ThinLTOPreLink:
+              case ThinOrFullLTOPhase::None: {
+                MPM.addPass(BorrowSanitizerPass(BorrowSanitizerOptions()));
+              } break;
+              default:
+                break;
+              }
             });
           }};
 }
