@@ -29,7 +29,6 @@ def normalize_stdout(val):
     )  # the time keeps changing, obviously
     return val
 
-
 def check_output(actual, path, regex, name):
     if ARGS.bless:
         # Write the output only if bless is set

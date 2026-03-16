@@ -358,4 +358,8 @@ SANITIZER_WEAK_ATTRIBUTE void __bsan_debug_tree_size(BorTag bor_tag,
 SANITIZER_WEAK_ATTRIBUTE void __bsan_debug_print_diff(BorTag bor_tag,
                                                       AllocInfo *alloc_info) {}
 
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_abort() {
+  // Printf("BorrowSanitizer: aborting due to a fatal error.\n");
+  Die();
+}
 } // extern "C"

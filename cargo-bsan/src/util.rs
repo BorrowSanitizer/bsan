@@ -87,6 +87,40 @@ pub fn exec_with_pipe(mut cmd: Command) -> ! {
     std::process::exit(exit_status.code().unwrap_or(-1))
 }
 
+/// Determines where the host sysroot of this execution is
+pub fn get_host_sysroot_dir(verbose: usize) -> PathBuf {
+    let mut cmd = rustc();
+    cmd.args(["--print", "sysroot"]);
+    debug_cmd("[cargo-bsan rustc]", verbose, &cmd);
+    let libdir = exec_stdout(cmd);
+    PathBuf::from(libdir.trim())
+}
+
+/// Determines where the sysroot of this execution is
+///
+/// Either in a user-specified spot by an envar, or in a default cache location.
+pub fn get_target_sysroot_dir() -> PathBuf {
+    match std::env::var_os("BSAN_SYSROOT") {
+        Some(dir) => PathBuf::from(dir),
+        None => {
+            let user_dirs =
+                directories::ProjectDirs::from("org", "borrowsanitizer", "bsan").unwrap();
+            user_dirs.cache_dir().to_owned()
+        }
+    }
+}
+
+pub fn get_host_sysroot_binary(binary: &str, verbose: usize) -> PathBuf {
+    let bsan_sysroot = get_host_sysroot_dir(verbose);
+    let sysroot_bindir = Path::new(&bsan_sysroot).join("bin");
+    let binary_path = sysroot_bindir.join(binary);
+    if binary_path.exists() {
+        binary_path
+    } else {
+        show_error!("Unable to locate `{binary}` within the host sysroot ({sysroot_bindir:?}).");
+    }
+}
+
 pub fn ask_to_run(mut cmd: Command, ask: bool, text: &str) {
     // Disable interactive prompts in CI (GitHub Actions, Travis, AppVeyor, etc).
     // Azure doesn't set `CI` though (nothing to see here, just Microsoft being Microsoft),

@@ -1,6 +1,7 @@
 #include "BorrowSanitizer.h"
 #include "Declarations.h"
 #include "Provenance.h"
+#include "Retag.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
@@ -27,26 +28,14 @@
 
 using namespace llvm;
 
-class RetagInfo {
-public:
-  Value *Ptr;
-  Value *ImArray;
-  ConstantInt *Size;
-  ConstantInt *IsProtected;
-  ConstantInt *IsFreeze;
-  ConstantInt *IsUnpin;
-  ConstantInt *PtrKind;
-  RetagInfo(CallBase *CB) {
-    assert(CB->arg_size() == 7);
-    Ptr = CB->getOperand(0);
-    ImArray = CB->getOperand(1);
-    Size = cast<ConstantInt>(CB->getOperand(2));
-    IsProtected = cast<ConstantInt>(CB->getOperand(3));
-    IsFreeze = cast<ConstantInt>(CB->getOperand(4));
-    IsUnpin = cast<ConstantInt>(CB->getOperand(5));
-    PtrKind = cast<ConstantInt>(CB->getOperand(6));
-  }
-};
+/*
+ * CLI Argument for handling inline assembly
+ */
+static cl::opt<bool> ClHandleAsmConservative(
+    "bsan-asm-conservative",
+    cl::desc("Conservatively handle inline assembly by setting all pointer "
+             "outputs to wildcard Provenance"),
+    cl::Hidden, cl::init(true));
 
 class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   friend class InstVisitor<BorrowSanitizerVisitor>;
@@ -70,6 +59,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // metadata for the provenance of stack allocations.
   SmallVector<std::tuple<BasicBlock *, SmallVector<Instruction *>>>
       Instructions;
+
   // If a stack allocation does not have a dedicated `lifetime.start`, then we
   // allocate metadata for it within the entry block. We use a liveness pass to
   // determine which allocations need to be freed, so no additional handling is
@@ -213,7 +203,6 @@ public:
     patchShadowPHINodes();
     patchAllocaPHINodes();
     removeRetagIntrinsics();
-
     return true;
   }
 
@@ -521,27 +510,26 @@ private:
     if (Prov.isVector()) {
       report_fatal_error("Vectors are not supported.");
     } else {
-      Value *ShadowPointer =
-          IRB.CreateCall(BS.BsanFuncGetShadowDest, {ObjAddr});
-      ProvenancePointer Dest =
-          ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
-      Prov.store(IRB, BS.PL, Dest, Ordering);
+      ProvenanceScalar Scalar = Prov.assertScalar();
+      Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncShadowStore,
+                                            {Scalar.Tag, Scalar.Info, ObjAddr});
     }
   }
 
   // Loads a provenance value into shadow memory
-  // starting at the given object address.
+  // starting at the given object address via a
+  // temporary buffer
   Provenance loadProvenanceFromShadow(IRBuilder<> &IRB,
                                       ProvenanceComponent &Comp,
                                       Value *ObjAddr) {
-    ProvenancePointer ProvPtr;
     if (Comp.isVector()) {
       report_fatal_error("Vectors are not supported.");
     } else {
-      Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncGetShadowSrc, {ObjAddr});
-      ProvPtr = ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
+      Value *Tmp = IRB.CreateAlloca(BS.PL.ProvenanceTy, nullptr);
+      IRB.CreateCall(BS.BsanFuncShadowLoad, {ObjAddr, Tmp});
+      ProvenancePointerScalar ProvPtr(IRB, BS.PL, Tmp);
+      return Provenance::load(IRB, BS.PL, ProvPtr);
     }
-    return Provenance::load(IRB, BS.PL, ProvPtr);
   }
 
   void populateBlocks(IRBuilder<> &IRB) {
@@ -720,20 +708,6 @@ private:
             !BS.getAllocaSizeInBytes(AI).isZero());
   }
 
-  bool isRetag(CallBase *CB) {
-    Function *Callee = CB->getCalledFunction();
-    return CB->arg_size() == 7 && Callee &&
-           Callee->getName().starts_with(kBsanRustIntrinsicRetagPrefix);
-  }
-
-  bool isFnEntryRetag(CallBase *CB) {
-    if (isRetag(CB)) {
-      RetagInfo RI(CB);
-      return RI.IsProtected->getZExtValue() != 0;
-    }
-    return false;
-  }
-
   void handleDebugFunction(CallBase &CB, Function *F) {
     IRBuilder<> IRB(&CB);
     auto Name = F->getName();
@@ -771,13 +745,16 @@ private:
     IRBuilder<> IRB(&CB);
     Value *Operand = CB.getOperand(0);
     Value *SrcAddr = IRB.CreateLoad(BS.PtrTy, Operand, true);
-    Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncGetShadowDest, {Operand});
-    ProvenancePointerScalar ProvPtr =
-        ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
-    ProvenanceScalar SrcProv =
-        Provenance::loadScalar(IRB, BS.PL, ProvPtr, AtomicOrdering::NotAtomic);
+
+    Value *Tmp = IRB.CreateAlloca(BS.PL.ProvenanceTy, nullptr);
+    IRB.CreateCall(BS.BsanFuncShadowLoad, {Operand, Tmp});
+    ProvenancePointerScalar SrcProvPtr(IRB, BS.PL, Tmp);
+    ProvenanceScalar SrcProv = Provenance::loadScalar(
+        IRB, BS.PL, SrcProvPtr, AtomicOrdering::NotAtomic);
+
     ProvenanceScalar RetaggedProv = instrumentRetag(IRB, CB, SrcAddr, SrcProv);
-    RetaggedProv.store(IRB, BS.PL, ProvPtr);
+    IRB.CreateCall(BS.BsanFuncShadowStore,
+                   {RetaggedProv.Tag, RetaggedProv.Info, Operand});
   }
 
   void instrumentRetagReg(CallBase &CB) {
@@ -857,8 +834,12 @@ private:
       }
     }
 
-    if (CB.isInlineAsm())
-      return;
+    if (CB.isInlineAsm()) {
+      if (ClHandleAsmConservative)
+        visitAsmInstruction(CB);
+      else
+        return;
+    }
 
     // If we've made it here, then we don't have a hard-coded way to handle this
     // function. We need to pass its arguments into our thread-local array and
@@ -944,6 +925,54 @@ private:
     }
   }
 
+  void visitAsmInstruction(Instruction &I) {
+    CallBase *CB = cast<CallBase>(&I);
+    IRBuilder<> IRB(&I);
+    InlineAsm *IA = cast<InlineAsm>(CB->getCalledOperand());
+    int NumOutputs = getNumOutputArgs(IA, CB);
+
+    // Get the output arguments
+    for (int J = 0; J < NumOutputs; J++) {
+      Value *Operand = CB->getOperand(J);
+
+      Type *OpType = Operand->getType();
+
+      // Handle aggregate values
+      SmallVector<ProvenanceComponent> *Components =
+          getProvenanceComponents(IRB, OpType);
+
+      for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
+        setProvenance({Operand, Idx}, BS.WildcardProvenance);
+      }
+    }
+  }
+
+  // Ported from MSAN
+  /// Get the number of output arguments returned by pointers.
+  int getNumOutputArgs(InlineAsm *IA, CallBase *CB) {
+    int NumRetOutputs = 0;
+    int NumOutputs = 0;
+    Type *RetTy = cast<Value>(CB)->getType();
+    if (!RetTy->isVoidTy()) {
+      // Register outputs are returned via the CallInst return value.
+      auto *ST = dyn_cast<StructType>(RetTy);
+      if (ST)
+        NumRetOutputs = ST->getNumElements();
+      else
+        NumRetOutputs = 1;
+    }
+    InlineAsm::ConstraintInfoVector Constraints = IA->ParseConstraints();
+    for (const InlineAsm::ConstraintInfo &Info : Constraints) {
+      switch (Info.Type) {
+      case InlineAsm::isOutput:
+        NumOutputs++;
+        break;
+      default:
+        break;
+      }
+    }
+    return NumOutputs - NumRetOutputs;
+  }
   ProvenanceScalar
   createScalarProvenancePHI(IRBuilder<> &IRB,
                             iterator_range<pred_iterator> Blocks) {
@@ -1365,9 +1394,6 @@ bool BorrowSanitizer::instrumentModule(Module &M) {
   assert(BsanCtorFunction && BsanDtorFunction);
   const int Priority = 1;
 
-  BsanCtorFunction->addFnAttr(Attribute::DisableSanitizerInstrumentation);
-  BsanDtorFunction->addFnAttr(Attribute::DisableSanitizerInstrumentation);
-
   // Put the constructor and destructor in comdat if both
   // (1) global instrumentation is not TU-specific
   // (2) target is ELF.
@@ -1502,11 +1528,11 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncValidateRetvalTLS = M.getOrInsertFunction(
       kBsanFuncValidateRetvalTLSName, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
 
-  BsanFuncGetShadowSrc =
-      M.getOrInsertFunction(kBsanFuncGetShadowSrcName, AL, PtrTy, PtrTy);
+  BsanFuncShadowLoad = M.getOrInsertFunction(kBsanFuncGetShadowLoadName, AL,
+                                             IRB.getVoidTy(), PtrTy, PtrTy);
 
-  BsanFuncGetShadowDest =
-      M.getOrInsertFunction(kBsanFuncGetShadowDestName, AL, PtrTy, PtrTy);
+  BsanFuncShadowStore = M.getOrInsertFunction(
+      kBsanFuncGetShadowStoreName, AL, IRB.getVoidTy(), IntptrTy, PtrTy, PtrTy);
 
   BsanFuncMemCpy = M.getOrInsertFunction(
       kBsanFuncMemCpyName, AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
