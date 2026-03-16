@@ -510,27 +510,26 @@ private:
     if (Prov.isVector()) {
       report_fatal_error("Vectors are not supported.");
     } else {
-      Value *ShadowPointer =
-          IRB.CreateCall(BS.BsanFuncGetShadowDest, {ObjAddr});
-      ProvenancePointer Dest =
-          ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
-      Prov.store(IRB, BS.PL, Dest, Ordering);
+      ProvenanceScalar Scalar = Prov.assertScalar();
+      Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncShadowStore,
+                                            {Scalar.Tag, Scalar.Info, ObjAddr});
     }
   }
 
   // Loads a provenance value into shadow memory
-  // starting at the given object address.
+  // starting at the given object address via a
+  // temporary buffer
   Provenance loadProvenanceFromShadow(IRBuilder<> &IRB,
                                       ProvenanceComponent &Comp,
                                       Value *ObjAddr) {
-    ProvenancePointer ProvPtr;
     if (Comp.isVector()) {
       report_fatal_error("Vectors are not supported.");
     } else {
-      Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncGetShadowSrc, {ObjAddr});
-      ProvPtr = ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
+      Value *Tmp = IRB.CreateAlloca(BS.PL.ProvenanceTy, nullptr);
+      IRB.CreateCall(BS.BsanFuncShadowLoad, {ObjAddr, Tmp});
+      ProvenancePointerScalar ProvPtr(IRB, BS.PL, Tmp);
+      return Provenance::load(IRB, BS.PL, ProvPtr);
     }
-    return Provenance::load(IRB, BS.PL, ProvPtr);
   }
 
   void populateBlocks(IRBuilder<> &IRB) {
@@ -746,13 +745,16 @@ private:
     IRBuilder<> IRB(&CB);
     Value *Operand = CB.getOperand(0);
     Value *SrcAddr = IRB.CreateLoad(BS.PtrTy, Operand, true);
-    Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncGetShadowDest, {Operand});
-    ProvenancePointerScalar ProvPtr =
-        ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
-    ProvenanceScalar SrcProv =
-        Provenance::loadScalar(IRB, BS.PL, ProvPtr, AtomicOrdering::NotAtomic);
+
+    Value *Tmp = IRB.CreateAlloca(BS.PL.ProvenanceTy, nullptr);
+    IRB.CreateCall(BS.BsanFuncShadowLoad, {Operand, Tmp});
+    ProvenancePointerScalar SrcProvPtr(IRB, BS.PL, Tmp);
+    ProvenanceScalar SrcProv = Provenance::loadScalar(
+        IRB, BS.PL, SrcProvPtr, AtomicOrdering::NotAtomic);
+
     ProvenanceScalar RetaggedProv = instrumentRetag(IRB, CB, SrcAddr, SrcProv);
-    RetaggedProv.store(IRB, BS.PL, ProvPtr);
+    IRB.CreateCall(BS.BsanFuncShadowStore,
+                   {RetaggedProv.Tag, RetaggedProv.Info, Operand});
   }
 
   void instrumentRetagReg(CallBase &CB) {
@@ -1526,11 +1528,11 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncValidateRetvalTLS = M.getOrInsertFunction(
       kBsanFuncValidateRetvalTLSName, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
 
-  BsanFuncGetShadowSrc =
-      M.getOrInsertFunction(kBsanFuncGetShadowSrcName, AL, PtrTy, PtrTy);
+  BsanFuncShadowLoad = M.getOrInsertFunction(kBsanFuncGetShadowLoadName, AL,
+                                             IRB.getVoidTy(), PtrTy, PtrTy);
 
-  BsanFuncGetShadowDest =
-      M.getOrInsertFunction(kBsanFuncGetShadowDestName, AL, PtrTy, PtrTy);
+  BsanFuncShadowStore = M.getOrInsertFunction(
+      kBsanFuncGetShadowStoreName, AL, IRB.getVoidTy(), IntptrTy, PtrTy, PtrTy);
 
   BsanFuncMemCpy = M.getOrInsertFunction(
       kBsanFuncMemCpyName, AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
