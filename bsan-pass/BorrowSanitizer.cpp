@@ -28,6 +28,15 @@
 
 using namespace llvm;
 
+/*
+ * CLI Argument for handling inline assembly
+ */
+static cl::opt<bool> ClHandleAsmConservative(
+    "bsan-asm-conservative",
+    cl::desc("Conservatively handle inline assembly by setting all pointer "
+             "outputs to wildcard Provenance"),
+    cl::Hidden, cl::init(true));
+
 class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   friend class InstVisitor<BorrowSanitizerVisitor>;
   BorrowSanitizer &BS;
@@ -823,8 +832,12 @@ private:
       }
     }
 
-    if (CB.isInlineAsm())
-      return;
+    if (CB.isInlineAsm()) {
+      if (ClHandleAsmConservative)
+        visitAsmInstruction(CB);
+      else
+        return;
+    }
 
     // If we've made it here, then we don't have a hard-coded way to handle this
     // function. We need to pass its arguments into our thread-local array and
@@ -910,6 +923,54 @@ private:
     }
   }
 
+  void visitAsmInstruction(Instruction &I) {
+    CallBase *CB = cast<CallBase>(&I);
+    IRBuilder<> IRB(&I);
+    InlineAsm *IA = cast<InlineAsm>(CB->getCalledOperand());
+    int NumOutputs = getNumOutputArgs(IA, CB);
+
+    // Get the output arguments
+    for (int J = 0; J < NumOutputs; J++) {
+      Value *Operand = CB->getOperand(J);
+
+      Type *OpType = Operand->getType();
+
+      // Handle aggregate values
+      SmallVector<ProvenanceComponent> *Components =
+          getProvenanceComponents(IRB, OpType);
+
+      for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
+        setProvenance({Operand, Idx}, BS.WildcardProvenance);
+      }
+    }
+  }
+
+  // Ported from MSAN
+  /// Get the number of output arguments returned by pointers.
+  int getNumOutputArgs(InlineAsm *IA, CallBase *CB) {
+    int NumRetOutputs = 0;
+    int NumOutputs = 0;
+    Type *RetTy = cast<Value>(CB)->getType();
+    if (!RetTy->isVoidTy()) {
+      // Register outputs are returned via the CallInst return value.
+      auto *ST = dyn_cast<StructType>(RetTy);
+      if (ST)
+        NumRetOutputs = ST->getNumElements();
+      else
+        NumRetOutputs = 1;
+    }
+    InlineAsm::ConstraintInfoVector Constraints = IA->ParseConstraints();
+    for (const InlineAsm::ConstraintInfo &Info : Constraints) {
+      switch (Info.Type) {
+      case InlineAsm::isOutput:
+        NumOutputs++;
+        break;
+      default:
+        break;
+      }
+    }
+    return NumOutputs - NumRetOutputs;
+  }
   ProvenanceScalar
   createScalarProvenancePHI(IRBuilder<> &IRB,
                             iterator_range<pred_iterator> Blocks) {
