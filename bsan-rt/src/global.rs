@@ -11,6 +11,10 @@ use crate::helpers::FxHashMap;
 use crate::memory::{Heap, ShadowHeap};
 use crate::*;
 
+unsafe extern "C" {
+    fn __bsan_abort() -> !;
+}
+
 #[derive(Default)]
 pub struct ProtectedTags(FxHashMap<BorTag, ProtectorKind>);
 

@@ -46,6 +46,8 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_init();
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_deinit();
 
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_abort();
+
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memmove(void *dest, const void *src,
                                                   uptr n);
 
