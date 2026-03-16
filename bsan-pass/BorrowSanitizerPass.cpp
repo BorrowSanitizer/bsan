@@ -60,6 +60,15 @@ static llvm::PassPluginLibraryInfo getBorrowSanitizerPluginInfo() {
                 break;
               }
             });
+            PB.registerPipelineParsingCallback(
+                [](StringRef Name, ModulePassManager &MPM,
+                   ArrayRef<PassBuilder::PipelineElement>) {
+                  if (Name == "bsan") {
+                    MPM.addPass(BorrowSanitizerPass(BorrowSanitizerOptions()));
+                    return true;
+                  }
+                  return false;
+                });
           }};
 }
 

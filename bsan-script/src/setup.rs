@@ -65,7 +65,7 @@ fn ensure_toolchain(
     }
 
     if let Some(meta) = metadata {
-        return Ok(meta);
+        Ok(meta)
     } else {
         // First, check if the current platform is supported.
         let current_target = &host.host;
@@ -77,13 +77,7 @@ fn ensure_toolchain(
         skip_prompt = skip_prompt || local_dir.is_some();
         if let Some(PromptResult::Yes) = prompt_user_unless(skip_prompt, INSTALL_PROMPT)? {
             fs::create_dir_all(toolchain_dir)?;
-            install_toolchain(
-                sh,
-                host,
-                config,
-                toolchain_dir,
-                local_dir.as_ref().map(|inner| inner.as_path()),
-            )
+            install_toolchain(sh, host, config, toolchain_dir, local_dir.as_deref())
         } else {
             std::process::exit(0)
         }
@@ -106,8 +100,6 @@ fn install_toolchain(
     let help_on_error = "Failed to download the custom Rust toolchain.";
 
     let tmp_dir = sh.create_temp_dir()?;
-
-    let local_dir: Option<&Path> = local_dir.map(|dir| dir);
 
     let download_unpack_install = |prefix: &str, needs_target: bool| -> Result<()> {
         // Download the .tar.xz file
@@ -196,7 +188,7 @@ pub fn ensure_llvm_cmake(
         cmd!(sh, "cp -fr {tmp_dir}/llvm {toolchain_dir}").run()?;
         cmd!(sh, "cp -fr {tmp_dir}/cmake {toolchain_dir}").run()?;
 
-        fs::write(lockfile, &branch)?;
+        fs::write(lockfile, branch)?;
     }
 
     let link_source = path!(root_dir / "bsan-rt" / "llvm-wrapper");

@@ -1,14 +1,15 @@
 use std::env;
 use std::ffi::OsString;
 use std::io::{self, Write};
-use std::ops::Not;
+use std::ops::{Deref, Not};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use cargo_metadata::{Metadata, MetadataCommand};
-use path_macro::path;
+use rustc_version::VersionMeta;
 
 use crate::arg::*;
+use crate::setup::EnvConfig;
 
 #[derive(Clone, Debug)]
 pub enum BsanCommand {
@@ -26,6 +27,8 @@ pub enum RustcPhase {
     Setup,
     /// Regular build
     Build,
+    /// Rustdoc build
+    Rustdoc,
 }
 
 pub fn show_error_(msg: &impl std::fmt::Display) -> ! {
@@ -40,27 +43,11 @@ macro_rules! show_error {
 pub(crate) use show_error;
 
 /// Debug-print a command that is going to be run.
-pub fn debug_cmd(prefix: &str, verbose: usize, cmd: &Command) {
-    if verbose != 0 {
+pub fn debug_cmd(prefix: &str, verbose: bool, cmd: &Command) {
+    if verbose {
         eprintln!("{prefix} running command: {cmd:?}");
     }
 }
-
-pub fn cargo() -> Command {
-    Command::new(env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")))
-}
-
-pub fn find_library(default: &str, sysroot: &Path, libname: &str) -> Option<PathBuf> {
-    env::var_os(default).map(|o| o.into()).or_else(|| {
-        let plugin: PathBuf = path!(sysroot / "lib" / libname);
-        if plugin.exists() {
-            Some(plugin)
-        } else {
-            None
-        }
-    })
-}
-
 /// Execute the `Command`, where possible by replacing the current process with a new process
 /// described by the `Command`. Then exit this process with the exit code of the new process.
 pub fn exec(mut cmd: Command) -> ! {
@@ -100,40 +87,6 @@ pub fn exec_with_pipe(mut cmd: Command) -> ! {
     std::process::exit(exit_status.code().unwrap_or(-1))
 }
 
-/// Determines where the host sysroot of this execution is
-pub fn get_host_sysroot_dir(verbose: usize) -> PathBuf {
-    let mut cmd = rustc();
-    cmd.args(["--print", "sysroot"]);
-    debug_cmd("[cargo-bsan rustc]", verbose, &cmd);
-    let libdir = exec_stdout(cmd);
-    PathBuf::from(libdir.trim())
-}
-
-/// Determines where the sysroot of this execution is
-///
-/// Either in a user-specified spot by an envar, or in a default cache location.
-pub fn get_target_sysroot_dir() -> PathBuf {
-    match std::env::var_os("BSAN_SYSROOT") {
-        Some(dir) => PathBuf::from(dir),
-        None => {
-            let user_dirs =
-                directories::ProjectDirs::from("org", "borrowsanitizer", "bsan").unwrap();
-            user_dirs.cache_dir().to_owned()
-        }
-    }
-}
-
-pub fn get_host_sysroot_binary(binary: &str, verbose: usize) -> PathBuf {
-    let bsan_sysroot = get_host_sysroot_dir(verbose);
-    let sysroot_bindir = Path::new(&bsan_sysroot).join("bin");
-    let binary_path = sysroot_bindir.join(binary);
-    if binary_path.exists() {
-        binary_path
-    } else {
-        show_error!("Unable to locate `{binary}` within the host sysroot ({sysroot_bindir:?}).");
-    }
-}
-
 pub fn ask_to_run(mut cmd: Command, ask: bool, text: &str) {
     // Disable interactive prompts in CI (GitHub Actions, Travis, AppVeyor, etc).
     // Azure doesn't set `CI` though (nothing to see here, just Microsoft being Microsoft),
@@ -159,62 +112,62 @@ pub fn ask_to_run(mut cmd: Command, ask: bool, text: &str) {
     }
 }
 
-/// Get the target directory for bsan output.
-///
-/// Either in an argument passed-in, or from cargo metadata.
-pub fn get_target_dir(meta: &Metadata) -> PathBuf {
-    let mut output = match get_arg_flag_value("--target-dir") {
-        Some(dir) => PathBuf::from(dir),
-        None => meta.target_directory.clone().into_std_path_buf(),
-    };
-    output.push("bsan");
-    output
-}
+pub struct Cargo;
 
-// Computes the extra flags that need to be passed to cargo to make it behave like the current
-// cargo invocation.
-fn cargo_extra_flags() -> Vec<String> {
-    let mut flags = Vec::new();
-    // Forward `--config` flags.
-    let config_flag = "--config";
-    for arg in get_arg_flag_values(config_flag) {
-        flags.push(config_flag.to_string());
-        flags.push(arg);
+impl Cargo {
+    pub fn get_target_dir() -> PathBuf {
+        Self::metadata().target_directory.clone().into_std_path_buf().join("bsan")
+    }
+    pub fn cmd() -> Command {
+        // Honor the `CARGO` env var if set, otherwise look for `cargo` in PATH.
+        let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+        Command::new(cargo)
     }
 
-    // Forward `--manifest-path`.
-    let manifest_flag = "--manifest-path";
-    if let Some(manifest) = get_arg_flag_value(manifest_flag) {
-        flags.push(manifest_flag.to_string());
-        flags.push(manifest);
+    pub fn metadata() -> Metadata {
+        // This will honor the `CARGO` env var the same way our `cargo()` does.
+        MetadataCommand::new().no_deps().other_options(Self::extra_flags()).exec().unwrap_or_else(
+            |err| {
+                if let cargo_metadata::Error::CargoMetadata { stderr } = err {
+                    show_error!("{stderr}")
+                } else {
+                    show_error!("{err}")
+                }
+            },
+        )
     }
 
-    // Forwarding `--target-dir` would make sense, but `cargo metadata` does not support that flag.
-    flags
+    // Computes the extra flags that need to be passed to cargo to make it behave like the current
+    // cargo invocation.
+    fn extra_flags() -> Vec<String> {
+        let mut flags = Vec::new();
+        // Forward `--config` flags.
+        let config_flag = "--config";
+        for arg in get_arg_flag_values(config_flag) {
+            flags.push(config_flag.to_string());
+            flags.push(arg);
+        }
+
+        // Forward `--manifest-path`.
+        let manifest_flag = "--manifest-path";
+        if let Some(manifest) = get_arg_flag_value(manifest_flag) {
+            flags.push(manifest_flag.to_string());
+            flags.push(manifest);
+        }
+
+        // Forwarding `--target-dir` would make sense, but `cargo metadata` does not support that flag.
+        flags
+    }
 }
 
-pub fn get_cargo_metadata() -> Metadata {
-    // This will honor the `CARGO` env var the same way our `cargo()` does.
-    MetadataCommand::new().no_deps().other_options(cargo_extra_flags()).exec().unwrap_or_else(
-        |err| {
-            if let cargo_metadata::Error::CargoMetadata { stderr } = err {
-                show_error!("{stderr}")
-            } else {
-                show_error!("{err}")
-            }
-        },
-    )
-}
-
-pub fn clean_sysroot_dir() {
-    let sysroot = get_target_sysroot_dir();
-    if sysroot.exists() {
-        std::fs::remove_dir_all(&sysroot).unwrap();
+pub fn clean_sysroot_dir(sysroot: &Sysroot) {
+    if sysroot.root.exists() {
+        std::fs::remove_dir_all(&sysroot.root).unwrap();
     }
 }
 
 pub fn clean_target_dir() {
-    let target_dir = get_target_dir(&get_cargo_metadata());
+    let target_dir = Cargo::get_target_dir();
     if target_dir.exists() {
         std::fs::remove_dir_all(&target_dir).unwrap();
     }
@@ -244,4 +197,82 @@ pub fn rustc_path() -> PathBuf {
 
 pub fn rustc() -> Command {
     Command::new(rustc_path())
+}
+
+pub fn rustdoc_path() -> PathBuf {
+    env_or_host("BSAN_ORIG_RUSTDOC", "rustdoc")
+}
+
+pub fn rustdoc() -> Command {
+    Command::new(rustdoc_path())
+}
+
+pub fn try_get_host_binary(sysroot: &Sysroot, binary: &str) -> Option<PathBuf> {
+    sysroot.binary(binary).or_else(|| which::which(binary).ok())
+}
+
+pub fn assert_host_binary(sysroot: &Sysroot, binary: &str) -> PathBuf {
+    try_get_host_binary(sysroot, binary)
+        .unwrap_or_else(|| show_error!("failed to find `{}`", binary))
+}
+
+pub struct Sysroot {
+    root: PathBuf,
+}
+
+impl Sysroot {
+    pub fn host(env: &EnvConfig) -> Self {
+        let mut cmd = rustc();
+        cmd.args(["--print", "sysroot"]);
+        debug_cmd("[cargo-bsan rustc]", env.verbose, &cmd);
+        let libdir = exec_stdout(cmd);
+        Self { root: PathBuf::from(libdir.trim()) }
+    }
+
+    pub fn target(config: &EnvConfig) -> Self {
+        let root = match std::env::var_os("BSAN_SYSROOT") {
+            Some(dir) => PathBuf::from(dir),
+            None => {
+                let target_prefix = if config.lto { "bsan-lto" } else { "bsan" };
+                let user_dirs =
+                    directories::ProjectDirs::from("org", "borrowsanitizer", target_prefix)
+                        .unwrap();
+                user_dirs.cache_dir().to_owned()
+            }
+        };
+        Self { root }
+    }
+
+    pub fn bin(&self) -> PathBuf {
+        self.root.join("bin")
+    }
+
+    pub fn binary(&self, binary: &str) -> Option<PathBuf> {
+        let path = self.bin().join(binary);
+        path.exists().then_some(path)
+    }
+
+    pub fn target_dir(&self, version_meta: &VersionMeta) -> PathBuf {
+        let mut target_dir = self.root.clone();
+        target_dir.push("lib");
+        target_dir.push("rustlib");
+        target_dir.push(&version_meta.host);
+        if target_dir.exists() {
+            target_dir
+        } else {
+            panic!(
+                "The host sysroot `{}` does not contain a target directory for target `{}`.",
+                self.root.display(),
+                version_meta.host
+            );
+        }
+    }
+}
+
+impl Deref for Sysroot {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        &self.root
+    }
 }

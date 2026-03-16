@@ -12,9 +12,8 @@ rustc-build-sysroot = "0.5.11"
 rustc_version = "0.4"
 path_macro = "1.0.0"
 which = "8.0.0"
+regex = "1.12.3"
+cfg-if = "1.0.4"
 
 [build-dependencies]
 rustc_tools_util = "0.4"
-
-[package.metadata.rust-analyzer]
-rustc_private = true
