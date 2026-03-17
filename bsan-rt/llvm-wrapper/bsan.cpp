@@ -358,4 +358,7 @@ SANITIZER_WEAK_ATTRIBUTE void __bsan_debug_tree_size(BorTag bor_tag,
 SANITIZER_WEAK_ATTRIBUTE void __bsan_debug_print_diff(BorTag bor_tag,
                                                       AllocInfo *alloc_info) {}
 
+SANITIZER_WEAK_ATTRIBUTE void __bsan_debug_get_provenance(void *ptr, BorTag* bor_tag,
+                                                      AllocInfo **alloc_info) {}
+
 } // extern "C"

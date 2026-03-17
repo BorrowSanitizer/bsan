@@ -655,6 +655,12 @@ extern "C" fn __bsan_debug_print_diff(bor_tag: BorTag, alloc_info: *mut AllocInf
     });
 }
 
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_debug_get_provenance(_ptr: *const c_void, _bor_tag_ptr: *mut u64, _alloc_info_ptr: *mut *mut c_void) {
+    // Nothing to be done here. Everything happens in the BorrowSanitizer Pass which 
+    // fetches the compile-time provenance information for `ptr` and stores it in the provided pointers.
+}
+
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
