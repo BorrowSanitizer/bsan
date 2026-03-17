@@ -1145,10 +1145,17 @@ private:
     insertReadCheck(IRB, Ptr, Size);
   }
 
-  bool shouldClearProvenance(StoreInst &SI) {
+  bool shouldClearProvenance(IRBuilder<> &IRB, StoreInst &SI) {
     Value *Dest = SI.getPointerOperand()->stripPointerCastsAndAliases();
     if (AllocaInst *AI = dyn_cast<AllocaInst>(Dest)) {
-      return false;
+      TypeSize TS = BS.getAllocaSizeInBytes(*AI);
+      if(TS.isFixed()) {
+        DynSize Size(IRB.CreateTypeSize(BS.IntptrTy, TS));
+        std::optional<unsigned> ConstSize = Size.constant();
+        if(ConstSize.has_value()) {
+          return ConstSize.value() > BS.PtrSize;
+        }
+      }
     }
     return true;
   }
