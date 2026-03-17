@@ -68,6 +68,7 @@ const char kBsanFuncDebugSnapshot[] = BSAN_DEBUG_FN("snapshot");
 const char kBsanFuncDebugPrintDiff[] = BSAN_DEBUG_FN("print_diff");
 const char kBsanFuncDebugParamTLS[] = BSAN_DEBUG_FN("param_tls");
 const char kBsanFuncDebugRetvalTLS[] = BSAN_DEBUG_FN("retval_tls");
+const char kBsanFuncDebugGetProvenance[] = BSAN_DEBUG_FN("get_provenance");
 
 const char kBsanProvStackName[] = "__BSAN_PROV_STACK";
 const char kBsanParamTLSName[] = "__BSAN_PARAM_TLS";

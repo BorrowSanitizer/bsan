@@ -742,6 +742,7 @@ private:
   void handleDebugFunction(CallBase &CB, Function *F) {
     IRBuilder<> IRB(&CB);
     auto Name = F->getName();
+    bool NeedsRuntimeCall = true;
 
     FunctionCallee Callee;
     ProvenanceScalar Prov = assertProvenanceScalar(CB.getArgOperand(0));
@@ -764,11 +765,24 @@ private:
       Callee = BS.BsanFuncDebugSnapshot;
     } else if (Name == kBsanFuncDebugPrintDiff) {
       Callee = BS.BsanFuncDebugPrintDiff;
+    } else if (Name == kBsanFuncDebugGetProvenance) {
+      Value *TagPtr = CB.getArgOperand(1);
+      Value *InfoPtr = CB.getArgOperand(2);
+      IRB.CreateStore(Prov.Tag, TagPtr, true);
+      IRB.CreateStore(Prov.Info, InfoPtr, true);
+      IRB.CreateLoad(BS.IntptrTy, TagPtr, true,
+                     "__bsan_debug_get_provenance.tag");
+      IRB.CreateLoad(BS.PtrTy, InfoPtr, true,
+                     "__bsan_debug_get_provenance.info");
+      NeedsRuntimeCall = false;
     } else {
       report_fatal_error("Unknown debug function: " + Twine(Name) + "\n");
     }
 
-    IRB.CreateCall(Callee, {Prov.Tag, Prov.Info});
+    if (NeedsRuntimeCall) {
+      IRB.CreateCall(Callee, {Prov.Tag, Prov.Info});
+    }
+
     CB.eraseFromParent();
   }
 
@@ -1663,6 +1677,9 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   BsanFuncDebugPrintDiff = M.getOrInsertFunction(
       kBsanFuncDebugPrintDiff, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
+
+  BsanFuncDebugGetProvenance = M.getOrInsertFunction(
+      kBsanFuncDebugGetProvenance, AL, IRB.getVoidTy(), PtrTy, PtrTy, PtrTy);
 
   EHPersonality Pers = getDefaultEHPersonality(TargetTriple);
   DefaultPersonalityFn =
