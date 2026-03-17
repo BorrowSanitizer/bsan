@@ -10,8 +10,7 @@
 
 namespace llvm {
 
-// Provenance is three words, and consists of three
-// components: an allocation ID, a borrow tag, and
+// Provenance is two words: a borrow tag and
 // a pointer to an allocation metadata object.
 static const unsigned kProvenanceSize = 16;
 
@@ -154,13 +153,89 @@ public:
                                    ElementCount Elems);
 };
 
+// When loading and storing provenance, we need a way to
+// handle dynamically sized values (e.g. scalable vectors),
+// which can be placed at any position within an aggregate
+// type. The `DynSize` type makes it far easier to reason
+// about arithmetic and other operations on values with both
+// a static and dynamic component.
+struct DynSize {
+  unsigned Static = 0;
+  SmallVector<Value *, 2> Dynamic;
+
+public:
+  DynSize() {}
+
+  DynSize(unsigned Off) : Static(Off) {}
+
+  DynSize(Value *Val) { this->append(Val); }
+
+  Value *getValue(IRBuilder<> &IRB, Type *Ty) {
+    Value *V = ConstantInt::get(Ty, Static);
+    for (Value *D : Dynamic) {
+      V = IRB.CreateAdd(V, D);
+    }
+    return V;
+  }
+
+  void append(Value *Val) {
+    if (ConstantInt *CI = dyn_cast<ConstantInt>(Val)) {
+      Static += CI->getZExtValue();
+    } else {
+      Dynamic.push_back(Val);
+    }
+  }
+
+  std::optional<unsigned> constant() {
+    if (Dynamic.empty()) {
+      return Static;
+    } else {
+      return std::nullopt;
+    }
+  }
+
+  DynSize add(DynSize RHS) {
+    DynSize Off;
+    Off.Static = this->Static + RHS.Static;
+    Off.Dynamic.append(this->Dynamic);
+    Off.Dynamic.append(RHS.Dynamic);
+    return Off;
+  }
+
+  DynSize sub(IRBuilder<> &IRB, Type *Ty, DynSize RHS) {
+    std::optional<unsigned> LConst = this->constant();
+    std::optional<unsigned> RConst = RHS.constant();
+    if (LConst.has_value() && RConst.has_value()) {
+      return DynSize(LConst.value() - RConst.value());
+    } else {
+      Value *LVal = this->getValue(IRB, Ty);
+      Value *RVal = RHS.getValue(IRB, Ty);
+      return IRB.CreateSub(LVal, RVal);
+    }
+  }
+
+  bool operator==(const DynSize &other) const {
+    if (this->Static != other.Static) {
+      return false;
+    }
+    if (this->Dynamic.size() != other.Dynamic.size()) {
+      return false;
+    }
+    return std::is_permutation(this->Dynamic.begin(), this->Dynamic.end(),
+                               other.Dynamic.begin());
+  }
+
+  bool operator!=(const DynSize &other) const { return !(*this == other); }
+};
+
 // The "footprint" within shadow memory of a provenance-carrying component of
 // a type. Each pointer-sized word of shadow memory corresponds to three words
 // of provenance
 struct ShadowFootprint {
-  Value *ByteOffset;
-  Value *ByteWidth;
-  ShadowFootprint(Value *BO, Value *BW) : ByteOffset(BO), ByteWidth(BW) {}
+  DynSize ByteOffset;
+  DynSize ByteWidth;
+  ShadowFootprint(Value *BO, Value *BW)
+      : ByteOffset(DynSize(BO)), ByteWidth(DynSize(BW)) {}
 };
 
 // A component of a type that carries provenance information.
