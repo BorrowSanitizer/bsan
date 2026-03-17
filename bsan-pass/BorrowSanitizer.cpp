@@ -1149,10 +1149,10 @@ private:
     Value *Dest = SI.getPointerOperand()->stripPointerCastsAndAliases();
     if (AllocaInst *AI = dyn_cast<AllocaInst>(Dest)) {
       TypeSize TS = BS.getAllocaSizeInBytes(*AI);
-      if(TS.isFixed()) {
+      if (TS.isFixed()) {
         DynSize Size(IRB.CreateTypeSize(BS.IntptrTy, TS));
         std::optional<unsigned> ConstSize = Size.constant();
-        if(ConstSize.has_value()) {
+        if (ConstSize.has_value()) {
           return ConstSize.value() > BS.PtrSize;
         }
       }
@@ -1175,7 +1175,7 @@ private:
 
     IRBuilder<> NextIRB(SI.getNextNode());
 
-    bool Clear = shouldClearProvenance(SI);
+    bool Clear = shouldClearProvenance(NextIRB, SI);
 
     // Store provenance for the value into shadow memory.
     Value *Base = SI.getPointerOperand();
