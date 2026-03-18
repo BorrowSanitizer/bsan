@@ -44,7 +44,7 @@ fn show_version() {
     println!();
 }
 
-pub const BSAN_DEFAULT_ARGS: &[&str] = &[
+pub const BSAN_DEFAULT_RUSTFLAGS: &[&str] = &[
     "--cfg=bsan",
     "-Copt-level=0",
     "-Zmir-opt-level=0",
@@ -56,6 +56,9 @@ pub const BSAN_DEFAULT_ARGS: &[&str] = &[
     "-Cembed-bitcode=yes",
     "-Cdebuginfo=2",
 ];
+
+pub const BSAN_DEFAULT_CFLAGS: &[&str] =
+    &["-g", "-O0", "-fno-omit-frame-pointer", "-mno-omit-leaf-frame-pointer"];
 
 pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     if has_arg_flag("--help") || has_arg_flag("-h") {
@@ -193,8 +196,12 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     }
     cmd.env("RUSTDOC", &cargo_bsan_path);
 
-    cmd.env("BSAN_SYMBOLIZER", llvm_tools.llvm_symbolizer);
+    cmd.env("BSAN_SYMBOLIZER", &llvm_tools.llvm_symbolizer);
     cmd.env("BSAN_SYSROOT", target_sysroot.as_os_str());
+
+    let cflags = bsan_cflags(&deps, &llvm_tools);
+    cmd.env("CFLAGS", &cflags);
+    cmd.env("CXXFLAGS", &cflags);
 
     // Run cargo.
     debug_cmd("[cargo-bsan rustc]", env.verbose, &cmd);
@@ -272,7 +279,8 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
 
 fn bsan_rustflags(env: &EnvConfig, deps: &Dependencies, llvm_tools: &LlvmTools) -> Vec<String> {
     let rt_dir = deps.runtime.parent().unwrap();
-    let mut additional_args = BSAN_DEFAULT_ARGS.iter().map(ToString::to_string).collect::<Vec<_>>();
+    let mut additional_args =
+        BSAN_DEFAULT_RUSTFLAGS.iter().map(ToString::to_string).collect::<Vec<_>>();
     additional_args.push(format!("-L{}", rt_dir.display()));
     additional_args.push(String::from("-lstatic=bsan_rt"));
     additional_args.push(format!("-Clinker={}", llvm_tools.clang.display()));
@@ -287,6 +295,14 @@ fn bsan_rustflags(env: &EnvConfig, deps: &Dependencies, llvm_tools: &LlvmTools) 
         additional_args.push(format!("-Zllvm-plugins={}", deps.llvm_pass.display()));
     }
     additional_args
+}
+
+fn bsan_cflags(deps: &Dependencies, llvm_tools: &LlvmTools) -> String {
+    let mut additional_args =
+        BSAN_DEFAULT_CFLAGS.iter().map(ToString::to_string).collect::<Vec<_>>();
+    additional_args.push(format!("-fpass-plugin={}", deps.llvm_pass.display()));
+    additional_args.push(format!("-fuse-ld={}", llvm_tools.lld.display()));
+    additional_args.join(" ")
 }
 
 pub fn phase_rustdoc(args: impl Iterator<Item = String>) {
