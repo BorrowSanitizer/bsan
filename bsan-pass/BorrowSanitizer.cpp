@@ -580,35 +580,39 @@ private:
   // Populates the array of argument provenance pointers and initializes the
   // start and end of the function prologue.
   void initStack(IRBuilder<> &EntryIRB) {
-    if (!isCalledFromUninstContext(F)) {
-      Value *TotalNumProvenanceValues = BS.Zero;
-      for (auto &Arg : F.args()) {
-        if (Arg.hasAttribute(Attribute::ByVal)) {
-          Type *Ty = Arg.getParamByValType();
-          TypeSize TS = BS.DL->getTypeAllocSize(Ty);
-          Value *Size = EntryIRB.CreateTypeSize(BS.IntptrTy, TS);
-          Value *Tag = newBorrowTag(EntryIRB);
-          Value *Info = EntryIRB.CreateCall(BS.BsanFuncReserveStackSlot, {});
-          EntryIRB.CreateCall(BS.BsanFuncAllocStack, {&Arg, Size, Tag, Info});
-          setProvenance(&Arg, ProvenanceScalar(Tag, Info));
-          ByValArgs.push_back(&Arg);
-          TotalNumProvenanceValues =
-              EntryIRB.CreateAdd(TotalNumProvenanceValues, BS.One);
-        } else {
-          SmallVector<ProvenanceComponent> *Components =
-              getProvenanceComponents(EntryIRB, Arg.getType());
-          for (auto &C : *Components) {
-            Value *CurrentArrayByteOffset = EntryIRB.CreateMul(
-                TotalNumProvenanceValues, BS.PL.ProvenanceSize);
-            Value *CurrentArraySlot = addPointer(EntryIRB, BS.DL, BS.ParamTLS,
-                                                 CurrentArrayByteOffset);
-            ProvenancePointer Ptr =
-                C.getPointerToProvenance(EntryIRB, BS.PL, CurrentArraySlot);
-            ArgumentProvenance[&Arg].push_back(Ptr);
-            TotalNumProvenanceValues = EntryIRB.CreateAdd(
-                TotalNumProvenanceValues, C.NumProvenanceValues);
-          }
+
+    Value *NumParamProv = BS.Zero;
+    for (auto &Arg : F.args()) {
+      if (Arg.hasAttribute(Attribute::ByVal)) {
+        Type *Ty = Arg.getParamByValType();
+        TypeSize TS = BS.DL->getTypeAllocSize(Ty);
+        Value *Size = EntryIRB.CreateTypeSize(BS.IntptrTy, TS);
+        Value *Tag = newBorrowTag(EntryIRB);
+        Value *Info = EntryIRB.CreateCall(BS.BsanFuncReserveStackSlot, {});
+        EntryIRB.CreateCall(BS.BsanFuncAllocStack, {&Arg, Size, Tag, Info});
+        setProvenance(&Arg, ProvenanceScalar(Tag, Info));
+        ByValArgs.push_back(&Arg);
+        NumParamProv = EntryIRB.CreateAdd(NumParamProv, BS.One);
+      } else {
+        SmallVector<ProvenanceComponent> *Components =
+            getProvenanceComponents(EntryIRB, Arg.getType());
+        for (auto &C : *Components) {
+          Value *CurrentArrayByteOffset =
+              EntryIRB.CreateMul(NumParamProv, BS.PL.ProvenanceSize);
+          Value *CurrentArraySlot =
+              addPointer(EntryIRB, BS.DL, BS.ParamTLS, CurrentArrayByteOffset);
+          ProvenancePointer Ptr =
+              C.getPointerToProvenance(EntryIRB, BS.PL, CurrentArraySlot);
+          ArgumentProvenance[&Arg].push_back(Ptr);
+          NumParamProv =
+              EntryIRB.CreateAdd(NumParamProv, C.NumProvenanceValues);
         }
+      }
+    }
+
+    if (needsTLSValidation(&F)) {
+      if (!shouldTrustFunction(&F)) {
+        EntryIRB.CreateCall(BS.BsanFuncValidateParamTLS, {&F, NumParamProv});
       }
     }
 
@@ -802,14 +806,22 @@ private:
             Callee->hasExternalWeakLinkage() || Callee->hasAddressTaken());
   }
 
-  bool shouldTrustCallee(CallBase *CB) {
-    return isAllocationFn(CB, TLI) || getFreedOperand(CB, TLI);
-  }
+  bool shouldTrustFunction(Value *V) {
+    if (isAllocationFn(V, TLI)) {
+      return true;
+    }
 
-  void trustCallee(IRBuilder<> &IRB) { IRB.CreateStore(BS.One, BS.TrustFlag); }
+    if (CallBase *CB = dyn_cast<CallBase>(V)) {
+      return getFreedOperand(CB, TLI);
+    }
 
-  void untrustCallee(IRBuilder<> &IRB) {
-    IRB.CreateStore(BS.Zero, BS.TrustFlag);
+    if (Function *F = dyn_cast<Function>(V)) {
+      LibFunc LibFn;
+      TLI->getLibFunc(*F, LibFn);
+      return isLibFreeFunction(F, LibFn);
+    }
+
+    return false;
   }
 
   using InstVisitor<BorrowSanitizerVisitor>::visit;
@@ -837,8 +849,7 @@ private:
     if (CB.isInlineAsm()) {
       if (ClHandleAsmConservative)
         visitAsmInstruction(CB);
-      else
-        return;
+      return;
     }
 
     // If we've made it here, then we don't have a hard-coded way to handle this
@@ -846,10 +857,6 @@ private:
     // then read the provenance for the return value.
     IRBuilder<> Before(&CB);
 
-    bool Trust = shouldTrustCallee(&CB);
-    if (Trust) {
-      trustCallee(Before);
-    }
     // Store the provenance for each argument into the thread-local storage for
     // parameters. The process for computing provenance components is
     // deterministic, so we can guarantee that the callee will expect a
@@ -878,11 +885,7 @@ private:
     // instructions, since some function calls occur within terminators.
     IRBuilder<> After = switchToInsertionPointAfterCall(&CB);
 
-    if (Trust) {
-      untrustCallee(After);
-    }
-
-    Value *NumProvenanceValues = BS.Zero;
+    Value *NumReturnProv = BS.Zero;
     SmallVector<std::pair<unsigned, ProvenancePointer>> ProvenancePointers;
 
     if (CB.getType()->isSized()) {
@@ -906,21 +909,26 @@ private:
         Value *ByteWidth =
             Before.CreateMul(Comp.NumProvenanceValues, BS.PL.ProvenanceSize);
         RetvalByteWidth = Before.CreateAdd(RetvalByteWidth, ByteWidth);
-        NumProvenanceValues =
-            Before.CreateAdd(NumProvenanceValues, Comp.NumProvenanceValues);
+        NumReturnProv =
+            Before.CreateAdd(NumReturnProv, Comp.NumProvenanceValues);
       }
-      // We need to validate thread-local storage before we load provenance
-      // values from it, but we also need to know the number of provenance
-      // values associated with the return value to perform initialization.
-      if (!Trust && needsTLSValidation(Callee)) {
-        if (NumProvenanceValues != BS.Zero) {
-          Before.CreateMemSet(BS.RetvalTLS, ConstantInt::get(BS.Int8Ty, 0),
-                              RetvalByteWidth, MaybeAlign(1));
-        }
+    }
+    // We need to validate thread-local storage before we load provenance
+    // values from it, but we also need to know the number of provenance
+    // values associated with the return value to perform initialization.
+    if (needsTLSValidation(Callee)) {
+      if (shouldTrustFunction(&CB)) {
+        Value *Marker = Before.CreateCall(BS.BsanFuncMarkTLS,
+                                          {ConstantPointerNull::get(BS.PtrTy)});
+        After.CreateStore(Marker, BS.TLSMarker);
+      } else {
+        Value *Marker =
+            Before.CreateCall(BS.BsanFuncMarkTLS, {CB.getCalledOperand()});
+        After.CreateCall(BS.BsanFuncValidateRetvalTLS, {Marker, NumReturnProv});
       }
-      for (auto &[Idx, Ptr] : ProvenancePointers) {
-        setProvenance({&CB, Idx}, Provenance::load(After, BS.PL, Ptr));
-      }
+    }
+    for (auto &[Idx, Ptr] : ProvenancePointers) {
+      setProvenance({&CB, Idx}, Provenance::load(After, BS.PL, Ptr));
     }
   }
 
@@ -1563,14 +1571,14 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncDeallocStack = M.getOrInsertFunction(
       kBsanFuncDeallocStackName, AL, IRB.getVoidTy(), PtrTy, IntptrTy, PtrTy);
 
-  BsanFuncMarkTLS = M.getOrInsertFunction(
-      kBsanFuncMarkTLSName, FunctionType::get(PtrTy, /*isVarArg=*/false), AL);
+  BsanFuncMarkTLS =
+      M.getOrInsertFunction(kBsanFuncMarkTLSName, AL, PtrTy, PtrTy);
 
   BsanFuncValidateParamTLS = M.getOrInsertFunction(
-      kBsanFuncValidateParamTLSName, AL, IRB.getVoidTy(), IntptrTy);
+      kBsanFuncValidateParamTLSName, AL, IRB.getVoidTy(), PtrTy, IntptrTy);
 
   BsanFuncValidateRetvalTLS = M.getOrInsertFunction(
-      kBsanFuncValidateRetvalTLSName, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
+      kBsanFuncValidateRetvalTLSName, AL, IRB.getVoidTy(), PtrTy, IntptrTy);
 
   BsanFuncShadowLoad = M.getOrInsertFunction(kBsanFuncGetShadowLoadName, AL,
                                              IRB.getVoidTy(), PtrTy, PtrTy);
@@ -1640,8 +1648,8 @@ void BorrowSanitizer::createUserspaceApi(Module &M,
                                    ArrayType::get(PL.ProvenanceTy, kTLSSize));
   ParamTLS = getOrInsertTLSGlobal(M, kBsanParamTLSName,
                                   ArrayType::get(PL.ProvenanceTy, kTLSSize));
+  TLSMarker = getOrInsertTLSGlobal(M, kBsanTLSMarkerName, PtrTy);
   ProvStack = getOrInsertTLSGlobal(M, kBsanProvStackName, PtrTy);
-  TrustFlag = getOrInsertTLSGlobal(M, kBsanTrustFlagName, IntptrTy);
   BorTagCounter = getOrInsertGlobal(M, kBsanBorTagCounterName, IntptrTy);
 }
 

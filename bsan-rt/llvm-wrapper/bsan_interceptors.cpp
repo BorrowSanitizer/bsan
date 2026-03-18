@@ -14,7 +14,19 @@ using namespace __bsan;
 DECLARE_REAL(void *, malloc, SIZE_T)
 DECLARE_REAL(void, free, void *)
 
-bool inst_caller() { return __BSAN_TRUST == 1; }
+bool inst_caller(void *sym) {
+  if (__BSAN_TLS_MARKER) {
+    bool cond = __BSAN_TLS_MARKER == sym;
+    if (cond) {
+      __BSAN_TLS_MARKER = 0;
+    }
+    return cond;
+  } else {
+    return true;
+  }
+}
+
+#define INST_CALLER(f) inst_caller((void *)f)
 
 #define ENSURE_BSAN_INITED()                                                   \
   do {                                                                         \
@@ -81,7 +93,7 @@ INTERCEPTOR(void *, malloc, SIZE_T size) {
   if (DlsymAlloc::Use())
     return DlsymAlloc::Allocate(size);
   void *ptr = REAL(malloc)(size);
-  if (inst_caller()) {
+  if (INST_CALLER(malloc)) {
     Location loc = LOCATION();
     Provenance *RetSlot = GetRetValSlot(0);
     BorTag Tag = __bsan_new_bor_tag();
@@ -103,7 +115,7 @@ INTERCEPTOR(void, free, void *ptr) {
     return;
   if (DlsymAlloc::PointerIsMine(ptr))
     return DlsymAlloc::Free(ptr);
-  if (inst_caller()) {
+  if (INST_CALLER(free)) {
     Location loc = LOCATION();
     Provenance *Slot = GetArgSlot(0);
     __bsan_dealloc(ptr, Slot->Tag, Slot->Info, loc);
@@ -117,7 +129,7 @@ INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
     return DlsymAlloc::Callocate(nmemb, size);
   void *ptr = REAL(calloc)(nmemb, size);
   Provenance *RetSlot = GetRetValSlot(0);
-  if (inst_caller()) {
+  if (INST_CALLER(calloc)) {
     Location loc = LOCATION();
     BorTag Tag = __bsan_new_bor_tag();
     *RetSlot = {Tag, __bsan_alloc(ptr, nmemb * size, Tag, loc)};
@@ -131,14 +143,15 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
   if (DlsymAlloc::Use() || DlsymAlloc::PointerIsMine(ptr))
     return DlsymAlloc::Realloc(ptr, size);
   Location loc = LOCATION();
-  if (inst_caller()) {
+  bool is_inst = INST_CALLER(realloc);
+  if (is_inst) {
     Provenance *Slot = GetArgSlot(0);
     __bsan_dealloc(ptr, Slot->Tag, Slot->Info, loc);
     HANDLE_ERROR(loc);
   }
   void *nptr = REAL(realloc)(ptr, size);
   Provenance *RetSlot = GetRetValSlot(0);
-  if (inst_caller()) {
+  if (is_inst) {
     BorTag Tag = __bsan_new_bor_tag();
     *RetSlot = {Tag, __bsan_alloc(nptr, size, Tag, loc)};
   } else {

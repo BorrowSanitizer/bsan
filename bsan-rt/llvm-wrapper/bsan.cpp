@@ -17,9 +17,7 @@ using namespace __bsan;
 SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance __BSAN_PARAM_TLS[TLS_SIZE];
 SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance
     __BSAN_RETVAL_TLS[TLS_SIZE];
-SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __BSAN_TRUST = 0;
-
-THREADLOCAL uptr BSAN_TLS_MARKER = 0;
+SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_TLS_MARKER = nullptr;
 
 bool BSAN_INITED = false;
 bool BSAN_INIT_RUNNING;
@@ -122,10 +120,10 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_deinit() {
 /// been called from uninstrumented code, we check to see if our caller's frame
 /// pointer matches this boundary marker to determine whether we can trust our
 /// thread-local provenance arrays.
-SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_mark_tls() {
-  uptr prev_pc = BSAN_TLS_MARKER;
-  BSAN_TLS_MARKER = unwind(GET_CURRENT_FRAME(), 1);
-  return prev_pc;
+SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_mark_tls(void *callee) {
+  void *prev_marker = __BSAN_TLS_MARKER;
+  __BSAN_TLS_MARKER = callee;
+  return prev_marker;
 }
 
 /// Clears the parameter provenance array if the frame pointer of the
@@ -134,10 +132,10 @@ SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_mark_tls() {
 /// boundary marker, then we reset the boundary marker to null, signaling that
 /// when we are back within the caller, we can trust the provenance array for
 /// the return value.
-SANITIZER_INTERFACE_ATTRIBUTE void __bsan_validate_param_tls(uptr len) {
-  uptr marker = unwind(GET_CURRENT_FRAME(), 2);
-  if (marker == BSAN_TLS_MARKER) {
-    BSAN_TLS_MARKER = 0;
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_validate_param_tls(void *current_fn,
+                                                             uptr len) {
+  if (__BSAN_TLS_MARKER == 0 || current_fn == __BSAN_TLS_MARKER) {
+    __BSAN_TLS_MARKER = 0;
   } else {
     for (uptr i = 0; i < len; ++i) {
       *GetArgSlot(i) = WILDCARD;
@@ -151,14 +149,14 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_validate_param_tls(uptr len) {
 /// fill it with wildcard provenance values for each pointer being returned. We
 /// also need to restore the boundary marker to the value it had before the
 /// function that was called.
-SANITIZER_INTERFACE_ATTRIBUTE void
-__bsan_validate_retval_tls(uptr len, uptr prev_marker) {
-  if (BSAN_TLS_MARKER) {
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_validate_retval_tls(void *prev_marker,
+                                                              uptr len) {
+  if (__BSAN_TLS_MARKER) {
     for (uptr i = 0; i < len; ++i) {
       *GetRetValSlot(i) = WILDCARD;
     }
   }
-  BSAN_TLS_MARKER = prev_marker;
+  __BSAN_TLS_MARKER = prev_marker;
 }
 
 // Get the top frame PC address from the current PC

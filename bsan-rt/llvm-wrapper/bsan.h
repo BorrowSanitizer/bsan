@@ -12,6 +12,7 @@ using __sanitizer::uptr;
 extern THREADLOCAL uptr __BSAN_HAD_ERROR;
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __BSAN_TRUST;
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_PROV_STACK;
+extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_TLS_MARKER;
 
 typedef uptr Span;
 typedef uptr FramePtr;
@@ -56,12 +57,13 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memcpy(void *dest, const void *src,
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memset(void *s, int c, uptr n);
 
-SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_mark_tls();
+SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_mark_tls(void *callee);
 
-SANITIZER_INTERFACE_ATTRIBUTE void __bsan_validate_param_tls(uptr len);
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_validate_param_tls(void *current_fn,
+                                                             uptr len);
 
-SANITIZER_INTERFACE_ATTRIBUTE void __bsan_validate_retval_tls(uptr len,
-                                                              uptr prev_marker);
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_validate_retval_tls(void *prev_marker,
+                                                              uptr len);
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_print_stack_trace(Location loc,
                                                             uptr depth);
@@ -172,7 +174,6 @@ SANITIZER_WEAK_ATTRIBUTE void __bsan_debug_print_diff(BorTag bor_tag,
 } // extern "C"
 
 extern THREADLOCAL void *BSAN_CURR_THREAD;
-extern THREADLOCAL uptr BSAN_TLS_MARKER;
 extern bool BSAN_INITED;
 extern bool BSAN_INIT_RUNNING;
 extern bool BSAN_DEINIT_RUNNING;

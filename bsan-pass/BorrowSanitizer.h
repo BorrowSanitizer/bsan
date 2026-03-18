@@ -124,8 +124,7 @@ public:
   Value *ParamTLS = nullptr;
   Value *RetvalTLS = nullptr;
   Value *ProvStack = nullptr;
-  Value *TrustFlag = nullptr;
-  Value *AllocIdCounter = nullptr;
+  Value *TLSMarker = nullptr;
   Value *BorTagCounter = nullptr;
 
   Constant *Zero = nullptr;
