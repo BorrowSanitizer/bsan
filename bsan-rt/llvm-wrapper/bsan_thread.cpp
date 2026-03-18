@@ -1,9 +1,12 @@
 #include "bsan_thread.h"
+#include "sanitizer_common/sanitizer_atomic.h"
 
 using namespace __sanitizer;
 using namespace __bsan;
 
 SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_PROV_STACK = nullptr;
+
+extern atomic_uintptr_t THREAD_ID_CTR;
 
 BsanThread *BsanThread::Create(thread_callback_t start_routine, void *arg) {
   uptr PageSize = GetPageSizeCached();
@@ -12,6 +15,7 @@ BsanThread *BsanThread::Create(thread_callback_t start_routine, void *arg) {
   thread->start_routine_ = start_routine;
   thread->arg_ = arg;
   thread->destructor_iterations_ = GetPthreadDestructorIterations();
+  thread->id = atomic_fetch_add(&THREAD_ID_CTR, 1, memory_order_relaxed);
   return thread;
 }
 
