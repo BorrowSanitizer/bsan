@@ -20,7 +20,7 @@ public:
   bool IsMainThread() { return start_routine_ == nullptr; }
   uptr stack_top() { return stack_top_; }
   uptr stack_bottom() { return stack_bottom_; }
-  int destructor_iterations_;  
+  int destructor_iterations_;
   ThreadId id;
   __sanitizer_sigset_t starting_sigset_;
 

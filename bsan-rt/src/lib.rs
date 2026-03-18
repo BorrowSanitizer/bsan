@@ -82,7 +82,6 @@ macro_rules! debug_bsan {
     };
 }
 
-
 #[unsafe(no_mangle)]
 pub static __BSAN_ALLOC_ID_CTR: AtomicUsize = AtomicUsize::new(3);
 
