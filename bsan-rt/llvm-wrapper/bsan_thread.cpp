@@ -6,7 +6,7 @@ using namespace __bsan;
 
 SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_PROV_STACK = nullptr;
 
-extern atomic_uintptr_t THREAD_ID_CTR;
+atomic_uintptr_t THREAD_ID_CTR;
 
 BsanThread *BsanThread::Create(thread_callback_t start_routine, void *arg) {
   uptr PageSize = GetPageSizeCached();
