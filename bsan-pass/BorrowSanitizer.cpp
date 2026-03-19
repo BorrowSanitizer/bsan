@@ -804,8 +804,12 @@ private:
     } else if (Name == kBsanFuncDebugGetProvenance) {
       Value *TagPtr = CB.getArgOperand(1);
       Value *InfoPtr = CB.getArgOperand(2);
-      IRB.CreateStore(Prov.Tag, TagPtr);
-      IRB.CreateStore(Prov.Info, InfoPtr);
+      IRB.CreateStore(Prov.Tag, TagPtr, true);
+      IRB.CreateStore(Prov.Info, InfoPtr, true);
+      IRB.CreateLoad(BS.IntptrTy, TagPtr, true,
+                     "__bsan_debug_get_provenance.tag");
+      IRB.CreateLoad(BS.PtrTy, InfoPtr, true,
+                     "__bsan_debug_get_provenance.info");
       NeedsRuntimeCall = false;
     } else {
       report_fatal_error("Unknown debug function: " + Twine(Name) + "\n");

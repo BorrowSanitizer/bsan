@@ -20,13 +20,7 @@ unsafe extern "C" {
     pub unsafe fn __bsan_debug_tree_size(ptr: *mut u8);
     /// Retrieves the provenance metadata for the ptr.
     pub unsafe fn __bsan_debug_get_provenance(ptr: *const std::ffi::c_void, bor_tag_ptr: *mut u64, alloc_info_ptr: *mut *mut std::ffi::c_void); 
-}
-
-
-// The following functions can be used to manually call bsan runtime functions
-#[allow(unused)]
-unsafe extern "C" {
-    /// Asserts that a pointer's provenance value is null.
+    /// Returns the shadow memory location for an address
     pub unsafe fn __bsan_shadow_src(addr: *const std::ffi::c_void) -> *const std::ffi::c_void;
 }
 
