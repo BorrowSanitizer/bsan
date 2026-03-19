@@ -38,10 +38,6 @@ use crate::sanitizer_common::{Location, Span};
 #[unsafe(no_mangle)]
 pub static mut __BSAN_HAD_ERROR: usize = 0;
 
-#[thread_local]
-#[unsafe(no_mangle)]
-pub static mut __BSAN_THREAD_ID: ThreadId = ThreadId(0);
-
 /// A struct for summarizing debug information about memory operations
 #[cfg(feature = "debug")]
 struct DebugSummary {
@@ -84,40 +80,6 @@ macro_rules! debug_bsan {
             libc_print::std_name::println!("{}", summary);
         }
     };
-}
-
-#[unsafe(no_mangle)]
-pub static __BSAN_THREAD_ID_CTR: AtomicUsize = AtomicUsize::new(3);
-
-/// Unique identifier for an thread
-#[repr(transparent)]
-#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ThreadId(pub usize);
-
-impl ThreadId {
-    pub fn get(&self) -> usize {
-        self.0
-    }
-
-    pub fn is_main(&self) -> bool {
-        self.0 == 1
-    }
-}
-
-impl Default for ThreadId {
-    fn default() -> Self {
-        ThreadId(__BSAN_THREAD_ID_CTR.fetch_add(1, Ordering::Relaxed))
-    }
-}
-
-impl fmt::Debug for ThreadId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if f.alternate() {
-            write!(f, "t{}", self.0)
-        } else {
-            write!(f, "thread{}", self.0)
-        }
-    }
 }
 
 #[unsafe(no_mangle)]
