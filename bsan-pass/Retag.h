@@ -1,5 +1,5 @@
 #ifndef BSAN_RETAG_H
-#define BSAN_RETAG_h
+#define BSAN_RETAG_H
 
 #include "llvm/IR/Instructions.h"
 
