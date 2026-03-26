@@ -199,7 +199,7 @@ regexes! {
     // erase platform dependent line retrieved
     r"(-->\s+\S+/PLATFORM\.rs:l:c)\n\s*\|\s*\n\s*\d+\s*\|.*\n\s*\|\s*\n" => "$1\n",
     // erase paths into the crate registry
-    r"[^ ]*/\.?cargo/registry/.*/(.*\.rs)"  => "CARGO_REGISTRY/.../$1",
+    r"[^ ]*/\.?cargo/registry/.*/(.*\.(rs|c|cpp))"  => "CARGO_REGISTRY/.../$1",
     // normalize workspace paths to relative
     r"(/.*/tests/)([^ \n]+)" => "bsan/tests/$2",
     r"::h[0-9a-f]{16}\b" => "::HASH",

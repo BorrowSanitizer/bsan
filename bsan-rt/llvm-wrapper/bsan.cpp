@@ -36,31 +36,23 @@ void ClearRetValSlot(uptr Idx) { __BSAN_RETVAL_TLS[Idx] = WILDCARD; }
 void PrintStackTrace(StackTrace &stack) {
   Printf("stack backtrace:\n");
   InternalScopedString frame_desc;
-  for (uptr i = 0; i < stack.size; ++i) {
+  for (uptr i = 1; i < stack.size; ++i) {
     uptr pc = stack.trace[i];
     SymbolizedStackHolder symbolized_stack(
         Symbolizer::GetOrInit()->SymbolizePC(pc));
     const SymbolizedStack *frame = symbolized_stack.get();
     if (frame) {
       StackTracePrinter::GetOrInit()->RenderFrame(
-          &frame_desc, "%n: %f\n      at %S", i, frame->info.address,
+          &frame_desc, "%f\n      at %S", i, frame->info.address,
           &frame->info, common_flags()->symbolize_vs_style,
           common_flags()->strip_path_prefix);
-      Printf("%s\n", frame_desc.data());
+      Printf("%ld: %s\n", i - 1, frame_desc.data());
       frame_desc.clear();
     }
   }
 }
 
 } // namespace __bsan
-
-uptr unwind(uptr bp, uptr len) {
-  if (!bp || len == 0) {
-    return bp;
-  } else {
-    return unwind(*(uptr *)bp, len - 1);
-  }
-}
 
 void __sanitizer::BufferedStackTrace::UnwindImpl(uptr pc, uptr bp,
                                                  void *context,
