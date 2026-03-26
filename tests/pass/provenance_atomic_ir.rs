@@ -49,9 +49,22 @@ struct UnsafeSend<T>(*mut T);
 unsafe impl<T> Send for UnsafeSend<T> {}
 unsafe impl<T> Sync for UnsafeSend<T> {}
 
+const NUM_THREADS: usize = 200;
 
 fn main() {
-    const NUM_THREADS: usize = 100;
+    for &(store_ordering, load_ordering) in &[ 
+        (std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst),
+        (std::sync::atomic::Ordering::Release, std::sync::atomic::Ordering::Acquire),
+        (std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed),
+    ] {
+        println!("Testing with store ordering: {:?}, load ordering: {:?}", store_ordering, load_ordering);
+        store_and_load(store_ordering, load_ordering);
+    }
+}
+
+
+
+fn store_and_load(store_ordering: std::sync::atomic::Ordering, load_ordering: std::sync::atomic::Ordering) {
     let values: [u32; NUM_THREADS] = std::array::from_fn(|i| (i + 1) as u32);
 
     let mut prov_map = std::collections::HashMap::<UnsafeSend<u32>, Provenance>::new();
@@ -59,7 +72,7 @@ fn main() {
         let ptr = &values[i] as *const u32 as *mut u32; // Get a raw pointer to x
         get_provenance!(ptr, bor_tag, alloc_info);
         let prov = Provenance { bor_tag, alloc_info };
-        println!("Pointer {:p} (value: {}) has provenance: {:?}", ptr, unsafe {*ptr}, prov); 
+        println!("Storing pointer {:p} (value: {}) to prov_map with provenance: {:?}", ptr, unsafe {*ptr}, prov); 
         let inserted_ptr = UnsafeSend(ptr);
         prov_map.insert(inserted_ptr, prov);
     }
@@ -74,7 +87,7 @@ fn main() {
             let barrier = &barrier;
             s.spawn(move || {
                 barrier.wait(); // Increase the chance that loads and stores happen around the same time, making the test more likely to catch issues.
-                pointer_storage_ref.store(ptr.0, std::sync::atomic::Ordering::Release);
+                pointer_storage_ref.store(ptr.0, store_ordering);
             });
         }
 
@@ -84,17 +97,16 @@ fn main() {
             let barrier = &barrier;
             s.spawn(move || {
                 barrier.wait(); // Increase the chance that loads and stores happen around the same time, making the test more likely to catch issues.
-                let loaded_ptr: *mut u32 = pointer_storage_ref.load(std::sync::atomic::Ordering::Acquire);
-                if !loaded_ptr.is_null() {
-                    
+                let loaded_ptr: *mut u32 = pointer_storage_ref.load(load_ordering);
+                if !loaded_ptr.is_null() {     
                     get_provenance!(loaded_ptr, bor_tag, alloc_info);
-                    
                     let orignal_prov = prov_map_ref.get(&UnsafeSend(loaded_ptr)).unwrap();
-
                     assert_eq!(orignal_prov.bor_tag, bor_tag);
                     assert_eq!(orignal_prov.alloc_info, alloc_info);
                 }
             });
         }
     });
+
+    println!("Threads have joined successfully. Test ends here. BSAN should not have reported any issues if synchronization of provenance is working correctly.");
 }
