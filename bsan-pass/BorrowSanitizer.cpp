@@ -525,6 +525,18 @@ private:
     return NextNode;
   }
 
+  void lockForAtomicAccess(IRBuilder<> &Before, Value *ObjAddr) {
+    IRBuilder<> After(insertionPointAfterAppAccess(Before));
+    // We lock the shadow memory before performing the shadow memory
+    // operation
+    // and we unlock it AFTER the APPLICATION's atomic LOAD/STORE
+    // instruction has finished. Therefore accessing provenance metadata and
+    // accessing the actual application's pointer value is done in one block
+    // with no interleaving modifications from other threads.
+    Value *Guard = Before.CreateCall(BS.BsanFuncShadowAtomicLock, {ObjAddr});
+    After.CreateCall(BS.BsanFuncShadowAtomicUnlock, {Guard});
+  }
+
   // Stores a provenance value into shadow memory, starting at the given object
   // address.
   void storeProvenanceToShadow(IRBuilder<> &IRB, Value *ObjAddr,
@@ -539,19 +551,9 @@ private:
           ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
 
       if (Ordering != AtomicOrdering::NotAtomic) {
-        // We lock the shadow memory before performing the shadow memory
-        // operation
-        Value *Guard = IRB.CreateCall(BS.BsanFuncShadowAtomicLock, {ObjAddr});
-        Prov.store(IRB, BS.PL, Dest, Ordering);
-        // and we unlock it AFTER the APPLICATION's atomic LOAD/STORE
-        // instruction has finished. Therefore accessing provenance metadata and
-        // accessing the actual application's pointer value is done in one block
-        // with no interleaving modifications from other threads.
-        IRBuilder<> AfterAccessIRB(insertionPointAfterAppAccess(IRB));
-        AfterAccessIRB.CreateCall(BS.BsanFuncShadowAtomicUnlock, {Guard});
-      } else {
-        Prov.store(IRB, BS.PL, Dest, Ordering);
+        lockForAtomicAccess(IRB, ObjAddr);
       }
+      Prov.store(IRB, BS.PL, Dest);
     }
   }
 
@@ -568,21 +570,11 @@ private:
       ProvPtr = ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
     }
 
-    Provenance Prov;
     if (Ordering != AtomicOrdering::NotAtomic) {
-      // We lock the shadow memory before performing the shadow memory operation
-      Value *Guard = IRB.CreateCall(BS.BsanFuncShadowAtomicLock, {ObjAddr});
-      Prov = Provenance::load(IRB, BS.PL, ProvPtr, Ordering);
-      // and we unlock it AFTER the APPLICATION's atomic LOAD/STORE instruction
-      // has finished. Therefore accessing provenance metadata and accessing the
-      // actual application's pointer value is done in one block with no
-      // interleaving modifications from other threads.;
-      IRBuilder<> AfterAccessIRB(insertionPointAfterAppAccess(IRB));
-      AfterAccessIRB.CreateCall(BS.BsanFuncShadowAtomicUnlock, {Guard});
-    } else {
-      Prov = Provenance::load(IRB, BS.PL, ProvPtr);
+      lockForAtomicAccess(IRB, ObjAddr);
     }
-    return Prov;
+
+    return Provenance::load(IRB, BS.PL, ProvPtr);
   }
 
   void populateBlocks(IRBuilder<> &IRB) {
