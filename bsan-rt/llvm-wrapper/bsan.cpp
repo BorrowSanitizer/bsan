@@ -43,8 +43,8 @@ void PrintStackTrace(StackTrace &stack) {
     const SymbolizedStack *frame = symbolized_stack.get();
     if (frame) {
       StackTracePrinter::GetOrInit()->RenderFrame(
-          &frame_desc, "%f\n      at %S", i, frame->info.address,
-          &frame->info, common_flags()->symbolize_vs_style,
+          &frame_desc, "%f\n      at %S", i, frame->info.address, &frame->info,
+          common_flags()->symbolize_vs_style,
           common_flags()->strip_path_prefix);
       Printf("%ld: %s\n", i - 1, frame_desc.data());
       frame_desc.clear();
@@ -241,7 +241,7 @@ __bsan_retag(void *object_addr, uptr access_size, u8 is_prot, u8 is_freeze,
   BorTag tag =
       __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
                         ptr_kind, im_data, im_len, bor_tag, alloc_info, loc);
-  HANDLE_ERROR(loc);
+  HANDLE_ERROR();
   return tag;
 }
 
@@ -256,7 +256,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void
 __bsan_pop_frame(const Provenance *frame_start, uptr prot) {
   Location loc = LOCATION();
   __bsan_pop_frame_impl(frame_start, prot, loc);
-  HANDLE_ERROR(loc);
+  HANDLE_ERROR();
 }
 
 SANITIZER_WEAK_ATTRIBUTE void
@@ -267,7 +267,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_read(void *ptr, uptr access_size,
                                                AllocInfo *alloc_info) {
   Location loc = LOCATION();
   __bsan_read_impl(ptr, access_size, bor_tag, alloc_info, loc);
-  HANDLE_ERROR(loc);
+  HANDLE_ERROR();
 }
 
 SANITIZER_WEAK_ATTRIBUTE void __bsan_read_impl(void *ptr, uptr access_size,
@@ -280,7 +280,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_write(void *ptr, uptr access_size,
                                                 AllocInfo *alloc_info) {
   Location loc = LOCATION();
   __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, loc);
-  HANDLE_ERROR(loc);
+  HANDLE_ERROR();
 }
 
 SANITIZER_WEAK_ATTRIBUTE void __bsan_write_impl(void *ptr, uptr access_size,
@@ -310,7 +310,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_alloc_stack(void *base_addr,
                                                       AllocInfo *alloc_info) {
   Location loc = LOCATION();
   __bsan_alloc_stack_impl(base_addr, size, bor_tag, alloc_info, loc);
-  HANDLE_ERROR(loc);
+  HANDLE_ERROR();
 }
 
 SANITIZER_WEAK_ATTRIBUTE void __bsan_alloc_stack_impl(void *base_addr,
@@ -322,7 +322,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void
 __bsan_dealloc_stack(void *ptr, BorTag bor_tag, AllocInfo *alloc_info) {
   Location loc = LOCATION();
   __bsan_dealloc_stack_impl(ptr, bor_tag, alloc_info, loc);
-  HANDLE_ERROR(loc);
+  HANDLE_ERROR();
 }
 
 SANITIZER_WEAK_ATTRIBUTE void __bsan_dealloc_stack_impl(void *ptr,

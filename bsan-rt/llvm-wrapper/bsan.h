@@ -24,7 +24,7 @@ typedef struct Location {
 
 #define LOCATION() {.pc = GET_CALLER_PC(), .bp = GET_CURRENT_FRAME()}
 
-#define HANDLE_ERROR(loc)                                                         \
+#define HANDLE_ERROR()                                                         \
   if (__BSAN_HAD_ERROR) {                                                      \
     UNINITIALIZED BufferedStackTrace stack;                                    \
     stack.Unwind(StackTrace::GetCurrentPc(), GET_CURRENT_FRAME(), nullptr,     \
