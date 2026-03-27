@@ -15,15 +15,14 @@ extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_PROV_STACK;
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_TLS_MARKER;
 
 typedef uptr Span;
-#define GET_PC_BP \
-  uptr pc = StackTrace::GetCurrentPc(); \ 
-  uptr bp = GET_CURRENT_FRAME(); \ 
+#define GET_PC_BP                                                              \
+  uptr pc = StackTrace::GetCurrentPc();                                        \
+  uptr bp = GET_CURRENT_FRAME();
 
 #define HANDLE_ERROR()                                                         \
   if (__BSAN_HAD_ERROR) {                                                      \
     UNINITIALIZED BufferedStackTrace stack;                                    \
-    stack.Unwind(pc, bp, nullptr,                                              \
-                 common_flags()->fast_unwind_on_fatal, 4);                     \
+    stack.Unwind(pc, bp, nullptr, common_flags()->fast_unwind_on_fatal, 4);    \
     PrintStackTrace(stack);                                                    \
     Die();                                                                     \
   }
@@ -79,8 +78,8 @@ extern "C" {
 SANITIZER_WEAK_ATTRIBUTE AllocInfo *__bsan_alloc(void *base_addr, uptr size,
                                                  BorTag bor_tag, Span pc);
 
-SANITIZER_WEAK_ATTRIBUTE void
-__bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info, Span pc);
+SANITIZER_WEAK_ATTRIBUTE void __bsan_dealloc(void *ptr, BorTag bor_tag,
+                                             AllocInfo *alloc_info, Span pc);
 
 SANITIZER_INTERFACE_ATTRIBUTE BorTag
 __bsan_retag(void *object_addr, uptr access_size, u8 is_prot, u8 is_freeze,
@@ -102,16 +101,14 @@ SANITIZER_INTERFACE_ATTRIBUTE void
 __bsan_pop_frame(const Provenance *frame_start, uptr protected_);
 
 SANITIZER_WEAK_ATTRIBUTE void
-__bsan_pop_frame_impl(const Provenance *frame_start, uptr protected_,
-                      Span pc);
+__bsan_pop_frame_impl(const Provenance *frame_start, uptr protected_, Span pc);
 
 SANITIZER_INTERFACE_ATTRIBUTE void
 __bsan_read(void *ptr, uptr access_size, BorTag bor_tag, AllocInfo *alloc_info);
 
 SANITIZER_WEAK_ATTRIBUTE void __bsan_read_impl(void *ptr, uptr access_size,
                                                BorTag bor_tag,
-                                               AllocInfo *alloc_info,
-                                               Span pc);
+                                               AllocInfo *alloc_info, Span pc);
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_write(void *ptr, uptr access_size,
                                                 BorTag bor_tag,
@@ -119,8 +116,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_write(void *ptr, uptr access_size,
 
 SANITIZER_WEAK_ATTRIBUTE void __bsan_write_impl(void *ptr, uptr access_size,
                                                 BorTag bor_tag,
-                                                AllocInfo *alloc_info,
-                                                Span pc);
+                                                AllocInfo *alloc_info, Span pc);
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_alloc_stack(void *base_addr,
                                                       uptr size, BorTag bor_tag,

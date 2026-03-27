@@ -43,8 +43,8 @@ void PrintStackTrace(StackTrace &stack) {
     const SymbolizedStack *frame = symbolized_stack.get();
     if (frame) {
       StackTracePrinter::GetOrInit()->RenderFrame(
-          &frame_desc, "%n: %f\n      at %S", i, frame->info.address, &frame->info,
-          common_flags()->symbolize_vs_style,
+          &frame_desc, "%n: %f\n      at %S", i, frame->info.address,
+          &frame->info, common_flags()->symbolize_vs_style,
           common_flags()->strip_path_prefix);
       Printf("%s\n", frame_desc.data());
       frame_desc.clear();
@@ -55,11 +55,11 @@ void PrintStackTrace(StackTrace &stack) {
 } // namespace __bsan
 
 NOINLINE void __sanitizer::BufferedStackTrace::UnwindImpl(uptr pc, uptr bp,
-                                                 void *context,
-                                                 bool request_fast,
-                                                 u32 max_depth) {
-                                                  ENABLE_FRAME_POINTER;
-                                                  
+                                                          void *context,
+                                                          bool request_fast,
+                                                          u32 max_depth) {
+  ENABLE_FRAME_POINTER;
+
   BsanThread *t = GetCurrentThread();
   if (!t) {
     // The thread is still being created, or has already been destroyed.
@@ -264,14 +264,13 @@ __bsan_pop_frame(const Provenance *frame_start, uptr prot) {
 SANITIZER_WEAK_ATTRIBUTE void
 __bsan_pop_frame_impl(const Provenance *frame_start, uptr prot, Span pc) {}
 
-
-
 // Define this somewhere out of the fast path (e.g., in bsan_report.cpp)
 // Use SANITIZER_INTERFACE_ATTRIBUTE if this is called from instrumented code,
 // or just NOINLINE if it's internal.
-NOINLINE void __bsan_report_error(uptr pc, uptr bp, void* ptr, uptr access_size) {
+NOINLINE void __bsan_report_error(uptr pc, uptr bp, void *ptr,
+                                  uptr access_size) {
   // 1. Guarantee the frame pointer is intact for the unwinder
-  ENABLE_FRAME_POINTER; 
+  ENABLE_FRAME_POINTER;
 
   // 2. Fetch standard unwinding flags rather than hardcoding
   bool fast_unwind = common_flags()->fast_unwind_on_fatal;
@@ -280,19 +279,15 @@ NOINLINE void __bsan_report_error(uptr pc, uptr bp, void* ptr, uptr access_size)
   // 3. Unwind and report
   UNINITIALIZED BufferedStackTrace stack;
   stack.Unwind(pc, bp, nullptr, fast_unwind, max_depth);
-  
+
   PrintStackTrace(stack);
   Die();
 }
 
 SANITIZER_WEAK_ATTRIBUTE void __bsan_read_impl(void *ptr, uptr access_size,
                                                BorTag bor_tag,
-                                               AllocInfo *alloc_info,
-                                               Span pc) {}
-
-
-
-
+                                               AllocInfo *alloc_info, Span pc) {
+}
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_read(void *ptr, uptr access_size,
                                                BorTag bor_tag,
@@ -301,7 +296,6 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_read(void *ptr, uptr access_size,
   __bsan_read_impl(ptr, access_size, bor_tag, alloc_info, pc);
   HANDLE_ERROR();
 }
-
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_write(void *ptr, uptr access_size,
                                                 BorTag bor_tag,
@@ -330,8 +324,7 @@ SANITIZER_WEAK_ATTRIBUTE AllocInfo *__bsan_alloc(void *base_addr, uptr size,
   return nullptr;
 }
 SANITIZER_WEAK_ATTRIBUTE void __bsan_dealloc(void *ptr, BorTag bor_tag,
-                                             AllocInfo *alloc_info,
-                                             Span pc) {}
+                                             AllocInfo *alloc_info, Span pc) {}
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_alloc_stack(void *base_addr,
                                                       uptr size, BorTag bor_tag,

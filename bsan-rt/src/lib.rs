@@ -332,11 +332,7 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_pop_frame_impl(
-    frame_start: *const Provenance,
-    protected: usize,
-    pc: Span,
-) {
+extern "C" fn __bsan_pop_frame_impl(frame_start: *const Provenance, protected: usize, pc: Span) {
     let ctx = unsafe { global_ctx() };
     let provenance = unsafe { slice::from_raw_parts(frame_start, protected) };
     for prov in provenance {
