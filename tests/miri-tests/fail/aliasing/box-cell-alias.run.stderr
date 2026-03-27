@@ -1,34 +1,32 @@
 error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
-    |
-244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
-    |
-    = help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(WeakProtector) (i.e., it is not a child)
-    = help: this reborrow would cause the protected tag <TAG>(WeakProtector) (currently Active) to become Disabled
-    = help: protected tags must never be Disabled
+    --> RUSTLIB/core/src/cell.rs:513:31
+     |
+ 513 | mem::replace(unsafe { &mut *self.value.get() }, val)
+     |
+     = help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(WeakProtector) (i.e., it is not a child)
+     = help: this reborrow would cause the protected tag <TAG>(WeakProtector) (currently Active) to become Disabled
+     = help: protected tags must never be Disabled
 help: the accessed tag <TAG>(unprotected) was created here
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
-    |
-244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
-    |
+    --> RUSTLIB/core/src/cell.rs:2420:0
+     |
+2420 | pub const fn get(&self) -> *mut T {
+     |
 help: the protected tag <TAG>(WeakProtector) was created here, in the initial state Reserved
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
-    |
-244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
-    |
+    --> bsan/tests/miri-tests/fail/aliasing/box-cell-alias.rs:8:0
+     |
+   8 | fn helper(val: Box<Cell<u8>>, ptr: *const Cell<u8>) -> u8 {
+     |
 help: the protected tag <TAG>(WeakProtector) later transitioned due to a child write
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:310:20
-    |
-310 | __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, pc);
-    |
+    --> RUSTLIB/core/src/mem/mod.rs:901:9
+     |
+ 901 | crate::intrinsics::write_via_move(dest, src);
+     |
 help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
 
 stack backtrace:
-0: __bsan_retag
-      at /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
-1: <core::cell::Cell<u8>>::replace
+0: <core::cell::Cell<u8>>::replace
  at RUSTLIB/core/src/cell.rs:513:31
-2: <core::cell::Cell<u8>>::set
+1: <core::cell::Cell<u8>>::set
  at RUSTLIB/core/src/cell.rs:437:14
-3: box_cell_alias::helper
+2: box_cell_alias::helper
  at bsan/tests/miri-tests/fail/aliasing/box-cell-alias.rs:10:21

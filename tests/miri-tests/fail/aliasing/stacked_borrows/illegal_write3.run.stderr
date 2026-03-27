@@ -1,21 +1,19 @@
 error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:310:20
-    |
-310 | __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, pc);
-    |
-    = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this write
+ --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/illegal_write3.rs:9:14
+  |
+9 | unsafe { *ptr = 42 }; //miri: ~ ERROR: /write access .* only grants SharedReadOnly permission/
+  |
+  = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this write
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
-    |
-244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
-    |
+ --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/illegal_write3.rs:7:17
+  |
+7 | let r#ref = &target; // freeze
+  |
 
 stack backtrace:
-0: __bsan_write
-      at /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:310:20
-1: illegal_write3::main
+0: illegal_write3::main
  at bsan/tests/miri-tests/fail/aliasing/stacked_borrows/illegal_write3.rs:9:14
-2: <fn() as core::ops::function::FnOnce<()>>::call_once
+1: <fn() as core::ops::function::FnOnce<()>>::call_once
  at RUSTLIB/core/src/ops/function.rs:250:5
-3: std::sys::backtrace::__rust_begin_short_backtrace
+2: std::sys::backtrace::__rust_begin_short_backtrace
  at RUSTLIB/std/src/sys/backtrace.rs:166:18

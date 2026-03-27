@@ -1,15 +1,9 @@
 error: Undefined Behavior: trying to access an allocation that has been freed.
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan_interceptors.cpp:143:3
-    |
-143 | GET_PC_BP;
-    |
-
+  --> RUSTLIB/std/src/sys/alloc/PLATFORM.rs:l:c
 stack backtrace:
-0: realloc
-      at /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan_interceptors.cpp:143:3
-1: <std::alloc::System as core::alloc::global::GlobalAlloc>::realloc
+0: <std::alloc::System as core::alloc::global::GlobalAlloc>::realloc
  at RUSTLIB/std/src/sys/alloc/PLATFORM.rs:l:c
-2: __rustc::__rdl_realloc
+1: __rustc::__rdl_realloc
  at RUSTLIB/std/src/alloc.rs:479:6
-3: alloc::alloc::realloc
+2: alloc::alloc::realloc
  at RUSTLIB/alloc/src/alloc.rs:135:14

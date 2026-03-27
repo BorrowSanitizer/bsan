@@ -1,27 +1,25 @@
 error: Undefined Behavior: write through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:310:20
-    |
-310 | __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, pc);
-    |
-    = help: the accessed tag <TAG>(StrongProtector) has state Reserved (conflicted) which forbids this write
+ --> bsan/tests/miri-tests/fail/aliasing/both_borrows/aliasing_mut1.rs:8:5
+  |
+8 | *x = 1; //miri: ~[tree] ERROR: /write access through .* is forbidden/
+  |
+  = help: the accessed tag <TAG>(StrongProtector) has state Reserved (conflicted) which forbids this write
 help: the accessed tag <TAG>(StrongProtector) was created here, in the initial state Reserved
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
-    |
-244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
-    |
+ --> bsan/tests/miri-tests/fail/aliasing/both_borrows/aliasing_mut1.rs:6:0
+  |
+6 | fn safe(x: &mut i32, y: &mut i32) {
+  |
 help: the accessed tag <TAG>(StrongProtector) later transitioned due to a reborrow (acting as a foreign read access)
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
-    |
-244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
-    |
+ --> bsan/tests/miri-tests/fail/aliasing/both_borrows/aliasing_mut1.rs:6:0
+  |
+6 | fn safe(x: &mut i32, y: &mut i32) {
+  |
 help: this transition corresponds to a temporary loss of write permissions until function exit
 
 stack backtrace:
-0: __bsan_write
-      at /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:310:20
-1: aliasing_mut1::safe
+0: aliasing_mut1::safe
  at bsan/tests/miri-tests/fail/aliasing/both_borrows/aliasing_mut1.rs:8:5
-2: aliasing_mut1::main
+1: aliasing_mut1::main
  at bsan/tests/miri-tests/fail/aliasing/both_borrows/aliasing_mut1.rs:20:5
-3: <fn() as core::ops::function::FnOnce<()>>::call_once
+2: <fn() as core::ops::function::FnOnce<()>>::call_once
  at RUSTLIB/core/src/ops/function.rs:250:5

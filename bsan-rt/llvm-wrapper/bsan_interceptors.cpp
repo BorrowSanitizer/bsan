@@ -119,13 +119,13 @@ INTERCEPTOR(void, free, void *ptr) {
   if (INST_CALLER(free)) {
     Provenance *Slot = GetArgSlot(0);
     __bsan_dealloc(ptr, Slot->Tag, Slot->Info, span);
-    HANDLE_ERROR();
+    HANDLE_ERROR(pc, bp);
   }
   return REAL(free)(ptr);
 }
 
 INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
-  GET_SPAN_PC_BP;
+  uptr span = GET_CALLER_PC();
   if (DlsymAlloc::Use())
     return DlsymAlloc::Callocate(nmemb, size);
   void *ptr = REAL(calloc)(nmemb, size);
@@ -147,7 +147,7 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
   if (is_inst) {
     Provenance *Slot = GetArgSlot(0);
     __bsan_dealloc(ptr, Slot->Tag, Slot->Info, span);
-    HANDLE_ERROR();
+    HANDLE_ERROR(pc, bp);
   }
   void *nptr = REAL(realloc)(ptr, size);
   Provenance *RetSlot = GetRetValSlot(0);

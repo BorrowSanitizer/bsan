@@ -1,28 +1,26 @@
 error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x3] is forbidden
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:310:20
+   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/outside-range.rs:22:5
     |
-310 | __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, pc);
+ 22 | *y.add(3) = 42; //miri: ~ ERROR: /write access through .* is forbidden/
     |
     = help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
     = help: this write would cause the protected tag <TAG>(StrongProtector) (currently Reserved) to become Disabled
     = help: protected tags must never be Disabled
 help: the accessed tag <TAG>(unprotected) was created here
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
+   --> RUSTLIB/core/src/slice/mod.rs:757:0
     |
-244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
+757 | pub const fn as_mut_ptr(&mut self) -> *mut T {
     |
 help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
+   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/outside-range.rs:14:0
     |
-244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
+ 14 | unsafe fn stuff(x: &mut u8, y: *mut u8) {
     |
 
 stack backtrace:
-0: __bsan_write
-      at /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:310:20
-1: outside_range::stuff
+0: outside_range::stuff
  at bsan/tests/miri-tests/fail/aliasing/tree_borrows/outside-range.rs:22:5
-2: outside_range::main
+1: outside_range::main
  at bsan/tests/miri-tests/fail/aliasing/tree_borrows/outside-range.rs:10:9
-3: <fn() as core::ops::function::FnOnce<()>>::call_once
+2: <fn() as core::ops::function::FnOnce<()>>::call_once
  at RUSTLIB/core/src/ops/function.rs:250:5

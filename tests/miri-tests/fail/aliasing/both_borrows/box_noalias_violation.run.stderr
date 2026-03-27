@@ -1,34 +1,32 @@
 error: Undefined Behavior: read through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:301:19
-    |
-301 | __bsan_read_impl(ptr, access_size, bor_tag, alloc_info, pc);
-    |
-    = help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(WeakProtector) (i.e., it is not a child)
-    = help: this read would cause the protected tag <TAG>(WeakProtector) (currently Active) to become Disabled
-    = help: protected tags must never be Disabled
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/box_noalias_violation.rs:9:5
+   |
+ 9 | *y
+   |
+   = help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(WeakProtector) (i.e., it is not a child)
+   = help: this read would cause the protected tag <TAG>(WeakProtector) (currently Active) to become Disabled
+   = help: protected tags must never be Disabled
 help: the accessed tag <TAG>(unprotected) was created here
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
-    |
-244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
-    |
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/box_noalias_violation.rs:17:19
+   |
+17 | let ptr = &mut v as *mut i32;
+   |
 help: the protected tag <TAG>(WeakProtector) was created here, in the initial state Reserved
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
-    |
-244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
-    |
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/box_noalias_violation.rs:5:0
+   |
+ 5 | unsafe fn test(mut x: Box<i32>, y: *const i32) -> i32 {
+   |
 help: the protected tag <TAG>(WeakProtector) later transitioned due to a child write
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:310:20
-    |
-310 | __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, pc);
-    |
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/box_noalias_violation.rs:7:5
+   |
+ 7 | *x = 5;
+   |
 help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
 
 stack backtrace:
-0: __bsan_read
-      at /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:301:19
-1: box_noalias_violation::test
+0: box_noalias_violation::test
  at bsan/tests/miri-tests/fail/aliasing/both_borrows/box_noalias_violation.rs:9:5
-2: box_noalias_violation::main
+1: box_noalias_violation::main
  at bsan/tests/miri-tests/fail/aliasing/both_borrows/box_noalias_violation.rs:18:9
-3: <fn() as core::ops::function::FnOnce<()>>::call_once
+2: <fn() as core::ops::function::FnOnce<()>>::call_once
  at RUSTLIB/core/src/ops/function.rs:250:5

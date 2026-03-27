@@ -1,33 +1,31 @@
 error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x8] is forbidden
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:310:20
+   --> bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:17:13
     |
-310 | __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, pc);
+ 17 | *x = 1; //miri: ~ERROR: write access
     |
     = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this write
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
+   --> bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:20:10
     |
-244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
+ 20 | .await
     |
 help: the accessed tag <TAG>(unprotected) later transitioned due to a child write
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:310:20
+   --> bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:17:13
     |
-310 | __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, pc);
+ 17 | *x = 1; //miri: ~ERROR: write access
     |
 help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
 help: the accessed tag <TAG>(unprotected) later transitioned due to a reborrow (acting as a foreign read access)
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
+   --> RUSTLIB/core/src/ops/deref.rs:173:9
     |
-244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
+173 | self
     |
 help: this transition corresponds to a loss of write permissions
 
 stack backtrace:
-0: __bsan_write
-      at /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:310:20
-1: async_shared_mutable::main::{closure#0}::{closure#0}
+0: async_shared_mutable::main::{closure#0}::{closure#0}
  at bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:17:13
-2: <core::future::poll_fn::PollFn<async_shared_mutable::main::{closure#0}::{closure#0}> as core::future::future::Future>::poll
+1: <core::future::poll_fn::PollFn<async_shared_mutable::main::{closure#0}::{closure#0}> as core::future::future::Future>::poll
  at RUSTLIB/core/src/future/poll_fn.rs:151:9
-3: async_shared_mutable::main::{closure#0}
+2: async_shared_mutable::main::{closure#0}
  at bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:20:10

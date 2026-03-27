@@ -1,27 +1,25 @@
 error: Undefined Behavior: read through <TAG>(unprotected) at ALLOC[0x8] is forbidden
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:301:19
+   --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/shared_rw_borrows_are_weak2.rs:16:20
     |
-301 | __bsan_read_impl(ptr, access_size, bor_tag, alloc_info, pc);
+ 16 | let _val = *y; //miri: ~ ERROR: /read access .* tag does not exist in the borrow stack/
     |
     = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this read
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
+   --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/shared_rw_borrows_are_weak2.rs:13:38
     |
-244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
+ 13 | let y: &i32 = mem::transmute(&*x.borrow()); // launder lifetime
     |
 help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:310:20
+   --> RUSTLIB/core/src/mem/mod.rs:901:9
     |
-310 | __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, pc);
+901 | crate::intrinsics::write_via_move(dest, src);
     |
 help: this transition corresponds to a loss of read permissions
 
 stack backtrace:
-0: __bsan_read
-      at /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:301:19
-1: shared_rw_borrows_are_weak2::main
+0: shared_rw_borrows_are_weak2::main
  at bsan/tests/miri-tests/fail/aliasing/stacked_borrows/shared_rw_borrows_are_weak2.rs:16:20
-2: <fn() as core::ops::function::FnOnce<()>>::call_once
+1: <fn() as core::ops::function::FnOnce<()>>::call_once
  at RUSTLIB/core/src/ops/function.rs:250:5
-3: std::sys::backtrace::__rust_begin_short_backtrace
+2: std::sys::backtrace::__rust_begin_short_backtrace
  at RUSTLIB/std/src/sys/backtrace.rs:166:18

@@ -1,27 +1,25 @@
 error: Undefined Behavior: read through <TAG>(unprotected) at ALLOC[0x8] is forbidden
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:301:19
+   --> CARGO_REGISTRY/.../bzlib.c:454:45
     |
-301 | __bsan_read_impl(ptr, access_size, bor_tag, alloc_info, pc);
+454 | if (s->avail_in_expect != s->strm->avail_in)
     |
     = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this read
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
+   --> CARGO_REGISTRY/.../mem.rs:123:41
     |
-244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
+123 | ffi::BZ2_bzCompressInit(&mut *raw, lvl.level() as c_int, 0, work_factor as c_int),
     |
 help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:310:20
+   --> CARGO_REGISTRY/.../mem.rs:149:9
     |
-310 | __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, pc);
+149 | self.inner.raw.avail_in = input.len().min(c_uint::MAX as usize) as c_uint;
     |
 help: this transition corresponds to a loss of read and write permissions
 
 stack backtrace:
-0: __bsan_read
-      at /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:301:19
-1: BZ2_bzCompress
+0: BZ2_bzCompress
       at CARGO_REGISTRY/.../bzlib.c:454:45
-2: <bzip2::mem::Compress>::compress_inner
+1: <bzip2::mem::Compress>::compress_inner
  at CARGO_REGISTRY/.../mem.rs:153:19
-3: <bzip2::mem::Compress>::compress
+2: <bzip2::mem::Compress>::compress
  at CARGO_REGISTRY/.../mem.rs:177:23

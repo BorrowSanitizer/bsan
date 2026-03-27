@@ -1,27 +1,22 @@
 error: Undefined Behavior: deallocation through <TAG>(WeakProtector) at ALLOC[0x0] is forbidden
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan_interceptors.cpp:115:3
-    |
-115 | if (UNLIKELY(!ptr))
-    |
+   --> RUSTLIB/std/src/sys/alloc/PLATFORM.rs:l:c
     = help: the accessed tag <TAG>(WeakProtector) is a child of the conflicting tag <TAG>(unprotected)
     = help: the conflicting tag <TAG>(unprotected) has state Frozen which forbids this deallocation
 help: the accessed tag <TAG>(WeakProtector) was created here
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
+   --> RUSTLIB/core/src/mem/mod.rs:970:0
     |
-244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
+970 | pub const fn drop<T>(_x: T)
     |
 help: the conflicting tag <TAG>(unprotected) was created here, in the initial state Frozen
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
+   --> bsan/tests/fail/aliasing/bsan-ptr-craft.rs:6:19
     |
-244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
+  6 | let ptr = &i as *const i32 as *mut i32 as *mut i32;
     |
 
 stack backtrace:
-0: free
-      at /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan_interceptors.cpp:115:3
-1: <std::alloc::System as core::alloc::global::GlobalAlloc>::dealloc
+0: <std::alloc::System as core::alloc::global::GlobalAlloc>::dealloc
  at RUSTLIB/std/src/sys/alloc/PLATFORM.rs:l:c
-2: alloc::alloc::dealloc
+1: alloc::alloc::dealloc
  at RUSTLIB/alloc/src/alloc.rs:115:14
-3: <alloc::alloc::Global>::deallocate_impl_runtime
+2: <alloc::alloc::Global>::deallocate_impl_runtime
  at RUSTLIB/alloc/src/alloc.rs:209:22

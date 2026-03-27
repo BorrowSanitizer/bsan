@@ -1,27 +1,22 @@
 error: Undefined Behavior: deallocation through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan_interceptors.cpp:115:3
-    |
-115 | if (UNLIKELY(!ptr))
-    |
-    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this deallocation
+    --> RUSTLIB/std/src/sys/alloc/PLATFORM.rs:l:c
+     = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this deallocation
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
-    |
-244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
-    |
+    --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/illegal_deALLOC.rs:8:20
+     |
+   8 | let ptr2 = (&mut *ptr1) as *mut u8;
+     |
 help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:310:20
-    |
-310 | __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, pc);
-    |
+    --> RUSTLIB/core/src/ptr/mod.rs:1910:9
+     |
+1910 | intrinsics::write_via_move(dst, src)
+     |
 help: this transition corresponds to a loss of read and write permissions
 
 stack backtrace:
-0: free
-      at /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan_interceptors.cpp:115:3
-1: <std::alloc::System as core::alloc::global::GlobalAlloc>::dealloc
+0: <std::alloc::System as core::alloc::global::GlobalAlloc>::dealloc
  at RUSTLIB/std/src/sys/alloc/PLATFORM.rs:l:c
-2: alloc::alloc::dealloc
+1: alloc::alloc::dealloc
  at RUSTLIB/alloc/src/alloc.rs:115:14
-3: illegal_deALLOC::main
+2: illegal_deALLOC::main
  at bsan/tests/miri-tests/fail/aliasing/stacked_borrows/illegal_deALLOC.rs:12:9

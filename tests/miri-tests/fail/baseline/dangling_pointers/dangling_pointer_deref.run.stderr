@@ -1,15 +1,13 @@
 error: Undefined Behavior: trying to access an allocation that has been freed.
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:301:19
-    |
-301 | __bsan_read_impl(ptr, access_size, bor_tag, alloc_info, pc);
-    |
+  --> bsan/tests/miri-tests/fail/baseline/dangling_pointers/dangling_pointer_deref.rs:10:22
+   |
+10 | let x = unsafe { *p }; //miri: ~ ERROR: has been freed
+   |
 
 stack backtrace:
-0: __bsan_read
-      at /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:301:19
-1: dangling_pointer_deref::main
+0: dangling_pointer_deref::main
  at bsan/tests/miri-tests/fail/baseline/dangling_pointers/dangling_pointer_deref.rs:10:22
-2: <fn() as core::ops::function::FnOnce<()>>::call_once
+1: <fn() as core::ops::function::FnOnce<()>>::call_once
  at RUSTLIB/core/src/ops/function.rs:250:5
-3: std::sys::backtrace::__rust_begin_short_backtrace
+2: std::sys::backtrace::__rust_begin_short_backtrace
  at RUSTLIB/std/src/sys/backtrace.rs:166:18

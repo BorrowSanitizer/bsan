@@ -1,27 +1,25 @@
 error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x4] is forbidden
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
-    |
-244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
-    |
-    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/return_invalid_shr.rs:10:5
+   |
+10 | ret
+   |
+   = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
-    |
-244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
-    |
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/return_invalid_shr.rs:8:24
+   |
+ 8 | let ret = unsafe { &(*xraw).1 };
+   |
 help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
-   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:310:20
-    |
-310 | __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, pc);
-    |
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/return_invalid_shr.rs:9:14
+   |
+ 9 | unsafe { *xraw = (42, 23) }; // unfreeze
+   |
 help: this transition corresponds to a loss of read permissions
 
 stack backtrace:
-0: __bsan_retag
-      at /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
-1: return_invalid_shr::foo
+0: return_invalid_shr::foo
  at bsan/tests/miri-tests/fail/aliasing/both_borrows/return_invalid_shr.rs:10:5
-2: return_invalid_shr::main
+1: return_invalid_shr::main
  at bsan/tests/miri-tests/fail/aliasing/both_borrows/return_invalid_shr.rs:16:5
-3: <fn() as core::ops::function::FnOnce<()>>::call_once
+2: <fn() as core::ops::function::FnOnce<()>>::call_once
  at RUSTLIB/core/src/ops/function.rs:250:5
