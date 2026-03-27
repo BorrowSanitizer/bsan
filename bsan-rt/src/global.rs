@@ -110,9 +110,9 @@ impl GlobalCtx {
         ProtectedTagsRefMut(self.protected_tags.write())
     }
 
-    pub fn handle_error(&self, ub_info: UBInfo, loc: Location) {
+    pub fn handle_error(&self, ub_info: UBInfo, pc: Span) {
         let mut ctx = ErrorFormatContext::default();
-        crate::eprint!("error: {}", ctx.display_ub(ub_info, loc.pc));
+        crate::eprint!("error: {}", ctx.display_ub(ub_info, pc));
         unsafe {
             __BSAN_HAD_ERROR = 1;
         }

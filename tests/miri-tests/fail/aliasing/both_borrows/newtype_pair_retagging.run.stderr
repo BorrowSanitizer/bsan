@@ -1,29 +1,34 @@
 error: Undefined Behavior: deallocation through <TAG>(WeakProtector) at ALLOC[0x0] is forbidden
-    --> RUSTLIB/std/src/sys/alloc/PLATFORM.rs:l:c
-     = help: the accessed tag <TAG>(WeakProtector) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
-     = help: this deallocation would cause the protected tag <TAG>(StrongProtector) (currently Reserved (conflicted)) to become Disabled
-     = help: protected tags must never be Disabled
+   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan_interceptors.cpp:115:3
+    |
+115 | if (UNLIKELY(!ptr))
+    |
+    = help: the accessed tag <TAG>(WeakProtector) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
+    = help: this deallocation would cause the protected tag <TAG>(StrongProtector) (currently Reserved (conflicted)) to become Disabled
+    = help: protected tags must never be Disabled
 help: the accessed tag <TAG>(WeakProtector) was created here
-    --> RUSTLIB/core/src/mem/mod.rs:970:0
-     |
- 970 | pub const fn drop<T>(_x: T)
-     |
+   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
+    |
+244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
+    |
 help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
-    --> bsan/tests/miri-tests/fail/aliasing/both_borrows/newtype_pair_retagging.rs:9:0
-     |
-   9 | fn dealloc_while_running(_n: Newtype<'_>, dealloc: impl FnOnce()) {
-     |
+   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
+    |
+244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
+    |
 help: the protected tag <TAG>(StrongProtector) later transitioned due to a reborrow (acting as a foreign read access)
-    --> RUSTLIB/alloc/src/boxed.rs:1266:18
-     |
-1266 | unsafe { Self::from_raw_in(raw, Global) }
-     |
+   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
+    |
+244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
+    |
 help: this transition corresponds to a temporary loss of write permissions until function exit
 
 stack backtrace:
-0: <std::alloc::System as core::alloc::global::GlobalAlloc>::dealloc
+0: free
+      at /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan_interceptors.cpp:115:3
+1: <std::alloc::System as core::alloc::global::GlobalAlloc>::dealloc
  at RUSTLIB/std/src/sys/alloc/PLATFORM.rs:l:c
-1: alloc::alloc::dealloc
+2: alloc::alloc::dealloc
  at RUSTLIB/alloc/src/alloc.rs:115:14
-2: <alloc::alloc::Global>::deallocate_impl_runtime
+3: <alloc::alloc::Global>::deallocate_impl_runtime
  at RUSTLIB/alloc/src/alloc.rs:209:22

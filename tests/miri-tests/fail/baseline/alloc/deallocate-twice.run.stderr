@@ -1,9 +1,15 @@
 error: Undefined Behavior: trying to access an allocation that has been freed.
-  --> RUSTLIB/std/src/sys/alloc/PLATFORM.rs:l:c
+   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan_interceptors.cpp:115:3
+    |
+115 | if (UNLIKELY(!ptr))
+    |
+
 stack backtrace:
-0: <std::alloc::System as core::alloc::global::GlobalAlloc>::dealloc
+0: free
+      at /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan_interceptors.cpp:115:3
+1: <std::alloc::System as core::alloc::global::GlobalAlloc>::dealloc
  at RUSTLIB/std/src/sys/alloc/PLATFORM.rs:l:c
-1: alloc::alloc::dealloc
+2: alloc::alloc::dealloc
  at RUSTLIB/alloc/src/alloc.rs:115:14
-2: deallocate_twice::main
+3: deallocate_twice::main
  at bsan/tests/miri-tests/fail/baseline/alloc/deallocate-twice.rs:8:9

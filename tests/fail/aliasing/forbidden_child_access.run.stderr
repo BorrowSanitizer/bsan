@@ -1,25 +1,27 @@
 error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-   --> RUSTLIB/core/src/hint.rs:481:0
+   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
     |
-481 | pub const fn black_box<T>(dummy: T) -> T {
+244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
     |
     = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
-   --> bsan/tests/fail/aliasing/forbidden_child_access.rs:5:23
+   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
     |
-  5 | let r1 = unsafe { &mut *ptr };
+244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
     |
 help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
-   --> bsan/tests/fail/aliasing/forbidden_child_access.rs:7:5
+   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:310:20
     |
-  7 | *r2 += 1;
+310 | __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, pc);
     |
 help: this transition corresponds to a loss of read and write permissions
 
 stack backtrace:
-0: core::hint::black_box
+0: __bsan_retag
+      at /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
+1: core::hint::black_box
  at RUSTLIB/core/src/hint.rs:481
-1: forbidden_child_access::main
+2: forbidden_child_access::main
  at bsan/tests/fail/aliasing/forbidden_child_access.rs:8:5
-2: <fn() as core::ops::function::FnOnce<()>>::call_once
+3: <fn() as core::ops::function::FnOnce<()>>::call_once
  at RUSTLIB/core/src/ops/function.rs:250:5

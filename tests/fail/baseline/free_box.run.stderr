@@ -1,13 +1,15 @@
 error: Undefined Behavior: trying to access an allocation that has been freed.
-  --> bsan/tests/fail/baseline/free_box.rs:12:9
-   |
-12 | *ptr = 1;
-   |
+   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:310:20
+    |
+310 | __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, pc);
+    |
 
 stack backtrace:
-0: free_box::main
+0: __bsan_write
+      at /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:310:20
+1: free_box::main
  at bsan/tests/fail/baseline/free_box.rs:12:9
-1: <fn() as core::ops::function::FnOnce<()>>::call_once
+2: <fn() as core::ops::function::FnOnce<()>>::call_once
  at RUSTLIB/core/src/ops/function.rs:250:5
-2: std::sys::backtrace::__rust_begin_short_backtrace
+3: std::sys::backtrace::__rust_begin_short_backtrace
  at RUSTLIB/std/src/sys/backtrace.rs:166:18

@@ -1,13 +1,15 @@
 error: Undefined Behavior: an access of size 4 at offset 0x4 is out of bounds for ALLOC of size 4.
-    --> RUSTLIB/core/src/ptr/mod.rs:1910:9
-     |
-1910 | intrinsics::write_via_move(dst, src)
-     |
+   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:310:20
+    |
+310 | __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, pc);
+    |
 
 stack backtrace:
-0: core::ptr::write
+0: __bsan_write
+      at /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:310:20
+1: core::ptr::write
  at RUSTLIB/core/src/ptr/mod.rs:1910:9
-1: <*mut i32>::write
+2: <*mut i32>::write
  at RUSTLIB/core/src/ptr/mut_ptr.rs:1418:18
-2: access_oob::foo
+3: access_oob::foo
  at bsan/tests/fail/baseline/access_oob.rs:10:23

@@ -1,25 +1,27 @@
 error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/pass_invalid_shr_tuple.rs:6:0
-   |
- 6 | fn foo(_: (&i32, &i32)) {}
-   |
-   = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow
+   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
+    |
+244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
+    |
+    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/pass_invalid_shr_tuple.rs:12:31
-   |
-12 | let pair_xref = unsafe { (&*xraw0, &*xraw1) };
-   |
+   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
+    |
+244 | __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
+    |
 help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/pass_invalid_shr_tuple.rs:13:14
-   |
-13 | unsafe { *xraw0 = 42 }; // unfreeze
-   |
+   --> /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:310:20
+    |
+310 | __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, pc);
+    |
 help: this transition corresponds to a loss of read permissions
 
 stack backtrace:
-0: pass_invalid_shr_tuple::foo
+0: __bsan_retag
+      at /home/icmccorm/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan.cpp:244:24
+1: pass_invalid_shr_tuple::foo
  at bsan/tests/miri-tests/fail/aliasing/both_borrows/pass_invalid_shr_tuple.rs:6
-1: pass_invalid_shr_tuple::main
+2: pass_invalid_shr_tuple::main
  at bsan/tests/miri-tests/fail/aliasing/both_borrows/pass_invalid_shr_tuple.rs:14:5
-2: <fn() as core::ops::function::FnOnce<()>>::call_once
+3: <fn() as core::ops::function::FnOnce<()>>::call_once
  at RUSTLIB/core/src/ops/function.rs:250:5
