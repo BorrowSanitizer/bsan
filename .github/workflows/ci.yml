@@ -1,7 +1,7 @@
 name: CI
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "obraunsdorf/bencherdev" ]  # TODO: remove obraunsdorf/bencherdev after merging the bencher.dev integration
   pull_request:
     branches: [ "main" ]
   schedule:
@@ -9,6 +9,9 @@ on:
   workflow_dispatch: 
 env:
   CARGO_TERM_COLOR: always
+  BENCHER_PROJECT: '244e3ab7-f904-4240-a4f1-53695a02b061'
+
+
 jobs:
   build:
     strategy:
@@ -28,11 +31,17 @@ jobs:
     name: '${{ matrix.config.target }}'
     steps:
     - uses: actions/checkout@v4
+    - uses: bencherdev/bencher@main
     - name: Setup dependencies
       run: |
         ln -s /root/.rustup/ $HOME/.rustup
     - name: CI
       run: ./xb ci
+    - name: Continuous benchmarking with bencher.dev
+      run: |
+          ./bencher.sh $BENCHER_PROJECT '${{ secrets.BENCHER_API_TOKENS }}'
+
+
        
         
 
