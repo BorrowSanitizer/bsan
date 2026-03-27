@@ -15,14 +15,15 @@ extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_PROV_STACK;
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_TLS_MARKER;
 
 typedef uptr Span;
-#define GET_PC_BP                                                              \
+#define GET_SPAN_PC_BP                                                         \
+  uptr span = GET_CALLER_PC();                                                 \
   uptr pc = StackTrace::GetCurrentPc();                                        \
   uptr bp = GET_CURRENT_FRAME();
 
 #define HANDLE_ERROR()                                                         \
   if (__BSAN_HAD_ERROR) {                                                      \
     UNINITIALIZED BufferedStackTrace stack;                                    \
-    stack.Unwind(pc, bp, nullptr, common_flags()->fast_unwind_on_fatal, 4);    \
+    stack.Unwind(pc, bp, nullptr, false, 10);                                  \
     PrintStackTrace(stack);                                                    \
     Die();                                                                     \
   }

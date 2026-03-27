@@ -239,10 +239,10 @@ SANITIZER_INTERFACE_ATTRIBUTE BorTag
 __bsan_retag(void *object_addr, uptr access_size, u8 is_prot, u8 is_freeze,
              u8 is_unpin, u8 ptr_kind, const uptr im_data[2], uptr im_len,
              BorTag bor_tag, AllocInfo *alloc_info) {
-  GET_PC_BP;
+  GET_SPAN_PC_BP;
   BorTag tag =
       __bsan_retag_impl(object_addr, access_size, is_prot, is_freeze, is_unpin,
-                        ptr_kind, im_data, im_len, bor_tag, alloc_info, pc);
+                        ptr_kind, im_data, im_len, bor_tag, alloc_info, span);
   HANDLE_ERROR();
   return tag;
 }
@@ -256,8 +256,8 @@ __bsan_retag_impl(void *object_addr, uptr access_size, u8 is_prot, u8 is_freeze,
 
 SANITIZER_INTERFACE_ATTRIBUTE void
 __bsan_pop_frame(const Provenance *frame_start, uptr prot) {
-  GET_PC_BP;
-  __bsan_pop_frame_impl(frame_start, prot, pc);
+  GET_SPAN_PC_BP;
+  __bsan_pop_frame_impl(frame_start, prot, span);
   HANDLE_ERROR();
 }
 
@@ -292,16 +292,16 @@ SANITIZER_WEAK_ATTRIBUTE void __bsan_read_impl(void *ptr, uptr access_size,
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_read(void *ptr, uptr access_size,
                                                BorTag bor_tag,
                                                AllocInfo *alloc_info) {
-  GET_PC_BP;
-  __bsan_read_impl(ptr, access_size, bor_tag, alloc_info, pc);
+  GET_SPAN_PC_BP;
+  __bsan_read_impl(ptr, access_size, bor_tag, alloc_info, span);
   HANDLE_ERROR();
 }
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_write(void *ptr, uptr access_size,
                                                 BorTag bor_tag,
                                                 AllocInfo *alloc_info) {
-  GET_PC_BP;
-  __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, pc);
+  GET_SPAN_PC_BP;
+  __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, span);
   HANDLE_ERROR();
 }
 
@@ -329,8 +329,8 @@ SANITIZER_WEAK_ATTRIBUTE void __bsan_dealloc(void *ptr, BorTag bor_tag,
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_alloc_stack(void *base_addr,
                                                       uptr size, BorTag bor_tag,
                                                       AllocInfo *alloc_info) {
-  GET_PC_BP;
-  __bsan_alloc_stack_impl(base_addr, size, bor_tag, alloc_info, pc);
+  GET_SPAN_PC_BP;
+  __bsan_alloc_stack_impl(base_addr, size, bor_tag, alloc_info, span);
   HANDLE_ERROR();
 }
 
@@ -341,8 +341,8 @@ SANITIZER_WEAK_ATTRIBUTE void __bsan_alloc_stack_impl(void *base_addr,
 
 SANITIZER_INTERFACE_ATTRIBUTE void
 __bsan_dealloc_stack(void *ptr, BorTag bor_tag, AllocInfo *alloc_info) {
-  GET_PC_BP;
-  __bsan_dealloc_stack_impl(ptr, bor_tag, alloc_info, pc);
+  GET_SPAN_PC_BP;
+  __bsan_dealloc_stack_impl(ptr, bor_tag, alloc_info, span);
   HANDLE_ERROR();
 }
 

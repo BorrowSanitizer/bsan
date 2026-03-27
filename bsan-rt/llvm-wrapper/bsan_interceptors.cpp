@@ -90,14 +90,14 @@ extern "C" void *__crt_malloc(SIZE_T size) {
 }
 
 INTERCEPTOR(void *, malloc, SIZE_T size) {
-  GET_PC_BP;
+  GET_SPAN_PC_BP;
   if (DlsymAlloc::Use())
     return DlsymAlloc::Allocate(size);
   void *ptr = REAL(malloc)(size);
   if (INST_CALLER(malloc)) {
     Provenance *RetSlot = GetRetValSlot(0);
     BorTag Tag = __bsan_new_bor_tag();
-    *RetSlot = {Tag, __bsan_alloc(ptr, size, Tag, pc)};
+    *RetSlot = {Tag, __bsan_alloc(ptr, size, Tag, span)};
   }
   return ptr;
 }
@@ -111,28 +111,28 @@ extern "C" void __crt_free(void *ptr) {
 }
 
 INTERCEPTOR(void, free, void *ptr) {
-  GET_PC_BP;
+  GET_SPAN_PC_BP;
   if (UNLIKELY(!ptr))
     return;
   if (DlsymAlloc::PointerIsMine(ptr))
     return DlsymAlloc::Free(ptr);
   if (INST_CALLER(free)) {
     Provenance *Slot = GetArgSlot(0);
-    __bsan_dealloc(ptr, Slot->Tag, Slot->Info, pc);
+    __bsan_dealloc(ptr, Slot->Tag, Slot->Info, span);
     HANDLE_ERROR();
   }
   return REAL(free)(ptr);
 }
 
 INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
-  GET_PC_BP;
+  GET_SPAN_PC_BP;
   if (DlsymAlloc::Use())
     return DlsymAlloc::Callocate(nmemb, size);
   void *ptr = REAL(calloc)(nmemb, size);
   Provenance *RetSlot = GetRetValSlot(0);
   if (INST_CALLER(calloc)) {
     BorTag Tag = __bsan_new_bor_tag();
-    *RetSlot = {Tag, __bsan_alloc(ptr, nmemb * size, Tag, pc)};
+    *RetSlot = {Tag, __bsan_alloc(ptr, nmemb * size, Tag, span)};
   } else {
     *RetSlot = {0, nullptr};
   }
@@ -140,20 +140,20 @@ INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
 }
 
 INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
-  GET_PC_BP;
+  GET_SPAN_PC_BP;
   if (DlsymAlloc::Use() || DlsymAlloc::PointerIsMine(ptr))
     return DlsymAlloc::Realloc(ptr, size);
   bool is_inst = INST_CALLER(realloc);
   if (is_inst) {
     Provenance *Slot = GetArgSlot(0);
-    __bsan_dealloc(ptr, Slot->Tag, Slot->Info, pc);
+    __bsan_dealloc(ptr, Slot->Tag, Slot->Info, span);
     HANDLE_ERROR();
   }
   void *nptr = REAL(realloc)(ptr, size);
   Provenance *RetSlot = GetRetValSlot(0);
   if (is_inst) {
     BorTag Tag = __bsan_new_bor_tag();
-    *RetSlot = {Tag, __bsan_alloc(nptr, size, Tag, pc)};
+    *RetSlot = {Tag, __bsan_alloc(nptr, size, Tag, span)};
   } else {
     *RetSlot = {0, nullptr};
   }
