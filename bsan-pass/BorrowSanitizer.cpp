@@ -914,11 +914,10 @@ private:
       // values associated with the return value to perform initialization.
       if (!Trust && needsTLSValidation(Callee)) {
         if (NumProvenanceValues != BS.Zero) {
-          After.CreateMemSet(BS.RetvalTLS, ConstantInt::get(BS.Int8Ty, 0),
-                             RetvalByteWidth, MaybeAlign(1));
+          Before.CreateMemSet(BS.RetvalTLS, ConstantInt::get(BS.Int8Ty, 0),
+                              RetvalByteWidth, MaybeAlign(1));
         }
       }
-
       for (auto &[Idx, Ptr] : ProvenancePointers) {
         setProvenance({&CB, Idx}, Provenance::load(After, BS.PL, Ptr));
       }
@@ -932,8 +931,8 @@ private:
     int NumOutputs = getNumOutputArgs(IA, CB);
 
     // Get the output arguments
-    for (int J = 0; J < NumOutputs; J++) {
-      Value *Operand = CB->getOperand(J);
+    for (int Idx = 0; Idx < NumOutputs; Idx++) {
+      Value *Operand = CB->getOperand(Idx);
 
       Type *OpType = Operand->getType();
 
@@ -1138,11 +1137,27 @@ private:
     Value *Base = LI.getPointerOperand();
     for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
       ShadowFootprint Footprint = Comp.Footprint;
-      Value *ObjAddr = addPointer(IRB, BS.DL, Base, Footprint.ByteOffset);
+      Value *ByteOffset = Footprint.ByteOffset.getValue(IRB, BS.IntptrTy);
+      Value *ObjAddr = addPointer(IRB, BS.DL, Base, ByteOffset);
       Provenance Prov = loadProvenanceFromShadow(IRB, Comp, ObjAddr);
       setProvenance({&LI, Idx}, Prov);
     }
     insertReadCheck(IRB, Ptr, Size);
+  }
+
+  bool shouldClearProvenance(IRBuilder<> &IRB, StoreInst &SI) {
+    Value *Dest = SI.getPointerOperand()->stripPointerCastsAndAliases();
+    if (AllocaInst *AI = dyn_cast<AllocaInst>(Dest)) {
+      TypeSize TS = BS.getAllocaSizeInBytes(*AI);
+      if (TS.isFixed()) {
+        DynSize Size(IRB.CreateTypeSize(BS.IntptrTy, TS));
+        std::optional<unsigned> ConstSize = Size.constant();
+        if (ConstSize.has_value()) {
+          return ConstSize.value() > BS.PtrSize;
+        }
+      }
+    }
+    return true;
   }
 
   void visitStoreInst(StoreInst &SI) {
@@ -1154,20 +1169,33 @@ private:
     Ptr = SI.getPointerOperand();
     Val = SI.getValueOperand();
 
-    Value *Size = IRB.CreateTypeSize(BS.IntptrTy,
-                                     BS.DL->getTypeStoreSize(Val->getType()));
-    insertWriteCheck(IRB, Ptr, Size);
+    Value *EntireSize = IRB.CreateTypeSize(
+        BS.IntptrTy, BS.DL->getTypeStoreSize(Val->getType()));
+    insertWriteCheck(IRB, Ptr, EntireSize);
 
     IRBuilder<> NextIRB(SI.getNextNode());
+
+    bool Clear = shouldClearProvenance(NextIRB, SI);
+
     // Store provenance for the value into shadow memory.
     Value *Base = SI.getPointerOperand();
     SmallVector<ProvenanceComponent> *Components =
         getProvenanceComponents(NextIRB, Val->getType());
 
+    DynSize Offset = DynSize(BS.Zero);
     for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
       ShadowFootprint Footprint = Comp.Footprint;
-      Value *ObjAddr = addPointer(NextIRB, BS.DL, Base, Footprint.ByteOffset);
-
+      Value *ByteOffset = Footprint.ByteOffset.getValue(IRB, BS.IntptrTy);
+      if (Clear) {
+        if (Offset != Footprint.ByteOffset) {
+          Value *CurrOffset = Offset.getValue(IRB, BS.IntptrTy);
+          Value *GapSize = IRB.CreateSub(ByteOffset, CurrOffset);
+          Value *BaseAddr = addPointer(NextIRB, BS.DL, Base, CurrOffset);
+          clearProvenance(NextIRB, BaseAddr, GapSize, SI.getOrdering());
+        }
+        Offset = Footprint.ByteOffset.add(Footprint.ByteWidth);
+      }
+      Value *ObjAddr = addPointer(NextIRB, BS.DL, Base, ByteOffset);
       Provenance Prov;
       ProvenanceKey Key = {SI.getValueOperand(), Idx};
       if (Comp.isVector()) {
@@ -1176,6 +1204,24 @@ private:
         Prov = assertProvenanceScalar(Key);
       }
       storeProvenanceToShadow(NextIRB, ObjAddr, Prov, SI.getOrdering());
+    }
+    if (Clear) {
+      Value *OffsetVal = Offset.getValue(NextIRB, BS.IntptrTy);
+      Value *Remaining = NextIRB.CreateSub(EntireSize, OffsetVal);
+      Value *RemainingAddr = addPointer(NextIRB, BS.DL, Base, OffsetVal);
+      clearProvenance(NextIRB, RemainingAddr, Remaining, SI.getOrdering());
+    }
+  }
+
+  void clearProvenance(IRBuilder<> &IRB, Value *Base, Value *Size,
+                       AtomicOrdering Ordering) {
+    if (ConstantInt *CI = dyn_cast<ConstantInt>(Size)) {
+      uint64_t Value = CI->getZExtValue();
+      if (Value == 0)
+        return;
+      IRB.CreateCall(BS.BsanFuncShadowClear, {Base, Size});
+    } else {
+      report_fatal_error("Scalable vectors are not supported!");
     }
   }
 
@@ -1232,9 +1278,7 @@ private:
 
   void visitInsertValueInst(InsertValueInst &II) {
     IRBuilder<> IRB(&II);
-
     BaseProvMap.transferToValue(II.getAggregateOperand(), &II);
-
     Value *ToInsert = II.getInsertedValueOperand();
     SmallVector<ProvenanceComponent> *SrcComponents =
         getProvenanceComponents(IRB, ToInsert->getType());
@@ -1533,6 +1577,9 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   BsanFuncShadowStore = M.getOrInsertFunction(
       kBsanFuncGetShadowStoreName, AL, IRB.getVoidTy(), IntptrTy, PtrTy, PtrTy);
+
+  BsanFuncShadowClear = M.getOrInsertFunction(kBsanFuncShadowClearName, AL,
+                                              IRB.getVoidTy(), PtrTy, IntptrTy);
 
   BsanFuncMemCpy = M.getOrInsertFunction(
       kBsanFuncMemCpyName, AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
