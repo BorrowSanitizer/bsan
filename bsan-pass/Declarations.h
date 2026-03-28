@@ -69,7 +69,7 @@ const char kBsanFuncDebugRetvalTLS[] = BSAN_DEBUG_FN("retval_tls");
 const char kBsanProvStackName[] = "__BSAN_PROV_STACK";
 const char kBsanParamTLSName[] = "__BSAN_PARAM_TLS";
 const char kBsanRetvalTLSName[] = "__BSAN_RETVAL_TLS";
-const char kBsanTrustFlagName[] = "__BSAN_TRUST";
+const char kBsanTLSMarkerName[] = "__BSAN_TLS_MARKER";
 
 const char kBsanBorTagCounterName[] = "__BSAN_BOR_TAG_CTR";
 const char kBsanAllocIdCounterName[] = "__BSAN_ALLOC_ID_CTR";
