@@ -39,8 +39,7 @@ jobs:
     - name: Install Bencher.dev CLI
       run: | # FIXME: installing like this is only necessary because the github "action bencherdev/bencher@main is not allowed in BorrowSanitizer/bsan". Otherwise we could just do "uses: bencherdev/bencher@main" and skip the installation step
           curl --proto '=https' --tlsv1.2 -sSfL https://bencher.dev/download/install-cli.sh | sh
-          source $HOME/.cargo/env
-          bencher --version
+          /github/home/.cargo/bin/bencher --version
     - name: Continuous benchmarking with bencher.dev
       run: |
           ./bencher.sh $BENCHER_PROJECT '${{ secrets.BENCHER_API_TOKENS }}' /github/home/.cargo/bin/bencher
