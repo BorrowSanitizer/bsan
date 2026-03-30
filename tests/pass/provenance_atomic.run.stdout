@@ -1,0 +1,6 @@
+Testing with store ordering: SeqCst, load ordering: SeqCst
+Threads have joined successfully. Test ends here. BSAN should not have reported any issues if synchronization of provenance is working correctly.
+Testing with store ordering: Release, load ordering: Acquire
+Threads have joined successfully. Test ends here. BSAN should not have reported any issues if synchronization of provenance is working correctly.
+Testing with store ordering: Relaxed, load ordering: Relaxed
+Threads have joined successfully. Test ends here. BSAN should not have reported any issues if synchronization of provenance is working correctly.

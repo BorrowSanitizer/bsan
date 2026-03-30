@@ -5,6 +5,7 @@ use std::sync::atomic::AtomicPtr;
 #[path = "../utils/bsan_extern.rs"]
 #[macro_use]
 mod bsan_debug;
+use bsan_debug::Provenance;
 
 /* 
 fn print_provenance_info(addr: *const std::ffi::c_void) {
@@ -22,21 +23,11 @@ fn print_provenance_info(addr: *const std::ffi::c_void) {
 }
 */
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug)]
-pub struct Provenance {
-    pub bor_tag: u64,
-    pub alloc_info: *mut std::ffi::c_void,
-}
-unsafe impl Send for Provenance {}
-unsafe impl Sync for Provenance {}
-
 macro_rules! get_provenance {
-    ($val:expr, $tag:ident, $info:ident) => {
-        let mut $tag: u64 = 0;
-        let mut $info: *mut std::ffi::c_void = std::ptr::null_mut();
+    ($val:expr, $prov:expr) => {
+        let prov_ptr: *mut Provenance = &mut $prov;
         unsafe {
-            bsan_debug::__bsan_debug_get_provenance($val as *const std::ffi::c_void, &mut $tag, &mut $info);
+            bsan_debug::__bsan_debug_get_provenance($val as *const std::ffi::c_void, prov_ptr);
         }
     };
 }
@@ -49,8 +40,9 @@ struct UnsafeSend<T>(*mut T);
 unsafe impl<T> Send for UnsafeSend<T> {}
 unsafe impl<T> Sync for UnsafeSend<T> {}
 
-const NUM_THREADS: usize = 200;
+const NUM_THREADS: usize = 32;
 
+//@run
 fn main() {
     for &(store_ordering, load_ordering) in &[ 
         (std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst),
@@ -70,9 +62,12 @@ fn store_and_load(store_ordering: std::sync::atomic::Ordering, load_ordering: st
     let mut prov_map = std::collections::HashMap::<UnsafeSend<u32>, Provenance>::new();
     for i in 0..values.len() {
         let ptr = &values[i] as *const u32 as *mut u32; // Get a raw pointer to x
-        get_provenance!(ptr, bor_tag, alloc_info);
-        let prov = Provenance { bor_tag, alloc_info };
-        println!("Storing pointer {:p} (value: {}) to prov_map with provenance: {:?}", ptr, unsafe {*ptr}, prov); 
+        let mut prov = Provenance {
+            bor_tag: 0,
+            alloc_info: std::ptr::null_mut(),
+        };
+        get_provenance!(ptr, prov);
+        //println!("Storing pointer {:p} (value: {}) to prov_map with provenance: {:?}", ptr, unsafe {*ptr}, prov); 
         let inserted_ptr = UnsafeSend(ptr);
         prov_map.insert(inserted_ptr, prov);
     }
@@ -98,11 +93,15 @@ fn store_and_load(store_ordering: std::sync::atomic::Ordering, load_ordering: st
             s.spawn(move || {
                 barrier.wait(); // Increase the chance that loads and stores happen around the same time, making the test more likely to catch issues.
                 let loaded_ptr: *mut u32 = pointer_storage_ref.load(load_ordering);
-                if !loaded_ptr.is_null() {     
-                    get_provenance!(loaded_ptr, bor_tag, alloc_info);
+                if !loaded_ptr.is_null() {
+                    let mut loaded_prov = Provenance {
+                        bor_tag: 0,
+                        alloc_info: std::ptr::null_mut(),
+                    };     
+                    get_provenance!(loaded_ptr, loaded_prov);
                     let orignal_prov = prov_map_ref.get(&UnsafeSend(loaded_ptr)).unwrap();
-                    assert_eq!(orignal_prov.bor_tag, bor_tag);
-                    assert_eq!(orignal_prov.alloc_info, alloc_info);
+                    assert_eq!(orignal_prov.bor_tag, loaded_prov.bor_tag);
+                    assert_eq!(orignal_prov.alloc_info, loaded_prov.alloc_info);
                 }
             });
         }

@@ -375,4 +375,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_abort() {
   Die();
 }
 
+SANITIZER_WEAK_ATTRIBUTE void __bsan_debug_get_provenance(void *ptr,
+                                                          Provenance *prov) {}
+
 } // extern "C"

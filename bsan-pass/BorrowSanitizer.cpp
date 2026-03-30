@@ -766,10 +766,8 @@ private:
     } else if (Name == kBsanFuncDebugPrintDiff) {
       Callee = BS.BsanFuncDebugPrintDiff;
     } else if (Name == kBsanFuncDebugGetProvenance) {
-      Value *TagPtr = CB.getArgOperand(1);
-      Value *InfoPtr = CB.getArgOperand(2);
-      IRB.CreateStore(Prov.Tag, TagPtr, true);
-      IRB.CreateStore(Prov.Info, InfoPtr, true);
+      Value *ProvPtr = CB.getArgOperand(1);
+      Prov.store(IRB, BS.PL, ProvPtr);
       NeedsRuntimeCall = false;
     } else {
       report_fatal_error("Unknown debug function: " + Twine(Name) + "\n");

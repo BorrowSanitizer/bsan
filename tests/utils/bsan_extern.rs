@@ -19,10 +19,19 @@ unsafe extern "C" {
     /// Prints the size of the tree associated with the pointer.
     pub unsafe fn __bsan_debug_tree_size(ptr: *mut u8);
     /// Retrieves the provenance metadata for the ptr.
-    pub unsafe fn __bsan_debug_get_provenance(ptr: *const std::ffi::c_void, bor_tag_ptr: *mut u64, alloc_info_ptr: *mut *mut std::ffi::c_void); 
+    pub unsafe fn __bsan_debug_get_provenance(ptr: *const std::ffi::c_void, prov: *mut Provenance); 
     /// Returns the shadow memory location for an address
     pub unsafe fn __bsan_shadow_src(addr: *const std::ffi::c_void) -> *const std::ffi::c_void;
 }
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct Provenance {
+    pub bor_tag: u64,
+    pub alloc_info: *mut std::ffi::c_void,
+}
+unsafe impl Send for Provenance {}
+unsafe impl Sync for Provenance {}
 
 
 #[macro_export]
