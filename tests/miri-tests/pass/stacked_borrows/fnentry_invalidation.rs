@@ -8,7 +8,7 @@ fn main() {
     let z = &mut x as *mut i32;
     x.do_bad();
     unsafe {
-        let _oof = *z; //miri: ~ ERROR: /read access .* tag does not exist in the borrow stack/    
+        let _oof = *z; //miri: ~ ERROR: /read access .* tag does not exist in the borrow stack/
     }
 }
 

@@ -1,5 +1,4 @@
 //@run:0
-// note: this is flaky on x86
 use std::thread;
 
 fn main() {

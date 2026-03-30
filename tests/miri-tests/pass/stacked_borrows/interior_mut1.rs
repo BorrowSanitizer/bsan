@@ -13,6 +13,6 @@ fn main() {
         *c.get() = UnsafeCell::new(1); // invalidates inner_shr
         // stack: [c: SharedReadWrite]
 
-        let _val = *inner_shr.get(); //miri: ~ ERROR: /retag .* tag does not exist in the borrow stack/    
+        let _val = *inner_shr.get(); //miri: ~ ERROR: /retag .* tag does not exist in the borrow stack/
     }
 }
