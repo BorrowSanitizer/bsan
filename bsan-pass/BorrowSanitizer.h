@@ -117,7 +117,6 @@ public:
   FunctionCallee BsanFuncDebugTreeSize;
   FunctionCallee BsanFuncDebugSnapshot;
   FunctionCallee BsanFuncDebugPrintDiff;
-  FunctionCallee BsanFuncDebugGetProvenance;
 
   FunctionCallee DefaultPersonalityFn;
 

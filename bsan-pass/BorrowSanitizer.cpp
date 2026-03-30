@@ -770,10 +770,6 @@ private:
       Value *InfoPtr = CB.getArgOperand(2);
       IRB.CreateStore(Prov.Tag, TagPtr, true);
       IRB.CreateStore(Prov.Info, InfoPtr, true);
-      IRB.CreateLoad(BS.IntptrTy, TagPtr, true,
-                     "__bsan_debug_get_provenance.tag");
-      IRB.CreateLoad(BS.PtrTy, InfoPtr, true,
-                     "__bsan_debug_get_provenance.info");
       NeedsRuntimeCall = false;
     } else {
       report_fatal_error("Unknown debug function: " + Twine(Name) + "\n");
@@ -1677,9 +1673,6 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   BsanFuncDebugPrintDiff = M.getOrInsertFunction(
       kBsanFuncDebugPrintDiff, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
-
-  BsanFuncDebugGetProvenance = M.getOrInsertFunction(
-      kBsanFuncDebugGetProvenance, AL, IRB.getVoidTy(), PtrTy, PtrTy, PtrTy);
 
   EHPersonality Pers = getDefaultEHPersonality(TargetTriple);
   DefaultPersonalityFn =
