@@ -1182,7 +1182,8 @@ private:
       ShadowFootprint Footprint = Comp.Footprint;
       Value *ByteOffset = Footprint.ByteOffset.getValue(IRB, BS.IntptrTy);
       Value *ObjAddr = addPointer(IRB, BS.DL, Base, ByteOffset);
-      Provenance Prov = loadProvenanceFromShadow(IRB, Comp, ObjAddr, LI.getOrdering());
+      Provenance Prov =
+          loadProvenanceFromShadow(IRB, Comp, ObjAddr, LI.getOrdering());
       setProvenance({&LI, Idx}, Prov);
     }
   }
