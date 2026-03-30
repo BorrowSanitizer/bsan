@@ -15,8 +15,8 @@ set -e
 WORKDIR="$(cd "$(dirname "$0")" && pwd)"
 
 # print Usage if no arguments are provided
-if [ "$#" -ne 2 ]; then
-    echo "Usage: $0 <BENCHER_PROJECT> <BENCHER_TOKEN>"
+if [ "$#" -ne 3 ]; then
+    echo "Usage: $0 <BENCHER_PROJECT> <BENCHER_TOKEN> <BENCHER_BIN_PATH>"
     exit 1
 fi
 
