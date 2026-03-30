@@ -22,6 +22,7 @@ fi
 
 BENCHER_PROJECT=$1
 BENCHER_TOKEN=$2
+BENCHER_BIN=$3
 
 #execute hyperfine tests
 RUNS=20
@@ -34,7 +35,7 @@ for file_path in "$PROGRAMS_DIR"/*.rs; do
     echo "compiling $program_name..."
     xb inst "$PROGRAMS_DIR/$filename" &> /dev/null
     # the filename without .json is used by bencher.dev to identify the benchmark name
-    bencher run --project $BENCHER_PROJECT --adapter shell_hyperfine --file "${program_name}.json" --token $BENCHER_TOKEN "hyperfine -i --runs $RUNS --warmup $WARMUP --shell=none --export-json '${program_name}.json' './${program_name}' --cleanup 'rm ${program_name}'"
+    $BENCHER_BIN run --project $BENCHER_PROJECT --adapter shell_hyperfine --file "${program_name}.json" --token $BENCHER_TOKEN "hyperfine -i --runs $RUNS --warmup $WARMUP --shell=none --export-json '${program_name}.json' './${program_name}' --cleanup 'rm ${program_name}'"
     rm "${program_name}.json" # clean up the generated json file after bencher.dev has read it
 done
 
@@ -44,5 +45,5 @@ done
 # execute libtest benches in bsan-rt
 echo "Running libtest benches in bsan-rt..."
 pushd bsan-rt
-bencher run --project $BENCHER_PROJECT --token $BENCHER_TOKEN "cargo bench"
+$BENCHER_BIN run --project $BENCHER_PROJECT --token $BENCHER_TOKEN "cargo bench"
 popd
