@@ -60,8 +60,9 @@ for crate_path in "$CRATES_DIR"/*; do
     TEST_BINARY=$(cargo bsan test --no-run --message-format=json 2>&1 | \
     jq -r 'select(.executable != null) | .executable' | head -n1)
     echo "Compiled test binary: $TEST_BINARY"
+    cp "$TEST_BINARY" ./$crate
     echo "Benchmarking $crate"
-    $RUN_BENCHER --adapter shell_hyperfine --file "$crate.json" "hyperfine -i --runs $RUNS --warmup $WARMUP --shell=none --export-json '$crate.json' '$TEST_BINARY'"
+    $RUN_BENCHER --adapter shell_hyperfine --file "$crate.json" "hyperfine -i --runs $RUNS --warmup $WARMUP --shell=none --export-json '$crate.json' './$crate'"
     echo "cleaning $crate.json"
     rm "$crate.json" # clean up the generated json file after bencher.dev has read it
     popd
