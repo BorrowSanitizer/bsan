@@ -90,7 +90,7 @@ extern "C" void *__crt_malloc(SIZE_T size) {
 }
 
 INTERCEPTOR(void *, malloc, SIZE_T size) {
-  GET_SPAN_PC_BP;
+  uptr span = GET_CALLER_PC();
   if (DlsymAlloc::Use())
     return DlsymAlloc::Allocate(size);
   void *ptr = REAL(malloc)(size);
