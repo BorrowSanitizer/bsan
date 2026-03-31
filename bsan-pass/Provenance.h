@@ -154,11 +154,10 @@ public:
 };
 
 // When loading and storing provenance, we need a way to
-// handle dynamically sized values (e.g. scalable vectors),
-// which can be placed at any position within an aggregate
-// type. The `DynSize` type makes it far easier to reason
-// about arithmetic and other operations on values with both
-// a static and dynamic component.
+// handle dynamically sized values, which can be placed at any
+// position within an aggregate type. The `DynSize` type makes
+// it far easier to reason about arithmetic and other operations
+// on values with both static and dynamic components.
 struct DynSize {
   unsigned Static = 0;
   SmallVector<Value *, 2> Dynamic;

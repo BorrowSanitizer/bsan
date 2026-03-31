@@ -58,7 +58,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // determine which allocations need to be freed, so no additional handling is
   // necessary to determine where to free these allocations, even if they do not
   // have a `lifetime.end`, either.
-  DenseMap<AllocaInst *, SmallVector<IntrinsicInst *>> HasLifetimeStart;
+  DenseSet<AllocaInst *> HasLifetimeStart;
 
   // Alloca instructions. For the moment, static allocas are handled the same as
   // dynamic ones, but we will adjust this behavior in the future to support
@@ -86,19 +86,12 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // provenance value within `V`.
   ProvenanceMap BaseProvMap;
 
-  // Most allocations have a single `lifetime.start`. We assign a single
-  // provenance value to these allocations starting from the entry block. It is
-  // left uninitialized until the `lifetime.start`. Uninitialized provenance
-  // values have the same semantics as invalid ones, so we can still detect UB
-  // for accesses outside of the lifetime. This is necessary; otherwise,
-  // ~thousands~ of PHI nodes can be emitted for certain edge-case functions.
-  DenseMap<Value *, std::pair<Value *, ProvenanceScalar>> SingletonAllocaMap;
-
   // If an `alloca` has multiple `lifetime.start` instructions, then we need to
   // track each one separately, because any access might be mutually dominated
   // by more than one `lifetime.start`.
   DenseMap<std::pair<BasicBlock *, AllocaInst *>, ProvenanceScalar>
       AllocaProvMap;
+
   // Sometimes, a GEP is issued for an alloca before its `lifetime.start`. The
   // Rust-view of `lifetime.start` indicates that the result of this GEP should
   // be invalid, but the LLVM view seems to permit this. For now, we defer
@@ -149,8 +142,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // the pointer receiving the retag.
   SmallVector<CallBase *> RetagMemVec;
 
-  // The number of "function-entry" retags, of any kind.
-  unsigned NumFnEntryRetags = 0;
+  SmallVector<CallBase *> FnEntryRetags;
 
   // The start of the current frame of protected tags. This is the "top" of the
   // frame, since we decrement from the beginning of the chunk. The thread-local
@@ -305,6 +297,10 @@ private:
       return AllocaProvMap[{BB, AI}];
     }
 
+    if (BB->isEntryBlock()) {
+      return BS.InvalidProvenance;
+    }
+
     if (BasicBlock *Pred = BB->getSinglePredecessor()) {
       return assertAllocaProvenance(Pred, AI);
     }
@@ -313,14 +309,6 @@ private:
   }
 
   ProvenanceScalar getAllocaProvenance(BasicBlock *BB, AllocaInst *AI) {
-    if (!shouldInstrumentAlloca(*AI))
-      return BS.WildcardProvenance;
-
-    if (SingletonAllocaMap.contains(AI)) {
-      const auto [Size, Prov] = SingletonAllocaMap[AI];
-      return Prov;
-    }
-
     DenseSet<BasicBlock *> Visited;
     return getAllocaProvenanceRecurse(BB, AI, Visited);
   }
@@ -334,6 +322,10 @@ private:
 
     if (AllocaProvMap.contains({BB, AI})) {
       return AllocaProvMap[{BB, AI}];
+    }
+
+    if (BB->isEntryBlock()) {
+      return BS.InvalidProvenance;
     }
 
     if (BasicBlock *Pred = BB->getSinglePredecessor()) {
@@ -352,8 +344,6 @@ private:
     AllocaProvPHINodes.push_back(std::make_tuple(BB, AI, ProvPHI));
     return ProvPHI;
   }
-
-  void setProvenance(Value *V, Provenance Prov) { setProvenance({V, 0}, Prov); }
 
   void setProvenance(ProvenanceKey Key, Provenance Prov) {
     BaseProvMap.set(Key, Prov);
@@ -496,7 +486,7 @@ private:
         if (CallBase *CB = dyn_cast<CallBase>(&I)) {
           if (isRetag(CB)) {
             if (isFnEntryRetag(CB)) {
-              NumFnEntryRetags += 1;
+              FnEntryRetags.push_back(CB);
             }
             if (CB->getType() == BS.PtrTy) {
               RetagRegVec.push_back(CB);
@@ -509,7 +499,9 @@ private:
               AllocaInst *AI = findAllocaForValue(I->getArgOperand(1), true);
               if (!AI)
                 continue;
-              HasLifetimeStart[AI].push_back(I);
+              if (!shouldInstrumentAlloca(*AI))
+                continue;
+              HasLifetimeStart.insert(AI);
             }
           }
         }
@@ -521,7 +513,6 @@ private:
   // Populates the array of argument provenance pointers and initializes the
   // start and end of the function prologue.
   void initStack(IRBuilder<> &EntryIRB) {
-
     Value *NumParamProv = BS.Zero;
     for (auto &Arg : F.args()) {
       if (Arg.hasAttribute(Attribute::ByVal)) {
@@ -562,15 +553,12 @@ private:
     if (StaticAllocaVec.size() > 0) {
       for (AllocaInst *AI : StaticAllocaVec) {
         if (HasLifetimeStart.contains(AI)) {
-          if (HasLifetimeStart[AI].size() > 1) {
-            AllocaProvMap[{EntryIRB.GetInsertBlock(), AI}] =
-                BS.InvalidProvenance;
-          } else {
-            SingletonAllocaMap[AI] = createAllocaMetadata(EntryIRB, AI);
-          }
+          setProvenance(AI, createAllocaMetadata(EntryIRB, AI));
         } else {
+          ProvenanceScalar Prov = createAllocaMetadata(EntryIRB, AI);
           IRBuilder<> IRB(AI->getNextNode());
-          BaseProvMap.set({AI, 0}, createAndInitAllocaMetadata(IRB, AI));
+          initAllocaMetadata(IRB, AI, Prov);
+          setProvenance(AI, Prov);
         }
       }
     }
@@ -936,55 +924,42 @@ private:
     }
   }
 
-  std::pair<Value *, ProvenanceScalar> createAllocaMetadata(IRBuilder<> &IRB,
-                                                            AllocaInst *AI) {
+  ProvenanceScalar createAllocaMetadata(IRBuilder<> &IRB, AllocaInst *AI) {
     TypeSize TS = BS.getAllocaSizeInBytes(*AI);
     Value *Size = IRB.CreateTypeSize(BS.IntptrTy, TS);
     Value *Tag = newBorrowTag(IRB);
     Value *Info = IRB.CreateCall(BS.BsanFuncReserveStackSlot, {});
-    return std::make_pair(Size, ProvenanceScalar(Tag, Info));
+    return ProvenanceScalar(Tag, Info);
   }
 
-  void initAllocaMetadata(IRBuilder<> &IRB, AllocaInst *AI, Value *Size,
+  void initAllocaMetadata(IRBuilder<> &IRB, AllocaInst *AI,
                           ProvenanceScalar Prov) {
+    TypeSize TS = BS.getAllocaSizeInBytes(*AI);
+    Value *Size = IRB.CreateTypeSize(BS.IntptrTy, TS);
     IRB.CreateCall(BS.BsanFuncAllocStack, {AI, Size, Prov.Tag, Prov.Info});
   }
 
   ProvenanceScalar createAndInitAllocaMetadata(IRBuilder<> &IRB,
                                                AllocaInst *AI) {
-    const auto [Size, Prov] = createAllocaMetadata(IRB, AI);
-    initAllocaMetadata(IRB, AI, Size, Prov);
+    ProvenanceScalar Prov = createAllocaMetadata(IRB, AI);
+    initAllocaMetadata(IRB, AI, Prov);
     return Prov;
   }
 
   void instrumentLifetimeStart(IntrinsicInst &II) {
     AllocaInst *AI = findAllocaForValue(II.getArgOperand(1), true);
-    if (!AI)
-      return;
     IRBuilder<> IRB(&II);
-
-    ProvenanceScalar CurrentProv = getAllocaProvenance(II.getParent(), AI);
+    ProvenanceScalar CurrentProv = assertProvenanceScalar(II.getParent(), AI);
     if (CurrentProv != BS.WildcardProvenance) {
       IRB.CreateCall(BS.BsanFuncDeallocStack,
                      {AI, CurrentProv.Tag, CurrentProv.Info});
     }
-    if (!shouldInstrumentAlloca(*AI))
-      return;
-    if (SingletonAllocaMap.contains(AI)) {
-      const auto [Size, Prov] = SingletonAllocaMap[AI];
-      initAllocaMetadata(IRB, AI, Size, Prov);
-    } else {
-      AllocaProvMap[{II.getParent(), AI}] =
-          createAndInitAllocaMetadata(IRB, AI);
-    }
+    initAllocaMetadata(IRB, AI, CurrentProv);
   }
 
   void instrumentLifetimeEnd(IntrinsicInst &II) {
     AllocaInst *AI = findAllocaForValue(II.getArgOperand(1), true);
-    if (!AI)
-      return;
     IRBuilder<> IRB(&II);
-
     ProvenanceScalar Root = assertProvenanceScalar(II.getParent(), AI);
     if (Root != BS.WildcardProvenance) {
       IRB.CreateCall(BS.BsanFuncDeallocStack, {AI, Root.Tag, Root.Info});
@@ -1249,19 +1224,17 @@ private:
       Value *RetvalByteWidth = BS.Zero;
       for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
         Value *Slot = addPointer(IRB, BS.DL, BS.RetvalTLS, RetvalByteWidth);
-
         Provenance Prov = assertProvenance(IRB, Comp, {RetVal, Idx});
         ProvenancePointer Dest =
             ProvenancePointer(IRB, BS.PL, Slot, Comp.Elems, Prov.Kind);
         Prov.store(IRB, BS.PL, Dest);
-
         Value *ByteWidth =
             IRB.CreateMul(Comp.NumProvenanceValues, BS.PL.ProvenanceSize);
         RetvalByteWidth = IRB.CreateAdd(RetvalByteWidth, ByteWidth);
       }
     }
 
-    if (NumFnEntryRetags) {
+    if (!FnEntryRetags.empty()) {
       Value *FrameBottom = IRB.CreateLoad(BS.PtrTy, BS.ProvStack, true);
       Value *FrameLen =
           IRB.CreatePtrDiff(BS.PL.ProvenanceTy, FrameTop, FrameBottom);
@@ -1274,8 +1247,8 @@ private:
         ProvenanceScalar Root = assertProvenanceScalar(BB, AI);
         if (LifetimeInfo->isAliveAfter(AI, &I)) {
           IRB.CreateCall(BS.BsanFuncDeallocStack, {AI, Root.Tag, Root.Info});
-          IRB.CreateCall(BS.BsanFuncDestroyStackSlot, {Root.Info});
         }
+        IRB.CreateCall(BS.BsanFuncDestroyStackSlot, {Root.Info});
       }
     }
     for (auto &Ptr : ByValArgs) {
