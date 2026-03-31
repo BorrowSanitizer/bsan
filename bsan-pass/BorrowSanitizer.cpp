@@ -160,6 +160,7 @@ public:
 
     BasicBlock *EntryBlock = &F.getEntryBlock();
     IRBuilder<> EntryIRB(EntryBlock, EntryBlock->getFirstNonPHIIt());
+
     populateBlocks(EntryIRB);
 
     initStack(EntryIRB);
@@ -1445,9 +1446,11 @@ bool BorrowSanitizer::instrumentFunction(Function &F,
   if (F.empty()) {
     return false;
   }
+
   if (F.getLinkage() == GlobalValue::AvailableExternallyLinkage) {
     return false;
   }
+
   if (F.getName().starts_with(kBsanPrefix)) {
     return false;
   }
