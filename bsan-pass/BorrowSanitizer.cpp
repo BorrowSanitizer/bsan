@@ -92,19 +92,6 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   DenseMap<std::pair<BasicBlock *, AllocaInst *>, ProvenanceScalar>
       AllocaProvMap;
 
-  // Sometimes, a GEP is issued for an alloca before its `lifetime.start`. The
-  // Rust-view of `lifetime.start` indicates that the result of this GEP should
-  // be invalid, but the LLVM view seems to permit this. For now, we defer
-  // initializing the provenance of a GEP for an `alloca` until we need to use
-  // it to validate an operation. Instead of setting the provenance for these
-  // GEPs, we indicate in this map that they alias an `alloca`. Then, when we
-  // need to get the provenance for the GEP, we look to see if it's an alias for
-  // an `alloca`. If so, we return the provenance for the `alloca` based on
-  // whichever block that we're instrumenting. This interaction is only
-  // necessary for the edge cases where the `alloca` has multiple
-  // `lifetime.start`.
-  DenseMap<Value *, AllocaInst *> AllocaAliases;
-
   // Pointer-type arguments with the `byval` attribute point to a different
   // allocation than was originally allocated for the argument in the calling
   // context. This means that provenance passed by the caller will not be valid.
@@ -262,12 +249,8 @@ private:
       return BaseProvMap.get(Key);
     }
 
-    if (AllocaAliases.contains(Key.V)) {
-      AllocaInst *AI = AllocaAliases[Key.V];
-      return getProvenance(BB, {AI, 0});
-    }
-
-    if (AllocaInst *AI = dyn_cast<AllocaInst>(Key.V)) {
+    Value *BaseObj = getUnderlyingObject(Key.V);
+    if (AllocaInst *AI = dyn_cast<llvm::AllocaInst>(BaseObj)) {
       return getAllocaProvenance(BB, AI);
     }
 
@@ -1115,15 +1098,9 @@ private:
   void visitGetElementPtrInst(GetElementPtrInst &I) {
     // Pointer arithmetic does not affect provenance, so we can propagage the
     // provenance of the input to the output value.
-    if (AllocaAliases.contains(I.getPointerOperand())) {
-      AllocaAliases[&I] = AllocaAliases[I.getPointerOperand()];
-    } else if (AllocaInst *AI = dyn_cast<AllocaInst>(I.getPointerOperand())) {
-      AllocaAliases[&I] = AI;
-    } else {
-      ProvenanceScalar Prov =
-          assertProvenanceScalar(I.getParent(), I.getPointerOperand());
-      setProvenance(&I, Prov);
-    }
+    ProvenanceScalar Prov =
+        assertProvenanceScalar(I.getParent(), I.getPointerOperand());
+    setProvenance(&I, Prov);
   }
 
   void visitIntToPtrInst(IntToPtrInst &I) {
