@@ -274,7 +274,12 @@ public:
   }
 };
 
-using ProvenanceKey = std::pair<Value *, unsigned>;
+struct ProvenanceKey {
+  Value *V;
+  unsigned long Offset;
+  ProvenanceKey(Value *V) : V(V), Offset(0) {}
+  ProvenanceKey(Value *V, unsigned long Offset) : V(V), Offset(Offset) {}
+};
 
 struct ProvenanceMap {
 public:
@@ -283,7 +288,7 @@ public:
   bool contains(Value *V) { return this->contains({V, 0}); }
 
   bool contains(ProvenanceKey Key) {
-    return Inner.contains(Key.first) && Inner[Key.first].contains(Key.second);
+    return Inner.contains(Key.V) && Inner[Key.V].contains(Key.Offset);
   }
 
   void transferToValue(Value *Src, Value *Dest) {
@@ -295,12 +300,12 @@ public:
     }
   }
   void set(ProvenanceKey Key, Provenance Prov) {
-    Inner[Key.first][Key.second] = Prov;
+    Inner[Key.V][Key.Offset] = Prov;
   }
 
   std::optional<Provenance> get(ProvenanceKey Key) {
     if (this->contains(Key)) {
-      return Inner[Key.first][Key.second];
+      return Inner[Key.V][Key.Offset];
     } else {
       return std::nullopt;
     }
