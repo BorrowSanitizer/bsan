@@ -160,7 +160,6 @@ public:
 
     BasicBlock *EntryBlock = &F.getEntryBlock();
     IRBuilder<> EntryIRB(EntryBlock, EntryBlock->getFirstNonPHIIt());
-
     populateBlocks(EntryIRB);
 
     initStack(EntryIRB);
@@ -197,8 +196,8 @@ private:
   }
 
   // Will fail with an error if anything other than a scalar provenance value is
-  // present. If no provenance has been assigned yet, then the null provenance
-  // value is returned.
+  // present. If no provenance has been assigned yet, then return a wildcard
+  // provenance value.
   ProvenanceScalar assertProvenanceScalar(BasicBlock *BB, ProvenanceKey Key) {
     std::optional<Provenance> OptProv = getProvenance(BB, Key);
     if (OptProv.has_value()) {
@@ -273,22 +272,6 @@ private:
     }
 
     return std::nullopt;
-  }
-
-  ProvenanceScalar assertAllocaProvenance(BasicBlock *BB, AllocaInst *AI) {
-    if (AllocaProvMap.contains({BB, AI})) {
-      return AllocaProvMap[{BB, AI}];
-    }
-
-    if (BB->isEntryBlock()) {
-      return BS.InvalidProvenance;
-    }
-
-    if (BasicBlock *Pred = BB->getSinglePredecessor()) {
-      return assertAllocaProvenance(Pred, AI);
-    }
-
-    report_fatal_error("Unable to resolve incoming provenance.");
   }
 
   ProvenanceScalar getAllocaProvenance(BasicBlock *BB, AllocaInst *AI) {
@@ -572,8 +555,15 @@ private:
       Worklist.push_back(InfoNode);
 
       for (BasicBlock *IncomingBlock : predecessors(BB)) {
-        ProvenanceScalar IncomingProv =
-            assertAllocaProvenance(IncomingBlock, AI);
+        BasicBlock *CurrBB = IncomingBlock;
+        ProvenanceScalar IncomingProv = BS.InvalidProvenance;
+        while (CurrBB) {
+          if (AllocaProvMap.contains({CurrBB, AI})) {
+            IncomingProv = AllocaProvMap[{CurrBB, AI}];
+            break;
+          }
+          CurrBB = CurrBB->getSinglePredecessor();
+        };
         TagNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Tag);
         InfoNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Info);
       }
