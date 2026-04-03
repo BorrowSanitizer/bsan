@@ -146,23 +146,10 @@ SANITIZER_WEAK_ATTRIBUTE AllocInfo *__bsan_reserve_stack_slot();
 
 SANITIZER_WEAK_ATTRIBUTE void __bsan_destroy_stack_slot(AllocInfo *slot);
 
-SANITIZER_WEAK_ATTRIBUTE void __bsan_debug_assert_null(BorTag bor_tag,
-                                                       AllocInfo *alloc_info);
-SANITIZER_WEAK_ATTRIBUTE void
-__bsan_debug_assert_wildcard(BorTag bor_tag, AllocInfo *alloc_info);
-SANITIZER_WEAK_ATTRIBUTE void __bsan_debug_assert_valid(BorTag bor_tag,
-                                                        AllocInfo *alloc_info);
-SANITIZER_WEAK_ATTRIBUTE void
-__bsan_debug_assert_invalid(BorTag bor_tag, AllocInfo *alloc_info);
-SANITIZER_WEAK_ATTRIBUTE void __bsan_debug_print(BorTag bor_tag,
-                                                 AllocInfo *alloc_info);
-SANITIZER_WEAK_ATTRIBUTE void
-__bsan_debug_print_borrow_state(BorTag bor_tag, AllocInfo *alloc_info);
-
-SANITIZER_WEAK_ATTRIBUTE void __bsan_debug_tree_size(BorTag bor_tag,
-                                                     AllocInfo *alloc_info);
-SANITIZER_WEAK_ATTRIBUTE void __bsan_debug_print_diff(BorTag bor_tag,
-                                                      AllocInfo *alloc_info);
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_print(void *ptr);
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_print_borrow_state(void *ptr);
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_tree_size(void *ptr);
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_print_diff(void *ptr);
 
 } // extern "C"
 

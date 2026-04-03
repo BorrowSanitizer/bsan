@@ -96,12 +96,6 @@ impl GlobalCtx {
         &self.shadow_heap
     }
 
-    pub fn exit(&self, code: i32) -> ! {
-        unsafe {
-            libc::exit(code);
-        }
-    }
-
     pub fn protected_tags<'a>(&'a self) -> ProtectedTagsRef<'a> {
         ProtectedTagsRef(self.protected_tags.read())
     }
