@@ -9,8 +9,6 @@
 #include "sanitizer_common/sanitizer_stacktrace_printer.h"
 #include "sanitizer_common/sanitizer_symbolizer.h"
 
-#include <unistd.h>
-
 using namespace __sanitizer;
 using namespace __bsan;
 
@@ -38,6 +36,11 @@ void ClearArgSlot(uptr Idx) { __BSAN_PARAM_TLS[Idx] = WILDCARD; }
 void ClearRetValSlot(uptr Idx) { __BSAN_RETVAL_TLS[Idx] = WILDCARD; }
 
 void PrintStackTrace(StackTrace &stack) {
+  if (GetEnv("BSAN_SYMBOLIZER") == nullptr) {
+    Printf("Symbolizer not found, please add llvm-symbolizer to your PATH for "
+           "source code information.\n");
+    return;
+  }
   Printf("stack backtrace:\n");
   InternalScopedString frame_desc;
   for (uptr i = 0; i < stack.size; ++i) {
@@ -54,64 +57,6 @@ void PrintStackTrace(StackTrace &stack) {
       frame_desc.clear();
     }
   }
-}
-
-// Get rustc to print the sysroot path
-// Capture stdout via a pipe
-// Append /bin/llvm-symbolizer
-const char *FindSymbolizer() {
-  static char symbolizer_path[4096] = {};
-
-  char *rustc_path = FindPathToBinary("rustc");
-  if (!rustc_path) {
-    return nullptr;
-  }
-
-  const char *argv[] = {rustc_path, "--print", "sysroot", nullptr};
-  fd_t pipe_cmd[2];
-  if (pipe(pipe_cmd) != 0) {
-    return nullptr;
-  }
-
-  pid_t pid = StartSubprocess(rustc_path, argv, GetEnviron(),
-                              /*stdin_fd=*/kInvalidFd,
-                              /*stdout_fd=*/pipe_cmd[1],
-                              /*stderr_fd=*/kInvalidFd);
-  internal_close(pipe_cmd[1]);
-
-  if (pid < 0) {
-    internal_close(pipe_cmd[0]);
-    return nullptr;
-  }
-
-  uptr used = 0;
-  while (used + 1 < sizeof(symbolizer_path)) {
-    uptr n = internal_read(pipe_cmd[0], symbolizer_path + used,
-                           sizeof(symbolizer_path) - 1 - used);
-    if ((sptr)n <= 0)
-      break;
-    used += n;
-  }
-  internal_close(pipe_cmd[0]);
-
-  if (WaitForProcess(pid) != 0 || used == 0) {
-    return nullptr;
-  }
-
-  symbolizer_path[used] = '\0';
-  while (used > 0 && (symbolizer_path[used - 1] == '\n' ||
-                      symbolizer_path[used - 1] == '\r')) {
-    symbolizer_path[--used] = '\0';
-  }
-
-  uptr remaining = sizeof(symbolizer_path) - used;
-  int written = internal_snprintf(symbolizer_path + used, remaining, "%s",
-                                  "/bin/llvm-symbolizer");
-  if (written <= 0 || (uptr)written >= remaining) {
-    return nullptr;
-  }
-
-  return FileExists(symbolizer_path) ? symbolizer_path : nullptr;
 }
 
 } // namespace __bsan
@@ -151,10 +96,12 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_init() {
   SetCommonFlagsDefaults();
 
   const char *symbolizer_path = GetEnv("BSAN_SYMBOLIZER");
-  if (!symbolizer_path || symbolizer_path[0] == '\0')
-    symbolizer_path = FindSymbolizer();
+  if (!symbolizer_path || symbolizer_path[0] == '\0') {
+    symbolizer_path = FindPathToBinary("llvm-symbolizer");
+  }
 
   if (symbolizer_path && symbolizer_path[0] != '\0') {
+    SetEnv("BSAN_SYMBOLIZER", symbolizer_path);
     CommonFlags cf;
     cf.CopyFrom(*common_flags());
     cf.external_symbolizer_path = symbolizer_path;

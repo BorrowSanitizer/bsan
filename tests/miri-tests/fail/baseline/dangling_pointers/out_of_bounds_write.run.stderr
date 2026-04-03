@@ -1,4 +1,4 @@
-error: Undefined Behavior: an access of size 2 at offset 0x6 is out of bounds for ALLOC of size 4.
+error: Undefined Behavior: an access of size 2b at offset 0x6 is out of bounds for ALLOC of size 4b.
  --> bsan/tests/miri-tests/fail/baseline/dangling_pointers/out_of_bounds_write.rs:5:14
   |
 5 | unsafe { *v.as_mut_ptr().wrapping_byte_add(6) = 0 }; //miri: ~ ERROR: attempting to access 2 bytes

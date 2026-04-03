@@ -1,4 +1,4 @@
-error: Undefined Behavior: an access of size 2 at offset $HEX is out of bounds for ALLOC of size 4.
+error: Undefined Behavior: an access of size 2b at offset $HEX is out of bounds for ALLOC of size 4b.
  --> bsan/tests/miri-tests/fail/baseline/dangling_pointers/out_of_bounds_read_neg_offset.rs:5:22
   |
 5 | let x = unsafe { *v.as_ptr().wrapping_byte_sub(6) }; //miri: ~ ERROR: before the beginning of the allocation
