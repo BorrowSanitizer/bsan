@@ -57,7 +57,6 @@ const char kBsanFuncAssertProvenanceWildcard[] =
 const char kBsanFuncAssertProvenanceValid[] = BSAN_DEBUG_FN("assert_valid");
 const char kBsanFuncAssertProvenanceInvalid[] = BSAN_DEBUG_FN("assert_invalid");
 const char kBsanFuncDebugGC[] = BSAN_DEBUG_FN("gc");
-const char kBsanFuncDebugSnapshot[] = BSAN_DEBUG_FN("snapshot");
 const char kBsanFuncDebugParamTLS[] = BSAN_DEBUG_FN("param_tls");
 const char kBsanFuncDebugRetvalTLS[] = BSAN_DEBUG_FN("retval_tls");
 

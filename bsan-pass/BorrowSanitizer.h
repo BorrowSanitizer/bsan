@@ -109,8 +109,6 @@ public:
   FunctionCallee BsanFuncAssertProvenanceValid;
   FunctionCallee BsanFuncAssertProvenanceInvalid;
 
-  FunctionCallee BsanFuncDebugSnapshot;
-
   FunctionCallee DefaultPersonalityFn;
 
   ProvenanceScalar WildcardProvenance;

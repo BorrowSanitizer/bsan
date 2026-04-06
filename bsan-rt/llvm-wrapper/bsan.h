@@ -150,6 +150,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_print(void *ptr);
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_print_borrow_state(void *ptr);
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_tree_size(void *ptr);
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_print_diff(void *ptr);
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_snapshot(void *ptr);
 
 } // extern "C"
 

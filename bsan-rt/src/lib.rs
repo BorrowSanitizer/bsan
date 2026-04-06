@@ -550,7 +550,7 @@ extern "C" fn __bsan_tree_size(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_debug_snapshot(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+extern "C" fn __bsan_snapshot(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
     let _ = BorrowTracker::for_alloc(prov, |bt| {

@@ -727,8 +727,6 @@ private:
       Callee = BS.BsanFuncAssertProvenanceNull;
     } else if (Name == kBsanFuncAssertProvenanceWildcard) {
       Callee = BS.BsanFuncAssertProvenanceWildcard;
-    } else if (Name == kBsanFuncDebugSnapshot) {
-      Callee = BS.BsanFuncDebugSnapshot;
     } else {
       // report_fatal_error("Unknown debug function: " + Twine(Name) + "\n");
       return false;
@@ -1613,9 +1611,6 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   BsanFuncAssertProvenanceInvalid = M.getOrInsertFunction(
       kBsanFuncAssertProvenanceInvalid, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
-
-  BsanFuncDebugSnapshot = M.getOrInsertFunction(
-      kBsanFuncDebugSnapshot, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
 
   EHPersonality Pers = getDefaultEHPersonality(TargetTriple);
   DefaultPersonalityFn =

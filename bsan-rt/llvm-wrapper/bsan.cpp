@@ -358,6 +358,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_print(void *ptr) {
   Provenance *Slot = GetArgSlot(0);
   __bsan_print(Slot->Tag, Slot->Info);
 }
+
 SANITIZER_WEAK_ATTRIBUTE void __bsan_print_borrow_state(BorTag bor_tag,
                                                         AllocInfo *alloc_info) {
 }
@@ -365,12 +366,21 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_print_borrow_state(void *ptr) {
   Provenance *Slot = GetArgSlot(0);
   __bsan_print_borrow_state(Slot->Tag, Slot->Info);
 }
+
 SANITIZER_WEAK_ATTRIBUTE void __bsan_tree_size(BorTag bor_tag,
                                                AllocInfo *alloc_info) {}
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_tree_size(void *ptr) {
   Provenance *Slot = GetArgSlot(0);
   __bsan_tree_size(Slot->Tag, Slot->Info);
 }
+
+SANITIZER_WEAK_ATTRIBUTE void __bsan_snapshot(BorTag bor_tag,
+                                              AllocInfo *alloc_info) {}
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_snapshot(void *ptr) {
+  Provenance *Slot = GetArgSlot(0);
+  __bsan_snapshot(Slot->Tag, Slot->Info);
+}
+
 SANITIZER_WEAK_ATTRIBUTE void __bsan_print_diff(BorTag bor_tag,
                                                 AllocInfo *alloc_info) {}
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_print_diff(void *ptr) {
