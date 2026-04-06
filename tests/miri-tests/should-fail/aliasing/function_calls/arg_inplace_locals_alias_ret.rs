@@ -21,8 +21,6 @@ fn main() {
             // This specifically uses a type with scalar representation to tempt Miri to use the
             // efficient way of storing local variables (outside adressable memory).
             Call(_non_copy = callee(Move(_non_copy)), ReturnTo(after_call), UnwindContinue())
-            //miri: ~[stack]^ ERROR: not granting access
-            //miri: ~[tree]| ERROR: /reborrow .* forbidden/
         }
         after_call = {
             Return()
@@ -31,5 +29,7 @@ fn main() {
 }
 
 fn callee(x: S) -> S {
+    //miri: ~[stack]^ ERROR: not granting access
+    //miri: ~[tree]| ERROR: /reborrow .* forbidden/
     x
 }

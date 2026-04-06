@@ -15,15 +15,15 @@ public:
     TargetTriple = Triple(M.getTargetTriple());
 
     PL = ProvenanceLayout(C, DL);
-    LongSize = M.getDataLayout().getPointerSizeInBits();
-
+    unsigned PtrSizeBits = M.getDataLayout().getPointerSizeInBits();
+    PtrSize = PtrSizeBits / 8;
     BoolTy = Type::getInt1Ty(*C);
     Int8Ty = Type::getInt8Ty(*C);
     Int16Ty = Type::getInt16Ty(*C);
     Int32Ty = Type::getInt32Ty(*C);
     Int64Ty = Type::getInt64Ty(*C);
     PtrTy = PointerType::getUnqual(*C);
-    IntptrTy = Type::getIntNTy(*C, LongSize);
+    IntptrTy = Type::getIntNTy(*C, PtrSizeBits);
 
     Zero = ConstantInt::get(IntptrTy, 0);
     One = ConstantInt::get(IntptrTy, 1);
@@ -64,7 +64,7 @@ public:
   ProvenanceLayout PL;
   const StackSafetyGlobalInfo *const SSGI = nullptr;
 
-  int LongSize;
+  unsigned PtrSize;
   Triple TargetTriple;
   Type *BoolTy;
   Type *Int8Ty;
@@ -99,6 +99,7 @@ public:
   FunctionCallee BsanFuncMemSet;
   FunctionCallee BsanFuncMemMove;
   FunctionCallee BsanFuncMemCpy;
+  FunctionCallee BsanFuncShadowClear;
 
   FunctionCallee BsanFuncReserveStackSlot;
   FunctionCallee BsanFuncDestroyStackSlot;
@@ -123,8 +124,7 @@ public:
   Value *ParamTLS = nullptr;
   Value *RetvalTLS = nullptr;
   Value *ProvStack = nullptr;
-  Value *TrustFlag = nullptr;
-  Value *AllocIdCounter = nullptr;
+  Value *TLSMarker = nullptr;
   Value *BorTagCounter = nullptr;
 
   Constant *Zero = nullptr;

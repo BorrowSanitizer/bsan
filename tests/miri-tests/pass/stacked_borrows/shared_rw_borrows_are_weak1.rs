@@ -12,6 +12,6 @@ fn main() {
         let y: &mut Cell<i32> = mem::transmute(&mut *x); // launder lifetime
         let shr_rw = &*x; // thanks to interior mutability this will be a SharedReadWrite
         shr_rw.set(1);
-        y.get_mut(); //miri: ~ ERROR: /retag .* tag does not exist in the borrow stack/   
+        y.get_mut(); //miri: ~ ERROR: /retag .* tag does not exist in the borrow stack/
     }
 }

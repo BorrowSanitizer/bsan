@@ -13,7 +13,7 @@ fn invalid_scalar() {
     unsafe {
         let a = addr_of_mut!(a).cast::<bool>();
         let b = addr_of_mut!(b).cast::<bool>();
-        typed_swap_nonoverlapping(a, b); //miri: ~ERROR: constructing invalid value    
+        typed_swap_nonoverlapping(a, b); //miri: ~ERROR: constructing invalid value
     }
 }
 

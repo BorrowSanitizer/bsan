@@ -18,6 +18,6 @@ fn main() {
         // without invalidating `x`.  That would be bad!  It would mean that creating `shr`
         // leaked `x` to `raw`.
         let _val = ptr::read(raw);
-        let _val = *x.get_mut(); //miri: ~ ERROR: /retag .* tag does not exist in the borrow stack/    
+        let _val = *x.get_mut(); //miri: ~ ERROR: /retag .* tag does not exist in the borrow stack/
     }
 }

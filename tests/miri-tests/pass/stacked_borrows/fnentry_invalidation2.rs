@@ -13,7 +13,7 @@ fn main() {
     let ptr = t.sli.as_ptr();
     inner(&mut t);
     unsafe {
-        let _oof = *ptr; //miri: ~ ERROR: /read access .* tag does not exist in the borrow stack/    
+        let _oof = *ptr; //miri: ~ ERROR: /read access .* tag does not exist in the borrow stack/
     }
 }
 

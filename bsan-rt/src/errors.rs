@@ -80,7 +80,7 @@ impl ErrorFormatContext {
             }
             UBInfo::AccessOutOfBounds { alloc_id, access_size, alloc_size, offset } => {
                 result.push_str(&format!(
-                    "an access of size {access_size} at offset 0x{offset:x} is out of bounds for {alloc_id:?} of size {alloc_size}.\n"
+                    "an access of size {access_size}b at offset 0x{offset:x} is out of bounds for {alloc_id:?} of size {alloc_size}b.\n"
                 ));
                 result.push_str(&self.format_symbol_standalone(symbol));
                 result.push('\n');

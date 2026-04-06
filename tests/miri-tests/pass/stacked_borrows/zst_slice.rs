@@ -6,6 +6,6 @@ fn main() {
         let a = [1, 2, 3];
         let s = &a[0..0];
         assert_eq!(s.len(), 0);
-        assert_eq!(*s.as_ptr().add(1), 2); //miri: ~ ERROR: /retag .* tag does not exist in the borrow stack/    
+        assert_eq!(*s.as_ptr().add(1), 2); //miri: ~ ERROR: /retag .* tag does not exist in the borrow stack/
     }
 }

@@ -8,6 +8,8 @@
 using namespace __sanitizer;
 namespace __bsan {
 
+typedef uptr ThreadId;
+
 class BsanThread {
 public:
   static BsanThread *Create(thread_callback_t start_routine, void *arg);
@@ -19,6 +21,7 @@ public:
   uptr stack_top() { return stack_top_; }
   uptr stack_bottom() { return stack_bottom_; }
   int destructor_iterations_;
+  ThreadId id;
   __sanitizer_sigset_t starting_sigset_;
 
 private:

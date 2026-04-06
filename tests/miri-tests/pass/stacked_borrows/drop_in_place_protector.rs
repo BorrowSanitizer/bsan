@@ -11,7 +11,7 @@ impl Drop for HasDrop {
     fn drop(&mut self) {
         unsafe {
             let _val = *P;
-            //miri: ~^ ERROR: /not granting access .* because that would remove .* which is strongly protected/ 
+            //miri: ~^ ERROR: /not granting access .* because that would remove .* which is strongly protected/
         }
     }
 }

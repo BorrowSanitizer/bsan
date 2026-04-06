@@ -5,23 +5,12 @@ use core::{fmt, ptr, slice};
 
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug)]
-pub struct FramePtr(usize);
-
-#[repr(transparent)]
-#[derive(Clone, Copy, Debug)]
 pub struct Span(usize);
 
 impl Span {
     pub const fn dummy() -> Self {
         Self(0)
     }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct Location {
-    pub pc: Span,
-    pub bp: FramePtr,
 }
 
 #[derive(Clone, Debug, PartialEq)]

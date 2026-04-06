@@ -1,5 +1,4 @@
 //@run:0
-#![allow(unused)]
 #![feature(core_intrinsics)]
 #![feature(stmt_expr_attributes)]
 #![feature(closure_track_caller)]
@@ -274,5 +273,5 @@ fn main() {
     test_trait_obj();
     test_trait_obj2();
     test_closure();
-    test_coroutine();*
+    test_coroutine();
 }

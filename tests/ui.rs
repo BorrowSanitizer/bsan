@@ -199,7 +199,7 @@ regexes! {
     // erase platform dependent line retrieved
     r"(-->\s+\S+/PLATFORM\.rs:l:c)\n\s*\|\s*\n\s*\d+\s*\|.*\n\s*\|\s*\n" => "$1\n",
     // erase paths into the crate registry
-    r"[^ ]*/\.?cargo/registry/.*/(.*\.rs)"  => "CARGO_REGISTRY/.../$1",
+    r"[^ ]*/\.?cargo/registry/.*/(.*\.(rs|c|cpp))"  => "CARGO_REGISTRY/.../$1",
     // normalize workspace paths to relative
     r"(/.*/tests/)([^ \n]+)" => "bsan/tests/$2",
     r"::h[0-9a-f]{16}\b" => "::HASH",
@@ -253,8 +253,9 @@ fn main() -> Result<()> {
     let tmpdir = tempfile::Builder::new().prefix("bsan-uitest-").tempdir()?;
     ui(Mode::Pass, "tests/pass", &target, WithoutDependencies, tmpdir.path())?;
     ui(Mode::Pass, "tests/pass-dep", &target, WithDependencies, tmpdir.path())?;
+    ui(Mode::Pass, "tests/miri-tests/pass", &target, WithoutDependencies, tmpdir.path())?;
     ui(Mode::Fail, "tests/fail", &target, WithoutDependencies, tmpdir.path())?;
+    ui(Mode::Fail, "tests/fail-dep", &target, WithDependencies, tmpdir.path())?;
     ui(Mode::Fail, "tests/miri-tests/fail", &target, WithoutDependencies, tmpdir.path())?;
-    ui(Mode::Fail, "tests/miri-tests/pass", &target, WithoutDependencies, tmpdir.path())?;
     Ok(())
 }

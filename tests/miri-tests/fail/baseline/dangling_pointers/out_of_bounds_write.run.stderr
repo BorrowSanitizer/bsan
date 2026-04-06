@@ -1,12 +1,12 @@
 error: Undefined Behavior: an access of size 2b at offset 0x6 is out of bounds for ALLOC of size 4b.
- --> bsan/tests/miri-tests/fail/baseline/dangling_pointers/out_of_bounds_write.rs:5:14
+ --> bsan/tests/miri-tests/fail/baseline/dangling_pointers/out_of_bounds_write.rs:8:14
   |
-5 | unsafe { *v.as_mut_ptr().wrapping_byte_add(6) = 0 }; //miri: ~ ERROR: attempting to access 2 bytes
+8 | unsafe { *v.as_mut_ptr().wrapping_byte_add(6) = 0 }; //miri: ~ ERROR: attempting to access 2 bytes
   |
 
 stack backtrace:
 0: out_of_bounds_write::main
- at bsan/tests/miri-tests/fail/baseline/dangling_pointers/out_of_bounds_write.rs:5:14
+ at bsan/tests/miri-tests/fail/baseline/dangling_pointers/out_of_bounds_write.rs:8:14
 1: <fn() as core::ops::function::FnOnce<()>>::call_once
  at RUSTLIB/core/src/ops/function.rs:250:5
 2: std::sys::backtrace::__rust_begin_short_backtrace
