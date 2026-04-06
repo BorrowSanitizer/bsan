@@ -51,15 +51,6 @@ const char kBsanFuncMarkTLSName[] = BSAN_FN("mark_tls");
 
 const char kBsanDebugPrefix[] = BSAN_DEBUG_FN();
 
-const char kBsanFuncAssertProvenanceNull[] = BSAN_DEBUG_FN("assert_null");
-const char kBsanFuncAssertProvenanceWildcard[] =
-    BSAN_DEBUG_FN("assert_wildcard");
-const char kBsanFuncAssertProvenanceValid[] = BSAN_DEBUG_FN("assert_valid");
-const char kBsanFuncAssertProvenanceInvalid[] = BSAN_DEBUG_FN("assert_invalid");
-const char kBsanFuncDebugGC[] = BSAN_DEBUG_FN("gc");
-const char kBsanFuncDebugParamTLS[] = BSAN_DEBUG_FN("param_tls");
-const char kBsanFuncDebugRetvalTLS[] = BSAN_DEBUG_FN("retval_tls");
-
 const char kBsanProvStackName[] = "__BSAN_PROV_STACK";
 const char kBsanParamTLSName[] = "__BSAN_PARAM_TLS";
 const char kBsanRetvalTLSName[] = "__BSAN_RETVAL_TLS";

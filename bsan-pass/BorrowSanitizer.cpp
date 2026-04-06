@@ -712,32 +712,6 @@ private:
             !BS.getAllocaSizeInBytes(AI).isZero());
   }
 
-  bool handleDebugFunction(CallBase &CB, Function *F) {
-    IRBuilder<> IRB(&CB);
-    auto Name = F->getName();
-
-    FunctionCallee Callee;
-    ProvenanceScalar Prov = assertProvenanceScalar(CB.getArgOperand(0));
-
-    if (Name == kBsanFuncAssertProvenanceInvalid) {
-      Callee = BS.BsanFuncAssertProvenanceInvalid;
-    } else if (Name == kBsanFuncAssertProvenanceValid) {
-      Callee = BS.BsanFuncAssertProvenanceValid;
-    } else if (Name == kBsanFuncAssertProvenanceNull) {
-      Callee = BS.BsanFuncAssertProvenanceNull;
-    } else if (Name == kBsanFuncAssertProvenanceWildcard) {
-      Callee = BS.BsanFuncAssertProvenanceWildcard;
-    } else {
-      // report_fatal_error("Unknown debug function: " + Twine(Name) + "\n");
-      return false;
-    }
-
-    IRB.CreateCall(Callee, {Prov.Tag, Prov.Info});
-    CB.eraseFromParent();
-
-    return true;
-  }
-
   void instrumentRetagMem(CallBase &CB) {
     IRBuilder<> IRB(&CB);
     Value *Operand = CB.getOperand(0);
@@ -829,10 +803,6 @@ private:
 
     Function *Callee = CB.getCalledFunction();
     if (Callee) {
-      if (Callee->getName().starts_with(kBsanDebugPrefix)) {
-        if (handleDebugFunction(CB, Callee))
-          return;
-      }
       if (isRetag(&CB)) {
         if (CB.getType() == BS.PtrTy) {
           return instrumentRetagReg(CB);
@@ -1599,18 +1569,6 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   BsanFuncDestroyStackSlot = M.getOrInsertFunction(
       kBsanFuncDestroyStackSlotName, AL, IRB.getVoidTy(), PtrTy);
-
-  BsanFuncAssertProvenanceNull = M.getOrInsertFunction(
-      kBsanFuncAssertProvenanceNull, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
-
-  BsanFuncAssertProvenanceWildcard = M.getOrInsertFunction(
-      kBsanFuncAssertProvenanceWildcard, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
-
-  BsanFuncAssertProvenanceValid = M.getOrInsertFunction(
-      kBsanFuncAssertProvenanceValid, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
-
-  BsanFuncAssertProvenanceInvalid = M.getOrInsertFunction(
-      kBsanFuncAssertProvenanceInvalid, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
 
   EHPersonality Pers = getDefaultEHPersonality(TargetTriple);
   DefaultPersonalityFn =
