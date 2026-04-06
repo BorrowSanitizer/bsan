@@ -41,7 +41,8 @@ void PrintStackTrace(StackTrace &stack) {
       Printf("%ld: %p\n", (i - 1), (void *)stack.trace[i]);
     }
     Printf("\nwarning: Symbolizer not found. Please add llvm-symbolizer"
-           " to your PATH for source code info (recommended).\n");
+           " to your PATH or set BSAN_SYMBOLIZER for source code info "
+           "(recommended).\n");
     return;
   }
   InternalScopedString frame_desc;
