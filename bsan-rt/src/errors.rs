@@ -80,7 +80,7 @@ impl ErrorFormatContext {
             }
             UBInfo::AccessOutOfBounds { alloc_id, access_size, alloc_size, offset } => {
                 result.push_str(&format!(
-                    "an access of size {access_size}b at offset 0x{offset:x} is out of bounds for {alloc_id:?} of size {alloc_size}b.\n"
+                    "an access of size {access_size} at offset 0x{offset:x} is out of bounds for {alloc_id:?} of size {alloc_size}.\n"
                 ));
                 result.push_str(&self.format_symbol_standalone(symbol));
                 result.push('\n');
@@ -187,7 +187,7 @@ impl ErrorFormatContext {
         }
 
         for (symbol, msg) in event_symbols {
-            if symbol != Symbol::Unresolved {
+            if !matches!(symbol, Symbol::Unresolved { .. }) {
                 buffer.push_str(&format!("help: {}\n", msg));
                 buffer.push_str(&self.format_symbol(symbol, max_indentation));
             }

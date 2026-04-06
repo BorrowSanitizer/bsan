@@ -27,7 +27,7 @@ pub struct Location {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Symbol {
     Resolved { file: String, line: u32, col: u32 },
-    Unresolved,
+    Unresolved { pc: usize },
     Unused,
 }
 
@@ -52,7 +52,10 @@ impl fmt::Display for Symbol {
             Symbol::Resolved { file, line, col } => {
                 write!(f, "{file}:{line}:{col}")
             }
-            _ => write!(f, "<unknown>"),
+            Symbol::Unresolved { pc } => {
+                write!(f, "pc:0x{pc:x}")
+            }
+            Symbol::Unused => unreachable!(),
         }
     }
 }
@@ -76,7 +79,7 @@ impl SanitizerCommon {
                 return Symbol::Resolved { file: s.to_string(), line, col: column };
             }
         }
-        Symbol::Unresolved
+        Symbol::Unresolved { pc: span.0 }
     }
 
     /// Read entire file into a String
