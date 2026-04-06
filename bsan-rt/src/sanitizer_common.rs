@@ -44,7 +44,7 @@ impl fmt::Display for Symbol {
             Symbol::Unresolved { pc } => {
                 write!(f, "pc:0x{pc:x}")
             }
-            Symbol::Unused => unreachable!(),
+            Symbol::Unused => write!(f, "<unused>"),
         }
     }
 }
