@@ -35,12 +35,15 @@ void ClearArgSlot(uptr Idx) { __BSAN_PARAM_TLS[Idx] = WILDCARD; }
 void ClearRetValSlot(uptr Idx) { __BSAN_RETVAL_TLS[Idx] = WILDCARD; }
 
 void PrintStackTrace(StackTrace &stack) {
+  Printf("stack backtrace:\n");
   if (GetEnv("BSAN_SYMBOLIZER") == nullptr) {
-    Printf("Symbolizer not found, please add llvm-symbolizer to your PATH for "
-           "source code information.\n");
+    for (uptr i = 1; i < stack.size; ++i) {
+      Printf("%ld: %p\n", (i - 1), (void *)stack.trace[i]);
+    }
+    Printf("\nwarning: Symbolizer not found. Please add llvm-symbolizer"
+           " to your PATH for source code info (recommended).\n");
     return;
   }
-  Printf("stack backtrace:\n");
   InternalScopedString frame_desc;
   for (uptr i = 1; i < stack.size; ++i) {
     uptr pc = stack.trace[i];

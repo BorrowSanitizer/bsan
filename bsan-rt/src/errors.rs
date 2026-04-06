@@ -187,10 +187,8 @@ impl ErrorFormatContext {
         }
 
         for (symbol, msg) in event_symbols {
-            if !matches!(symbol, Symbol::Unresolved { .. }) {
-                buffer.push_str(&format!("help: {}\n", msg));
-                buffer.push_str(&self.format_symbol(symbol, max_indentation));
-            }
+            buffer.push_str(&format!("help: {}\n", msg));
+            buffer.push_str(&self.format_symbol(symbol, max_indentation));
         }
         buffer.push('\n');
         buffer
@@ -203,22 +201,28 @@ impl ErrorFormatContext {
 
     fn format_symbol(&mut self, symbol: Symbol, indentation: usize) -> String {
         let mut buffer = String::new();
-        if let Symbol::Resolved { file: path, line, col } = symbol {
-            let max_indent = " ".repeat(indentation);
-            buffer.push_str(&format!("{max_indent}--> {path}:{line}:{col}\n"));
-            let file = self
-                .file_cache
-                .entry(path.clone())
-                .or_insert_with(|| SanitizerCommon::read_file(&path).unwrap_or_default());
-            if let Some(content) = SanitizerCommon::get_source_line(file, line) {
-                let line = line.to_string();
-                let line_indent_len = max(indentation, line.len()) - line.len();
-                let line_indent = " ".repeat(line_indent_len);
+        match symbol {
+            Symbol::Resolved { file: path, line, col } => {
+                let max_indent = " ".repeat(indentation);
+                buffer.push_str(&format!("{max_indent}--> {path}:{line}:{col}\n"));
+                let file = self
+                    .file_cache
+                    .entry(path.clone())
+                    .or_insert_with(|| SanitizerCommon::read_file(&path).unwrap_or_default());
+                if let Some(content) = SanitizerCommon::get_source_line(file, line) {
+                    let line = line.to_string();
+                    let line_indent_len = max(indentation, line.len()) - line.len();
+                    let line_indent = " ".repeat(line_indent_len);
 
-                buffer.push_str(&format!("{max_indent} |\n",));
-                buffer.push_str(&format!("{line_indent}{line} | {content}\n"));
-                buffer.push_str(&format!("{max_indent} |\n",));
+                    buffer.push_str(&format!("{max_indent} |\n",));
+                    buffer.push_str(&format!("{line_indent}{line} | {content}\n"));
+                    buffer.push_str(&format!("{max_indent} |\n",));
+                }
             }
+            Symbol::Unresolved { pc } => {
+                buffer.push_str(&format!(" --> 0x{pc:x}\n"));
+            }
+            Symbol::Unused => (),
         }
         buffer
     }
