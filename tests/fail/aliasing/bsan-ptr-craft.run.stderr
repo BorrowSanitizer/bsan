@@ -16,7 +16,7 @@ help: the conflicting tag <TAG>(unprotected) was created here, in the initial st
 stack backtrace:
 0: <std::alloc::System as core::alloc::global::GlobalAlloc>::dealloc
  at RUSTLIB/std/src/sys/alloc/PLATFORM.rs:l:c
-1: alloc::alloc::dealloc
+1: __rustc::__rdl_dealloc
+ at RUSTLIB/std/src/alloc.rs:463:25
+2: alloc::alloc::dealloc
  at RUSTLIB/alloc/src/alloc.rs:115:14
-2: <alloc::alloc::Global>::deallocate_impl_runtime
- at RUSTLIB/alloc/src/alloc.rs:209:22
