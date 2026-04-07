@@ -1294,7 +1294,6 @@ private:
     }
     IRB.CreateStore(FrameTop, BS.ProvStack);
 
-
     if (StaticAllocaVec.size() > 0) {
       for (AllocaInst *AI : StaticAllocaVec) {
         ProvenanceScalar Root = assertProvenanceScalar(BB, AI);
@@ -1304,7 +1303,7 @@ private:
         IRB.CreateCall(BS.BsanFuncDestroyStackSlot, {Root.Info});
       }
     }
-    
+
     for (auto &Ptr : ByValArgs) {
       ProvenanceScalar Root = assertProvenanceScalar(BB, Ptr);
       IRB.CreateCall(BS.BsanFuncDeallocStack, {Ptr, Root.Tag, Root.Info});
