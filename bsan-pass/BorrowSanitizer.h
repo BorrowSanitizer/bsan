@@ -104,17 +104,6 @@ public:
   FunctionCallee BsanFuncReserveStackSlot;
   FunctionCallee BsanFuncDestroyStackSlot;
 
-  FunctionCallee BsanFuncAssertProvenanceNull;
-  FunctionCallee BsanFuncAssertProvenanceWildcard;
-  FunctionCallee BsanFuncAssertProvenanceValid;
-  FunctionCallee BsanFuncAssertProvenanceInvalid;
-
-  FunctionCallee BsanFuncDebugPrint;
-  FunctionCallee BsanFuncDebugPrintBorrowState;
-  FunctionCallee BsanFuncDebugTreeSize;
-  FunctionCallee BsanFuncDebugSnapshot;
-  FunctionCallee BsanFuncDebugPrintDiff;
-
   FunctionCallee DefaultPersonalityFn;
 
   ProvenanceScalar WildcardProvenance;

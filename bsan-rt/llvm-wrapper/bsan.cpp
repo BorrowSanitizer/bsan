@@ -351,24 +351,42 @@ SANITIZER_WEAK_ATTRIBUTE void __bsan_dealloc_stack_impl(void *ptr,
                                                         BorTag bor_tag,
                                                         AllocInfo *alloc_info,
                                                         Span pc) {}
-// Weak Debugging
-SANITIZER_WEAK_ATTRIBUTE void __bsan_debug_assert_null(BorTag bor_tag,
-                                                       AllocInfo *alloc_info) {}
-SANITIZER_WEAK_ATTRIBUTE void
-__bsan_debug_assert_wildcard(BorTag bor_tag, AllocInfo *alloc_info) {}
-SANITIZER_WEAK_ATTRIBUTE void __bsan_debug_assert_valid(BorTag bor_tag,
+// Debugging
+SANITIZER_WEAK_ATTRIBUTE void __bsan_print(BorTag bor_tag,
+                                           AllocInfo *alloc_info) {}
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_print(void *ptr) {
+  Provenance *Slot = GetArgSlot(0);
+  __bsan_print(Slot->Tag, Slot->Info);
+}
+
+SANITIZER_WEAK_ATTRIBUTE void __bsan_print_borrow_state(BorTag bor_tag,
                                                         AllocInfo *alloc_info) {
 }
-SANITIZER_WEAK_ATTRIBUTE void
-__bsan_debug_assert_invalid(BorTag bor_tag, AllocInfo *alloc_info) {}
-SANITIZER_WEAK_ATTRIBUTE void __bsan_debug_print(BorTag bor_tag,
-                                                 AllocInfo *alloc_info) {}
-SANITIZER_WEAK_ATTRIBUTE void
-__bsan_debug_print_borrow_state(BorTag bor_tag, AllocInfo *alloc_info) {}
-SANITIZER_WEAK_ATTRIBUTE void __bsan_debug_tree_size(BorTag bor_tag,
-                                                     AllocInfo *alloc_info) {}
-SANITIZER_WEAK_ATTRIBUTE void __bsan_debug_print_diff(BorTag bor_tag,
-                                                      AllocInfo *alloc_info) {}
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_print_borrow_state(void *ptr) {
+  Provenance *Slot = GetArgSlot(0);
+  __bsan_print_borrow_state(Slot->Tag, Slot->Info);
+}
+
+SANITIZER_WEAK_ATTRIBUTE void __bsan_tree_size(BorTag bor_tag,
+                                               AllocInfo *alloc_info) {}
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_tree_size(void *ptr) {
+  Provenance *Slot = GetArgSlot(0);
+  __bsan_tree_size(Slot->Tag, Slot->Info);
+}
+
+SANITIZER_WEAK_ATTRIBUTE void __bsan_snapshot(BorTag bor_tag,
+                                              AllocInfo *alloc_info) {}
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_snapshot(void *ptr) {
+  Provenance *Slot = GetArgSlot(0);
+  __bsan_snapshot(Slot->Tag, Slot->Info);
+}
+
+SANITIZER_WEAK_ATTRIBUTE void __bsan_print_diff(BorTag bor_tag,
+                                                AllocInfo *alloc_info) {}
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_print_diff(void *ptr) {
+  Provenance *Slot = GetArgSlot(0);
+  __bsan_print_diff(Slot->Tag, Slot->Info);
+}
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_abort() {
   // Printf("BorrowSanitizer: aborting due to a fatal error.\n");

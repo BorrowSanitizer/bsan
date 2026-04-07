@@ -712,39 +712,6 @@ private:
             !BS.getAllocaSizeInBytes(AI).isZero());
   }
 
-  void handleDebugFunction(CallBase &CB, Function *F) {
-    IRBuilder<> IRB(&CB);
-    auto Name = F->getName();
-
-    FunctionCallee Callee;
-    ProvenanceScalar Prov = assertProvenanceScalar(CB.getArgOperand(0));
-
-    if (Name == kBsanFuncAssertProvenanceInvalid) {
-      Callee = BS.BsanFuncAssertProvenanceInvalid;
-    } else if (Name == kBsanFuncAssertProvenanceValid) {
-      Callee = BS.BsanFuncAssertProvenanceValid;
-    } else if (Name == kBsanFuncAssertProvenanceNull) {
-      Callee = BS.BsanFuncAssertProvenanceNull;
-    } else if (Name == kBsanFuncAssertProvenanceWildcard) {
-      Callee = BS.BsanFuncAssertProvenanceWildcard;
-    } else if (Name == kBsanFuncDebugPrint) {
-      Callee = BS.BsanFuncDebugPrint;
-    } else if (Name == kBsanFuncDebugPrintBorrowState) {
-      Callee = BS.BsanFuncDebugPrintBorrowState;
-    } else if (Name == kBsanFuncDebugTreeSize) {
-      Callee = BS.BsanFuncDebugTreeSize;
-    } else if (Name == kBsanFuncDebugSnapshot) {
-      Callee = BS.BsanFuncDebugSnapshot;
-    } else if (Name == kBsanFuncDebugPrintDiff) {
-      Callee = BS.BsanFuncDebugPrintDiff;
-    } else {
-      report_fatal_error("Unknown debug function: " + Twine(Name) + "\n");
-    }
-
-    IRB.CreateCall(Callee, {Prov.Tag, Prov.Info});
-    CB.eraseFromParent();
-  }
-
   void instrumentRetagMem(CallBase &CB) {
     IRBuilder<> IRB(&CB);
     Value *Operand = CB.getOperand(0);
@@ -807,6 +774,7 @@ private:
   }
 
   bool shouldTrustFunction(Value *V) {
+
     if (isAllocationFn(V, TLI)) {
       return true;
     }
@@ -816,6 +784,9 @@ private:
     }
 
     if (Function *F = dyn_cast<Function>(V)) {
+      if (F->getName().starts_with(kBsanPrefix)) {
+        return true;
+      }
       LibFunc LibFn;
       TLI->getLibFunc(*F, LibFn);
       return isLibFreeFunction(F, LibFn);
@@ -832,12 +803,6 @@ private:
 
     Function *Callee = CB.getCalledFunction();
     if (Callee) {
-      if (Callee->getName().starts_with(kBsanDebugPrefix)) {
-        return handleDebugFunction(CB, Callee);
-      }
-      if (Callee->getName().starts_with(kBsanPrefix)) {
-        return;
-      }
       if (isRetag(&CB)) {
         if (CB.getType() == BS.PtrTy) {
           return instrumentRetagReg(CB);
@@ -1604,33 +1569,6 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   BsanFuncDestroyStackSlot = M.getOrInsertFunction(
       kBsanFuncDestroyStackSlotName, AL, IRB.getVoidTy(), PtrTy);
-
-  BsanFuncAssertProvenanceNull = M.getOrInsertFunction(
-      kBsanFuncAssertProvenanceNull, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
-
-  BsanFuncAssertProvenanceWildcard = M.getOrInsertFunction(
-      kBsanFuncAssertProvenanceWildcard, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
-
-  BsanFuncAssertProvenanceValid = M.getOrInsertFunction(
-      kBsanFuncAssertProvenanceValid, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
-
-  BsanFuncAssertProvenanceInvalid = M.getOrInsertFunction(
-      kBsanFuncAssertProvenanceInvalid, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
-
-  BsanFuncDebugPrint = M.getOrInsertFunction(kBsanFuncDebugPrint, AL,
-                                             IRB.getVoidTy(), IntptrTy, PtrTy);
-
-  BsanFuncDebugPrintBorrowState = M.getOrInsertFunction(
-      kBsanFuncDebugPrintBorrowState, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
-
-  BsanFuncDebugTreeSize = M.getOrInsertFunction(
-      kBsanFuncDebugTreeSize, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
-
-  BsanFuncDebugSnapshot = M.getOrInsertFunction(
-      kBsanFuncDebugSnapshot, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
-
-  BsanFuncDebugPrintDiff = M.getOrInsertFunction(
-      kBsanFuncDebugPrintDiff, AL, IRB.getVoidTy(), IntptrTy, PtrTy);
 
   EHPersonality Pers = getDefaultEHPersonality(TargetTriple);
   DefaultPersonalityFn =
