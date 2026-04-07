@@ -2,14 +2,11 @@
 #include "Declarations.h"
 #include "Provenance.h"
 #include "Retag.h"
-#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/StackLifetime.h"
-#include "llvm/Analysis/StackSafetyAnalysis.h"
 #include "llvm/Analysis/ValueTracking.h"
-
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/DataLayout.h"
@@ -18,6 +15,7 @@
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/PatternMatch.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/CommandLine.h"
@@ -29,26 +27,85 @@
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
 using namespace llvm;
+using namespace llvm::PatternMatch;
 
 /*
  * CLI Argument for handling inline assembly
  */
+
 static cl::opt<bool> ClHandleAsmConservative(
     "bsan-asm-conservative",
     cl::desc("Conservatively handle inline assembly by setting all pointer "
              "outputs to wildcard Provenance"),
     cl::Hidden, cl::init(true));
 
+namespace {
+
+Value *addPointer(IRBuilder<> &IRB, Value *Pointer, Value *Offset) {
+  if (match(Offset, m_Zero()))
+    return Pointer;
+  return IRB.CreateGEP(IRB.getInt8Ty(), Pointer, Offset);
+}
+
+Value *subtractPointer(IRBuilder<> &IRB, Value *Pointer, Value *Offset) {
+  if (match(Offset, m_Zero()))
+    return Pointer;
+  return IRB.CreateGEP(IRB.getInt8Ty(), Pointer, IRB.CreateNeg(Offset));
+}
+
+TypeSize assertAllocaSize(const AllocaInst &AI) {
+  return *AI.getAllocationSize(AI.getDataLayout());
+}
+
+// We only instrument allocations that have a non-zero size.
+bool shouldInstrumentAlloca(const AllocaInst &AI) {
+  // Although Rust emits retags for ZSTs, tracking
+  // allocations leads to false positive errors—probably
+  // due to interactions with lowering.
+  const DataLayout &DL = AI.getDataLayout();
+  Type *AllocType = AI.getAllocatedType();
+  std::optional<TypeSize> AllocSize = AI.getAllocationSize(DL);
+  return (AllocType->isSized() && AllocSize.has_value() &&
+          !AllocSize.value().isZero());
+}
+
+bool needsTLSValidation(const Function *Callee) {
+  return !Callee ||
+         (Callee->isDeclaration() || Callee->hasExternalLinkage() ||
+          Callee->hasExternalWeakLinkage() || Callee->hasAddressTaken());
+}
+
+bool shouldTrustFunction(const TargetLibraryInfo *TLI, const Value *V) {
+  if (isAllocationFn(V, TLI)) {
+    return true;
+  }
+
+  if (const CallBase *CB = dyn_cast<CallBase>(V)) {
+    return getFreedOperand(CB, TLI);
+  }
+
+  if (const Function *F = dyn_cast<Function>(V)) {
+    LibFunc LibFn;
+    TLI->getLibFunc(*F, LibFn);
+    return isLibFreeFunction(F, LibFn);
+  }
+
+  return false;
+}
+
+} // namespace
+
 class StackSlotAllocator {
 private:
   DenseMap<BasicBlock *, unsigned> BlockOffsets;
   DenseMap<BasicBlock *, Value *> IncomingOffsets;
+  SmallVector<PHINode *> SlotPHINodes;
 
-public:
   Value *getBlockOffset(BasicBlock *BB, Type *Ty) {
     return ConstantInt::get(Ty, BlockOffsets.lookup(BB));
   }
 
+public:
   Value *allocSlot(DominatorTree &DT, IRBuilder<> &IRB, Type *Ty) {
     unsigned &Offset = BlockOffsets[IRB.GetInsertBlock()];
     Offset += 1;
@@ -58,7 +115,7 @@ public:
   Value *getOutgoingOffset(DominatorTree &DT, IRBuilder<> &IRB, Type *Ty) {
     BasicBlock *BB = IRB.GetInsertBlock();
     Value *Incoming = getIncomingOffset(DT, BB, Ty);
-    Value *Within = getBlockOffset(BB, Ty);
+    Value *Within = ConstantInt::get(Ty, BlockOffsets.lookup(BB));
     return IRB.CreateAdd(Incoming, Within);
   }
 
@@ -190,16 +247,11 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   SmallVector<std::tuple<BasicBlock *, AllocaInst *, ProvenanceScalar>>
       AllocaProvPHINodes;
 
-  // Operand retag intrinsics (`__rust_retag_operand`), which need
-  // to be replaced with their first argument (the pointer being retagged).
-  SmallVector<CallBase *> RetagRegVec;
-
   // Place retag intrinsics (`__rust_retag_place`), which update the shadow
   // provenance value for their first argument, which is a place containing
   // the pointer receiving the retag.
-  SmallVector<CallBase *> RetagMemVec;
-
-  SmallVector<CallBase *> FnEntryRetags;
+  SmallVector<CallBase *> Retags;
+  unsigned NumFnEntryRetags = 0;
 
   // The start of the current frame of protected tags. This is the "top" of the
   // frame, since we decrement from the beginning of the chunk. The thread-local
@@ -244,31 +296,18 @@ public:
 
     patchShadowPHINodes();
     patchAllocaPHINodes();
-    removeRetagIntrinsics();
+
+    for (CallBase *CB : Retags) {
+      if (CB->getType()->isPointerTy()) {
+        CB->replaceAllUsesWith(CB->getOperand(0));
+      }
+      CB->eraseFromParent();
+    }
+
     return true;
   }
 
 private:
-  Value *addPointer(IRBuilder<> &IRB, const DataLayout *DL, Value *Pointer,
-                    Value *Offset) {
-    if (ConstantInt *CI = dyn_cast<ConstantInt>(Offset))
-      if (CI->isZero())
-        return Pointer;
-    Value *Base = IRB.CreatePointerCast(Pointer, IRB.getIntPtrTy(*DL));
-    Base = IRB.CreateAdd(Base, Offset);
-    return IRB.CreateIntToPtr(Base, IRB.getPtrTy());
-  }
-
-  Value *subtractPointer(IRBuilder<> &IRB, const DataLayout *DL, Value *Pointer,
-                         Value *Offset) {
-    if (ConstantInt *CI = dyn_cast<ConstantInt>(Offset))
-      if (CI->isZero())
-        return Pointer;
-    Value *Base = IRB.CreatePointerCast(Pointer, IRB.getIntPtrTy(*DL));
-    Base = IRB.CreateSub(Base, Offset);
-    return IRB.CreateIntToPtr(Base, IRB.getPtrTy());
-  }
-
   // Will fail with an error if anything other than a scalar provenance value is
   // present. If no provenance has been assigned yet, then return a wildcard
   // provenance value.
@@ -276,12 +315,13 @@ private:
     std::optional<Provenance> OptProv = getProvenance(BB, Key);
     if (OptProv.has_value()) {
       Provenance Prov = OptProv.value();
-      if (Prov.isScalar()) {
+      if (Prov.Elems.isVector()) {
+        report_fatal_error(
+            "Expected scalar provenance, but found vector provenance!");
+      } else {
         ProvenanceScalar Scalar = Prov.assertScalar();
         return Scalar;
       }
-      report_fatal_error(
-          "Expected scalar provenance, but found vector provenance!");
     }
     return BS.WildcardProvenance;
   }
@@ -289,7 +329,7 @@ private:
   Provenance assertProvenance(IRBuilder<> &IRB, ProvenanceComponent &Comp,
                               ProvenanceKey Key) {
     BasicBlock *BB = IRB.GetInsertBlock();
-    return assertProvenance(IRB, BB, Comp.Kind, Comp.Elems, Key);
+    return assertProvenance(IRB, BB, Comp.Elems, Key);
   }
 
   // Asserts that there is either a provenance value at the given index, or that
@@ -298,17 +338,16 @@ private:
   // but do not care whether it's a vector or scalar. Checks for consistency
   // against a given provenance component.
   Provenance assertProvenance(IRBuilder<> &IRB, BasicBlock *BB,
-                              ProvenanceKind Kind, ElementCount &Elems,
-                              ProvenanceKey Key) {
+                              ElementCount &Elems, ProvenanceKey Key) {
     std::optional<Provenance> OptProv = getProvenance(BB, Key);
     if (OptProv.has_value()) {
       Provenance Prov = OptProv.value();
-      if (Prov.Kind != Kind) {
+      if (Prov.Elems != Elems) {
         report_fatal_error("Provenance type mismatch.");
       }
       return Prov;
     }
-    return Provenance::wildcard(IRB, BS.PL, Elems, Kind);
+    return Provenance::wildcard(IRB, BS.PL, Elems);
   }
 
   // Asserts that there is either a provenance value at the given index, or that
@@ -409,9 +448,8 @@ private:
     Value *NextProvOffset = ProvOffset;
     switch (CurrentTy->getTypeID()) {
     case Type::PointerTyID: {
-      ProvenanceComponent Comp(ByteOffset, TypeSize, ProvOffset, BS.One,
-                               ElementCount::get(1, false),
-                               ProvenanceKind::Scalar);
+      ProvenanceComponent Comp(ByteOffset, TypeSize, ProvOffset,
+                               ElementCount::get(1, false));
       Components.push_back(Comp);
       NextProvOffset = IRB.CreateAdd(ProvOffset, BS.One);
     } break;
@@ -484,7 +522,7 @@ private:
   void storeProvenanceToShadow(IRBuilder<> &IRB, Value *ObjAddr,
                                Provenance Prov, AtomicOrdering Ordering) {
     ProvenancePointer ProvPtr;
-    if (Prov.isVector()) {
+    if (Prov.Elems.isVector()) {
       report_fatal_error("Vectors are not supported.");
     } else {
       ProvenanceScalar Scalar = Prov.assertScalar();
@@ -499,7 +537,7 @@ private:
   Provenance loadProvenanceFromShadow(IRBuilder<> &IRB,
                                       ProvenanceComponent &Comp,
                                       Value *ObjAddr) {
-    if (Comp.isVector()) {
+    if (Comp.Elems.isVector()) {
       report_fatal_error("Vectors are not supported.");
     } else {
       Value *Tmp = IRB.CreateAlloca(BS.PL.ProvenanceTy, nullptr);
@@ -525,13 +563,9 @@ private:
 
         if (CallBase *CB = dyn_cast<CallBase>(&I)) {
           if (isRetag(CB)) {
+            Retags.push_back(CB);
             if (isFnEntryRetag(CB)) {
-              FnEntryRetags.push_back(CB);
-            }
-            if (CB->getType() == BS.PtrTy) {
-              RetagRegVec.push_back(CB);
-            } else {
-              RetagMemVec.push_back(CB);
+              NumFnEntryRetags += 1;
             }
           }
           if (IntrinsicInst *I = dyn_cast<IntrinsicInst>(CB)) {
@@ -572,18 +606,19 @@ private:
           Value *CurrentArrayByteOffset =
               EntryIRB.CreateMul(NumParamProv, BS.PL.ProvenanceSize);
           Value *CurrentArraySlot =
-              addPointer(EntryIRB, BS.DL, BS.ParamTLS, CurrentArrayByteOffset);
+              addPointer(EntryIRB, BS.ParamTLS, CurrentArrayByteOffset);
           ProvenancePointer Ptr =
               C.getPointerToProvenance(EntryIRB, BS.PL, CurrentArraySlot);
           ArgumentProvenance[&Arg].push_back(Ptr);
-          NumParamProv =
-              EntryIRB.CreateAdd(NumParamProv, C.NumProvenanceValues);
+
+          Value *NumProv = EntryIRB.CreateElementCount(BS.IntptrTy, C.Elems);
+          NumParamProv = EntryIRB.CreateAdd(NumParamProv, NumProv);
         }
       }
     }
 
     if (needsTLSValidation(&F)) {
-      if (!shouldTrustFunction(&F)) {
+      if (!shouldTrustFunction(TLI, &F)) {
         EntryIRB.CreateCall(BS.BsanFuncValidateParamTLS, {&F, NumParamProv});
       }
     }
@@ -613,8 +648,8 @@ private:
     for (auto &[PN, Prov, Idx] : ProvPHINodes) {
       for (auto [V, IncomingBlock] :
            llvm::zip(PN->incoming_values(), PN->blocks())) {
-        Provenance IncomingProv = assertProvenance(
-            EntryIRB, IncomingBlock, Prov.Kind, Prov.Elems, {V, Idx});
+        Provenance IncomingProv =
+            assertProvenance(EntryIRB, IncomingBlock, Prov.Elems, {V, Idx});
         Prov.addIncoming(IncomingBlock, IncomingProv);
       }
     }
@@ -665,28 +700,9 @@ private:
     } while (!PHIToDelete.empty());
   }
 
-  void removeRetagIntrinsics() {
-    for (CallBase *CB : RetagRegVec) {
-      CB->replaceAllUsesWith(CB->getOperand(0));
-      CB->eraseFromParent();
-    }
-    for (CallBase *CB : RetagMemVec) {
-      CB->eraseFromParent();
-    }
-  }
-
   Value *newBorrowTag(IRBuilder<> &IRB) {
     return IRB.CreateAtomicRMW(AtomicRMWInst::Add, BS.BorTagCounter, BS.One,
                                std::nullopt, AtomicOrdering::Monotonic);
-  }
-
-  // We only instrument allocations that have a non-zero size.
-  bool shouldInstrumentAlloca(AllocaInst &AI) {
-    // Although Rust emits retags for ZSTs, tracking
-    // allocations leads to false positive errors—probably
-    // due to interactions with lowering.
-    return (AI.getAllocatedType()->isSized() &&
-            !BS.getAllocaSizeInBytes(AI).isZero());
   }
 
   void instrumentRetagMem(CallBase &CB) {
@@ -697,9 +713,7 @@ private:
     Value *Tmp = IRB.CreateAlloca(BS.PL.ProvenanceTy, nullptr);
     IRB.CreateCall(BS.BsanFuncShadowLoad, {Operand, Tmp});
     ProvenancePointerScalar SrcProvPtr(IRB, BS.PL, Tmp);
-    ProvenanceScalar SrcProv = Provenance::loadScalar(
-        IRB, BS.PL, SrcProvPtr, AtomicOrdering::NotAtomic);
-
+    ProvenanceScalar SrcProv = ProvenanceScalar::load(IRB, BS.PL, SrcProvPtr);
     ProvenanceScalar RetaggedProv = instrumentRetag(IRB, CB, SrcAddr, SrcProv);
     IRB.CreateCall(BS.BsanFuncShadowStore,
                    {RetaggedProv.Tag, RetaggedProv.Info, Operand});
@@ -745,41 +759,13 @@ private:
   Value *allocStackSlot(IRBuilder<> &IRB) {
     Value *SlotOffset = StackSlots.allocSlot(DT, IRB, BS.IntptrTy);
     Value *ProvOffset = IRB.CreateMul(SlotOffset, BS.PL.ProvenanceSize);
-    return subtractPointer(IRB, BS.DL, FrameTop, ProvOffset);
+    return subtractPointer(IRB, FrameTop, ProvOffset);
   }
 
   Value *getStackOffset(IRBuilder<> &IRB) {
     Value *CurrOffset = StackSlots.getOutgoingOffset(DT, IRB, BS.IntptrTy);
     Value *ProvOffset = IRB.CreateMul(CurrOffset, BS.PL.ProvenanceSize);
-    return subtractPointer(IRB, BS.DL, FrameTop, ProvOffset);
-  }
-
-  bool needsTLSValidation(Function *Callee) {
-    return !Callee ||
-           (Callee->isDeclaration() || Callee->hasExternalLinkage() ||
-            Callee->hasExternalWeakLinkage() || Callee->hasAddressTaken());
-  }
-
-  bool shouldTrustFunction(Value *V) {
-
-    if (isAllocationFn(V, TLI)) {
-      return true;
-    }
-
-    if (CallBase *CB = dyn_cast<CallBase>(V)) {
-      return getFreedOperand(CB, TLI);
-    }
-
-    if (Function *F = dyn_cast<Function>(V)) {
-      if (F->getName().starts_with(kBsanPrefix)) {
-        return true;
-      }
-      LibFunc LibFn;
-      TLI->getLibFunc(*F, LibFn);
-      return isLibFreeFunction(F, LibFn);
-    }
-
-    return false;
+    return subtractPointer(IRB, FrameTop, ProvOffset);
   }
 
   using InstVisitor<BorrowSanitizerVisitor>::visit;
@@ -822,15 +808,15 @@ private:
       SmallVector<ProvenanceComponent> *Components =
           getProvenanceComponents(Before, Arg->getType());
       for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
-        Value *Slot = addPointer(Before, BS.DL, BS.ParamTLS, ParamByteWidth);
+        Value *Slot = addPointer(Before, BS.ParamTLS, ParamByteWidth);
 
         Provenance ProvSrc = assertProvenance(Before, Comp, {Arg, Idx});
         ProvenancePointer Dest =
-            ProvenancePointer(Before, BS.PL, Slot, Comp.Elems, ProvSrc.Kind);
+            ProvenancePointer(Before, BS.PL, Slot, Comp.Elems);
         ProvSrc.store(Before, BS.PL, Dest);
 
-        Value *ByteWidth =
-            Before.CreateMul(Comp.NumProvenanceValues, BS.PL.ProvenanceSize);
+        Value *NumProv = Before.CreateElementCount(BS.IntptrTy, Comp.Elems);
+        Value *ByteWidth = Before.CreateMul(NumProv, BS.PL.ProvenanceSize);
         ParamByteWidth = Before.CreateAdd(ParamByteWidth, ByteWidth);
       }
     }
@@ -855,23 +841,22 @@ private:
       // array is populated with default values.
       Value *RetvalByteWidth = BS.Zero;
       for (const auto &[Idx, Comp] : llvm::enumerate(*ReturnComponents)) {
-        Value *Slot = addPointer(After, BS.DL, BS.RetvalTLS, RetvalByteWidth);
+        Value *Slot = addPointer(After, BS.RetvalTLS, RetvalByteWidth);
 
         ProvenancePointer Ptr = Comp.getPointerToProvenance(After, BS.PL, Slot);
         ProvenancePointers.push_back({Idx, Ptr});
 
-        Value *ByteWidth =
-            Before.CreateMul(Comp.NumProvenanceValues, BS.PL.ProvenanceSize);
+        Value *NumProv = Before.CreateElementCount(BS.IntptrTy, Comp.Elems);
+        Value *ByteWidth = Before.CreateMul(NumProv, BS.PL.ProvenanceSize);
         RetvalByteWidth = Before.CreateAdd(RetvalByteWidth, ByteWidth);
-        NumReturnProv =
-            Before.CreateAdd(NumReturnProv, Comp.NumProvenanceValues);
+        NumReturnProv = Before.CreateAdd(NumReturnProv, NumProv);
       }
     }
     // We need to validate thread-local storage before we load provenance
     // values from it, but we also need to know the number of provenance
     // values associated with the return value to perform initialization.
     if (needsTLSValidation(Callee)) {
-      if (shouldTrustFunction(&CB)) {
+      if (shouldTrustFunction(TLI, &CB)) {
         Value *Marker = Before.CreateCall(BS.BsanFuncMarkTLS,
                                           {ConstantPointerNull::get(BS.PtrTy)});
         After.CreateStore(Marker, BS.TLSMarker);
@@ -886,54 +871,37 @@ private:
     }
   }
 
-  void visitAsmInstruction(Instruction &I) {
-    CallBase *CB = cast<CallBase>(&I);
-    IRBuilder<> IRB(&I);
-    InlineAsm *IA = cast<InlineAsm>(CB->getCalledOperand());
-    int NumOutputs = getNumOutputArgs(IA, CB);
+  void visitAsmInstruction(CallBase &CB) {
+    IRBuilder<> IRB(&CB);
+    InlineAsm *IA = cast<InlineAsm>(CB.getCalledOperand());
 
-    // Get the output arguments
+    int NumRetOutputs = 0;
+    Type *RetTy = CB.getType();
+    if (!RetTy->isVoidTy()) {
+      if (auto *ST = dyn_cast<StructType>(RetTy)) {
+        NumRetOutputs = ST->getNumElements();
+      } else {
+        NumRetOutputs = 1;
+      }
+    }
+
+    InlineAsm::ConstraintInfoVector Constraints = IA->ParseConstraints();
+    unsigned NumOutputs = llvm::count_if(Constraints, [](const auto &Info) {
+      return Info.Type == InlineAsm::isOutput;
+    });
+
+    NumOutputs -= NumRetOutputs;
+
     for (int Idx = 0; Idx < NumOutputs; Idx++) {
-      Value *Operand = CB->getOperand(Idx);
-
-      Type *OpType = Operand->getType();
-
-      // Handle aggregate values
+      Value *Operand = CB.getOperand(Idx);
       SmallVector<ProvenanceComponent> *Components =
-          getProvenanceComponents(IRB, OpType);
-
+          getProvenanceComponents(IRB, Operand->getType());
       for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
         setProvenance({Operand, Idx}, BS.WildcardProvenance);
       }
     }
   }
 
-  // Ported from MSAN
-  /// Get the number of output arguments returned by pointers.
-  int getNumOutputArgs(InlineAsm *IA, CallBase *CB) {
-    int NumRetOutputs = 0;
-    int NumOutputs = 0;
-    Type *RetTy = cast<Value>(CB)->getType();
-    if (!RetTy->isVoidTy()) {
-      // Register outputs are returned via the CallInst return value.
-      auto *ST = dyn_cast<StructType>(RetTy);
-      if (ST)
-        NumRetOutputs = ST->getNumElements();
-      else
-        NumRetOutputs = 1;
-    }
-    InlineAsm::ConstraintInfoVector Constraints = IA->ParseConstraints();
-    for (const InlineAsm::ConstraintInfo &Info : Constraints) {
-      switch (Info.Type) {
-      case InlineAsm::isOutput:
-        NumOutputs++;
-        break;
-      default:
-        break;
-      }
-    }
-    return NumOutputs - NumRetOutputs;
-  }
   ProvenanceScalar
   createScalarProvenancePHI(IRBuilder<> &IRB,
                             iterator_range<pred_iterator> Blocks) {
@@ -952,7 +920,7 @@ private:
 
   Provenance createProvenancePHI(IRBuilder<> &IRB, ProvenanceComponent Comp,
                                  iterator_range<pred_iterator> Blocks) {
-    if (Comp.isVector()) {
+    if (Comp.Elems.isVector()) {
       report_fatal_error("Vectors are not supported.");
     }
     return createScalarProvenancePHI(IRB, Blocks);
@@ -983,7 +951,7 @@ private:
   }
 
   ProvenanceScalar createAllocaMetadata(IRBuilder<> &IRB, AllocaInst *AI) {
-    TypeSize TS = BS.getAllocaSizeInBytes(*AI);
+    TypeSize TS = assertAllocaSize(*AI);
     Value *Size = IRB.CreateTypeSize(BS.IntptrTy, TS);
     Value *Tag = newBorrowTag(IRB);
     Value *Info = IRB.CreateCall(BS.BsanFuncReserveStackSlot, {});
@@ -992,7 +960,7 @@ private:
 
   void initAllocaMetadata(IRBuilder<> &IRB, AllocaInst *AI,
                           ProvenanceScalar Prov) {
-    TypeSize TS = BS.getAllocaSizeInBytes(*AI);
+    TypeSize TS = assertAllocaSize(*AI);
     Value *Size = IRB.CreateTypeSize(BS.IntptrTy, TS);
     IRB.CreateCall(BS.BsanFuncAllocStack, {AI, Size, Prov.Tag, Prov.Info});
   }
@@ -1088,7 +1056,7 @@ private:
     for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
       ShadowFootprint Footprint = Comp.Footprint;
       Value *ByteOffset = Footprint.ByteOffset.getValue(IRB, BS.IntptrTy);
-      Value *ObjAddr = addPointer(IRB, BS.DL, Base, ByteOffset);
+      Value *ObjAddr = addPointer(IRB, Base, ByteOffset);
       Provenance Prov = loadProvenanceFromShadow(IRB, Comp, ObjAddr);
       setProvenance({&LI, Idx}, Prov);
     }
@@ -1098,7 +1066,7 @@ private:
   bool shouldClearProvenance(IRBuilder<> &IRB, StoreInst &SI) {
     Value *Dest = SI.getPointerOperand()->stripPointerCastsAndAliases();
     if (AllocaInst *AI = dyn_cast<AllocaInst>(Dest)) {
-      TypeSize TS = BS.getAllocaSizeInBytes(*AI);
+      TypeSize TS = assertAllocaSize(*AI);
       if (TS.isFixed()) {
         DynSize Size(IRB.CreateTypeSize(BS.IntptrTy, TS));
         std::optional<unsigned> ConstSize = Size.constant();
@@ -1133,6 +1101,7 @@ private:
         getProvenanceComponents(NextIRB, Val->getType());
 
     DynSize Offset = DynSize(BS.Zero);
+
     for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
       ShadowFootprint Footprint = Comp.Footprint;
       Value *ByteOffset = Footprint.ByteOffset.getValue(IRB, BS.IntptrTy);
@@ -1140,20 +1109,21 @@ private:
         if (Offset != Footprint.ByteOffset) {
           Value *CurrOffset = Offset.getValue(IRB, BS.IntptrTy);
           Value *GapSize = IRB.CreateSub(ByteOffset, CurrOffset);
-          Value *BaseAddr = addPointer(NextIRB, BS.DL, Base, CurrOffset);
+          Value *BaseAddr = addPointer(NextIRB, Base, CurrOffset);
           clearProvenance(NextIRB, BaseAddr, GapSize, SI.getOrdering());
         }
         Offset = Footprint.ByteOffset.add(Footprint.ByteWidth);
       }
-      Value *ObjAddr = addPointer(NextIRB, BS.DL, Base, ByteOffset);
+      Value *ObjAddr = addPointer(NextIRB, Base, ByteOffset);
       Provenance Prov =
           assertProvenance(NextIRB, Comp, {SI.getValueOperand(), Idx});
       storeProvenanceToShadow(NextIRB, ObjAddr, Prov, SI.getOrdering());
     }
+    
     if (Clear) {
       Value *OffsetVal = Offset.getValue(NextIRB, BS.IntptrTy);
       Value *Remaining = NextIRB.CreateSub(EntireSize, OffsetVal);
-      Value *RemainingAddr = addPointer(NextIRB, BS.DL, Base, OffsetVal);
+      Value *RemainingAddr = addPointer(NextIRB, Base, OffsetVal);
       clearProvenance(NextIRB, RemainingAddr, Remaining, SI.getOrdering());
     }
   }
@@ -1250,7 +1220,7 @@ private:
     // value. This means that if the output type has provenance, then we need to
     // conditionally assign the result a provenance value.
     for (auto [Idx, Comp] : llvm::enumerate(*Components)) {
-      if (Comp.isVector()) {
+      if (Comp.Elems.isVector()) {
         report_fatal_error("Vectors are not supported.");
       } else {
         BasicBlock *BB = SI.getParent();
@@ -1275,21 +1245,21 @@ private:
 
       Value *RetvalByteWidth = BS.Zero;
       for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
-        Value *Slot = addPointer(IRB, BS.DL, BS.RetvalTLS, RetvalByteWidth);
+        Value *Slot = addPointer(IRB, BS.RetvalTLS, RetvalByteWidth);
         Provenance Prov = assertProvenance(IRB, Comp, {RetVal, Idx});
         ProvenancePointer Dest =
-            ProvenancePointer(IRB, BS.PL, Slot, Comp.Elems, Prov.Kind);
+            ProvenancePointer(IRB, BS.PL, Slot, Comp.Elems);
         Prov.store(IRB, BS.PL, Dest);
-        Value *ByteWidth =
-            IRB.CreateMul(Comp.NumProvenanceValues, BS.PL.ProvenanceSize);
+        Value *NumProv = IRB.CreateElementCount(BS.IntptrTy, Comp.Elems);
+        Value *ByteWidth = IRB.CreateMul(NumProv, BS.PL.ProvenanceSize);
         RetvalByteWidth = IRB.CreateAdd(RetvalByteWidth, ByteWidth);
       }
     }
 
-    if (!FnEntryRetags.empty()) {
+    if (NumFnEntryRetags) {
       Value *FrameLen = StackSlots.getOutgoingOffset(DT, IRB, BS.IntptrTy);
       Value *Offset = IRB.CreateMul(FrameLen, BS.PL.ProvenanceSize);
-      Value *FrameBottom = subtractPointer(IRB, BS.DL, FrameTop, Offset);
+      Value *FrameBottom = subtractPointer(IRB, FrameTop, Offset);
       IRB.CreateCall(BS.BsanFuncPopFrame, {FrameBottom, FrameLen});
     }
     IRB.CreateStore(FrameTop, BS.ProvStack);
