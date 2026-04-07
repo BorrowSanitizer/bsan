@@ -46,6 +46,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   LLVMContext *C;
 
   const TargetLibraryInfo *TLI;
+  DominatorTree &DT;
 
   // The end of the function's prologue, which is a call to `llvm.donothing()`.
   Instruction *FnPrologueEnd;
@@ -142,9 +143,9 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 
 public:
   BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
-                         const TargetLibraryInfo &TLI)
+                         const TargetLibraryInfo &TLI, DominatorTree &DT)
       : F(F), BS(BS), DIB(*F.getParent(), /*AllowUnresolved*/ false), C(BS.C),
-        TLI(&TLI) {
+        TLI(&TLI), DT(DT) {
     removeUnreachableBlocks(F);
   }
 
@@ -1468,8 +1469,9 @@ bool BorrowSanitizer::instrumentFunction(Function &F,
   }
 
   const TargetLibraryInfo &TLI = FAM.getResult<TargetLibraryAnalysis>(F);
+  DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
   initializeCallbacks(*F.getParent(), TLI);
-  BorrowSanitizerVisitor Visitor(F, *this, TLI);
+  BorrowSanitizerVisitor Visitor(F, *this, TLI, DT);
   Visitor.run();
 
   F.addFnAttr(Attribute::DisableSanitizerInstrumentation);
