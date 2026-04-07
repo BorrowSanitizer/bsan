@@ -33,44 +33,44 @@ struct ProvenanceLayout {
   Type *getIntTy(ElementCount Elems) const;
 };
 
-class ProvenancePointerScalar;
-class ProvenancePointerVector;
+class ProvenancePtrScalar;
+class ProvenancePtrVector;
 
 // A pointer to one or more adjacent provenance values in memory.
 // Represents a "provenancy-carrying-component" of a typed value,
 // offset from a given location in an array of provenance values.
-struct ProvenancePointer {
+struct ProvenancePtr {
   Value *TagPtr = nullptr;
   Value *InfoPtr = nullptr;
-  ElementCount Elems;
-  ProvenancePointer() {}
-  ProvenancePointer(Value *Tag, Value *Info, ElementCount Elems)
-      : TagPtr(Tag), InfoPtr(Info) {}
+  ElementCount Elems = ElementCount::getFixed(1);
+  ProvenancePtr() {}
+  ProvenancePtr(Value *Tag, Value *Info, ElementCount Elems)
+      : TagPtr(Tag), InfoPtr(Info), Elems(Elems) {}
 
-  ProvenancePointer(IRBuilder<> &IRB, const ProvenanceLayout &PL, Value *Base,
-                    ElementCount Elems);
+  ProvenancePtr(IRBuilder<> &IRB, const ProvenanceLayout &PL, Value *Base,
+                ElementCount Elems);
 };
 
-class ProvenancePointerScalar : public ProvenancePointer {
-  using ProvenancePointer::ProvenancePointer;
+class ProvenancePtrScalar : public ProvenancePtr {
+  using ProvenancePtr::ProvenancePtr;
 
 public:
-  ProvenancePointerScalar(Value *T, Value *F)
-      : ProvenancePointer(T, F, ElementCount::getFixed(1)) {}
-  ProvenancePointerScalar(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-                          Value *Base);
+  ProvenancePtrScalar(Value *T, Value *F)
+      : ProvenancePtr(T, F, ElementCount::getFixed(1)) {}
+  ProvenancePtrScalar(IRBuilder<> &IRB, const ProvenanceLayout &PL,
+                      Value *Base);
 };
 
-class ProvenancePointerVector : public ProvenancePointer {
-  using ProvenancePointer::ProvenancePointer;
+class ProvenancePtrVector : public ProvenancePtr {
+  using ProvenancePtr::ProvenancePtr;
 
 public:
-  ProvenancePointerVector(Value *T, Value *F, ElementCount Elems)
-      : ProvenancePointer(T, F, Elems) {}
-  ProvenancePointerVector(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-                          Value *Base, ElementCount Elems);
-  static ProvenancePointerVector
-  alloc(IRBuilder<> &IRB, const ProvenanceLayout &PL, ElementCount Elems);
+  ProvenancePtrVector(Value *T, Value *F, ElementCount Elems)
+      : ProvenancePtr(T, F, Elems) {}
+  ProvenancePtrVector(IRBuilder<> &IRB, const ProvenanceLayout &PL, Value *Base,
+                      ElementCount Elems);
+  static ProvenancePtrVector alloc(IRBuilder<> &IRB, const ProvenanceLayout &PL,
+                                   ElementCount Elems);
 };
 
 class ProvenanceScalar;
@@ -79,10 +79,11 @@ class Provenance {
 public:
   Value *Tag = nullptr;
   Value *Info = nullptr;
-  ElementCount Elems;
+  ElementCount Elems = ElementCount::getFixed(1);
 
   Provenance() {}
-  Provenance(Value *T, Value *F, ElementCount E) : Tag(T), Info(F), Elems(E) {}
+  Provenance(Value *Tag, Value *Info, ElementCount Elems)
+      : Tag(Tag), Info(Info), Elems(Elems) {}
   bool operator==(const Provenance &other) const {
     return this->Tag == other.Tag && this->Info == other.Info &&
            this->Elems == other.Elems;
@@ -96,10 +97,9 @@ public:
   std::optional<ProvenanceVector> getVector() const;
   ProvenanceVector assertVector() const;
   void store(IRBuilder<> &IRB, const ProvenanceLayout &PL, Value *Dest);
-  void store(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-             ProvenancePointer Dest);
+  void store(IRBuilder<> &IRB, const ProvenanceLayout &PL, ProvenancePtr Dest);
   static Provenance load(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-                         ProvenancePointer ProvPtr);
+                         ProvenancePtr ProvPtr);
   static Provenance wildcard(IRBuilder<> &IRB, const ProvenanceLayout &PL,
                              ElementCount Elems);
 };
@@ -108,10 +108,10 @@ class ProvenanceScalar : public Provenance {
   using Provenance::Provenance;
 
 public:
-  ProvenanceScalar(Value *T, Value *F)
-      : Provenance(T, F, ElementCount::get(0, false)) {}
+  ProvenanceScalar(Value *Tag, Value *Info)
+      : Provenance(Tag, Info, ElementCount::getFixed(1)) {}
   static ProvenanceScalar load(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-                               ProvenancePointerScalar ProvPtr);
+                               ProvenancePtrScalar ProvPtr);
   static ProvenanceScalar wildcard(const ProvenanceLayout &PL);
 };
 
@@ -119,9 +119,10 @@ class ProvenanceVector : public Provenance {
   using Provenance::Provenance;
 
 public:
-  ProvenanceVector(Value *T, Value *F, ElementCount E) : Provenance(T, F, E) {}
+  ProvenanceVector(Value *Tag, Value *Info, ElementCount Elems)
+      : Provenance(Tag, Info, Elems) {}
   static ProvenanceVector load(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-                               ProvenancePointerVector ProvPtr);
+                               ProvenancePtrVector ProvPtr);
   static ProvenanceVector wildcard(IRBuilder<> &IRB, const ProvenanceLayout &PL,
                                    ElementCount Elems);
 };
@@ -229,16 +230,16 @@ public:
   // Given a pointer to the start of an array of contiguous provenance values,
   // this function will return a pointer to the start of this provenance
   // component.
-  ProvenancePointer getPointerToProvenance(IRBuilder<> &IRB,
-                                           const ProvenanceLayout &PL,
-                                           Value *StartAddr) {
+  ProvenancePtr getPointerToProvenance(IRBuilder<> &IRB,
+                                       const ProvenanceLayout &PL,
+                                       Value *StartAddr) {
     Type *IntegerTy = ProvenanceOffset->getType();
     Value *PointerAsInt = IRB.CreatePointerCast(StartAddr, IntegerTy);
     Value *ProvByteOffset = IRB.CreateMul(
         ProvenanceOffset, ConstantInt::get(IntegerTy, kProvenanceSize));
     Value *BaseInt = IRB.CreateAdd(PointerAsInt, ProvByteOffset);
     Value *BasePointer = IRB.CreateIntToPtr(BaseInt, StartAddr->getType());
-    return ProvenancePointer(IRB, PL, BasePointer, Elems);
+    return ProvenancePtr(IRB, PL, BasePointer, Elems);
   }
 };
 

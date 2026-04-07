@@ -93,6 +93,26 @@ bool shouldTrustFunction(const TargetLibraryInfo *TLI, const Value *V) {
   return false;
 }
 
+void eliminatePHINodes(SmallVectorImpl<PHINode *> &Worklist) {
+  DenseSet<PHINode *> PHIToDelete;
+  do {
+    PHIToDelete.clear();
+    SmallVector<PHINode *> PendingWorklist;
+    for (PHINode *PN : Worklist) {
+      if (Value *Replacement = PN->hasConstantValue()) {
+        PN->replaceAllUsesWith(Replacement);
+        PHIToDelete.insert(PN);
+      } else {
+        PendingWorklist.push_back(PN);
+      }
+    }
+    for (PHINode *PN : PHIToDelete) {
+      PN->eraseFromParent();
+    }
+    Worklist = std::move(PendingWorklist);
+  } while (!PHIToDelete.empty());
+}
+
 } // namespace
 
 class StackSlotAllocator {
@@ -120,8 +140,18 @@ public:
   }
 
   Value *getIncomingOffset(DominatorTree &DT, BasicBlock *BB, Type *Ty) {
-    if (BlockOffsets.empty())
+    if (BlockOffsets.empty()) {
       return ConstantInt::get(Ty, 0);
+    }
+
+    if (BlockOffsets.size() == 1) {
+      auto It = BlockOffsets.begin();
+      BasicBlock *OffsetBB = It->first;
+      unsigned OffsetVal = It->second;
+      if (DT.properlyDominates(OffsetBB, BB)) {
+        return ConstantInt::get(Ty, OffsetVal);
+      }
+    }
 
     auto It = IncomingOffsets.find(BB);
     if (It != IncomingOffsets.end()) {
@@ -159,8 +189,13 @@ public:
         OffsetPN->addIncoming(IncomingOffset, PredBB);
       }
     }
+
+    SlotPHINodes.push_back(OffsetPN);
+
     return OffsetPN;
   }
+
+  void patchPHINodes() { eliminatePHINodes(SlotPHINodes); }
 };
 
 class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
@@ -201,7 +236,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // provenance for an argument, we take its pointer from this array and then
   // insert the necessary instructions to load it from thread-local storage
   // within the prologue of the function.
-  DenseMap<Argument *, SmallVector<ProvenancePointer>> ArgumentProvenance;
+  DenseMap<Argument *, SmallVector<ProvenancePtr>> ArgumentProvenance;
 
   // The provenance-carrying components of each type, cached for performance.
   DenseMap<Type *, SmallVector<ProvenanceComponent>> ProvenanceComponents;
@@ -296,6 +331,7 @@ public:
 
     patchShadowPHINodes();
     patchAllocaPHINodes();
+    StackSlots.patchPHINodes();
 
     for (CallBase *CB : Retags) {
       if (CB->getType()->isPointerTy()) {
@@ -375,8 +411,7 @@ private:
         if (Key.Offset >= ArgumentProvenance[Arg].size()) {
           report_fatal_error("Invalid argument provenance!");
         }
-        ProvenancePointer ArgProvenancePtr =
-            ArgumentProvenance[Arg][Key.Offset];
+        ProvenancePtr ArgProvenancePtr = ArgumentProvenance[Arg][Key.Offset];
         Provenance ArgProvenance =
             Provenance::load(EntryIRB, BS.PL, ArgProvenancePtr);
         setProvenance(Key, ArgProvenance);
@@ -521,7 +556,7 @@ private:
   // address.
   void storeProvenanceToShadow(IRBuilder<> &IRB, Value *ObjAddr,
                                Provenance Prov, AtomicOrdering Ordering) {
-    ProvenancePointer ProvPtr;
+    ProvenancePtr ProvPtr;
     if (Prov.Elems.isVector()) {
       report_fatal_error("Vectors are not supported.");
     } else {
@@ -542,7 +577,7 @@ private:
     } else {
       Value *Tmp = IRB.CreateAlloca(BS.PL.ProvenanceTy, nullptr);
       IRB.CreateCall(BS.BsanFuncShadowLoad, {ObjAddr, Tmp});
-      ProvenancePointerScalar ProvPtr(IRB, BS.PL, Tmp);
+      ProvenancePtrScalar ProvPtr(IRB, BS.PL, Tmp);
       return Provenance::load(IRB, BS.PL, ProvPtr);
     }
   }
@@ -607,7 +642,7 @@ private:
               EntryIRB.CreateMul(NumParamProv, BS.PL.ProvenanceSize);
           Value *CurrentArraySlot =
               addPointer(EntryIRB, BS.ParamTLS, CurrentArrayByteOffset);
-          ProvenancePointer Ptr =
+          ProvenancePtr Ptr =
               C.getPointerToProvenance(EntryIRB, BS.PL, CurrentArraySlot);
           ArgumentProvenance[&Arg].push_back(Ptr);
 
@@ -680,26 +715,6 @@ private:
     eliminatePHINodes(Worklist);
   }
 
-  void eliminatePHINodes(SmallVectorImpl<PHINode *> &Worklist) {
-    DenseSet<PHINode *> PHIToDelete;
-    do {
-      PHIToDelete.clear();
-      SmallVector<PHINode *> PendingWorklist;
-      for (PHINode *PN : Worklist) {
-        if (Value *Replacement = PN->hasConstantValue()) {
-          PN->replaceAllUsesWith(Replacement);
-          PHIToDelete.insert(PN);
-        } else {
-          PendingWorklist.push_back(PN);
-        }
-      }
-      for (PHINode *PN : PHIToDelete) {
-        PN->eraseFromParent();
-      }
-      Worklist = std::move(PendingWorklist);
-    } while (!PHIToDelete.empty());
-  }
-
   Value *newBorrowTag(IRBuilder<> &IRB) {
     return IRB.CreateAtomicRMW(AtomicRMWInst::Add, BS.BorTagCounter, BS.One,
                                std::nullopt, AtomicOrdering::Monotonic);
@@ -712,7 +727,7 @@ private:
 
     Value *Tmp = IRB.CreateAlloca(BS.PL.ProvenanceTy, nullptr);
     IRB.CreateCall(BS.BsanFuncShadowLoad, {Operand, Tmp});
-    ProvenancePointerScalar SrcProvPtr(IRB, BS.PL, Tmp);
+    ProvenancePtrScalar SrcProvPtr(IRB, BS.PL, Tmp);
     ProvenanceScalar SrcProv = ProvenanceScalar::load(IRB, BS.PL, SrcProvPtr);
     ProvenanceScalar RetaggedProv = instrumentRetag(IRB, CB, SrcAddr, SrcProv);
     IRB.CreateCall(BS.BsanFuncShadowStore,
@@ -811,8 +826,7 @@ private:
         Value *Slot = addPointer(Before, BS.ParamTLS, ParamByteWidth);
 
         Provenance ProvSrc = assertProvenance(Before, Comp, {Arg, Idx});
-        ProvenancePointer Dest =
-            ProvenancePointer(Before, BS.PL, Slot, Comp.Elems);
+        ProvenancePtr Dest = ProvenancePtr(Before, BS.PL, Slot, Comp.Elems);
         ProvSrc.store(Before, BS.PL, Dest);
 
         Value *NumProv = Before.CreateElementCount(BS.IntptrTy, Comp.Elems);
@@ -826,7 +840,7 @@ private:
     IRBuilder<> After = switchToInsertionPointAfterCall(&CB);
 
     Value *NumReturnProv = BS.Zero;
-    SmallVector<std::pair<unsigned, ProvenancePointer>> ProvenancePointers;
+    SmallVector<std::pair<unsigned, ProvenancePtr>> ProvenancePointers;
 
     if (CB.getType()->isSized()) {
       // Unsized return types do not have provenance, so we can skip handling
@@ -843,7 +857,7 @@ private:
       for (const auto &[Idx, Comp] : llvm::enumerate(*ReturnComponents)) {
         Value *Slot = addPointer(After, BS.RetvalTLS, RetvalByteWidth);
 
-        ProvenancePointer Ptr = Comp.getPointerToProvenance(After, BS.PL, Slot);
+        ProvenancePtr Ptr = Comp.getPointerToProvenance(After, BS.PL, Slot);
         ProvenancePointers.push_back({Idx, Ptr});
 
         Value *NumProv = Before.CreateElementCount(BS.IntptrTy, Comp.Elems);
@@ -1119,7 +1133,7 @@ private:
           assertProvenance(NextIRB, Comp, {SI.getValueOperand(), Idx});
       storeProvenanceToShadow(NextIRB, ObjAddr, Prov, SI.getOrdering());
     }
-    
+
     if (Clear) {
       Value *OffsetVal = Offset.getValue(NextIRB, BS.IntptrTy);
       Value *Remaining = NextIRB.CreateSub(EntireSize, OffsetVal);
@@ -1247,8 +1261,7 @@ private:
       for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
         Value *Slot = addPointer(IRB, BS.RetvalTLS, RetvalByteWidth);
         Provenance Prov = assertProvenance(IRB, Comp, {RetVal, Idx});
-        ProvenancePointer Dest =
-            ProvenancePointer(IRB, BS.PL, Slot, Comp.Elems);
+        ProvenancePtr Dest = ProvenancePtr(IRB, BS.PL, Slot, Comp.Elems);
         Prov.store(IRB, BS.PL, Dest);
         Value *NumProv = IRB.CreateElementCount(BS.IntptrTy, Comp.Elems);
         Value *ByteWidth = IRB.CreateMul(NumProv, BS.PL.ProvenanceSize);
