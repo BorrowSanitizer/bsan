@@ -36,6 +36,15 @@ void ClearRetValSlot(uptr Idx) { __BSAN_RETVAL_TLS[Idx] = WILDCARD; }
 
 void PrintStackTrace(StackTrace &stack) {
   Printf("stack backtrace:\n");
+  if (GetEnv("BSAN_SYMBOLIZER") == nullptr) {
+    for (uptr i = 1; i < stack.size; ++i) {
+      Printf("%ld: %p\n", (i - 1), (void *)stack.trace[i]);
+    }
+    Printf("\nwarning: Symbolizer not found. Please add llvm-symbolizer"
+           " to your PATH or set BSAN_SYMBOLIZER for source code info "
+           "(recommended).\n");
+    return;
+  }
   InternalScopedString frame_desc;
   for (uptr i = 1; i < stack.size; ++i) {
     uptr pc = stack.trace[i];
@@ -82,15 +91,20 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_init() {
   InitializePlatformEarly();
   InitializeInterceptors();
   SetCommonFlagsDefaults();
-  {
-    const char *symbolizer_path = GetEnv("BSAN_SYMBOLIZER");
-    if (symbolizer_path) {
-      CommonFlags cf;
-      cf.CopyFrom(*common_flags());
-      cf.external_symbolizer_path = symbolizer_path;
-      OverrideCommonFlags(cf);
-    }
+
+  const char *symbolizer_path = GetEnv("BSAN_SYMBOLIZER");
+  if (!symbolizer_path || symbolizer_path[0] == '\0') {
+    symbolizer_path = FindPathToBinary("llvm-symbolizer");
   }
+
+  if (symbolizer_path && symbolizer_path[0] != '\0') {
+    SetEnv("BSAN_SYMBOLIZER", symbolizer_path);
+    CommonFlags cf;
+    cf.CopyFrom(*common_flags());
+    cf.external_symbolizer_path = symbolizer_path;
+    OverrideCommonFlags(cf);
+  }
+
   BsanTSDInit();
   BsanThread *main_thread = BsanThread::Create(nullptr, nullptr);
   SetCurrentThread(main_thread);

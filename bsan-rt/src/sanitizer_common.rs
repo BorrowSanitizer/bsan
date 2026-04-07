@@ -16,7 +16,8 @@ impl Span {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Symbol {
     Resolved { file: String, line: u32, col: u32 },
-    Unknown,
+    Unresolved { pc: usize },
+    Unused,
 }
 
 impl Symbol {
@@ -29,7 +30,7 @@ impl Symbol {
                     1
                 }
             }
-            Symbol::Unknown => 0,
+            _ => 0,
         }
     }
 }
@@ -40,7 +41,10 @@ impl fmt::Display for Symbol {
             Symbol::Resolved { file, line, col } => {
                 write!(f, "{file}:{line}:{col}")
             }
-            Symbol::Unknown => write!(f, "<unknown>:?:?"),
+            Symbol::Unresolved { pc } => {
+                write!(f, "pc:0x{pc:x}")
+            }
+            Symbol::Unused => write!(f, "<unused>"),
         }
     }
 }
@@ -49,6 +53,9 @@ pub struct SanitizerCommon;
 
 impl SanitizerCommon {
     pub fn symbolize(span: Span) -> Symbol {
+        if span.0 == 0 {
+            return Symbol::Unused;
+        }
         let mut buf = [0u8; 512];
         let mut line: u32 = 0;
         let mut column: u32 = 0;
@@ -61,7 +68,7 @@ impl SanitizerCommon {
                 return Symbol::Resolved { file: s.to_string(), line, col: column };
             }
         }
-        Symbol::Unknown
+        Symbol::Unresolved { pc: span.0 }
     }
 
     /// Read entire file into a String
