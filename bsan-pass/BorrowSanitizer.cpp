@@ -112,14 +112,18 @@ void eliminatePHINodes(SmallVectorImpl<PHINode *> &Worklist) {
     Worklist = std::move(PendingWorklist);
   } while (!PHIToDelete.empty());
 }
-
-void createTerminatorBlock() {}
 } // namespace
 
-class StackSlotAllocator {
+// Tracks the current offset within the shadow stack.
+class ShadowStackAllocator {
 private:
+  // The number of slots allocated within each block
   DenseMap<BasicBlock *, unsigned> BlockOffsets;
+  // The offset from the top of the frame at the entry to each block
   DenseMap<BasicBlock *, Value *> IncomingOffsets;
+  // PHI nodes created for incoming offsets, which are
+  // simplified and removed after our instrumentation is
+  // inserted.
   SmallVector<PHINode *> SlotPHINodes;
 
   Value *getBlockOffset(BasicBlock *BB, Type *Ty) {
@@ -127,12 +131,14 @@ private:
   }
 
 public:
+  // Allocates a new slot and returns its offset from the top of the frame.
   Value *allocSlot(DominatorTree &DT, IRBuilder<> &IRB, Type *Ty) {
     unsigned &Offset = BlockOffsets[IRB.GetInsertBlock()];
     Offset += 1;
     return getOutgoingOffset(DT, IRB, Ty);
   }
 
+  // Returns the current offset from the top of the frame.
   Value *getOutgoingOffset(DominatorTree &DT, IRBuilder<> &IRB, Type *Ty) {
     BasicBlock *BB = IRB.GetInsertBlock();
     Value *Incoming = getIncomingOffset(DT, BB, Ty);
@@ -140,11 +146,21 @@ public:
     return IRB.CreateAdd(Incoming, Within);
   }
 
+  // Returns the offset at the beginning of the current basic block.
+  // This requires a reverse postorder traversal of the function.
+  // All incoming blocks that dominate the current block need to have
+  // been visited before we can compute the incoming offset for this block.
   Value *getIncomingOffset(DominatorTree &DT, BasicBlock *BB, Type *Ty) {
-    if (BlockOffsets.empty()) {
+    // If we have not allocated any slots yet, then we can guarantee
+    // a zero offset.
+    if (BlockOffsets.empty() || BB->isEntryBlock()) {
       return ConstantInt::get(Ty, 0);
     }
 
+    // Retags tend to cluster around a single block, which is usually
+    // the entry block. If this is the only block that contains  retags, then
+    // we can use its offset if it properly dominates us—it's not
+    // the same block as the one that we are visiting now.
     if (BlockOffsets.size() == 1) {
       auto It = BlockOffsets.begin();
       BasicBlock *OffsetBB = It->first;
@@ -159,10 +175,9 @@ public:
       return It->second;
     }
 
-    if (BB->isEntryBlock()) {
-      return ConstantInt::get(Ty, 0);
-    }
-
+    // If we have a single predecessor, then our incoming
+    // offset equal to its incoming offset plus the number of
+    // slots that it allocates.
     if (BasicBlock *PredBB = BB->getSinglePredecessor()) {
       IRBuilder<> IRB(PredBB->getTerminator());
       Value *PredIncomingOffset = getIncomingOffset(DT, PredBB, Ty);
@@ -173,6 +188,7 @@ public:
       return IncomingOffset;
     }
 
+    // We have multiple predecessors
     IRBuilder<> IRB(&BB->front());
     PHINode *OffsetPN = IRB.CreatePHI(Ty, pred_size(BB), "_bsphi_slot");
     OffsetPN->dropDbgRecords();
@@ -180,6 +196,11 @@ public:
 
     for (BasicBlock *PredBB : predecessors(BB)) {
       IRBuilder<> PredIRB(PredBB->getTerminator());
+      // If we dominate a predecessor, then we want our
+      // incoming offset to have the same value when we enter
+      // this block from that predecessor as we did when we
+      // first entered the block. Otherwise, each iteration of
+      // a loop would allocate fresh stack slots.
       if (DT.dominates(BB, PredBB)) {
         OffsetPN->addIncoming(OffsetPN, PredBB);
       } else {
@@ -190,7 +211,10 @@ public:
         OffsetPN->addIncoming(IncomingOffset, PredBB);
       }
     }
-
+    // We need to wait until later to simplify PHI nodes,
+    // since we cache the incoming offset to reuse in subsequent
+    // calls. If we remove a PHI node, then we invalidate a pointer
+    // in `IncomingOffsets`.
     SlotPHINodes.push_back(OffsetPN);
     return OffsetPN;
   }
@@ -287,7 +311,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // every exit point.
   std::unique_ptr<StackLifetime> LifetimeInfo;
 
-  StackSlotAllocator StackSlots;
+  ShadowStackAllocator ShadowStack;
 
 public:
   BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
@@ -321,7 +345,7 @@ public:
 
     patchShadowPHINodes();
     patchAllocaPHINodes();
-    StackSlots.patchPHINodes();
+    ShadowStack.patchPHINodes();
 
     for (CallBase *CB : Retags) {
       if (CB->getType()->isPointerTy()) {
@@ -764,13 +788,13 @@ private:
   }
 
   Value *allocStackSlot(IRBuilder<> &IRB) {
-    Value *SlotOffset = StackSlots.allocSlot(DT, IRB, BS.IntptrTy);
+    Value *SlotOffset = ShadowStack.allocSlot(DT, IRB, BS.IntptrTy);
     Value *ProvOffset = IRB.CreateMul(SlotOffset, BS.PL.ProvenanceSize);
     return subtractPointer(IRB, FrameTop, ProvOffset);
   }
 
   Value *getStackOffset(IRBuilder<> &IRB) {
-    Value *CurrOffset = StackSlots.getOutgoingOffset(DT, IRB, BS.IntptrTy);
+    Value *CurrOffset = ShadowStack.getOutgoingOffset(DT, IRB, BS.IntptrTy);
     Value *ProvOffset = IRB.CreateMul(CurrOffset, BS.PL.ProvenanceSize);
     return subtractPointer(IRB, FrameTop, ProvOffset);
   }
@@ -997,8 +1021,7 @@ private:
       IRB.CreateCall(BS.BsanFuncDeallocStack, {AI, Root.Tag, Root.Info});
     }
   }
-  // Whenever we memset, we need to clear the corresponding shadow memory
-  // section This should be removed when interceptors are implemented.
+
   void visitMemSetInst(MemSetInst &I) {
     IRBuilder<> IRB(&I);
     Value *Val = IRB.CreateIntCast(I.getValue(), IRB.getInt32Ty(), false);
@@ -1008,8 +1031,6 @@ private:
     I.eraseFromParent();
   }
 
-  // Whenever we memcpy, we need to copy the corresponding shadow memory section
-  // This should be removed when interceptors are implemented.
   void visitMemMoveInst(MemMoveInst &I) {
     IRBuilder<> IRB(&I);
     Value *Size = IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false);
@@ -1019,8 +1040,6 @@ private:
     I.eraseFromParent();
   }
 
-  // Whenever we memcpy, we need to copy the corresponding shadow memory section
-  // This should be removed when interceptors are implemented.
   void visitMemCpyInst(MemCpyInst &I) {
     IRBuilder<> IRB(&I);
     Value *Size = IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false);
@@ -1030,7 +1049,6 @@ private:
     I.eraseFromParent();
   }
 
-  // Inserts a check to validate a read access.
   void insertReadCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size) {
     ProvenanceScalar Prov = assertProvenanceScalar(IRB.GetInsertBlock(), Ptr);
     if (Prov != BS.WildcardProvenance) {
@@ -1038,7 +1056,6 @@ private:
     }
   }
 
-  // Inserts a check to validate a write access.
   void insertWriteCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size) {
     ProvenanceScalar Prov = assertProvenanceScalar(IRB.GetInsertBlock(), Ptr);
     if (Prov != BS.WildcardProvenance) {
@@ -1055,7 +1072,7 @@ private:
 
     Value *Size =
         IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeStoreSize(LI.getType()));
-    // Load provenance for the value from shadow memory.
+
     SmallVector<ProvenanceComponent> *Components =
         getProvenanceComponents(IRB, LI.getType());
     Value *Base = LI.getPointerOperand();
@@ -1101,7 +1118,6 @@ private:
 
     bool Clear = shouldClearProvenance(NextIRB, SI);
 
-    // Store provenance for the value into shadow memory.
     Value *Base = SI.getPointerOperand();
     SmallVector<ProvenanceComponent> *Components =
         getProvenanceComponents(NextIRB, Val->getType());
@@ -1174,11 +1190,6 @@ private:
         getProvenanceComponents(IRB, EI.getType());
 
     Type *CurrType = AggregateSrc->getType();
-
-    // For each index into the aggregate, compute and add the offset for the
-    // provenance component index. The final value will point to the start of
-    // the series of provenance components that we need to extract from the
-    // aggregate.
     uint64_t StartingIdx = 0;
     for (auto &Idx : EI.indices()) {
       std::tie(CurrType, StartingIdx) =
@@ -1201,11 +1212,6 @@ private:
 
     Type *CurrType = II.getType();
     uint64_t StartingIdx = 0;
-
-    // For each index into the aggregate, compute and add the offset for the
-    // provenance component index. The final value will be the base index that
-    // we need to use for inserting each loaded provenance value from the value
-    // that's being inserted.
     for (auto &Idx : II.indices()) {
       std::tie(CurrType, StartingIdx) =
           offsetIntoProvenanceIndex(IRB, CurrType, Idx, StartingIdx);
@@ -1222,9 +1228,6 @@ private:
     SmallVector<ProvenanceComponent> *Components =
         getProvenanceComponents(IRB, SI.getType());
 
-    // A select instruction returns one of two inputs depending on a boolean
-    // value. This means that if the output type has provenance, then we need to
-    // conditionally assign the result a provenance value.
     for (auto [Idx, Comp] : llvm::enumerate(*Components)) {
       if (Comp.Elems.isVector()) {
         report_fatal_error("Vectors are not supported.");
@@ -1262,7 +1265,7 @@ private:
     }
 
     if (NumFnEntryRetags) {
-      Value *FrameLen = StackSlots.getOutgoingOffset(DT, IRB, BS.IntptrTy);
+      Value *FrameLen = ShadowStack.getOutgoingOffset(DT, IRB, BS.IntptrTy);
       Value *Offset = IRB.CreateMul(FrameLen, BS.PL.ProvenanceSize);
       Value *FrameBottom = subtractPointer(IRB, FrameTop, Offset);
       IRB.CreateCall(BS.BsanFuncPopFrame, {FrameBottom, FrameLen});
