@@ -213,34 +213,17 @@ struct ShadowFootprint {
 
 // A component of a type that carries provenance information.
 // This is either a pointer or a vector of pointers.
-struct ProvenanceComponent {
+struct ProvenanceDesc {
   // The range within shadow memory that would contain this many
   // provenance values.
   ShadowFootprint Footprint;
-  // The number of provenance values in previous components.
-  Value *ProvenanceOffset;
   // The unevaluated static object representing the number
   // of provenance values in this component.
   ElementCount Elems;
 
 public:
-  ProvenanceComponent(Value *B, Value *BW, Value *P, ElementCount E)
-      : Footprint(B, BW), ProvenanceOffset(P), Elems(E) {}
-
-  // Given a pointer to the start of an array of contiguous provenance values,
-  // this function will return a pointer to the start of this provenance
-  // component.
-  ProvenancePtr getPointerToProvenance(IRBuilder<> &IRB,
-                                       const ProvenanceLayout &PL,
-                                       Value *StartAddr) {
-    Type *IntegerTy = ProvenanceOffset->getType();
-    Value *PointerAsInt = IRB.CreatePointerCast(StartAddr, IntegerTy);
-    Value *ProvByteOffset = IRB.CreateMul(
-        ProvenanceOffset, ConstantInt::get(IntegerTy, kProvenanceSize));
-    Value *BaseInt = IRB.CreateAdd(PointerAsInt, ProvByteOffset);
-    Value *BasePointer = IRB.CreateIntToPtr(BaseInt, StartAddr->getType());
-    return ProvenancePtr(IRB, PL, BasePointer, Elems);
-  }
+  ProvenanceDesc(Value *B, Value *BW, ElementCount E)
+      : Footprint(B, BW), Elems(E) {}
 };
 
 struct ProvenanceKey {

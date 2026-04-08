@@ -104,6 +104,7 @@ public:
 
   ProvenanceScalar WildcardProvenance;
   ProvenanceScalar InvalidProvenance;
+
   // Thread-local storage for paramters
   // and return values.
   Value *ParamTLS = nullptr;

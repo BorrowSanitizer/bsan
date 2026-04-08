@@ -131,8 +131,7 @@ private:
   // The offset from the top of the frame at the entry to each block
   DenseMap<BasicBlock *, Value *> IncomingOffsets;
   // PHI nodes created for incoming offsets, which are
-  // simplified and removed after our instrumentation is
-  // inserted.
+  // simplified and removed after inserting instrumentation.
   SmallVector<PHINode *> SlotPHINodes;
 
   Value *getBlockOffset(BasicBlock *BB, Type *Ty) {
@@ -264,9 +263,6 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // within the prologue of the function.
   DenseMap<Argument *, SmallVector<ProvenancePtr>> ArgumentProvenance;
 
-  // The provenance-carrying components of each type, cached for performance.
-  DenseMap<Type *, SmallVector<ProvenanceComponent>> ProvenanceComponents;
-
   // With the exception of `allocas`, each value is associated with a unique
   // provenance value. Provenanced values are indexed by each provenance
   // carrying component. For example, if `ProvenanceComponents[V]` has length 3,
@@ -385,7 +381,7 @@ private:
     return BS.WildcardProvenance;
   }
 
-  Provenance assertProvenance(IRBuilder<> &IRB, ProvenanceComponent &Comp,
+  Provenance assertProvenance(IRBuilder<> &IRB, ProvenanceDesc &Comp,
                               ProvenanceKey Key) {
     BasicBlock *BB = IRB.GetInsertBlock();
     return assertProvenance(IRB, BB, Comp.Elems, Key);
@@ -488,27 +484,25 @@ private:
   }
 
   // Returns the list of provenance-carrying components for a type.
-  SmallVector<ProvenanceComponent> *getProvenanceComponents(IRBuilder<> &IRB,
-                                                            Type *Ty) {
-    if (!ProvenanceComponents.contains(Ty))
-      populateProvenanceComponents(IRB, ProvenanceComponents[Ty], Ty, Ty,
-                                   BS.Zero, BS.Zero);
-    return &ProvenanceComponents[Ty];
+  SmallVector<ProvenanceDesc> getProvenanceDesc(IRBuilder<> &IRB, Type *Ty) {
+    SmallVector<ProvenanceDesc> Desc;
+    getProvenanceDesc(IRB, Desc, Ty, Ty, BS.Zero, BS.Zero);
+    return Desc;
   }
 
   // Recursively populates a given vector with the list of provenance-carrying
   // components for a type. A `ProvenanceComponent` contains all of the static
   // information that we need about the location of each pointer within a type.
-  std::tuple<Value *, Value *> populateProvenanceComponents(
-      IRBuilder<> &IRB, SmallVector<ProvenanceComponent> &Components,
-      Type *ParentTy, Type *CurrentTy, Value *ByteOffset, Value *ProvOffset) {
+  std::tuple<Value *, Value *>
+  getProvenanceDesc(IRBuilder<> &IRB, SmallVector<ProvenanceDesc> &Components,
+                    Type *ParentTy, Type *CurrentTy, Value *ByteOffset,
+                    Value *ProvOffset) {
     Value *TypeSize =
         IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeAllocSize(CurrentTy));
     Value *NextProvOffset = ProvOffset;
     switch (CurrentTy->getTypeID()) {
     case Type::PointerTyID: {
-      ProvenanceComponent Comp(ByteOffset, TypeSize, ProvOffset,
-                               ElementCount::get(1, false));
+      ProvenanceDesc Comp(ByteOffset, TypeSize, ElementCount::get(1, false));
       Components.push_back(Comp);
       NextProvOffset = IRB.CreateAdd(ProvOffset, BS.One);
     } break;
@@ -517,8 +511,8 @@ private:
       Value *CurrByteOffset = ByteOffset;
       for (Type *ElemType : ST->elements()) {
         auto [BOffset, POffset] =
-            populateProvenanceComponents(IRB, Components, ParentTy, ElemType,
-                                         CurrByteOffset, NextProvOffset);
+            getProvenanceDesc(IRB, Components, ParentTy, ElemType,
+                              CurrByteOffset, NextProvOffset);
         CurrByteOffset = BOffset;
         NextProvOffset = POffset;
       }
@@ -527,9 +521,9 @@ private:
       ArrayType *AT = cast<ArrayType>(CurrentTy);
       Value *CurrByteOffset = ByteOffset;
       for (unsigned Idx = 0; Idx < AT->getNumElements(); ++Idx) {
-        auto [BOffset, POffset] = populateProvenanceComponents(
-            IRB, Components, ParentTy, AT->getElementType(), CurrByteOffset,
-            NextProvOffset);
+        auto [BOffset, POffset] =
+            getProvenanceDesc(IRB, Components, ParentTy, AT->getElementType(),
+                              CurrByteOffset, NextProvOffset);
         CurrByteOffset = BOffset;
         NextProvOffset = POffset;
       }
@@ -555,9 +549,9 @@ private:
       uint64_t Offset = PrevOffset;
       for (unsigned CurrIdx = 0; CurrIdx < Idx; ++CurrIdx) {
         Type *ElemType = ST->getElementType(CurrIdx);
-        SmallVector<ProvenanceComponent> *Components =
-            getProvenanceComponents(IRB, ElemType);
-        Offset += Components->size();
+        SmallVector<ProvenanceDesc> Components =
+            getProvenanceDesc(IRB, ElemType);
+        Offset += Components.size();
       }
       return std::make_tuple(ST->getElementType(Idx), Offset);
     } break;
@@ -565,10 +559,10 @@ private:
       ArrayType *AT = cast<ArrayType>(CurrentTy);
       assert(Idx < AT->getNumElements() &&
              "Index out of bounds for array type.");
-      SmallVector<ProvenanceComponent> *Components =
-          getProvenanceComponents(IRB, AT->getElementType());
+      SmallVector<ProvenanceDesc> Components =
+          getProvenanceDesc(IRB, AT->getElementType());
       return std::make_tuple(AT->getElementType(),
-                             PrevOffset + Components->size());
+                             PrevOffset + Components.size());
     } break;
     default: {
       report_fatal_error("Cannot index into a non-struct or non-array type.");
@@ -593,8 +587,7 @@ private:
   // Loads a provenance value into shadow memory
   // starting at the given object address via a
   // temporary buffer
-  Provenance loadProvenanceFromShadow(IRBuilder<> &IRB,
-                                      ProvenanceComponent &Comp,
+  Provenance loadProvenanceFromShadow(IRBuilder<> &IRB, ProvenanceDesc &Comp,
                                       Value *ObjAddr) {
     if (Comp.Elems.isVector()) {
       report_fatal_error("Vectors are not supported.");
@@ -659,15 +652,15 @@ private:
         ByValArgs.push_back(&Arg);
         NumParamProv = EntryIRB.CreateAdd(NumParamProv, BS.One);
       } else {
-        SmallVector<ProvenanceComponent> *Components =
-            getProvenanceComponents(EntryIRB, Arg.getType());
-        for (auto &C : *Components) {
+        SmallVector<ProvenanceDesc> Components =
+            getProvenanceDesc(EntryIRB, Arg.getType());
+        for (auto &C : Components) {
           Value *CurrentArrayByteOffset =
               EntryIRB.CreateMul(NumParamProv, BS.PL.ProvenanceSize);
           Value *CurrentArraySlot =
               addPointer(EntryIRB, BS.ParamTLS, CurrentArrayByteOffset);
           ProvenancePtr Ptr =
-              C.getPointerToProvenance(EntryIRB, BS.PL, CurrentArraySlot);
+              ProvenancePtr(EntryIRB, BS.PL, CurrentArraySlot, C.Elems);
           ArgumentProvenance[&Arg].push_back(Ptr);
 
           Value *NumProv = EntryIRB.CreateElementCount(BS.IntptrTy, C.Elems);
@@ -845,9 +838,9 @@ private:
     // undefined behavior.
     Value *ParamByteWidth = BS.Zero;
     for (const auto &[i, Arg] : llvm::enumerate(CB.args())) {
-      SmallVector<ProvenanceComponent> *Components =
-          getProvenanceComponents(Before, Arg->getType());
-      for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
+      SmallVector<ProvenanceDesc> Components =
+          getProvenanceDesc(Before, Arg->getType());
+      for (const auto &[Idx, Comp] : llvm::enumerate(Components)) {
         Value *Slot = addPointer(Before, BS.ParamTLS, ParamByteWidth);
 
         Provenance ProvSrc = assertProvenance(Before, Comp, {Arg, Idx});
@@ -862,7 +855,19 @@ private:
 
     // We need to do some extra work here to compute where to insert our
     // instructions, since some function calls occur within terminators.
-    IRBuilder<> After = switchToInsertionPointAfterCall(&CB);
+    Instruction *NextInst;
+    if (auto *II = dyn_cast<InvokeInst>(&CB)) {
+      if (II->getNormalDest()->getSinglePredecessor()) {
+        NextInst = &II->getNormalDest()->front();
+      } else {
+        NextInst =
+            &SplitEdge(II->getParent(), II->getNormalDest(), &DT)->front();
+      }
+    } else {
+      assert(CB.getIterator() != CB.getParent()->end());
+      NextInst = CB.getNextNode();
+    }
+    IRBuilder<> After(NextInst);
     After.SetCurrentDebugLocation(CB.getDebugLoc());
 
     Value *NumReturnProv = BS.Zero;
@@ -871,8 +876,8 @@ private:
     if (CB.getType()->isSized()) {
       // Unsized return types do not have provenance, so we can skip handling
       // the return array.
-      SmallVector<ProvenanceComponent> *ReturnComponents =
-          getProvenanceComponents(Before, CB.getType());
+      SmallVector<ProvenanceDesc> ReturnComponents =
+          getProvenanceDesc(Before, CB.getType());
 
       // Load each provenance component for the return type from the
       // thread-local return value array. Also, compute the byte-width of the
@@ -880,10 +885,10 @@ private:
       // we are calling is uninstrumented, then we need ensure that the return
       // array is populated with default values.
       Value *RetvalByteWidth = BS.Zero;
-      for (const auto &[Idx, Comp] : llvm::enumerate(*ReturnComponents)) {
+      for (const auto &[Idx, Comp] : llvm::enumerate(ReturnComponents)) {
         Value *Slot = addPointer(After, BS.RetvalTLS, RetvalByteWidth);
 
-        ProvenancePtr Ptr = Comp.getPointerToProvenance(After, BS.PL, Slot);
+        ProvenancePtr Ptr = ProvenancePtr(After, BS.PL, Slot, Comp.Elems);
         ProvenancePointers.push_back({Idx, Ptr});
 
         Value *NumProv = Before.CreateElementCount(BS.IntptrTy, Comp.Elems);
@@ -934,9 +939,9 @@ private:
 
     for (int Idx = 0; Idx < NumOutputs; Idx++) {
       Value *Operand = CB.getOperand(Idx);
-      SmallVector<ProvenanceComponent> *Components =
-          getProvenanceComponents(IRB, Operand->getType());
-      for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
+      SmallVector<ProvenanceDesc> Components =
+          getProvenanceDesc(IRB, Operand->getType());
+      for (const auto &[Idx, Comp] : llvm::enumerate(Components)) {
         setProvenance({Operand, Idx}, BS.WildcardProvenance);
       }
     }
@@ -958,7 +963,7 @@ private:
     return ProvenanceScalar(TagNode, InfoNode);
   }
 
-  Provenance createProvenancePHI(IRBuilder<> &IRB, ProvenanceComponent Comp,
+  Provenance createProvenancePHI(IRBuilder<> &IRB, ProvenanceDesc Comp,
                                  iterator_range<pred_iterator> Blocks) {
     if (Comp.Elems.isVector()) {
       report_fatal_error("Vectors are not supported.");
@@ -969,9 +974,9 @@ private:
   void visitPHINode(PHINode &PN) {
     IRBuilder<> IRB(&PN);
     unsigned NumIncoming = PN.getNumIncomingValues();
-    SmallVector<ProvenanceComponent> *Components =
-        getProvenanceComponents(IRB, PN.getType());
-    for (auto [Idx, Comp] : llvm::enumerate(*Components)) {
+    SmallVector<ProvenanceDesc> Components =
+        getProvenanceDesc(IRB, PN.getType());
+    for (auto [Idx, Comp] : llvm::enumerate(Components)) {
       Provenance Prov =
           createProvenancePHI(IRB, Comp, predecessors(PN.getParent()));
       setProvenance({&PN, Idx}, Prov);
@@ -1083,10 +1088,10 @@ private:
     Value *Size =
         IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeStoreSize(LI.getType()));
 
-    SmallVector<ProvenanceComponent> *Components =
-        getProvenanceComponents(IRB, LI.getType());
+    SmallVector<ProvenanceDesc> Components =
+        getProvenanceDesc(IRB, LI.getType());
     Value *Base = LI.getPointerOperand();
-    for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
+    for (const auto &[Idx, Comp] : llvm::enumerate(Components)) {
       ShadowFootprint Footprint = Comp.Footprint;
       Value *ByteOffset = Footprint.ByteOffset.getValue(IRB, BS.IntptrTy);
       Value *ObjAddr = addPointer(IRB, Base, ByteOffset);
@@ -1129,12 +1134,12 @@ private:
     bool Clear = shouldClearProvenance(IRB, SI);
 
     Value *Base = SI.getPointerOperand();
-    SmallVector<ProvenanceComponent> *Components =
-        getProvenanceComponents(IRB, Val->getType());
+    SmallVector<ProvenanceDesc> Components =
+        getProvenanceDesc(IRB, Val->getType());
 
     DynSize Offset = DynSize(BS.Zero);
 
-    for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
+    for (const auto &[Idx, Comp] : llvm::enumerate(Components)) {
       ShadowFootprint Footprint = Comp.Footprint;
       Value *ByteOffset = Footprint.ByteOffset.getValue(IRB, BS.IntptrTy);
       if (Clear) {
@@ -1194,10 +1199,10 @@ private:
     IRBuilder<> IRB(&EI);
     Value *AggregateSrc = EI.getAggregateOperand();
 
-    SmallVector<ProvenanceComponent> *SrcComponents =
-        getProvenanceComponents(IRB, AggregateSrc->getType());
-    SmallVector<ProvenanceComponent> *DestComponents =
-        getProvenanceComponents(IRB, EI.getType());
+    SmallVector<ProvenanceDesc> SrcComponents =
+        getProvenanceDesc(IRB, AggregateSrc->getType());
+    SmallVector<ProvenanceDesc> DestComponents =
+        getProvenanceDesc(IRB, EI.getType());
 
     Type *CurrType = AggregateSrc->getType();
     uint64_t StartingIdx = 0;
@@ -1206,7 +1211,7 @@ private:
           offsetIntoProvenanceIndex(IRB, CurrType, Idx, StartingIdx);
     }
 
-    for (auto [Offset, Comp] : llvm::enumerate(*DestComponents)) {
+    for (auto [Offset, Comp] : llvm::enumerate(DestComponents)) {
       Provenance Prov =
           assertProvenance(IRB, Comp, {AggregateSrc, StartingIdx + Offset});
       setProvenance({&EI, Offset}, Prov);
@@ -1217,8 +1222,8 @@ private:
     IRBuilder<> IRB(&II);
     BaseProvMap.transferToValue(II.getAggregateOperand(), &II);
     Value *ToInsert = II.getInsertedValueOperand();
-    SmallVector<ProvenanceComponent> *SrcComponents =
-        getProvenanceComponents(IRB, ToInsert->getType());
+    SmallVector<ProvenanceDesc> SrcComponents =
+        getProvenanceDesc(IRB, ToInsert->getType());
 
     Type *CurrType = II.getType();
     uint64_t StartingIdx = 0;
@@ -1227,7 +1232,7 @@ private:
           offsetIntoProvenanceIndex(IRB, CurrType, Idx, StartingIdx);
     }
 
-    for (auto [Offset, Comp] : llvm::enumerate(*SrcComponents)) {
+    for (auto [Offset, Comp] : llvm::enumerate(SrcComponents)) {
       Provenance Prov = assertProvenance(IRB, Comp, {ToInsert, Offset});
       setProvenance({&II, StartingIdx + Offset}, Prov);
     }
@@ -1235,10 +1240,10 @@ private:
 
   void visitSelectInst(SelectInst &SI) {
     IRBuilder<> IRB(&SI);
-    SmallVector<ProvenanceComponent> *Components =
-        getProvenanceComponents(IRB, SI.getType());
+    SmallVector<ProvenanceDesc> Components =
+        getProvenanceDesc(IRB, SI.getType());
 
-    for (auto [Idx, Comp] : llvm::enumerate(*Components)) {
+    for (auto [Idx, Comp] : llvm::enumerate(Components)) {
       if (Comp.Elems.isVector()) {
         report_fatal_error("Vectors are not supported.");
       } else {
@@ -1259,11 +1264,11 @@ private:
   void popFrame(IRBuilder<> &IRB, Instruction &I, Value *RetVal) {
     BasicBlock *BB = IRB.GetInsertBlock();
     if (RetVal) {
-      SmallVector<ProvenanceComponent> *Components =
-          getProvenanceComponents(IRB, RetVal->getType());
+      SmallVector<ProvenanceDesc> Components =
+          getProvenanceDesc(IRB, RetVal->getType());
 
       Value *RetvalByteWidth = BS.Zero;
-      for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
+      for (const auto &[Idx, Comp] : llvm::enumerate(Components)) {
         Value *Slot = addPointer(IRB, BS.RetvalTLS, RetvalByteWidth);
         Provenance Prov = assertProvenance(IRB, Comp, {RetVal, Idx});
         ProvenancePtr Dest = ProvenancePtr(IRB, BS.PL, Slot, Comp.Elems);
@@ -1307,22 +1312,6 @@ private:
   void visitResumeInst(ResumeInst &I) {
     IRBuilder<> IRB(&I);
     popFrame(IRB, I, I.getValue());
-  }
-
-  IRBuilder<> switchToInsertionPointAfterCall(CallBase *CB) {
-    Instruction *NextInst;
-    if (auto *II = dyn_cast<InvokeInst>(CB)) {
-      if (II->getNormalDest()->getSinglePredecessor()) {
-        NextInst = &II->getNormalDest()->front();
-      } else {
-        NextInst =
-            &SplitEdge(II->getParent(), II->getNormalDest(), &DT)->front();
-      }
-    } else {
-      assert(CB->getIterator() != CB->getParent()->end());
-      NextInst = CB->getNextNode();
-    }
-    return IRBuilder<>(NextInst);
   }
 };
 
