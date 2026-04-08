@@ -11,8 +11,13 @@ use crate::helpers::FxHashMap;
 use crate::memory::{Heap, ShadowHeap};
 use crate::*;
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
+pub static DISABLE_NODE_DEBUG_INFO: AtomicBool = AtomicBool::new(false);
+
 unsafe extern "C" {
     fn __bsan_abort() -> !;
+    fn __bsan_disable_node_debug_info() -> bool;
 }
 
 #[derive(Default)]
@@ -193,6 +198,7 @@ static GLOBAL_CTX: GlobalCtxWrapper = GlobalCtxWrapper(UnsafeCell::new(MaybeUnin
 pub unsafe fn init_global_ctx() {
     unsafe {
         (*GLOBAL_CTX.0.get()).write(GlobalCtx::new());
+        DISABLE_NODE_DEBUG_INFO.store(__bsan_disable_node_debug_info(), Ordering::Relaxed);
     }
 }
 

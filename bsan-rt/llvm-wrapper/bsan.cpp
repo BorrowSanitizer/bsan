@@ -1,4 +1,5 @@
 #include "bsan.h"
+#include "bsan_flags.h"
 #include "bsan_thread.h"
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_file.h"
@@ -78,19 +79,10 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_init() {
     return;
   BSAN_INIT_RUNNING = true;
   AvoidCVE_2016_2143();
+  InitializeFlags();
   __bsan_internal_init();
   InitializePlatformEarly();
   InitializeInterceptors();
-  SetCommonFlagsDefaults();
-  {
-    const char *symbolizer_path = GetEnv("BSAN_SYMBOLIZER");
-    if (symbolizer_path) {
-      CommonFlags cf;
-      cf.CopyFrom(*common_flags());
-      cf.external_symbolizer_path = symbolizer_path;
-      OverrideCommonFlags(cf);
-    }
-  }
   BsanTSDInit();
   BsanThread *main_thread = BsanThread::Create(nullptr, nullptr);
   SetCurrentThread(main_thread);
