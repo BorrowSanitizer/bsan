@@ -1,31 +1,31 @@
 error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x8] is forbidden
-   --> bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:17:13
-    |
- 17 | *x = 1; //miri: ~ERROR: write access
-    |
+   --> bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:LL:CC
+   |
+LL | *x = 1; //miri: ~ERROR: write access
+   |
     = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this write
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
-   --> bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:20:10
-    |
- 20 | .await
-    |
+   --> bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:LL:CC
+   |
+LL | .await
+   |
 help: the accessed tag <TAG>(unprotected) later transitioned due to a child write
-   --> bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:17:13
-    |
- 17 | *x = 1; //miri: ~ERROR: write access
-    |
+   --> bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:LL:CC
+   |
+LL | *x = 1; //miri: ~ERROR: write access
+   |
 help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
 help: the accessed tag <TAG>(unprotected) later transitioned due to a reborrow (acting as a foreign read access)
-   --> RUSTLIB/core/src/ops/deref.rs:173:9
-    |
-173 | self
-    |
+   --> RUSTLIB/core/src/ops/deref.rs:LL:CC
+   |
+LL | self
+   |
 help: this transition corresponds to a loss of write permissions
 
 stack backtrace:
 0: async_shared_mutable::main::{closure#0}::{closure#0}
- at bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:17:13
+ at bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:LL:CC
 1: <core::future::poll_fn::PollFn<async_shared_mutable::main::{closure#0}::{closure#0}> as core::future::future::Future>::poll
- at RUSTLIB/core/src/future/poll_fn.rs:151:9
+ at RUSTLIB/core/src/future/poll_fn.rs:LL:CC
 2: async_shared_mutable::main::{closure#0}
- at bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:20:10
+ at bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:LL:CC

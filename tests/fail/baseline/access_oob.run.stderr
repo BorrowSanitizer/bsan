@@ -1,13 +1,13 @@
 error: Undefined Behavior: an access of size 4b at offset 0x4 is out of bounds for ALLOC of size 4b.
-    --> RUSTLIB/core/src/ptr/mod.rs:1910:9
-     |
-1910 | intrinsics::write_via_move(dst, src)
-     |
+    --> RUSTLIB/core/src/ptr/mod.rs:LL:CC
+   |
+LL | intrinsics::write_via_move(dst, src)
+   |
 
 stack backtrace:
 0: core::ptr::write
- at RUSTLIB/core/src/ptr/mod.rs:1910:9
+ at RUSTLIB/core/src/ptr/mod.rs:LL:CC
 1: <*mut i32>::write
- at RUSTLIB/core/src/ptr/mut_ptr.rs:1418:18
+ at RUSTLIB/core/src/ptr/mut_ptr.rs:LL:CC
 2: access_oob::foo
- at bsan/tests/fail/baseline/access_oob.rs:10:23
+ at bsan/tests/fail/baseline/access_oob.rs:LL:CC

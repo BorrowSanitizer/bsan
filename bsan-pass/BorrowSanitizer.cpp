@@ -41,6 +41,15 @@ static cl::opt<bool> ClHandleAsmConservative(
 
 namespace {
 
+/// Helper class to attach debug information of the given instruction onto new
+/// instructions inserted after.
+class NextNodeIRBuilder : public IRBuilder<> {
+public:
+  explicit NextNodeIRBuilder(Instruction *IP) : IRBuilder<>(IP->getNextNode()) {
+    SetCurrentDebugLocation(IP->getDebugLoc());
+  }
+};
+
 Value *addPointer(IRBuilder<> &IRB, Value *Pointer, Value *Offset) {
   if (match(Offset, m_Zero()))
     return Pointer;
@@ -681,7 +690,7 @@ private:
           setProvenance(AI, createAllocaMetadata(EntryIRB, AI));
         } else {
           ProvenanceScalar Prov = createAllocaMetadata(EntryIRB, AI);
-          IRBuilder<> IRB(AI->getNextNode());
+          NextNodeIRBuilder IRB(AI);
           initAllocaMetadata(IRB, AI, Prov);
           setProvenance(AI, Prov);
         }
@@ -854,6 +863,7 @@ private:
     // We need to do some extra work here to compute where to insert our
     // instructions, since some function calls occur within terminators.
     IRBuilder<> After = switchToInsertionPointAfterCall(&CB);
+    After.SetCurrentDebugLocation(CB.getDebugLoc());
 
     Value *NumReturnProv = BS.Zero;
     SmallVector<std::pair<unsigned, ProvenancePtr>> ProvenancePointers;
@@ -1105,22 +1115,22 @@ private:
     if (SI.isAtomic())
       return;
 
-    IRBuilder<> IRB(&SI);
+    IRBuilder<> PrevIRB(&SI);
     Value *Ptr, *Val;
     Ptr = SI.getPointerOperand();
     Val = SI.getValueOperand();
 
-    Value *EntireSize = IRB.CreateTypeSize(
+    Value *EntireSize = PrevIRB.CreateTypeSize(
         BS.IntptrTy, BS.DL->getTypeStoreSize(Val->getType()));
-    insertWriteCheck(IRB, Ptr, EntireSize);
+    insertWriteCheck(PrevIRB, Ptr, EntireSize);
 
-    IRBuilder<> NextIRB(SI.getNextNode());
+    NextNodeIRBuilder IRB(&SI);
 
-    bool Clear = shouldClearProvenance(NextIRB, SI);
+    bool Clear = shouldClearProvenance(IRB, SI);
 
     Value *Base = SI.getPointerOperand();
     SmallVector<ProvenanceComponent> *Components =
-        getProvenanceComponents(NextIRB, Val->getType());
+        getProvenanceComponents(IRB, Val->getType());
 
     DynSize Offset = DynSize(BS.Zero);
 
@@ -1131,22 +1141,22 @@ private:
         if (Offset != Footprint.ByteOffset) {
           Value *CurrOffset = Offset.getValue(IRB, BS.IntptrTy);
           Value *GapSize = IRB.CreateSub(ByteOffset, CurrOffset);
-          Value *BaseAddr = addPointer(NextIRB, Base, CurrOffset);
-          clearProvenance(NextIRB, BaseAddr, GapSize, SI.getOrdering());
+          Value *BaseAddr = addPointer(IRB, Base, CurrOffset);
+          clearProvenance(IRB, BaseAddr, GapSize, SI.getOrdering());
         }
         Offset = Footprint.ByteOffset.add(Footprint.ByteWidth);
       }
-      Value *ObjAddr = addPointer(NextIRB, Base, ByteOffset);
+      Value *ObjAddr = addPointer(IRB, Base, ByteOffset);
       Provenance Prov =
-          assertProvenance(NextIRB, Comp, {SI.getValueOperand(), Idx});
-      storeProvenanceToShadow(NextIRB, ObjAddr, Prov, SI.getOrdering());
+          assertProvenance(IRB, Comp, {SI.getValueOperand(), Idx});
+      storeProvenanceToShadow(IRB, ObjAddr, Prov, SI.getOrdering());
     }
 
     if (Clear) {
-      Value *OffsetVal = Offset.getValue(NextIRB, BS.IntptrTy);
-      Value *Remaining = NextIRB.CreateSub(EntireSize, OffsetVal);
-      Value *RemainingAddr = addPointer(NextIRB, Base, OffsetVal);
-      clearProvenance(NextIRB, RemainingAddr, Remaining, SI.getOrdering());
+      Value *OffsetVal = Offset.getValue(IRB, BS.IntptrTy);
+      Value *Remaining = IRB.CreateSub(EntireSize, OffsetVal);
+      Value *RemainingAddr = addPointer(IRB, Base, OffsetVal);
+      clearProvenance(IRB, RemainingAddr, Remaining, SI.getOrdering());
     }
   }
 

@@ -1,22 +1,25 @@
 error: Undefined Behavior: deallocation through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-    --> RUSTLIB/std/src/sys/alloc/PLATFORM.rs:l:c
+    --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
+   |
+LL | unsafe { libc::free(ptr as *mut libc::c_void) }
+   |
      = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this deallocation
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
-    --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/illegal_deALLOC.rs:8:20
-     |
-   8 | let ptr2 = (&mut *ptr1) as *mut u8;
-     |
+    --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/illegal_deALLOC.rs:LL:CC
+   |
+LL | let ptr2 = (&mut *ptr1) as *mut u8;
+   |
 help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
-    --> RUSTLIB/core/src/ptr/mod.rs:1910:9
-     |
-1910 | intrinsics::write_via_move(dst, src)
-     |
+    --> RUSTLIB/core/src/ptr/mod.rs:LL:CC
+   |
+LL | intrinsics::write_via_move(dst, src)
+   |
 help: this transition corresponds to a loss of read and write permissions
 
 stack backtrace:
 0: <std::alloc::System as core::alloc::global::GlobalAlloc>::dealloc
- at RUSTLIB/std/src/sys/alloc/PLATFORM.rs:l:c
+ at RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
 1: __rustc::__rdl_dealloc
- at RUSTLIB/std/src/alloc.rs:463:25
+ at RUSTLIB/std/src/alloc.rs:LL:CC
 2: alloc::alloc::dealloc
- at RUSTLIB/alloc/src/alloc.rs:115:14
+ at RUSTLIB/alloc/src/alloc.rs:LL:CC

@@ -1,25 +1,25 @@
 error: Undefined Behavior: read through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/alias_through_mutation.rs:18:16
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/alias_through_mutation.rs:LL:CC
    |
-18 | let _val = *target_alias;
+LL | let _val = *target_alias;
    |
    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this read
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/alias_through_mutation.rs:8:14
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/alias_through_mutation.rs:LL:CC
    |
- 8 | *x = &mut *(target as *mut _);
+LL | *x = &mut *(target as *mut _);
    |
 help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/alias_through_mutation.rs:17:5
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/alias_through_mutation.rs:LL:CC
    |
-17 | *target = 13;
+LL | *target = 13;
    |
 help: this transition corresponds to a loss of read permissions
 
 stack backtrace:
 0: alias_through_mutation::main
- at bsan/tests/miri-tests/fail/aliasing/both_borrows/alias_through_mutation.rs:18:16
+ at bsan/tests/miri-tests/fail/aliasing/both_borrows/alias_through_mutation.rs:LL:CC
 1: <fn() as core::ops::function::FnOnce<()>>::call_once
- at RUSTLIB/core/src/ops/function.rs:250:5
+ at RUSTLIB/core/src/ops/function.rs:LL:CC
 2: std::sys::backtrace::__rust_begin_short_backtrace
- at RUSTLIB/std/src/sys/backtrace.rs:166:18
+ at RUSTLIB/std/src/sys/backtrace.rs:LL:CC

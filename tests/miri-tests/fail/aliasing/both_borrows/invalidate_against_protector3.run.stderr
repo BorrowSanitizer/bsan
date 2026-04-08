@@ -1,23 +1,26 @@
 error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/invalidate_against_protector3.rs:11:14
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/invalidate_against_protector3.rs:LL:CC
    |
-11 | unsafe { *x = 0 };
+LL | unsafe { *x = 0 };
    |
    = help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
    = help: this write would cause the protected tag <TAG>(StrongProtector) (currently Frozen) to become Disabled
    = help: protected tags must never be Disabled
 help: the accessed tag <TAG>(unprotected) was created here
-  --> RUSTLIB/std/src/sys/alloc/PLATFORM.rs:l:c
-help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Frozen
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/invalidate_against_protector3.rs:7:0
+  --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
    |
- 7 | fn inner(x: *mut i32, _y: &i32) {
+LL | unsafe { libc::malloc(layout.size()) as *mut u8 }
+   |
+help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Frozen
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/invalidate_against_protector3.rs:LL:CC
+   |
+LL | fn inner(x: *mut i32, _y: &i32) {
    |
 
 stack backtrace:
 0: invalidate_against_protector3::inner
- at bsan/tests/miri-tests/fail/aliasing/both_borrows/invalidate_against_protector3.rs:11:14
+ at bsan/tests/miri-tests/fail/aliasing/both_borrows/invalidate_against_protector3.rs:LL:CC
 1: invalidate_against_protector3::main
- at bsan/tests/miri-tests/fail/aliasing/both_borrows/invalidate_against_protector3.rs:19:9
+ at bsan/tests/miri-tests/fail/aliasing/both_borrows/invalidate_against_protector3.rs:LL:CC
 2: <fn() as core::ops::function::FnOnce<()>>::call_once
- at RUSTLIB/core/src/ops/function.rs:250:5
+ at RUSTLIB/core/src/ops/function.rs:LL:CC

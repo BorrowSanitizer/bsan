@@ -1,25 +1,25 @@
 error: Undefined Behavior: read through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_write5.rs:14:16
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_write5.rs:LL:CC
    |
-14 | let _val = *xref;
+LL | let _val = *xref;
    |
    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this read
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_write5.rs:11:25
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_write5.rs:LL:CC
    |
-11 | let xref = unsafe { &mut *xraw };
+LL | let xref = unsafe { &mut *xraw };
    |
 help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_write5.rs:20:14
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_write5.rs:LL:CC
    |
-20 | unsafe { *xraw = 15 };
+LL | unsafe { *xraw = 15 };
    |
 help: this transition corresponds to a loss of read and write permissions
 
 stack backtrace:
 0: illegal_write5::main
- at bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_write5.rs:14:16
+ at bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_write5.rs:LL:CC
 1: <fn() as core::ops::function::FnOnce<()>>::call_once
- at RUSTLIB/core/src/ops/function.rs:250:5
+ at RUSTLIB/core/src/ops/function.rs:LL:CC
 2: std::sys::backtrace::__rust_begin_short_backtrace
- at RUSTLIB/std/src/sys/backtrace.rs:166:18
+ at RUSTLIB/std/src/sys/backtrace.rs:LL:CC

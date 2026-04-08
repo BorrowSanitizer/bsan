@@ -168,6 +168,12 @@ regexes! {
 
 regexes! {
     stderr_filters:
+    // normalize width of bars surrounding source locations
+    r"(?m)^ +\|" => "   |",
+    // erase line numbers in source locations
+    r"(?m)^ *[0-9]+ *\|" => "LL |",
+    // erase line and column info
+    r"\.(rs|c|cpp):[0-9]+:[0-9]+(: [0-9]+:[0-9]+)?" => ".rs:LL:CC",
     // erase alloc ids
     "alloc[0-9]+"                    => "ALLOC",
     // erase thread ids
