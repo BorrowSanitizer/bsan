@@ -113,6 +113,7 @@ void eliminatePHINodes(SmallVectorImpl<PHINode *> &Worklist) {
   } while (!PHIToDelete.empty());
 }
 
+void createTerminatorBlock() {}
 } // namespace
 
 class StackSlotAllocator {
@@ -191,7 +192,6 @@ public:
     }
 
     SlotPHINodes.push_back(OffsetPN);
-
     return OffsetPN;
   }
 
@@ -201,18 +201,19 @@ public:
 class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   friend class InstVisitor<BorrowSanitizerVisitor>;
   BorrowSanitizer &BS;
-
   Function &F;
   DIBuilder DIB;
   LLVMContext *C;
 
+  // Cached analysis results
   const TargetLibraryInfo *TLI;
   DominatorTree &DT;
 
-  // The end of the function's prologue, which is a call to `llvm.donothing()`.
+  // The end of the "prologue" of the function, where we initialize our
+  // instrumentation. This is a call to `llvm.donothing()`.
   Instruction *FnPrologueEnd;
 
-  // Relevant instructions in reverse postorder
+  // All relevant instructions in reverse postorder
   SmallVector<Instruction *, 64> Instructions;
 
   // If a stack allocation does not have a dedicated `lifetime.start`, then we
@@ -221,15 +222,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // necessary to determine where to free these allocations, even if they do not
   // have a `lifetime.end`, either.
   DenseSet<AllocaInst *> HasLifetimeStart;
-
-  // Alloca instructions. For the moment, static allocas are handled the same as
-  // dynamic ones, but we will adjust this behavior in the future to support
-  // optimizations such as combining static stack allocations into a single,
-  // larger allocation (see AddressSanitizer).
   SmallVector<AllocaInst *, 8> StaticAllocaVec;
-
-  // The number of function-entry retags. If none occur, then we can skip
-  // creating and popping a frame to contain protected tags.
 
   // Pointers to the sections of the thread-local array (BS.ParamTLS) where the
   // provenance values for each argument are stored. Whenever we need to get the
@@ -276,21 +269,18 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // leads to memory corruption.
   SmallVector<std::tuple<PHINode *, Provenance, unsigned int>> ProvPHINodes;
 
-  // Since `allocas` have multiple provenance values, the provenance for any
-  // `alloca` in a basic block will depend on its provenance in all of the
-  // incoming basic blocks.
+  // The provenance of an `alloca` may will depend
+  // on its provenance in all incoming basic blocks.
   SmallVector<std::tuple<BasicBlock *, AllocaInst *, ProvenanceScalar>>
       AllocaProvPHINodes;
 
-  // Place retag intrinsics (`__rust_retag_place`), which update the shadow
-  // provenance value for their first argument, which is a place containing
-  // the pointer receiving the retag.
   SmallVector<CallBase *> Retags;
+  // The number of function-entry retags. If none occur, then we can skip
+  // creating and popping a frame to contain protected tags.
   unsigned NumFnEntryRetags = 0;
 
   // The start of the current frame of protected tags. This is the "top" of the
-  // frame, since we decrement from the beginning of the chunk. The thread-local
-  // frame pointer is reset to this value when the function returns.
+  // frame, since we decrement to allocate slots.
   Value *FrameTop = nullptr;
 
   // We use LLVM's lifetime analysis to determine which `allocas` are alive at
@@ -434,8 +424,9 @@ private:
 
     Visited.insert(BB);
 
-    if (AllocaProvMap.contains({BB, AI})) {
-      return AllocaProvMap[{BB, AI}];
+    auto It = AllocaProvMap.find({BB, AI});
+    if (It != AllocaProvMap.end()) {
+      return It->second;
     }
 
     if (BB->isEntryBlock()) {
@@ -702,8 +693,9 @@ private:
         BasicBlock *CurrBB = IncomingBlock;
         ProvenanceScalar IncomingProv = BS.InvalidProvenance;
         while (CurrBB) {
-          if (AllocaProvMap.contains({CurrBB, AI})) {
-            IncomingProv = AllocaProvMap[{CurrBB, AI}];
+          auto It = AllocaProvMap.find({CurrBB, AI});
+          if (It != AllocaProvMap.end()) {
+            IncomingProv = It->second;
             break;
           }
           CurrBB = CurrBB->getSinglePredecessor();
