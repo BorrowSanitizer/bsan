@@ -134,7 +134,7 @@ public:
 // on values with both static and dynamic components.
 struct DynSize {
   unsigned Static = 0;
-  SmallVector<Value *, 2> Dynamic;
+  SmallVector<Value *, 1> Dynamic;
 
 public:
   DynSize() {}
@@ -201,29 +201,19 @@ public:
   bool operator!=(const DynSize &other) const { return !(*this == other); }
 };
 
-// The "footprint" within shadow memory of a provenance-carrying component of
-// a type. Each pointer-sized word of shadow memory corresponds to three words
-// of provenance
-struct ShadowFootprint {
-  DynSize ByteOffset;
-  DynSize ByteWidth;
-  ShadowFootprint(Value *BO, Value *BW)
-      : ByteOffset(DynSize(BO)), ByteWidth(DynSize(BW)) {}
-};
-
 // A component of a type that carries provenance information.
 // This is either a pointer or a vector of pointers.
 struct ProvenanceDesc {
-  // The range within shadow memory that would contain this many
-  // provenance values.
-  ShadowFootprint Footprint;
-  // The unevaluated static object representing the number
-  // of provenance values in this component.
+  // The offset where this field is located.
+  DynSize ByteOffset;
+  // The byte width of this field.
+  DynSize ByteWidth;
+  // The number of provenance values in field.
   ElementCount Elems;
 
 public:
-  ProvenanceDesc(Value *B, Value *BW, ElementCount E)
-      : Footprint(B, BW), Elems(E) {}
+  ProvenanceDesc(Value *ByteOffset, Value *ByteWidth, ElementCount Elems)
+      : ByteOffset(ByteOffset), ByteWidth(ByteWidth), Elems(Elems) {}
 };
 
 struct ProvenanceKey {
