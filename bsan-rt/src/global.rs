@@ -2,6 +2,7 @@ use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use borrow_tracker::ProtectorKind;
 use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -10,8 +11,6 @@ use crate::errors::{ErrorFormatContext, UBInfo};
 use crate::helpers::FxHashMap;
 use crate::memory::{Heap, ShadowHeap};
 use crate::*;
-
-use core::sync::atomic::{AtomicBool, Ordering};
 
 pub static DISABLE_NODE_DEBUG_INFO: AtomicBool = AtomicBool::new(false);
 

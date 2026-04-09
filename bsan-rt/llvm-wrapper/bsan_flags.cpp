@@ -21,12 +21,12 @@
 
 using namespace __sanitizer;
 
-extern "C" SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE
-const char *__bsan_default_options();
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE const char *
+__bsan_default_options();
 
 namespace __bsan {
 
-Flags bsan_flags_dont_use_directly;  // use via flags().
+Flags bsan_flags_dont_use_directly; // use via flags().
 
 static const char *MaybeUseBsanDefaultOptionsCompileDefinition() {
 #ifdef BSAN_DEFAULT_OPTIONS
@@ -43,7 +43,7 @@ void Flags::SetDefaults() {
 }
 
 static void RegisterBsanFlags(FlagParser *parser, Flags *f) {
-#define BSAN_FLAG(Type, Name, DefaultValue, Description) \
+#define BSAN_FLAG(Type, Name, DefaultValue, Description)                       \
   RegisterFlag(parser, #Name, Description, &f->Name);
 #include "bsan_flags.inc"
 #undef BSAN_FLAG
@@ -130,7 +130,7 @@ void InitializeFlags() {
 #endif
 }
 
-}  // namespace __bsan
+} // namespace __bsan
 
 extern "C" {
 SANITIZER_INTERFACE_ATTRIBUTE bool __bsan_disable_node_debug_info() {
@@ -138,6 +138,6 @@ SANITIZER_INTERFACE_ATTRIBUTE bool __bsan_disable_node_debug_info() {
 }
 }
 
-SANITIZER_INTERFACE_WEAK_DEF(const char*, __bsan_default_options, void) {
+SANITIZER_INTERFACE_WEAK_DEF(const char *, __bsan_default_options, void) {
   return "";
 }
