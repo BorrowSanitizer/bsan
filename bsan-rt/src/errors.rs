@@ -80,7 +80,7 @@ impl ErrorFormatContext {
             }
             UBInfo::AccessOutOfBounds { alloc_id, access_size, alloc_size, offset } => {
                 result.push_str(&format!(
-                    "an access of size {access_size} at offset 0x{offset:x} is out of bounds for {alloc_id:?} of size {alloc_size}.\n"
+                    "an access of size {access_size}b at offset 0x{offset:x} is out of bounds for {alloc_id:?} of size {alloc_size}b.\n"
                 ));
                 result.push_str(&self.format_symbol_standalone(symbol));
                 result.push('\n');
@@ -201,22 +201,28 @@ impl ErrorFormatContext {
 
     fn format_symbol(&mut self, symbol: Symbol, indentation: usize) -> String {
         let mut buffer = String::new();
-        if let Symbol::Resolved { file: path, line, col } = symbol {
-            let max_indent = " ".repeat(indentation);
-            buffer.push_str(&format!("{max_indent}--> {path}:{line}:{col}\n"));
-            let file = self
-                .file_cache
-                .entry(path.clone())
-                .or_insert_with(|| SanitizerCommon::read_file(&path).unwrap_or_default());
-            if let Some(content) = SanitizerCommon::get_source_line(file, line) {
-                let line = line.to_string();
-                let line_indent_len = max(indentation, line.len()) - line.len();
-                let line_indent = " ".repeat(line_indent_len);
+        match symbol {
+            Symbol::Resolved { file: path, line, col } => {
+                let max_indent = " ".repeat(indentation);
+                buffer.push_str(&format!("{max_indent}--> {path}:{line}:{col}\n"));
+                let file = self
+                    .file_cache
+                    .entry(path.clone())
+                    .or_insert_with(|| SanitizerCommon::read_file(&path).unwrap_or_default());
+                if let Some(content) = SanitizerCommon::get_source_line(file, line) {
+                    let line = line.to_string();
+                    let line_indent_len = max(indentation, line.len()) - line.len();
+                    let line_indent = " ".repeat(line_indent_len);
 
-                buffer.push_str(&format!("{max_indent} |\n",));
-                buffer.push_str(&format!("{line_indent}{line} | {content}\n"));
-                buffer.push_str(&format!("{max_indent} |\n",));
+                    buffer.push_str(&format!("{max_indent} |\n",));
+                    buffer.push_str(&format!("{line_indent}{line} | {content}\n"));
+                    buffer.push_str(&format!("{max_indent} |\n",));
+                }
             }
+            Symbol::Unresolved { pc } => {
+                buffer.push_str(&format!(" --> 0x{pc:x}\n"));
+            }
+            Symbol::Unused => (),
         }
         buffer
     }

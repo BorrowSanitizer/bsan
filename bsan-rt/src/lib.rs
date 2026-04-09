@@ -524,52 +524,14 @@ unsafe extern "C" fn __bsan_alloc_stack_impl(
     }
 }
 
-// Code is more readable with explicit return
-#[allow(clippy::needless_return)]
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_debug_assert_null(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
-    let global_ctx = unsafe { global_ctx() };
-    let prov = Provenance { bor_tag, alloc_info };
-    if prov != Provenance::null() {
-        crate::eprintln!("Expected null provenance, got {prov:?}");
-        global_ctx.exit(1);
-    }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn __bsan_debug_assert_wildcard(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
-    let global_ctx = unsafe { global_ctx() };
-    let prov = Provenance { bor_tag, alloc_info };
-    if prov != Provenance::wildcard() {
-        crate::eprintln!("Expected wildcard provenance, got {prov:?}");
-        global_ctx.exit(1);
-    }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn __bsan_debug_assert_valid(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
-    let prov = Provenance { bor_tag, alloc_info };
-    assert_ne!(prov, Provenance::null());
-    assert_ne!(prov, Provenance::wildcard());
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn __bsan_debug_assert_invalid(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
-    let global_ctx = unsafe { global_ctx() };
-    let prov = Provenance { bor_tag, alloc_info };
-    if !(prov == Provenance::null() || prov == Provenance::wildcard()) {
-        global_ctx.exit(1);
-    }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn __bsan_debug_print(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+extern "C" fn __bsan_print(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
     let prov = Provenance { bor_tag, alloc_info };
     crate::println!("{prov:?}");
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_debug_print_borrow_state(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+extern "C" fn __bsan_print_borrow_state(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
     let _ = BorrowTracker::for_alloc(prov, |bt| {
@@ -579,7 +541,7 @@ extern "C" fn __bsan_debug_print_borrow_state(bor_tag: BorTag, alloc_info: *mut 
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_debug_tree_size(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+extern "C" fn __bsan_tree_size(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
     let prov = Provenance { bor_tag, alloc_info };
     let _ = BorrowTracker::for_alloc(prov, |bt| {
         crate::println!("Tree size: {}", bt.debug_tree_size());
@@ -588,7 +550,7 @@ extern "C" fn __bsan_debug_tree_size(bor_tag: BorTag, alloc_info: *mut AllocInfo
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_debug_snapshot(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+extern "C" fn __bsan_snapshot(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
     let _ = BorrowTracker::for_alloc(prov, |bt| {
@@ -598,7 +560,7 @@ extern "C" fn __bsan_debug_snapshot(bor_tag: BorTag, alloc_info: *mut AllocInfo)
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_debug_print_diff(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+extern "C" fn __bsan_print_diff(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
     let _ = BorrowTracker::for_alloc(prov, |bt| {
