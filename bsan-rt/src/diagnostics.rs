@@ -110,6 +110,9 @@ pub struct HistoryData {
 impl History {
     /// Record an additional event to the history.
     pub fn push(&mut self, event: Event) {
+        if crate::global::DISABLE_NODE_DEBUG_INFO.load(core::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
         self.events.push(event);
     }
 

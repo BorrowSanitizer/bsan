@@ -2,6 +2,7 @@ use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use borrow_tracker::ProtectorKind;
 use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -11,8 +12,11 @@ use crate::helpers::FxHashMap;
 use crate::memory::{Heap, ShadowHeap};
 use crate::*;
 
+pub static DISABLE_NODE_DEBUG_INFO: AtomicBool = AtomicBool::new(false);
+
 unsafe extern "C" {
     fn __bsan_abort() -> !;
+    fn __bsan_disable_node_debug_info() -> bool;
 }
 
 #[derive(Default)]
@@ -187,6 +191,7 @@ static GLOBAL_CTX: GlobalCtxWrapper = GlobalCtxWrapper(UnsafeCell::new(MaybeUnin
 pub unsafe fn init_global_ctx() {
     unsafe {
         (*GLOBAL_CTX.0.get()).write(GlobalCtx::new());
+        DISABLE_NODE_DEBUG_INFO.store(__bsan_disable_node_debug_info(), Ordering::Relaxed);
     }
 }
 
