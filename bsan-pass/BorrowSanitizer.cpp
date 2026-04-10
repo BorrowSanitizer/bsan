@@ -318,6 +318,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 
   // The start of the current frame of protected tags. This is the "top" of the
   // frame, since we decrement to allocate slots.
+  Value *OGFrameTop = nullptr;
   Value *FrameTop = nullptr;
 
   // We use LLVM's lifetime analysis to determine which `allocas` are alive at
@@ -642,6 +643,8 @@ private:
   // Populates the array of argument provenance pointers and initializes the
   // start and end of the function prologue.
   void initStack(IRBuilder<> &EntryIRB) {
+    OGFrameTop = EntryIRB.CreateLoad(BS.PtrTy, BS.ProvStack);
+    FrameTop = OGFrameTop;
     Value *NumParamProv = BS.Zero;
     for (auto &Arg : F.args()) {
       if (Arg.hasAttribute(Attribute::ByVal)) {
@@ -678,18 +681,19 @@ private:
       }
     }
 
-    FrameTop = EntryIRB.CreateLoad(BS.PtrTy, BS.ProvStack);
-
     if (StaticAllocaVec.size() > 0) {
-      for (AllocaInst *AI : StaticAllocaVec) {
-        if (HasLifetimeStart.contains(AI)) {
-          setProvenance(AI, createAllocaMetadata(EntryIRB, AI));
-        } else {
-          ProvenanceScalar Prov = createAllocaMetadata(EntryIRB, AI);
+      for (auto [Idx, AI] : llvm::enumerate(StaticAllocaVec)) {
+        ProvenanceScalar Prov = createAllocaMetadata(EntryIRB, AI);
+        if (!HasLifetimeStart.contains(AI)) {
           NextNodeIRBuilder IRB(AI);
           initAllocaMetadata(IRB, AI, Prov);
-          setProvenance(AI, Prov);
         }
+        setProvenance(AI, Prov);
+        Value *SlotOffset = EntryIRB.CreateMul(
+            ConstantInt::get(BS.IntptrTy, Idx + 1), BS.PL.ProvenanceSize);
+        Value *Dest = subtractPointer(EntryIRB, OGFrameTop, SlotOffset);
+        Prov.store(EntryIRB, BS.PL, Dest);
+        FrameTop = Dest;
       }
     }
     FnPrologueEnd = EntryIRB.CreateIntrinsic(Intrinsic::donothing, {});
@@ -1279,23 +1283,16 @@ private:
       }
     }
 
-    if (NumFnEntryRetags) {
+    if (StaticAllocaVec.size() > 0 || NumFnEntryRetags) {
+      Value *AllocaVecSize =
+          ConstantInt::get(BS.IntptrTy, StaticAllocaVec.size());
       Value *FrameLen = ShadowStack.getOutgoingOffset(DT, IRB, BS.IntptrTy);
       Value *Offset = IRB.CreateMul(FrameLen, BS.PL.ProvenanceSize);
       Value *FrameBottom = subtractPointer(IRB, FrameTop, Offset);
-      IRB.CreateCall(BS.BsanFuncPopFrame, {FrameBottom, FrameLen});
+      IRB.CreateCall(BS.BsanFuncPopFrame,
+                     {FrameBottom, FrameLen, AllocaVecSize});
     }
-    IRB.CreateStore(FrameTop, BS.ProvStack);
-
-    if (StaticAllocaVec.size() > 0) {
-      for (AllocaInst *AI : StaticAllocaVec) {
-        ProvenanceScalar Root = assertProvenanceScalar(BB, AI);
-        if (LifetimeInfo->isAliveAfter(AI, &I)) {
-          IRB.CreateCall(BS.BsanFuncDeallocStack, {AI, Root.Tag, Root.Info});
-        }
-        IRB.CreateCall(BS.BsanFuncDestroyStackSlot, {Root.Info});
-      }
-    }
+    IRB.CreateStore(OGFrameTop, BS.ProvStack);
 
     for (auto &Ptr : ByValArgs) {
       ProvenanceScalar Root = assertProvenanceScalar(BB, Ptr);
@@ -1434,8 +1431,8 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
       kBsanFuncRetagName, AL, IntptrTy, PtrTy, IntptrTy, Int8Ty, Int8Ty, Int8Ty,
       Int8Ty, PtrTy, IntptrTy, IntptrTy, PtrTy);
 
-  BsanFuncPopFrame = M.getOrInsertFunction(kBsanFuncPopFrame, AL,
-                                           IRB.getVoidTy(), PtrTy, IntptrTy);
+  BsanFuncPopFrame = M.getOrInsertFunction(
+      kBsanFuncPopFrame, AL, IRB.getVoidTy(), PtrTy, IntptrTy, IntptrTy);
 
   BsanFuncRead = M.getOrInsertFunction(kBsanFuncReadName, AL, IRB.getVoidTy(),
                                        PtrTy, IntptrTy, IntptrTy, PtrTy);

@@ -12,7 +12,7 @@ use core::fmt::Debug;
 use core::panic::PanicInfo;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use core::{fmt, ptr, slice};
+use core::{fmt, ptr};
 
 use borrow_tracker::{AccessKind, RetagInfo, RetagPtrKind, Size};
 use libc_print::std_name::*;
@@ -332,13 +332,11 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_pop_frame_impl(frame_start: *const Provenance, protected: usize, pc: Span) {
+extern "C" fn __bsan_protector_end_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo, pc: Span) {
     let ctx = unsafe { global_ctx() };
-    let provenance = unsafe { slice::from_raw_parts(frame_start, protected) };
-    for prov in provenance {
-        let _ = BorrowTracker::for_alloc(*prov, |mut bt| bt.protector_end(ctx, pc));
-        ctx.protected_tags_mut().remove_protector(prov.bor_tag);
-    }
+    let prov = Provenance { bor_tag, alloc_info };
+    let _ = BorrowTracker::for_alloc(prov, |mut bt| bt.protector_end(ctx, pc));
+    ctx.protected_tags_mut().remove_protector(prov.bor_tag);
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -424,7 +422,6 @@ extern "C" fn __bsan_dealloc(
 // Registers a heap allocation of size `size`, storing its provenance in the return pointer.
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_dealloc_stack_impl(
-    ptr: *mut c_void,
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
     pc: Span,
@@ -441,12 +438,10 @@ unsafe extern "C-unwind" fn __bsan_dealloc_stack_impl(
     if unsafe { (*prov.alloc_info).tree_lock.is_none() } {
         return;
     }
-    BorrowTracker::for_access(prov, ptr, None, |mut bt| bt.dealloc(ctx, pc)).unwrap_or_else(
-        |err| {
-            let _: () = ctx.handle_error(err, pc);
-            ().into()
-        },
-    );
+    BorrowTracker::for_alloc(prov, |mut bt| bt.dealloc(ctx, pc)).unwrap_or_else(|err| {
+        let _: () = ctx.handle_error(err, pc);
+        ().into()
+    });
 }
 
 /// Copies the provenance stored in the range `[src_addr, src_addr + access_size)` within the shadow heap
