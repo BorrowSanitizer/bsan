@@ -1,26 +1,26 @@
 error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/invalidate_against_protector2.rs:9:14
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/invalidate_against_protector2.rs:LL:CC
    |
- 9 | unsafe { *x = 0 };
+LL | unsafe { *x = 0 };
    |
    = help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
    = help: this write would cause the protected tag <TAG>(StrongProtector) (currently Frozen) to become Disabled
    = help: protected tags must never be Disabled
 help: the accessed tag <TAG>(unprotected) was created here
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/invalidate_against_protector2.rs:16:16
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/invalidate_against_protector2.rs:LL:CC
    |
-16 | let xraw = &mut x as *mut _;
+LL | let xraw = &mut x as *mut _;
    |
 help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Frozen
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/invalidate_against_protector2.rs:5:0
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/invalidate_against_protector2.rs:LL:CC
    |
- 5 | fn inner(x: *mut i32, _y: &i32) {
+LL | fn inner(x: *mut i32, _y: &i32) {
    |
 
 stack backtrace:
 0: invalidate_against_protector2::inner
- at bsan/tests/miri-tests/fail/aliasing/both_borrows/invalidate_against_protector2.rs:9:14
+ at bsan/tests/miri-tests/fail/aliasing/both_borrows/invalidate_against_protector2.rs:LL:CC
 1: invalidate_against_protector2::main
- at bsan/tests/miri-tests/fail/aliasing/both_borrows/invalidate_against_protector2.rs:18:5
+ at bsan/tests/miri-tests/fail/aliasing/both_borrows/invalidate_against_protector2.rs:LL:CC
 2: <fn() as core::ops::function::FnOnce<()>>::call_once
- at RUSTLIB/core/src/ops/function.rs:250:5
+ at RUSTLIB/core/src/ops/function.rs:LL:CC

@@ -1,15 +1,15 @@
 error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/pass_invalid_shr_option.rs:0:27
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/pass_invalid_shr_option.rs:LL:CC
    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/pass_invalid_shr_option.rs:11:35
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/pass_invalid_shr_option.rs:LL:CC
    |
-11 | let some_xref = unsafe { Some(&*xraw) };
+LL | let some_xref = unsafe { Some(&*xraw) };
    |
 help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/pass_invalid_shr_option.rs:12:14
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/pass_invalid_shr_option.rs:LL:CC
    |
-12 | unsafe { *xraw = 42 }; // unfreeze
+LL | unsafe { *xraw = 42 }; // unfreeze
    |
 help: this transition corresponds to a loss of read permissions
 
@@ -17,6 +17,6 @@ stack backtrace:
 0: pass_invalid_shr_option::foo
  at bsan/tests/miri-tests/fail/aliasing/both_borrows/pass_invalid_shr_option.rs
 1: pass_invalid_shr_option::main
- at bsan/tests/miri-tests/fail/aliasing/both_borrows/pass_invalid_shr_option.rs:13:5
+ at bsan/tests/miri-tests/fail/aliasing/both_borrows/pass_invalid_shr_option.rs:LL:CC
 2: <fn() as core::ops::function::FnOnce<()>>::call_once
- at RUSTLIB/core/src/ops/function.rs:250:5
+ at RUSTLIB/core/src/ops/function.rs:LL:CC

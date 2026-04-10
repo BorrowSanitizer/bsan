@@ -14,14 +14,6 @@ namespace llvm {
 // a pointer to an allocation metadata object.
 static const unsigned kProvenanceSize = 16;
 
-// We have two ways of loading provenance into memory. When we
-// need a singular provenance value, we create each of its component
-// via function calls, taking the result by value. This happens recursively
-// for structs and arrays, covering each pointer. However, this approach
-// does not work for scalable vectors, which are dynamically sized. In those
-// cases, we allocate a vector of each provenance component.
-enum ProvenanceKind { Scalar, Vector };
-
 struct ProvenanceLayout {
   const DataLayout *DL;
   Type *IntptrTy = nullptr;
@@ -37,71 +29,61 @@ struct ProvenanceLayout {
     ProvenanceSize = ConstantInt::get(IntptrTy, kProvenanceSize);
     ProvenanceAlign = DL->getABITypeAlign(ProvenanceTy);
   }
-  Type *getPtrTy(ProvenanceKind Kind, ElementCount Elems) const;
-  Type *getIntTy(ProvenanceKind Kind, ElementCount Elems) const;
+  Type *getPtrTy(ElementCount Elems) const;
+  Type *getIntTy(ElementCount Elems) const;
 };
 
-class WithProvenanceKind {
-public:
-  ProvenanceKind Kind;
-  WithProvenanceKind(ProvenanceKind K) : Kind(K) {}
-  bool isScalar() const { return Kind == ProvenanceKind::Scalar; }
-  bool isVector() const { return Kind == ProvenanceKind::Vector; }
-};
-
-class ProvenancePointerScalar;
-class ProvenancePointerVector;
+class ProvenancePtrScalar;
+class ProvenancePtrVector;
 
 // A pointer to one or more adjacent provenance values in memory.
 // Represents a "provenancy-carrying-component" of a typed value,
 // offset from a given location in an array of provenance values.
-struct ProvenancePointer : public WithProvenanceKind {
+struct ProvenancePtr {
   Value *TagPtr = nullptr;
   Value *InfoPtr = nullptr;
-  ElementCount Elems;
-  ProvenancePointer() : WithProvenanceKind(ProvenanceKind::Scalar) {}
-  ProvenancePointer(Value *Tag, Value *Info, ElementCount Elems,
-                    ProvenanceKind Kind)
-      : TagPtr(Tag), InfoPtr(Info), WithProvenanceKind(Kind) {}
+  ElementCount Elems = ElementCount::getFixed(1);
+  ProvenancePtr() {}
+  ProvenancePtr(Value *Tag, Value *Info, ElementCount Elems)
+      : TagPtr(Tag), InfoPtr(Info), Elems(Elems) {}
 
-  ProvenancePointer(IRBuilder<> &IRB, const ProvenanceLayout &PL, Value *Base,
-                    ElementCount Elems, ProvenanceKind Kind);
+  ProvenancePtr(IRBuilder<> &IRB, const ProvenanceLayout &PL, Value *Base,
+                ElementCount Elems);
 };
 
-class ProvenancePointerScalar : public ProvenancePointer {
-  using ProvenancePointer::ProvenancePointer;
+class ProvenancePtrScalar : public ProvenancePtr {
+  using ProvenancePtr::ProvenancePtr;
 
 public:
-  ProvenancePointerScalar(Value *T, Value *F)
-      : ProvenancePointer(T, F, ElementCount::get(0, false),
-                          ProvenanceKind::Scalar) {}
-  ProvenancePointerScalar(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-                          Value *Base);
+  ProvenancePtrScalar(Value *T, Value *F)
+      : ProvenancePtr(T, F, ElementCount::getFixed(1)) {}
+  ProvenancePtrScalar(IRBuilder<> &IRB, const ProvenanceLayout &PL,
+                      Value *Base);
 };
 
-class ProvenancePointerVector : public ProvenancePointer {
-  using ProvenancePointer::ProvenancePointer;
+class ProvenancePtrVector : public ProvenancePtr {
+  using ProvenancePtr::ProvenancePtr;
 
 public:
-  ProvenancePointerVector(Value *T, Value *F, ElementCount Elems)
-      : ProvenancePointer(T, F, Elems, ProvenanceKind::Vector) {}
-  ProvenancePointerVector(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-                          Value *Base, ElementCount Elems);
-  static ProvenancePointerVector
-  alloc(IRBuilder<> &IRB, const ProvenanceLayout &PL, ElementCount Elems);
+  ProvenancePtrVector(Value *T, Value *F, ElementCount Elems)
+      : ProvenancePtr(T, F, Elems) {}
+  ProvenancePtrVector(IRBuilder<> &IRB, const ProvenanceLayout &PL, Value *Base,
+                      ElementCount Elems);
+  static ProvenancePtrVector alloc(IRBuilder<> &IRB, const ProvenanceLayout &PL,
+                                   ElementCount Elems);
 };
 
 class ProvenanceScalar;
 class ProvenanceVector;
-class Provenance : public WithProvenanceKind {
+class Provenance {
 public:
   Value *Tag = nullptr;
   Value *Info = nullptr;
-  ElementCount Elems;
+  ElementCount Elems = ElementCount::getFixed(1);
 
-  Provenance() : WithProvenanceKind(ProvenanceKind::Scalar) {}
-  Provenance(Value *T, Value *F, ElementCount E, ProvenanceKind K)
-      : Tag(T), Info(F), Elems(E), WithProvenanceKind(K) {}
+  Provenance() {}
+  Provenance(Value *Tag, Value *Info, ElementCount Elems)
+      : Tag(Tag), Info(Info), Elems(Elems) {}
   bool operator==(const Provenance &other) const {
     return this->Tag == other.Tag && this->Info == other.Info &&
            this->Elems == other.Elems;
@@ -114,32 +96,22 @@ public:
 
   std::optional<ProvenanceVector> getVector() const;
   ProvenanceVector assertVector() const;
-  void store(IRBuilder<> &IRB, const ProvenanceLayout &PL, Value *Dest,
-             AtomicOrdering Ordering = AtomicOrdering::NotAtomic);
-  void store(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-             ProvenancePointer Dest,
-             AtomicOrdering Ordering = AtomicOrdering::NotAtomic);
+  void store(IRBuilder<> &IRB, const ProvenanceLayout &PL, Value *Dest);
+  void store(IRBuilder<> &IRB, const ProvenanceLayout &PL, ProvenancePtr Dest);
   static Provenance load(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-                         ProvenancePointer ProvPtr,
-                         AtomicOrdering Ordering = AtomicOrdering::NotAtomic);
-  static ProvenanceScalar loadScalar(IRBuilder<> &IRB,
-                                     const ProvenanceLayout &PL,
-                                     ProvenancePointerScalar ProvPtr,
-                                     AtomicOrdering Ordering);
-  static ProvenanceVector loadVector(IRBuilder<> &IRB,
-                                     const ProvenanceLayout &PL,
-                                     ProvenancePointerVector ProvPtr,
-                                     AtomicOrdering Ordering);
+                         ProvenancePtr ProvPtr);
   static Provenance wildcard(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-                             ElementCount Elems, ProvenanceKind Kind);
+                             ElementCount Elems);
 };
 
 class ProvenanceScalar : public Provenance {
   using Provenance::Provenance;
 
 public:
-  ProvenanceScalar(Value *T, Value *F)
-      : Provenance(T, F, ElementCount::get(0, false), ProvenanceKind::Scalar) {}
+  ProvenanceScalar(Value *Tag, Value *Info)
+      : Provenance(Tag, Info, ElementCount::getFixed(1)) {}
+  static ProvenanceScalar load(IRBuilder<> &IRB, const ProvenanceLayout &PL,
+                               ProvenancePtrScalar ProvPtr);
   static ProvenanceScalar wildcard(const ProvenanceLayout &PL);
 };
 
@@ -147,21 +119,22 @@ class ProvenanceVector : public Provenance {
   using Provenance::Provenance;
 
 public:
-  ProvenanceVector(Value *T, Value *F, ElementCount E)
-      : Provenance(T, F, E, ProvenanceKind::Vector) {}
+  ProvenanceVector(Value *Tag, Value *Info, ElementCount Elems)
+      : Provenance(Tag, Info, Elems) {}
+  static ProvenanceVector load(IRBuilder<> &IRB, const ProvenanceLayout &PL,
+                               ProvenancePtrVector ProvPtr);
   static ProvenanceVector wildcard(IRBuilder<> &IRB, const ProvenanceLayout &PL,
                                    ElementCount Elems);
 };
 
 // When loading and storing provenance, we need a way to
-// handle dynamically sized values (e.g. scalable vectors),
-// which can be placed at any position within an aggregate
-// type. The `DynSize` type makes it far easier to reason
-// about arithmetic and other operations on values with both
-// a static and dynamic component.
+// handle dynamically sized values, which can be placed at any
+// position within an aggregate type. The `DynSize` type makes
+// it far easier to reason about arithmetic and other operations
+// on values with both static and dynamic components.
 struct DynSize {
   unsigned Static = 0;
-  SmallVector<Value *, 2> Dynamic;
+  SmallVector<Value *, 1> Dynamic;
 
 public:
   DynSize() {}
@@ -228,53 +201,27 @@ public:
   bool operator!=(const DynSize &other) const { return !(*this == other); }
 };
 
-// The "footprint" within shadow memory of a provenance-carrying component of
-// a type. Each pointer-sized word of shadow memory corresponds to three words
-// of provenance
-struct ShadowFootprint {
-  DynSize ByteOffset;
-  DynSize ByteWidth;
-  ShadowFootprint(Value *BO, Value *BW)
-      : ByteOffset(DynSize(BO)), ByteWidth(DynSize(BW)) {}
-};
-
 // A component of a type that carries provenance information.
 // This is either a pointer or a vector of pointers.
-struct ProvenanceComponent : public WithProvenanceKind {
-  // The range within shadow memory that would contain this many
-  // provenance values.
-  ShadowFootprint Footprint;
-  // The number of provenance values in previous components.
-  Value *ProvenanceOffset;
-  // The number of provenance values in this components.
-  Value *NumProvenanceValues;
-  // The unevaluated static object representing the number
-  // of provenance values in this component.
+struct ProvenanceDesc {
+  // The offset where this field is located.
+  DynSize ByteOffset;
+  // The byte width of this field.
+  DynSize ByteWidth;
+  // The number of provenance values in field.
   ElementCount Elems;
 
 public:
-  ProvenanceComponent(Value *B, Value *BW, Value *P, Value *PW, ElementCount E,
-                      ProvenanceKind Kind)
-      : Footprint(B, BW), ProvenanceOffset(P), NumProvenanceValues(PW),
-        Elems(E), WithProvenanceKind(Kind) {}
-
-  // Given a pointer to the start of an array of contiguous provenance values,
-  // this function will return a pointer to the start of this provenance
-  // component.
-  ProvenancePointer getPointerToProvenance(IRBuilder<> &IRB,
-                                           const ProvenanceLayout &PL,
-                                           Value *StartAddr) {
-    Type *IntegerTy = ProvenanceOffset->getType();
-    Value *PointerAsInt = IRB.CreatePointerCast(StartAddr, IntegerTy);
-    Value *ProvByteOffset = IRB.CreateMul(
-        ProvenanceOffset, ConstantInt::get(IntegerTy, kProvenanceSize));
-    Value *BaseInt = IRB.CreateAdd(PointerAsInt, ProvByteOffset);
-    Value *BasePointer = IRB.CreateIntToPtr(BaseInt, StartAddr->getType());
-    return ProvenancePointer(IRB, PL, BasePointer, this->Elems, this->Kind);
-  }
+  ProvenanceDesc(Value *ByteOffset, Value *ByteWidth, ElementCount Elems)
+      : ByteOffset(ByteOffset), ByteWidth(ByteWidth), Elems(Elems) {}
 };
 
-using ProvenanceKey = std::pair<Value *, unsigned>;
+struct ProvenanceKey {
+  Value *V;
+  unsigned long Offset;
+  ProvenanceKey(Value *V) : V(V), Offset(0) {}
+  ProvenanceKey(Value *V, unsigned long Offset) : V(V), Offset(Offset) {}
+};
 
 struct ProvenanceMap {
 public:
@@ -283,7 +230,7 @@ public:
   bool contains(Value *V) { return this->contains({V, 0}); }
 
   bool contains(ProvenanceKey Key) {
-    return Inner.contains(Key.first) && Inner[Key.first].contains(Key.second);
+    return Inner.contains(Key.V) && Inner[Key.V].contains(Key.Offset);
   }
 
   void transferToValue(Value *Src, Value *Dest) {
@@ -295,12 +242,12 @@ public:
     }
   }
   void set(ProvenanceKey Key, Provenance Prov) {
-    Inner[Key.first][Key.second] = Prov;
+    Inner[Key.V][Key.Offset] = Prov;
   }
 
   std::optional<Provenance> get(ProvenanceKey Key) {
     if (this->contains(Key)) {
-      return Inner[Key.first][Key.second];
+      return Inner[Key.V][Key.Offset];
     } else {
       return std::nullopt;
     }

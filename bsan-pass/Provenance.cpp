@@ -3,24 +3,22 @@
 
 using namespace llvm;
 
-Type *ProvenanceLayout::getPtrTy(ProvenanceKind Kind,
-                                 ElementCount Elems) const {
-  if (Kind == ProvenanceKind::Vector) {
-    return VectorType::get(this->PtrTy, Elems);
+Type *ProvenanceLayout::getPtrTy(ElementCount Elems) const {
+  if (Elems.isScalar()) {
+    return this->PtrTy;
   }
-  return this->PtrTy;
+  return VectorType::get(this->PtrTy, Elems);
 }
 
-Type *ProvenanceLayout::getIntTy(ProvenanceKind Kind,
-                                 ElementCount Elems) const {
-  if (Kind == ProvenanceKind::Vector) {
-    return VectorType::get(this->IntptrTy, Elems);
+Type *ProvenanceLayout::getIntTy(ElementCount Elems) const {
+  if (Elems.isScalar()) {
+    return this->IntptrTy;
   }
-  return this->IntptrTy;
+  return VectorType::get(this->IntptrTy, Elems);
 }
 
 std::optional<ProvenanceScalar> Provenance::getScalar() const {
-  if (isScalar()) {
+  if (Elems.isScalar()) {
     return *static_cast<const ProvenanceScalar *>(this);
   }
   return std::nullopt;
@@ -31,7 +29,7 @@ ProvenanceScalar Provenance::assertScalar() const {
 }
 
 std::optional<ProvenanceVector> Provenance::getVector() const {
-  if (isVector()) {
+  if (Elems.isVector()) {
     return *static_cast<const ProvenanceVector *>(this);
   }
   return std::nullopt;
@@ -41,20 +39,18 @@ ProvenanceVector Provenance::assertVector() const {
   return this->getVector().value();
 }
 
-ProvenancePointer::ProvenancePointer(IRBuilder<> &IRB,
-                                     const ProvenanceLayout &PL, Value *Base,
-                                     ElementCount Elems, ProvenanceKind Kind)
-    : WithProvenanceKind(Kind) {
-  if (Kind == ProvenanceKind::Scalar) {
-    *this = ProvenancePointerScalar(IRB, PL, Base);
+ProvenancePtr::ProvenancePtr(IRBuilder<> &IRB, const ProvenanceLayout &PL,
+                             Value *Base, ElementCount Elems) {
+  if (Elems.isScalar()) {
+    *this = ProvenancePtrScalar(IRB, PL, Base);
   } else {
-    *this = ProvenancePointerVector(IRB, PL, Base, Elems);
+    *this = ProvenancePtrVector(IRB, PL, Base, Elems);
   }
 }
 
-ProvenancePointerScalar::ProvenancePointerScalar(IRBuilder<> &IRB,
-                                                 const ProvenanceLayout &PL,
-                                                 Value *Base) {
+ProvenancePtrScalar::ProvenancePtrScalar(IRBuilder<> &IRB,
+                                         const ProvenanceLayout &PL,
+                                         Value *Base) {
 
   Value *ZeroIdx = ConstantInt::get(IRB.getInt64Ty(), 0);
   this->TagPtr = Base;
@@ -62,10 +58,9 @@ ProvenancePointerScalar::ProvenancePointerScalar(IRBuilder<> &IRB,
       PL.ProvenanceTy, Base, {ZeroIdx, ConstantInt::get(IRB.getInt32Ty(), 1)});
 }
 
-ProvenancePointerVector::ProvenancePointerVector(IRBuilder<> &IRB,
-                                                 const ProvenanceLayout &PL,
-                                                 Value *Base,
-                                                 ElementCount Elems) {
+ProvenancePtrVector::ProvenancePtrVector(IRBuilder<> &IRB,
+                                         const ProvenanceLayout &PL,
+                                         Value *Base, ElementCount Elems) {
   this->TagPtr = Base;
   this->Elems = Elems;
   Value *IntVecSize = IRB.CreateTypeSize(
@@ -86,50 +81,43 @@ void Provenance::addIncoming(BasicBlock *IncomingBlock,
 }
 
 Provenance Provenance::load(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-                            ProvenancePointer ProvPtr,
-                            AtomicOrdering Ordering) {
+                            ProvenancePtr ProvPtr) {
 
-  Type *IntTy = PL.getIntTy(ProvPtr.Kind, ProvPtr.Elems);
-  Type *PtrTy = PL.getPtrTy(ProvPtr.Kind, ProvPtr.Elems);
+  Type *IntTy = PL.getIntTy(ProvPtr.Elems);
+  Type *PtrTy = PL.getPtrTy(ProvPtr.Elems);
 
   LoadInst *Tag = IRB.CreateLoad(IntTy, ProvPtr.TagPtr, true);
   LoadInst *Info = IRB.CreateLoad(PtrTy, ProvPtr.InfoPtr, true);
-  Info->setAtomic(Ordering);
 
-  return Provenance(Tag, Info, ProvPtr.Elems, ProvPtr.Kind);
+  return Provenance(Tag, Info, ProvPtr.Elems);
 }
 
-ProvenanceScalar
-Provenance::loadScalar(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-                       ProvenancePointerScalar ProvPtr,
-                       AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
-  return Provenance::load(IRB, PL, ProvPtr, Ordering).assertScalar();
-}
-ProvenanceVector Provenance::loadVector(IRBuilder<> &IRB,
+ProvenanceScalar ProvenanceScalar::load(IRBuilder<> &IRB,
                                         const ProvenanceLayout &PL,
-                                        ProvenancePointerVector ProvPtr,
-                                        AtomicOrdering Ordering) {
-  return Provenance::load(IRB, PL, ProvPtr, Ordering).assertVector();
+                                        ProvenancePtrScalar ProvPtr) {
+  return Provenance::load(IRB, PL, ProvPtr).assertScalar();
+}
+ProvenanceVector ProvenanceVector::load(IRBuilder<> &IRB,
+                                        const ProvenanceLayout &PL,
+                                        ProvenancePtrVector ProvPtr) {
+  return Provenance::load(IRB, PL, ProvPtr).assertVector();
 }
 
 void Provenance::store(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-                       Value *Base, AtomicOrdering Ordering) {
-  this->store(IRB, PL,
-              ProvenancePointer(IRB, PL, Base, this->Elems, this->Kind),
-              Ordering);
+                       Value *Base) {
+  this->store(IRB, PL, ProvenancePtr(IRB, PL, Base, this->Elems));
 }
 
 void Provenance::store(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-                       ProvenancePointer Dest, AtomicOrdering Ordering) {
+                       ProvenancePtr Dest) {
 
   StoreInst *Tag = IRB.CreateStore(this->Tag, Dest.TagPtr, true);
   StoreInst *Info = IRB.CreateStore(this->Info, Dest.InfoPtr, true);
-  Info->setOrdering(Ordering);
 }
 
 Provenance Provenance::wildcard(IRBuilder<> &IRB, const ProvenanceLayout &PL,
-                                ElementCount Elems, ProvenanceKind Kind) {
-  if (Kind == ProvenanceKind::Scalar) {
+                                ElementCount Elems) {
+  if (Elems.isScalar()) {
     return ProvenanceScalar::wildcard(PL);
   }
   return ProvenanceVector::wildcard(IRB, PL, Elems);

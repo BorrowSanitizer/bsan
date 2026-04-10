@@ -1,25 +1,25 @@
 error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/box_exclusive_violation1.rs:31:9
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/box_exclusive_violation1.rs:LL:CC
    |
-31 | *LEAK = 7;
+LL | *LEAK = 7;
    |
    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this write
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/box_exclusive_violation1.rs:23:0
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/box_exclusive_violation1.rs:LL:CC
    |
-23 | fn unknown_code_1(x: &i32) {
+LL | fn unknown_code_1(x: &i32) {
    |
 help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/box_exclusive_violation1.rs:10:5
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/box_exclusive_violation1.rs:LL:CC
    |
-10 | *our = 5;
+LL | *our = 5;
    |
 help: this transition corresponds to a loss of read permissions
 
 stack backtrace:
 0: box_exclusive_violation1::unknown_code_2
- at bsan/tests/miri-tests/fail/aliasing/both_borrows/box_exclusive_violation1.rs:31:9
+ at bsan/tests/miri-tests/fail/aliasing/both_borrows/box_exclusive_violation1.rs:LL:CC
 1: box_exclusive_violation1::demo_box_advanced_unique
- at bsan/tests/miri-tests/fail/aliasing/both_borrows/box_exclusive_violation1.rs:12:5
+ at bsan/tests/miri-tests/fail/aliasing/both_borrows/box_exclusive_violation1.rs:LL:CC
 2: box_exclusive_violation1::main
- at bsan/tests/miri-tests/fail/aliasing/both_borrows/box_exclusive_violation1.rs:38:5
+ at bsan/tests/miri-tests/fail/aliasing/both_borrows/box_exclusive_violation1.rs:LL:CC

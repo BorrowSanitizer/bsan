@@ -1,25 +1,25 @@
 error: Undefined Behavior: read through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-  --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/pointer_smuggling.rs:12:23
+  --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/pointer_smuggling.rs:LL:CC
    |
-12 | let _x = unsafe { *PTR }; //miri: ~ ERROR: /read access .* tag does not exist in the borrow stack/
+LL | let _x = unsafe { *PTR }; //miri: ~ ERROR: /read access .* tag does not exist in the borrow stack/
    |
    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this read
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
-  --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/pointer_smuggling.rs:4:0
+  --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/pointer_smuggling.rs:LL:CC
    |
- 4 | fn fun1(x: &mut u8) {
+LL | fn fun1(x: &mut u8) {
    |
 help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
-  --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/pointer_smuggling.rs:19:5
+  --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/pointer_smuggling.rs:LL:CC
    |
-19 | *val = 2; // this invalidates any raw ptrs `fun1` might have created.
+LL | *val = 2; // this invalidates any raw ptrs `fun1` might have created.
    |
 help: this transition corresponds to a loss of read and write permissions
 
 stack backtrace:
 0: pointer_smuggling::fun2
- at bsan/tests/miri-tests/fail/aliasing/stacked_borrows/pointer_smuggling.rs:12:23
+ at bsan/tests/miri-tests/fail/aliasing/stacked_borrows/pointer_smuggling.rs:LL:CC
 1: pointer_smuggling::main
- at bsan/tests/miri-tests/fail/aliasing/stacked_borrows/pointer_smuggling.rs:20:5
+ at bsan/tests/miri-tests/fail/aliasing/stacked_borrows/pointer_smuggling.rs:LL:CC
 2: <fn() as core::ops::function::FnOnce<()>>::call_once
- at RUSTLIB/core/src/ops/function.rs:250:5
+ at RUSTLIB/core/src/ops/function.rs:LL:CC

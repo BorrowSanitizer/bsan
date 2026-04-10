@@ -55,10 +55,6 @@ public:
   // arguments and return values
   void createUserspaceApi(Module &M, const TargetLibraryInfo &TLI);
 
-  TypeSize getAllocaSizeInBytes(const AllocaInst &AI) const {
-    return *AI.getAllocationSize(AI.getDataLayout());
-  }
-
   LLVMContext *C;
   const DataLayout *DL;
   ProvenanceLayout PL;
@@ -108,6 +104,7 @@ public:
 
   ProvenanceScalar WildcardProvenance;
   ProvenanceScalar InvalidProvenance;
+
   // Thread-local storage for paramters
   // and return values.
   Value *ParamTLS = nullptr;

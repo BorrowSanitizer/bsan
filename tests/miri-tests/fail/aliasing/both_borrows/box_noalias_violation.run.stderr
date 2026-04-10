@@ -1,32 +1,32 @@
 error: Undefined Behavior: read through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/box_noalias_violation.rs:9:5
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/box_noalias_violation.rs:LL:CC
    |
- 9 | *y
+LL | *y
    |
    = help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(WeakProtector) (i.e., it is not a child)
    = help: this read would cause the protected tag <TAG>(WeakProtector) (currently Active) to become Disabled
    = help: protected tags must never be Disabled
 help: the accessed tag <TAG>(unprotected) was created here
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/box_noalias_violation.rs:17:19
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/box_noalias_violation.rs:LL:CC
    |
-17 | let ptr = &mut v as *mut i32;
+LL | let ptr = &mut v as *mut i32;
    |
 help: the protected tag <TAG>(WeakProtector) was created here, in the initial state Reserved
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/box_noalias_violation.rs:5:0
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/box_noalias_violation.rs:LL:CC
    |
- 5 | unsafe fn test(mut x: Box<i32>, y: *const i32) -> i32 {
+LL | unsafe fn test(mut x: Box<i32>, y: *const i32) -> i32 {
    |
 help: the protected tag <TAG>(WeakProtector) later transitioned due to a child write
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/box_noalias_violation.rs:7:5
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/box_noalias_violation.rs:LL:CC
    |
- 7 | *x = 5;
+LL | *x = 5;
    |
 help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
 
 stack backtrace:
 0: box_noalias_violation::test
- at bsan/tests/miri-tests/fail/aliasing/both_borrows/box_noalias_violation.rs:9:5
+ at bsan/tests/miri-tests/fail/aliasing/both_borrows/box_noalias_violation.rs:LL:CC
 1: box_noalias_violation::main
- at bsan/tests/miri-tests/fail/aliasing/both_borrows/box_noalias_violation.rs:18:9
+ at bsan/tests/miri-tests/fail/aliasing/both_borrows/box_noalias_violation.rs:LL:CC
 2: <fn() as core::ops::function::FnOnce<()>>::call_once
- at RUSTLIB/core/src/ops/function.rs:250:5
+ at RUSTLIB/core/src/ops/function.rs:LL:CC

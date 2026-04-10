@@ -16,8 +16,10 @@ extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_TLS_MARKER;
 
 typedef uptr Span;
 
+#define GET_SPAN uptr span = GET_CALLER_PC();
+
 #define GET_SPAN_PC_BP                                                         \
-  uptr span = GET_CALLER_PC();                                                 \
+  GET_SPAN;                                                                    \
   uptr pc = StackTrace::GetCurrentPc();                                        \
   uptr bp = GET_CURRENT_FRAME();
 

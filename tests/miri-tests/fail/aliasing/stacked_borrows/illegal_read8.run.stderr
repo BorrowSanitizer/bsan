@@ -1,25 +1,25 @@
 error: Undefined Behavior: read through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-  --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/illegal_read8.rs:14:21
+  --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/illegal_read8.rs:LL:CC
    |
-14 | let _fail = *y1; //miri: ~ ERROR: /read access .* tag does not exist in the borrow stack/
+LL | let _fail = *y1; //miri: ~ ERROR: /read access .* tag does not exist in the borrow stack/
    |
    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this read
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-  --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/illegal_read8.rs:9:39
+  --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/illegal_read8.rs:LL:CC
    |
- 9 | let y1: &i32 = mem::transmute(&*x); // launder lifetimes
+LL | let y1: &i32 = mem::transmute(&*x); // launder lifetimes
    |
 help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
-  --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/illegal_read8.rs:13:9
+  --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/illegal_read8.rs:LL:CC
    |
-13 | *y2 += 1;
+LL | *y2 += 1;
    |
 help: this transition corresponds to a loss of read permissions
 
 stack backtrace:
 0: illegal_read8::main
- at bsan/tests/miri-tests/fail/aliasing/stacked_borrows/illegal_read8.rs:14:21
+ at bsan/tests/miri-tests/fail/aliasing/stacked_borrows/illegal_read8.rs:LL:CC
 1: <fn() as core::ops::function::FnOnce<()>>::call_once
- at RUSTLIB/core/src/ops/function.rs:250:5
+ at RUSTLIB/core/src/ops/function.rs:LL:CC
 2: std::sys::backtrace::__rust_begin_short_backtrace
- at RUSTLIB/std/src/sys/backtrace.rs:166:18
+ at RUSTLIB/std/src/sys/backtrace.rs:LL:CC
