@@ -130,9 +130,6 @@ private:
   DenseMap<BasicBlock *, Value *> BlockOffsets;
   // The offset from the top of the frame at the entry to each block
   DenseMap<BasicBlock *, Value *> IncomingOffsets;
-  // PHI nodes created for incoming offsets, which are
-  // simplified and removed after inserting instrumentation.
-  SmallVector<PHINode *> SlotPHINodes;
 
   Value *getBlockOffset(BasicBlock *BB, Type *Ty) {
     Value *&Offset = BlockOffsets[BB];
@@ -219,7 +216,9 @@ public:
       // incoming offset to have the same value when we enter
       // this block from that predecessor as we did when we
       // first entered the block. Otherwise, each iteration of
-      // a loop would allocate fresh stack slots.
+      // a loop would allocate fresh stack slots, which we do
+      // not want to do. This is necessary regardless of
+      // whether we do a reverse postorder traversal.
       if (DT.dominates(BB, PredBB)) {
         OffsetPN->addIncoming(OffsetPN, PredBB);
       } else {
@@ -230,15 +229,14 @@ public:
         OffsetPN->addIncoming(IncomingOffset, PredBB);
       }
     }
-    // We need to wait until later to simplify PHI nodes,
-    // since we cache the incoming offset to reuse in subsequent
-    // calls. If we remove a PHI node, then we invalidate a pointer
-    // in `IncomingOffsets`.
-    SlotPHINodes.push_back(OffsetPN);
+
+    if (Value *ConstVal = OffsetPN->hasConstantValue()) {
+      OffsetPN->replaceAllUsesWith(ConstVal);
+      IncomingOffsets[BB] = ConstVal;
+    }
+
     return OffsetPN;
   }
-
-  void patchPHINodes() { eliminatePHINodes(SlotPHINodes); }
 };
 
 class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
@@ -361,7 +359,6 @@ public:
 
     patchShadowPHINodes();
     patchAllocaPHINodes();
-    ShadowStack.patchPHINodes();
 
     for (CallBase *CB : Retags) {
       if (CB->getType()->isPointerTy()) {
@@ -683,7 +680,7 @@ private:
       }
     }
 
-    FrameTop = EntryIRB.CreateLoad(BS.PtrTy, BS.ProvStack, true);
+    FrameTop = EntryIRB.CreateLoad(BS.PtrTy, BS.ProvStack);
 
     if (StaticAllocaVec.size() > 0) {
       for (AllocaInst *AI : StaticAllocaVec) {
