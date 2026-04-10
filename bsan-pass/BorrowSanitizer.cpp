@@ -243,7 +243,6 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   friend class InstVisitor<BorrowSanitizerVisitor>;
   BorrowSanitizer &BS;
   Function &F;
-  DIBuilder DIB;
   LLVMContext *C;
 
   // Cached analysis results
@@ -330,8 +329,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 public:
   BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
                          const TargetLibraryInfo &TLI, DominatorTree &DT)
-      : F(F), BS(BS), DIB(*F.getParent(), /*AllowUnresolved*/ false), C(BS.C),
-        TLI(&TLI), DT(DT) {}
+      : F(F), BS(BS), C(BS.C), TLI(&TLI), DT(DT) {}
 
   bool run() {
     removeUnreachableBlocks(F);
