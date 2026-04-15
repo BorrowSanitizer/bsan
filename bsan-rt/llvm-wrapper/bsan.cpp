@@ -29,6 +29,11 @@ const Provenance INVALID = {1, nullptr};
 
 namespace __bsan {
 
+u32 GetStackTraceLen() {
+  uptr max_stacktrace_len = flags()->max_stacktrace_len;
+  return static_cast<u32>(max_stacktrace_len) + 1;
+}
+
 Provenance *GetArgSlot(uptr Idx) { return &__BSAN_PARAM_TLS[Idx]; }
 Provenance *GetRetValSlot(uptr Idx) { return &__BSAN_RETVAL_TLS[Idx]; }
 
@@ -277,26 +282,6 @@ __bsan_pop_frame(const Provenance *frame_start, uptr prot,
       __bsan_destroy_stack_slot(Prov.Info);
     }
   }
-}
-
-// Define this somewhere out of the fast path (e.g., in bsan_report.cpp)
-// Use SANITIZER_INTERFACE_ATTRIBUTE if this is called from instrumented code,
-// or just NOINLINE if it's internal.
-NOINLINE void __bsan_report_error(uptr pc, uptr bp, void *ptr,
-                                  uptr access_size) {
-  // 1. Guarantee the frame pointer is intact for the unwinder
-  ENABLE_FRAME_POINTER;
-
-  // 2. Fetch standard unwinding flags rather than hardcoding
-  bool fast_unwind = common_flags()->fast_unwind_on_fatal;
-  u32 max_depth = 3; // Or hardcode a safe depth like 50
-
-  // 3. Unwind and report
-  UNINITIALIZED BufferedStackTrace stack;
-  stack.Unwind(pc, bp, nullptr, fast_unwind, max_depth);
-
-  PrintStackTrace(stack);
-  Die();
 }
 
 SANITIZER_WEAK_ATTRIBUTE void __bsan_read_impl(void *ptr, uptr access_size,

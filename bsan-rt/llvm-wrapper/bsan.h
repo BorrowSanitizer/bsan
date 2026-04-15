@@ -26,7 +26,7 @@ typedef uptr Span;
 #define HANDLE_ERROR(pc, bp)                                                   \
   if (__BSAN_HAD_ERROR) {                                                      \
     UNINITIALIZED BufferedStackTrace stack;                                    \
-    stack.Unwind(pc, bp, nullptr, true, 4);                                    \
+    stack.Unwind(pc, bp, nullptr, true, __bsan::GetStackTraceLen());           \
     PrintStackTrace(stack);                                                    \
     Die();                                                                     \
   }
@@ -166,6 +166,7 @@ extern bool BSAN_DEINIT_RUNNING;
 namespace __bsan {
 void BsanTSDInit();
 void InitializeInterceptors();
+u32 GetStackTraceLen();
 Provenance *GetArgSlot(uptr Idx);
 Provenance *GetRetValSlot(uptr Idx);
 void ClearArgSlot(uptr Idx);
