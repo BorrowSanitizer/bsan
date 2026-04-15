@@ -696,6 +696,8 @@ private:
         FrameTop = Dest;
       }
     }
+
+    EntryIRB.CreateStore(FrameTop, BS.ProvStack);
     FnPrologueEnd = EntryIRB.CreateIntrinsic(Intrinsic::donothing, {});
     LifetimeInfo = std::make_unique<StackLifetime>(
         F, StaticAllocaVec, StackLifetime::LivenessType::May);
@@ -1289,6 +1291,7 @@ private:
       Value *FrameLen = ShadowStack.getOutgoingOffset(DT, IRB, BS.IntptrTy);
       Value *Offset = IRB.CreateMul(FrameLen, BS.PL.ProvenanceSize);
       Value *FrameBottom = subtractPointer(IRB, FrameTop, Offset);
+      IRB.CreateStore(FrameBottom, BS.ProvStack);
       IRB.CreateCall(BS.BsanFuncPopFrame,
                      {FrameBottom, FrameLen, AllocaVecSize});
     }

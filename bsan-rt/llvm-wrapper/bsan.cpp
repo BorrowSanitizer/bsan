@@ -30,8 +30,8 @@ const Provenance INVALID = {1, nullptr};
 namespace __bsan {
 
 u32 GetStackTraceLen() {
-  uptr max_stacktrace_len = flags()->max_stacktrace_len;
-  return static_cast<u32>(max_stacktrace_len) + 1;
+  uptr stacktrace_max_len = flags()->stacktrace_max_len;
+  return static_cast<u32>(stacktrace_max_len) + 1;
 }
 
 Provenance *GetArgSlot(uptr Idx) { return &__BSAN_PARAM_TLS[Idx]; }
