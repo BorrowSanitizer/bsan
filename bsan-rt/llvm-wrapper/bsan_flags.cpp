@@ -13,11 +13,10 @@
 
 #include "bsan_flags.h"
 #include "bsan.h"
-#include "bsan_thread.h"
 #include "sanitizer_common/sanitizer_common.h"
-#include "sanitizer_common/sanitizer_file.h"
+#include "sanitizer_common/sanitizer_flag_parser.h"
 #include "sanitizer_common/sanitizer_flags.h"
-#include "sanitizer_common/sanitizer_libc.h"
+#include "sanitizer_common/sanitizer_win_interception.h"
 
 using namespace __sanitizer;
 

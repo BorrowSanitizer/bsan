@@ -27,6 +27,8 @@
 
 namespace __bsan {
 
+using __sanitizer::uptr;
+
 struct Flags {
 #define BSAN_FLAG(Type, Name, DefaultValue, Description) Type Name;
 #include "bsan_flags.inc"
