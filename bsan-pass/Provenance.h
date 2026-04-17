@@ -224,33 +224,41 @@ struct ProvenanceKey {
 };
 
 struct ProvenanceMap {
-public:
   DenseMap<Value *, DenseMap<unsigned, Provenance>> Inner;
 
-  bool contains(Value *V) { return this->contains({V, 0}); }
+public:
+  Provenance *find(ProvenanceKey Key) {
+    auto InnerIt = Inner.find(Key.V);
+    if (InnerIt == Inner.end())
+      return nullptr;
 
-  bool contains(ProvenanceKey Key) {
-    return Inner.contains(Key.V) && Inner[Key.V].contains(Key.Offset);
+    auto &SubMap = InnerIt->second;
+    auto SubIt = SubMap.find(Key.Offset);
+    if (SubIt == SubMap.end())
+      return nullptr;
+
+    return &SubIt->second;
   }
 
-  void transferToValue(Value *Src, Value *Dest) {
-    if (this->contains(Src)) {
+  void transfer(Value *Src, Value *Dest) {
+    auto It = Inner.find(Src);
+    if (It != Inner.end()) {
       DenseMap<unsigned, Provenance> *DestMap = &Inner[Dest];
-      for (const auto &[Idx, Prov] : Inner[Src]) {
+      for (const auto &[Idx, Prov] : It->second) {
         (*DestMap)[Idx] = Prov;
       }
     }
   }
+
   void set(ProvenanceKey Key, Provenance Prov) {
     Inner[Key.V][Key.Offset] = Prov;
   }
 
   std::optional<Provenance> get(ProvenanceKey Key) {
-    if (this->contains(Key)) {
-      return Inner[Key.V][Key.Offset];
-    } else {
-      return std::nullopt;
+    if (Provenance *Prov = this->find(Key)) {
+      return *Prov;
     }
+    return std::nullopt;
   }
 };
 
