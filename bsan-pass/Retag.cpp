@@ -25,8 +25,8 @@ bool isRetag(const CallBase *CB) {
 
 bool isFnEntryRetag(const CallBase *CB) {
   if (isRetag(CB)) {
-    RetagInfo RI(CB);
-    return RI.IsProtected->getZExtValue() != 0;
+    ConstantInt *IsProtected = cast<ConstantInt>(CB->getOperand(3));
+    return IsProtected->getZExtValue() != 0;
   }
   return false;
 }
