@@ -180,47 +180,95 @@ offsetIntoProvenanceIndex(IRBuilder<> &IRB, const DataLayout *DL,
 
 } // namespace
 
-// Tracks the current offset within the shadow stack.
 class ShadowStackAllocator {
 private:
+  // We track the number of stack slots
+  // using an alloca that gets promoted to a register.
   AllocaInst *TotalOffset = nullptr;
+  // If we need to allocate a slot for an instruction,
+  // then we load the incoming offset at the beginning of
+  // its basic block. We increment it for subsequent
+  // allocations in the same block, and then store it
+  // back at the end of the block.
   DenseMap<BasicBlock *, Value *> BlockOffsets;
-
-public:
+  // All shadow stack operations are dominated
+  // by function-entry retags. We need to know
+  // how many occurred in a given execution path
+  // to be able to remove their protectors when
+  // the function returns.
+  AllocaInst *FnEntryOffset = nullptr;
+  // Creates a counter alloca in the entry block of the
+  // function an initializes it to 0. Zero-initialization
+  // is crucial, since not all paths through a function will
+  // allocate shadow stack slots, but all paths will pop the
+  // current stack frame.
+  AllocaInst *createEntryAlloca(BasicBlock *BB, Type *Ty) {
+    BasicBlock *EntryBB = &BB->getParent()->getEntryBlock();
+    IRBuilder<> EntryIRB(&EntryBB->front());
+    AllocaInst *EntryAlloc = EntryIRB.CreateAlloca(Ty);
+    // We always need to zero-initialize here, in case
+    EntryIRB.CreateStore(ConstantInt::get(Ty, 0), EntryAlloc);
+    return EntryAlloc;
+  }
+  // Updates the current number of function entry retags to the given
+  // value, initializing the counter if it doesn't exist.
+  void updateFnEntryOffset(IRBuilder<> &IRB, Value *Offset, Type *Ty) {
+    if (!FnEntryOffset) {
+      BasicBlock *CurrBB = IRB.GetInsertBlock();
+      FnEntryOffset = createEntryAlloca(CurrBB, Ty);
+    }
+    IRB.CreateStore(Offset, FnEntryOffset);
+  }
+  // Returns the total number of stack slots currently allocated
+  // in the given basic block.
   Value *&getCurrentOffset(BasicBlock *InsertBB, Type *Ty) {
     Value *&BlockOffset = BlockOffsets[InsertBB];
     if (!TotalOffset) {
-      BasicBlock *EntryBB = &InsertBB->getParent()->getEntryBlock();
-      IRBuilder<> EntryIRB(&EntryBB->front());
-      TotalOffset = EntryIRB.CreateAlloca(Ty);
-
-      Value *Zero = ConstantInt::get(Ty, 0);
-      EntryIRB.CreateStore(Zero, TotalOffset);
-      BlockOffset = Zero;
+      TotalOffset = createEntryAlloca(InsertBB, Ty);
+      if (InsertBB->isEntryBlock())
+        BlockOffset = ConstantInt::get(Ty, 0);
     }
-
     if (!BlockOffset) {
       IRBuilder<> FrontIRB(InsertBB, InsertBB->getFirstInsertionPt());
       BlockOffset = FrontIRB.CreateLoad(Ty, TotalOffset);
     }
-
     return BlockOffset;
   }
 
-  // Allocates the requested number of slots and returns the offset from the top
-  // of the frame.
-  Value *alloc(IRBuilder<> &IRB, ElementCount EC, Type *Ty) {
+public:
+  // Allocates the requested number of slots and returns the offset from
+  // the top of the frame.
+  Value *alloc(IRBuilder<> &IRB, ElementCount EC, Type *Ty, bool IsFnEntry) {
     Value *&Offset = getCurrentOffset(IRB.GetInsertBlock(), Ty);
     Value *Elems = IRB.CreateElementCount(Ty, EC);
     Offset = IRB.CreateAdd(Offset, Elems);
+    if (IsFnEntry) {
+      updateFnEntryOffset(IRB, Offset, Ty);
+    }
     return Offset;
   }
 
-  // Returns the current offset from the top of the frame.
-  Value *getOutgoingOffset(BasicBlock *BB, Type *Ty) {
-    return getCurrentOffset(BB, Ty);
+  // Returns the current offset from the top of the frame. This is used
+  // to update the stack pointer before calling functions and to get the
+  // total number of function-entry retags before popping a stack frame.
+  Value *getOutgoingOffset(IRBuilder<> &IRB, Type *Ty, bool IsFnEntry) {
+    // We always need to create a load here, even if we have not allocated
+    // any stack slots yet. Our instrumentation pass does a depth-first
+    // traversal of the CFG, so it is possible that we have taken a path to an
+    // exit point that has bypassed a stack slot allocation that we will see in
+    // the future.
+    if (IsFnEntry) {
+      if (!FnEntryOffset) {
+        FnEntryOffset = createEntryAlloca(IRB.GetInsertBlock(), Ty);
+      }
+      return IRB.CreateLoad(Ty, FnEntryOffset);
+    }
+    return getCurrentOffset(IRB.GetInsertBlock(), Ty);
   }
 
+  // Stores the final offset for each basic block that
+  // allocated stack slots, and attempts to promote the
+  // counters to registers.
   void patchStackSlots(DominatorTree &DT) {
     if (!TotalOffset)
       return;
@@ -228,7 +276,11 @@ public:
       IRBuilder<> ExitIRB(BB->getTerminator());
       ExitIRB.CreateStore(Offset, TotalOffset);
     }
-    PromoteMemToReg({TotalOffset}, DT);
+    if (FnEntryOffset) {
+      PromoteMemToReg({FnEntryOffset, TotalOffset}, DT);
+    } else {
+      PromoteMemToReg({TotalOffset}, DT);
+    }
   }
 };
 
@@ -245,10 +297,6 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // The end of the "prologue" of the function, where we initialize our
   // instrumentation. This is a call to `llvm.donothing()`.
   Instruction *FnPrologueEnd;
-
-  // All relevant instructions in reverse postorder
-  SmallVector<Instruction *, 64> Instructions;
-
   // If a stack allocation does not have a dedicated `lifetime.start`, then we
   // allocate metadata for it within the entry block. We use a liveness pass to
   // determine which allocations need to be freed, so no additional handling is
@@ -294,8 +342,6 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   SmallVector<std::tuple<PHINode *, Provenance, unsigned int>> ProvPHINodes;
 
   SmallVector<CallBase *> Retags;
-  // The number of function-entry retags. If none occur, then we can skip
-  // creating and popping a frame to contain protected tags.
   unsigned NumFnEntryRetags = 0;
 
   // The start of the current frame of protected tags. This is the "top" of the
@@ -305,13 +351,13 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // We use LLVM's lifetime analysis to determine which `allocas` are alive at
   // every exit point.
   std::unique_ptr<StackLifetime> LifetimeInfo;
-
-  ShadowStackAllocator FnEntrySlots;
+  ShadowStackAllocator ShadowStack;
 
 public:
   BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
                          const TargetLibraryInfo &TLI, DominatorTree &DT)
       : F(F), BS(BS), C(BS.C), TLI(&TLI), DT(DT) {}
+
   bool run() {
     DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Lazy);
     removeUnreachableBlocks(F, &DTU);
@@ -323,7 +369,36 @@ public:
     BasicBlock *EntryBlock = &F.getEntryBlock();
     IRBuilder<> EntryIRB(EntryBlock, EntryBlock->getFirstNonPHIIt());
 
-    populateBlocks(EntryIRB);
+    SmallVector<Instruction *, 64> Instructions;
+
+    for (BasicBlock *BB : depth_first<BasicBlock *>(&F.getEntryBlock())) {
+      for (Instruction &I : *BB) {
+        if (I.getMetadata(LLVMContext::MD_nosanitize))
+          continue;
+        if (I.getOpcode() == Instruction::Alloca) {
+          AllocaInst &AI = static_cast<AllocaInst &>(I);
+          if (shouldInstrumentAlloca(*BS.DL, AI) && AI.isStaticAlloca())
+            StaticAllocaVec.push_back(&AI);
+          continue;
+        }
+        if (auto *CB = dyn_cast<CallBase>(&I)) {
+          if (isRetag(CB)) {
+            Retags.push_back(CB);
+            if (isFnEntryRetag(CB))
+              NumFnEntryRetags += 1;
+          }
+          if (auto *LI = dyn_cast<LifetimeIntrinsic>(CB)) {
+            if (CB->getIntrinsicID() == Intrinsic::lifetime_start) {
+              AllocaInst *AI = findAllocaForValue(LI->getArgOperand(1), true);
+              if (AI && shouldInstrumentAlloca(*BS.DL, *AI)) {
+                HasLifetimeStart.insert(AI);
+              }
+            }
+          }
+        }
+        Instructions.push_back(&I);
+      }
+    }
 
     initStack(EntryIRB);
 
@@ -332,7 +407,7 @@ public:
     }
 
     patchShadowPHINodes();
-    FnEntrySlots.patchStackSlots(DT);
+    ShadowStack.patchStackSlots(DT);
 
     for (CallBase *CB : Retags) {
       if (CB->getType()->isPointerTy()) {
@@ -397,7 +472,6 @@ private:
     if (Provenance *Prov = BaseProvMap.find(Key)) {
       return *Prov;
     }
-
     if (Argument *Arg = dyn_cast<Argument>(Key.V)) {
       // We always need to load the provenance for arguments right at the
       // beginning of the function. Otherwise, subsequent function calls could
@@ -448,42 +522,6 @@ private:
       IRB.CreateCall(BS.BsanFuncShadowLoad, {ObjAddr, Tmp});
       ProvenancePtrScalar ProvPtr(IRB, BS.PL, Tmp);
       return Provenance::load(IRB, BS.PL, ProvPtr);
-    }
-  }
-
-  void populateBlocks(IRBuilder<> &IRB) {
-    for (BasicBlock *BB :
-         ReversePostOrderTraversal<BasicBlock *>(&F.getEntryBlock())) {
-      for (Instruction &I : *BB) {
-        if (I.getMetadata(LLVMContext::MD_nosanitize))
-          continue;
-        if (I.getOpcode() == Instruction::Alloca) {
-          AllocaInst &AI = static_cast<AllocaInst &>(I);
-          if (shouldInstrumentAlloca(*BS.DL, AI) && AI.isStaticAlloca())
-            StaticAllocaVec.push_back(&AI);
-          continue;
-        }
-
-        if (CallBase *CB = dyn_cast<CallBase>(&I)) {
-          if (isRetag(CB)) {
-            Retags.push_back(CB);
-            if (isFnEntryRetag(CB)) {
-              NumFnEntryRetags += 1;
-            }
-          }
-          if (IntrinsicInst *I = dyn_cast<IntrinsicInst>(CB)) {
-            if (CB->getIntrinsicID() == Intrinsic::lifetime_start) {
-              AllocaInst *AI = findAllocaForValue(I->getArgOperand(1), true);
-              if (!AI)
-                continue;
-              if (!shouldInstrumentAlloca(*BS.DL, *AI))
-                continue;
-              HasLifetimeStart.insert(AI);
-            }
-          }
-        }
-        Instructions.push_back(&I);
-      }
     }
   }
 
@@ -607,24 +645,23 @@ private:
            RI.ImArray, ImArrayLen, TargetProv.Tag, TargetProv.Info});
 
       if (RI.IsProtected->getZExtValue() != 0) {
-        Value *SlotPtr = allocStackSlot(IRB);
+        Value *SlotPtr = allocStackSlot(IRB, true);
         TargetProv.store(IRB, BS.PL, SlotPtr);
       }
     }
     return TargetProv;
   }
 
-  Value *allocStackSlot(IRBuilder<> &IRB,
+  Value *allocStackSlot(IRBuilder<> &IRB, bool IsFnEntry,
                         ElementCount Elems = ElementCount::getFixed(1)) {
-
-    Value *SlotOffset = FnEntrySlots.alloc(IRB, Elems, BS.IntptrTy);
+    Value *SlotOffset = ShadowStack.alloc(IRB, Elems, BS.IntptrTy, IsFnEntry);
     Value *ProvOffset = IRB.CreateMul(SlotOffset, BS.PL.ProvenanceSize);
     return ptradd(IRB, FrameTop, IRB.CreateNeg(ProvOffset));
   }
 
-  Value *getStackOffset(IRBuilder<> &IRB) {
+  Value *getStackOffset(IRBuilder<> &IRB, bool IsFnEntry) {
     Value *CurrOffset =
-        FnEntrySlots.getOutgoingOffset(IRB.GetInsertBlock(), BS.IntptrTy);
+        ShadowStack.getOutgoingOffset(IRB, BS.IntptrTy, IsFnEntry);
     Value *ProvOffset = IRB.CreateMul(CurrOffset, BS.PL.ProvenanceSize);
     return ptradd(IRB, FrameTop, IRB.CreateNeg(ProvOffset));
   }
@@ -655,7 +692,7 @@ private:
     // function. We need to pass its arguments into our thread-local array and
     // then read the provenance for the return value.
     IRBuilder<> Before(&CB);
-    Value *StackOffset = getStackOffset(Before);
+    Value *StackOffset = getStackOffset(Before, false);
     Before.CreateStore(StackOffset, BS.ProvStack);
 
     // Store the provenance for each argument into the thread-local storage for
@@ -1105,12 +1142,12 @@ private:
     }
 
     if (NumFnEntryRetags) {
-      Value *FrameLen =
-          FnEntrySlots.getOutgoingOffset(IRB.GetInsertBlock(), BS.IntptrTy);
+      Value *FrameLen = ShadowStack.getOutgoingOffset(IRB, BS.IntptrTy, true);
       Value *Offset = IRB.CreateMul(FrameLen, BS.PL.ProvenanceSize);
       Value *FrameBottom = ptradd(IRB, FrameTop, IRB.CreateNeg(Offset));
       IRB.CreateCall(BS.BsanFuncPopFrame, {FrameBottom, FrameLen});
     }
+
     IRB.CreateStore(FrameTop, BS.ProvStack);
 
     if (StaticAllocaVec.size() > 0) {
