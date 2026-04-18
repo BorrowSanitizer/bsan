@@ -42,9 +42,12 @@ static cl::opt<bool> ClHandleAsmConservative(
 
 namespace {
 
-bool isReachableAgain(DominatorTree &DT, LoopInfo &LI, BasicBlock *BB) {
+bool inSCC(DominatorTree &DT, LoopInfo &LI, BasicBlock *BB) {
   if (LI.getLoopFor(BB))
     return true;
+  // It's still possible for us to have irreducible control flow, in which
+  // case LLVM would not recognize a loop, but it would still be possible for
+  // us to enter this basic block again.
   for (BasicBlock *SuccBB : successors(BB)) {
     if (isPotentiallyReachable(SuccBB, BB, nullptr, &DT, &LI)) {
       return true;
@@ -270,8 +273,7 @@ private:
     }
     if (!BlockOffset) {
       Value *GlobalOffset = IRB.CreateLoad(Ty, TotalOffset);
-      bool IsReachable = isReachableAgain(DT, LI, InsertBB);
-      if (IsReachable) {
+      if (inSCC(DT, LI, InsertBB)) {
         Value *InitVal = ConstantInt::get(Ty, -1, true);
         AllocaInst *CachedOffset = createEntryAlloca(InsertBB, InitVal);
         Value *Cached = IRB.CreateLoad(Ty, CachedOffset);
@@ -336,20 +338,21 @@ public:
       Promoteable.push_back(FnEntryOffset);
 
     for (auto &[BB, Offset] : BlockOffsets) {
-      if (!LoopBlocks.contains(BB)) {
+      auto LoopIt = LoopBlocks.find(BB);
+      if (LoopIt != LoopBlocks.end()) {
+        LoopBlockInfo &Info = LoopIt->second;
+        Instruction *InsertPt = SplitBlockAndInsertIfThen(
+            Info.Flag, BB->getTerminator(), false, nullptr, DTU, LI);
+
+        IRBuilder<> CleanupIRB(InsertPt);
+        CleanupIRB.CreateStore(Info.IncomingOffset, Info.CachedOffset);
+        CleanupIRB.CreateStore(Offset, TotalOffset);
+
+        Promoteable.push_back(Info.CachedOffset);
+      } else {
         IRBuilder<> ExitIRB(BB->getTerminator());
         ExitIRB.CreateStore(Offset, TotalOffset);
       }
-    }
-
-    for (auto &[BB, Info] : LoopBlocks) {
-      Value *Offset = BlockOffsets[BB];
-      Instruction *InsertPt = SplitBlockAndInsertIfThen(
-          Info.Flag, BB->getTerminator(), false, nullptr, DTU, LI);
-      IRBuilder<> CleanupIRB(InsertPt);
-      CleanupIRB.CreateStore(Info.IncomingOffset, Info.CachedOffset);
-      CleanupIRB.CreateStore(Offset, TotalOffset);
-      Promoteable.push_back(Info.CachedOffset);
     }
 
     DominatorTree &DT = DTU->getDomTree();
@@ -433,7 +436,6 @@ public:
       : F(F), BS(BS), C(BS.C), TLI(&TLI), DT(DT) {}
   bool run() {
     DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Lazy);
-    removeUnreachableBlocks(F, &DTU);
     EscapeEnumerator EE(F, "bsan_cleanup", true, &DTU);
     while (IRBuilder<> *AtExit = EE.Next()) {
     }
@@ -490,7 +492,6 @@ public:
       }
       CB->eraseFromParent();
     }
-
     return true;
   }
 
@@ -552,11 +553,13 @@ private:
       // beginning of the function. Otherwise, subsequent function calls could
       // overwrite them before they can be read from TLS
       IRBuilder<> EntryIRB(FnPrologueEnd);
-      if (ArgumentProvenance.count(Arg)) {
+      auto It = ArgumentProvenance.find(Arg);
+      if (It != ArgumentProvenance.end()) {
+        auto &ProvVec = It->second;
         if (Key.Offset >= ArgumentProvenance[Arg].size()) {
           report_fatal_error("Invalid argument provenance!");
         }
-        ProvenancePtr ArgProvenancePtr = ArgumentProvenance[Arg][Key.Offset];
+        ProvenancePtr ArgProvenancePtr = ProvVec[Key.Offset];
         Provenance ArgProvenance =
             Provenance::load(EntryIRB, BS.PL, ArgProvenancePtr);
         setProvenance(Key, ArgProvenance);
@@ -641,7 +644,7 @@ private:
 
     FrameTop = EntryIRB.CreateLoad(BS.PtrTy, BS.ProvStack);
 
-    if (StaticAllocaVec.size() > 0) {
+    if (!StaticAllocaVec.empty()) {
       for (AllocaInst *AI : StaticAllocaVec) {
         if (HasLifetimeStart.contains(AI)) {
           setProvenance(AI, createAllocaMetadata(EntryIRB, AI));
@@ -652,11 +655,12 @@ private:
           setProvenance(AI, Prov);
         }
       }
+      LifetimeInfo = std::make_unique<StackLifetime>(
+          F, StaticAllocaVec, StackLifetime::LivenessType::May);
+      LifetimeInfo->run();
     }
+
     FnPrologueEnd = EntryIRB.CreateIntrinsic(Intrinsic::donothing, {});
-    LifetimeInfo = std::make_unique<StackLifetime>(
-        F, StaticAllocaVec, StackLifetime::LivenessType::May);
-    LifetimeInfo->run();
   }
 
   void patchShadowPHINodes() {
