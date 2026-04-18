@@ -37,6 +37,9 @@ PreservedAnalyses BorrowSanitizerPass::run(Module &M,
   Modified |= ModuleSanitizer.instrumentModule(M);
 
   PreservedAnalyses PA = PreservedAnalyses::none();
+  // We incrementally update the dominator tree throughout
+  // these analysis passes.
+  PA.preserve<DominatorTreeAnalysis>();
   // GlobalsAA is considered stateless and does not get invalidated unless
   // explicitly invalidated; PreservedAnalyses::none() is not enough. Sanitizers
   // make changes that require GlobalsAA to be invalidated.

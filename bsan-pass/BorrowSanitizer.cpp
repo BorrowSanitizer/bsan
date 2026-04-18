@@ -2,6 +2,7 @@
 #include "Declarations.h"
 #include "Provenance.h"
 #include "Retag.h"
+#include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
@@ -40,6 +41,18 @@ static cl::opt<bool> ClHandleAsmConservative(
     cl::Hidden, cl::init(true));
 
 namespace {
+
+bool isReachableAgain(DominatorTree &DT, LoopInfo &LI, BasicBlock *BB) {
+  if (LI.getLoopFor(BB))
+    return true;
+  for (BasicBlock *SuccBB : successors(BB)) {
+    if (isPotentiallyReachable(SuccBB, BB, nullptr, &DT, &LI)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /// Helper class to attach debug information of the given instruction onto new
 /// instructions inserted after.
 class NextNodeIRBuilder : public IRBuilder<> {
@@ -180,6 +193,11 @@ offsetIntoProvenanceIndex(IRBuilder<> &IRB, const DataLayout *DL,
 
 } // namespace
 
+// BorrowSanitizer assigns a shadow stack allocation to each thread,
+// which is used to support garbage collection. We scan the
+// shadow stack to determine which provenance values are reachable
+// in memory. For this to be feasible, each shadow stack needs to be
+// a contiguous array of initialized provenance values.
 class ShadowStackAllocator {
 private:
   // We track the number of stack slots
@@ -193,21 +211,42 @@ private:
   DenseMap<BasicBlock *, Value *> BlockOffsets;
   // All shadow stack operations are dominated
   // by function-entry retags. We need to know
-  // how many occurred in a given execution path
-  // to be able to remove their protectors when
-  // the function returns.
+  // how many of these happened to be able to
+  // remove their protectors when the function
+  // returns.
   AllocaInst *FnEntryOffset = nullptr;
+
+  // If a block is in a loop, then we only want it to count
+  // once toward the global shadow stack offset. Subsequent
+  // visits to this block should reuse the same stack slots.
+  struct LoopBlockInfo {
+    // The initial offset at the beginning of the block.
+    // This is stored and incremented in `BlockOffsets`.
+    // We need the original value here to be able to cache it.
+    Value *IncomingOffset;
+    // Indicates whether this is the first time that this
+    // block has been visited. If so, then we branch to a
+    // special cleanup block.
+    Value *Flag;
+    // In this cleanup block, we store the incoming offset
+    // to the cache. Then, we update the global counter with
+    // the value from `BlockOffsets`, which we also do
+    // unconditionally for every other block.
+    AllocaInst *CachedOffset;
+  };
+
+  DenseMap<BasicBlock *, LoopBlockInfo> LoopBlocks;
+
   // Creates a counter alloca in the entry block of the
-  // function an initializes it to 0. Zero-initialization
+  // function and initializes it to 0. Zero-initialization
   // is crucial, since not all paths through a function will
   // allocate shadow stack slots, but all paths will pop the
   // current stack frame.
-  AllocaInst *createEntryAlloca(BasicBlock *BB, Type *Ty) {
+  AllocaInst *createEntryAlloca(BasicBlock *BB, Value *Init) {
     BasicBlock *EntryBB = &BB->getParent()->getEntryBlock();
     IRBuilder<> EntryIRB(&EntryBB->front());
-    AllocaInst *EntryAlloc = EntryIRB.CreateAlloca(Ty);
-    // We always need to zero-initialize here, in case
-    EntryIRB.CreateStore(ConstantInt::get(Ty, 0), EntryAlloc);
+    AllocaInst *EntryAlloc = EntryIRB.CreateAlloca(Init->getType());
+    EntryIRB.CreateStore(Init, EntryAlloc);
     return EntryAlloc;
   }
   // Updates the current number of function entry retags to the given
@@ -215,22 +254,37 @@ private:
   void updateFnEntryOffset(IRBuilder<> &IRB, Value *Offset, Type *Ty) {
     if (!FnEntryOffset) {
       BasicBlock *CurrBB = IRB.GetInsertBlock();
-      FnEntryOffset = createEntryAlloca(CurrBB, Ty);
+      FnEntryOffset = createEntryAlloca(CurrBB, ConstantInt::get(Ty, 0));
     }
     IRB.CreateStore(Offset, FnEntryOffset);
   }
+
   // Returns the total number of stack slots currently allocated
   // in the given basic block.
-  Value *&getCurrentOffset(BasicBlock *InsertBB, Type *Ty) {
+  Value *&getCurrentOffset(DominatorTree &DT, LoopInfo &LI, IRBuilder<> &IRB,
+                           Type *Ty) {
+    BasicBlock *InsertBB = IRB.GetInsertBlock();
     Value *&BlockOffset = BlockOffsets[InsertBB];
     if (!TotalOffset) {
-      TotalOffset = createEntryAlloca(InsertBB, Ty);
-      if (InsertBB->isEntryBlock())
-        BlockOffset = ConstantInt::get(Ty, 0);
+      TotalOffset = createEntryAlloca(InsertBB, ConstantInt::get(Ty, 0));
     }
     if (!BlockOffset) {
-      IRBuilder<> FrontIRB(InsertBB, InsertBB->getFirstInsertionPt());
-      BlockOffset = FrontIRB.CreateLoad(Ty, TotalOffset);
+      Value *GlobalOffset = IRB.CreateLoad(Ty, TotalOffset);
+      bool IsReachable = isReachableAgain(DT, LI, InsertBB);
+      if (IsReachable) {
+        Value *InitVal = ConstantInt::get(Ty, -1, true);
+        AllocaInst *CachedOffset = createEntryAlloca(InsertBB, InitVal);
+        Value *Cached = IRB.CreateLoad(Ty, CachedOffset);
+        Value *Flag = IRB.CreateICmpEQ(Cached, InitVal);
+        BlockOffset = IRB.CreateSelect(Flag, GlobalOffset, Cached);
+
+        LoopBlockInfo &Info = LoopBlocks[InsertBB];
+        Info.CachedOffset = CachedOffset;
+        Info.Flag = Flag;
+        Info.IncomingOffset = GlobalOffset;
+      } else {
+        BlockOffset = GlobalOffset;
+      }
     }
     return BlockOffset;
   }
@@ -238,8 +292,9 @@ private:
 public:
   // Allocates the requested number of slots and returns the offset from
   // the top of the frame.
-  Value *alloc(IRBuilder<> &IRB, ElementCount EC, Type *Ty, bool IsFnEntry) {
-    Value *&Offset = getCurrentOffset(IRB.GetInsertBlock(), Ty);
+  Value *alloc(DominatorTree &DT, LoopInfo &LI, IRBuilder<> &IRB,
+               ElementCount EC, Type *Ty, bool IsFnEntry) {
+    Value *&Offset = getCurrentOffset(DT, LI, IRB, Ty);
     Value *Elems = IRB.CreateElementCount(Ty, EC);
     Offset = IRB.CreateAdd(Offset, Elems);
     if (IsFnEntry) {
@@ -251,7 +306,8 @@ public:
   // Returns the current offset from the top of the frame. This is used
   // to update the stack pointer before calling functions and to get the
   // total number of function-entry retags before popping a stack frame.
-  Value *getOutgoingOffset(IRBuilder<> &IRB, Type *Ty, bool IsFnEntry) {
+  Value *getOutgoingOffset(DominatorTree &DT, LoopInfo &LI, IRBuilder<> &IRB,
+                           Type *Ty, bool IsFnEntry) {
     // We always need to create a load here, even if we have not allocated
     // any stack slots yet. Our instrumentation pass does a depth-first
     // traversal of the CFG, so it is possible that we have taken a path to an
@@ -259,28 +315,45 @@ public:
     // the future.
     if (IsFnEntry) {
       if (!FnEntryOffset) {
-        FnEntryOffset = createEntryAlloca(IRB.GetInsertBlock(), Ty);
+        FnEntryOffset =
+            createEntryAlloca(IRB.GetInsertBlock(), ConstantInt::get(Ty, 0));
       }
       return IRB.CreateLoad(Ty, FnEntryOffset);
     }
-    return getCurrentOffset(IRB.GetInsertBlock(), Ty);
+    return getCurrentOffset(DT, LI, IRB, Ty);
   }
 
   // Stores the final offset for each basic block that
   // allocated stack slots, and attempts to promote the
   // counters to registers.
-  void patchStackSlots(DominatorTree &DT) {
+  void patchStackSlots(DomTreeUpdater *DTU, LoopInfo *LI) {
     if (!TotalOffset)
       return;
+
+    SmallVector<AllocaInst *, 8> Promoteable;
+    Promoteable.push_back(TotalOffset);
+    if (FnEntryOffset)
+      Promoteable.push_back(FnEntryOffset);
+
     for (auto &[BB, Offset] : BlockOffsets) {
-      IRBuilder<> ExitIRB(BB->getTerminator());
-      ExitIRB.CreateStore(Offset, TotalOffset);
+      if (!LoopBlocks.contains(BB)) {
+        IRBuilder<> ExitIRB(BB->getTerminator());
+        ExitIRB.CreateStore(Offset, TotalOffset);
+      }
     }
-    if (FnEntryOffset) {
-      PromoteMemToReg({FnEntryOffset, TotalOffset}, DT);
-    } else {
-      PromoteMemToReg({TotalOffset}, DT);
+
+    for (auto &[BB, Info] : LoopBlocks) {
+      Value *Offset = BlockOffsets[BB];
+      Instruction *InsertPt = SplitBlockAndInsertIfThen(
+          Info.Flag, BB->getTerminator(), false, nullptr, DTU, LI);
+      IRBuilder<> CleanupIRB(InsertPt);
+      CleanupIRB.CreateStore(Info.IncomingOffset, Info.CachedOffset);
+      CleanupIRB.CreateStore(Offset, TotalOffset);
+      Promoteable.push_back(Info.CachedOffset);
     }
+
+    DominatorTree &DT = DTU->getDomTree();
+    PromoteMemToReg(Promoteable, DT);
   }
 };
 
@@ -293,6 +366,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // Cached analysis results
   const TargetLibraryInfo *TLI;
   DominatorTree &DT;
+  LoopInfo LI;
 
   // The end of the "prologue" of the function, where we initialize our
   // instrumentation. This is a call to `llvm.donothing()`.
@@ -302,7 +376,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // determine which allocations need to be freed, so no additional handling is
   // necessary to determine where to free these allocations, even if they do not
   // have a `lifetime.end`, either.
-  DenseSet<AllocaInst *> HasLifetimeStart;
+  SmallDenseSet<AllocaInst *> HasLifetimeStart;
   SmallVector<AllocaInst *, 8> StaticAllocaVec;
 
   // Pointers to the sections of the thread-local array (BS.ParamTLS) where the
@@ -310,7 +384,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // provenance for an argument, we take its pointer from this array and then
   // insert the necessary instructions to load it from thread-local storage
   // within the prologue of the function.
-  DenseMap<Argument *, SmallVector<ProvenancePtr>> ArgumentProvenance;
+  SmallDenseMap<Argument *, SmallVector<ProvenancePtr>> ArgumentProvenance;
 
   // With the exception of `allocas`, each value is associated with a unique
   // provenance value. Provenanced values are indexed by each provenance
@@ -357,7 +431,6 @@ public:
   BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
                          const TargetLibraryInfo &TLI, DominatorTree &DT)
       : F(F), BS(BS), C(BS.C), TLI(&TLI), DT(DT) {}
-
   bool run() {
     DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Lazy);
     removeUnreachableBlocks(F, &DTU);
@@ -365,6 +438,7 @@ public:
     while (IRBuilder<> *AtExit = EE.Next()) {
     }
     DTU.flush();
+    LI.analyze(DT);
 
     BasicBlock *EntryBlock = &F.getEntryBlock();
     IRBuilder<> EntryIRB(EntryBlock, EntryBlock->getFirstNonPHIIt());
@@ -407,7 +481,8 @@ public:
     }
 
     patchShadowPHINodes();
-    ShadowStack.patchStackSlots(DT);
+    ShadowStack.patchStackSlots(&DTU, &LI);
+    DTU.flush();
 
     for (CallBase *CB : Retags) {
       if (CB->getType()->isPointerTy()) {
@@ -654,14 +729,15 @@ private:
 
   Value *allocStackSlot(IRBuilder<> &IRB, bool IsFnEntry,
                         ElementCount Elems = ElementCount::getFixed(1)) {
-    Value *SlotOffset = ShadowStack.alloc(IRB, Elems, BS.IntptrTy, IsFnEntry);
+    Value *SlotOffset =
+        ShadowStack.alloc(DT, LI, IRB, Elems, BS.IntptrTy, IsFnEntry);
     Value *ProvOffset = IRB.CreateMul(SlotOffset, BS.PL.ProvenanceSize);
     return ptradd(IRB, FrameTop, IRB.CreateNeg(ProvOffset));
   }
 
   Value *getStackOffset(IRBuilder<> &IRB, bool IsFnEntry) {
     Value *CurrOffset =
-        ShadowStack.getOutgoingOffset(IRB, BS.IntptrTy, IsFnEntry);
+        ShadowStack.getOutgoingOffset(DT, LI, IRB, BS.IntptrTy, IsFnEntry);
     Value *ProvOffset = IRB.CreateMul(CurrOffset, BS.PL.ProvenanceSize);
     return ptradd(IRB, FrameTop, IRB.CreateNeg(ProvOffset));
   }
@@ -726,7 +802,7 @@ private:
         NextInst = &II->getNormalDest()->front();
       } else {
         NextInst =
-            &SplitEdge(II->getParent(), II->getNormalDest(), &DT)->front();
+            &SplitEdge(II->getParent(), II->getNormalDest(), &DT, &LI)->front();
       }
     } else {
       assert(CB.getIterator() != CB.getParent()->end());
@@ -1142,7 +1218,8 @@ private:
     }
 
     if (NumFnEntryRetags) {
-      Value *FrameLen = ShadowStack.getOutgoingOffset(IRB, BS.IntptrTy, true);
+      Value *FrameLen =
+          ShadowStack.getOutgoingOffset(DT, LI, IRB, BS.IntptrTy, true);
       Value *Offset = IRB.CreateMul(FrameLen, BS.PL.ProvenanceSize);
       Value *FrameBottom = ptradd(IRB, FrameTop, IRB.CreateNeg(Offset));
       IRB.CreateCall(BS.BsanFuncPopFrame, {FrameBottom, FrameLen});
