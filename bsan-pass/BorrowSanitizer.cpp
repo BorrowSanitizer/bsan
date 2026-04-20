@@ -196,16 +196,23 @@ offsetIntoProvenanceIndex(IRBuilder<> &IRB, const DataLayout *DL,
 
 } // namespace
 
-// BorrowSanitizer assigns a shadow stack allocation to each thread,
-// which is used to support garbage collection. We scan the
-// shadow stack to determine which provenance values are reachable
-// in memory. For this to be feasible, each shadow stack needs to be
-// a contiguous array of initialized provenance values.
+// BorrowSanitizer uses a shadow stack to track the provenance values
+// that are accessible in memory and to pass provenance between functions.
+// We need the stack to be a contiguous array of provenance values to
+// avoid consuming excess memory and to ensure that it can be easily scanned
+// by the garbage collector. The layout of the shadow stack can be known
+// stactically if the CFG is acyclic. However, if there are cycles, then we need
+// to dynamically track whether we have entered a block so that we can reuse the
+// same stack slots each time. The solution is to treat the shadow stack as if
+// it's entirely dynamically allocated, and then apply `mem2reg` selectively to
+// our offset counters. This lets us avoid having to precompute the stack layout
+// prior to inserting instrumentation, which would require splitting
+// BorrowSanitizer's primary instrumentation pass into multiple sub-passes.
 class ShadowStackAllocator {
 private:
-  // We track the number of stack slots
-  // using an alloca that gets promoted to a register.
-  AllocaInst *TotalOffset = nullptr;
+  // We track the total number of stack slots used by this function
+  // with a single alloca that gets promoted to a register.
+  AllocaInst *GlobalOffsetAlloc = nullptr;
   // If we need to allocate a slot for an instruction,
   // then we load the incoming offset at the beginning of
   // its basic block. We increment it for subsequent
@@ -218,24 +225,20 @@ private:
   // remove their protectors when the function
   // returns.
   AllocaInst *FnEntryOffset = nullptr;
-
   // If a block is in a loop, then we only want it to count
   // once toward the global shadow stack offset. Subsequent
   // visits to this block should reuse the same stack slots.
   struct LoopBlockInfo {
     // The initial offset at the beginning of the block.
     // This is stored and incremented in `BlockOffsets`.
-    // We need the original value here to be able to cache it.
-    Value *IncomingOffset;
+    // We need access to the original value here so that we can
+    // cache it.
+    Value *IncomingGlobalOffset;
+    // The "cached" initial offset for this block.
+    AllocaInst *CachedOffsetAlloc;
     // Indicates whether this is the first time that this
-    // block has been visited. If so, then we branch to a
-    // special cleanup block.
-    Value *Flag;
-    // In this cleanup block, we store the incoming offset
-    // to the cache. Then, we update the global counter with
-    // the value from `BlockOffsets`, which we also do
-    // unconditionally for every other block.
-    AllocaInst *CachedOffset;
+    // block has been visited.
+    Value *IsFirstIteration;
   };
 
   DenseMap<BasicBlock *, LoopBlockInfo> LoopBlocks;
@@ -267,28 +270,59 @@ private:
   Value *&getCurrentOffset(DominatorTree &DT, LoopInfo &LI, IRBuilder<> &IRB,
                            Type *Ty) {
     BasicBlock *InsertBB = IRB.GetInsertBlock();
-    Value *&BlockOffset = BlockOffsets[InsertBB];
-    if (!TotalOffset) {
-      TotalOffset = createEntryAlloca(InsertBB, ConstantInt::get(Ty, 0));
-    }
-    if (!BlockOffset) {
-      Value *GlobalOffset = IRB.CreateLoad(Ty, TotalOffset);
-      if (inSCC(DT, LI, InsertBB)) {
-        Value *InitVal = ConstantInt::get(Ty, -1, true);
-        AllocaInst *CachedOffset = createEntryAlloca(InsertBB, InitVal);
-        Value *Cached = IRB.CreateLoad(Ty, CachedOffset);
-        Value *Flag = IRB.CreateICmpEQ(Cached, InitVal);
-        BlockOffset = IRB.CreateSelect(Flag, GlobalOffset, Cached);
 
-        LoopBlockInfo &Info = LoopBlocks[InsertBB];
-        Info.CachedOffset = CachedOffset;
-        Info.Flag = Flag;
-        Info.IncomingOffset = GlobalOffset;
-      } else {
-        BlockOffset = GlobalOffset;
+    // If we already have an offset, then no initialization is necessary.
+    auto It = BlockOffsets.find(InsertBB);
+    if (It != BlockOffsets.end()) {
+      return It->second;
+    }
+
+    // Otherwise, this could be the first time we allocate a slot. We want
+    // to make sure that we have a "global" counter for stack slots.
+    if (!GlobalOffsetAlloc)
+      GlobalOffsetAlloc = createEntryAlloca(InsertBB, ConstantInt::get(Ty, 0));
+
+    // If we have a single predecessor, then we can use their outgoing offset
+    // as our incoming offset.
+    if (BasicBlock *PredBB = InsertBB->getSinglePredecessor()) {
+      auto OffsetIt = BlockOffsets.find(PredBB);
+      if (OffsetIt != BlockOffsets.end()) {
+        Value *Offset = OffsetIt->getSecond();
+        // If our predecessor has multiple successors, then it still needs to
+        // commit its final offset to memory end of its block.
+        if (PredBB->getSingleSuccessor()) {
+          auto LoopIt = LoopBlocks.find(PredBB);
+          if (LoopIt != LoopBlocks.end()) {
+            LoopBlocks[InsertBB] = LoopIt->second;
+            LoopBlocks.erase(LoopIt);
+          }
+          BlockOffsets.erase(OffsetIt);
+        }
+        BlockOffsets[InsertBB] = Offset;
+        return BlockOffsets[InsertBB];
       }
     }
-    return BlockOffset;
+
+    Value *Offset;
+    Value *GlobalOffset = IRB.CreateLoad(Ty, GlobalOffsetAlloc);
+    if (inSCC(DT, LI, InsertBB)) {
+      Value *InitVal = ConstantInt::get(Ty, -1, true);
+      AllocaInst *CachedOffsetAlloc = createEntryAlloca(InsertBB, InitVal);
+      Value *CachedOffset = IRB.CreateLoad(Ty, CachedOffsetAlloc);
+      Value *Flag = IRB.CreateICmpEQ(CachedOffset, InitVal);
+      Offset = IRB.CreateSelect(Flag, GlobalOffset, CachedOffset);
+      IRB.CreateStore(Offset, CachedOffsetAlloc);
+
+      LoopBlockInfo &Info = LoopBlocks[InsertBB];
+      Info.CachedOffsetAlloc = CachedOffsetAlloc;
+      Info.IsFirstIteration = Flag;
+      Info.IncomingGlobalOffset = GlobalOffset;
+    } else {
+      Offset = GlobalOffset;
+    }
+
+    BlockOffsets[InsertBB] = Offset;
+    return BlockOffsets[InsertBB];
   }
 
 public:
@@ -328,12 +362,12 @@ public:
   // Stores the final offset for each basic block that
   // allocated stack slots, and attempts to promote the
   // counters to registers.
-  void patchStackSlots(DomTreeUpdater *DTU, LoopInfo *LI) {
-    if (!TotalOffset)
+  void patchStackSlots(DominatorTree &DT) {
+    if (!GlobalOffsetAlloc)
       return;
 
     SmallVector<AllocaInst *, 8> Promoteable;
-    Promoteable.push_back(TotalOffset);
+    Promoteable.push_back(GlobalOffsetAlloc);
     if (FnEntryOffset)
       Promoteable.push_back(FnEntryOffset);
 
@@ -341,21 +375,19 @@ public:
       auto LoopIt = LoopBlocks.find(BB);
       if (LoopIt != LoopBlocks.end()) {
         LoopBlockInfo &Info = LoopIt->second;
-        Instruction *InsertPt = SplitBlockAndInsertIfThen(
-            Info.Flag, BB->getTerminator(), false, nullptr, DTU, LI);
-
-        IRBuilder<> CleanupIRB(InsertPt);
-        CleanupIRB.CreateStore(Info.IncomingOffset, Info.CachedOffset);
-        CleanupIRB.CreateStore(Offset, TotalOffset);
-
-        Promoteable.push_back(Info.CachedOffset);
-      } else {
         IRBuilder<> ExitIRB(BB->getTerminator());
-        ExitIRB.CreateStore(Offset, TotalOffset);
+        // We only update the global offset if this was the first time.
+        Value *FinalOffset = ExitIRB.CreateSelect(Info.IsFirstIteration, Offset,
+                                                  Info.IncomingGlobalOffset);
+        ExitIRB.CreateStore(FinalOffset, GlobalOffsetAlloc);
+        Promoteable.push_back(Info.CachedOffsetAlloc);
+      } else {
+        // Acyclic blocks always update the global offset,
+        // since we will never visit them again.
+        IRBuilder<> ExitIRB(BB->getTerminator());
+        ExitIRB.CreateStore(Offset, GlobalOffsetAlloc);
       }
     }
-
-    DominatorTree &DT = DTU->getDomTree();
     PromoteMemToReg(Promoteable, DT);
   }
 };
@@ -483,8 +515,7 @@ public:
     }
 
     patchShadowPHINodes();
-    ShadowStack.patchStackSlots(&DTU, &LI);
-    DTU.flush();
+    ShadowStack.patchStackSlots(DT);
 
     for (CallBase *CB : Retags) {
       if (CB->getType()->isPointerTy()) {
@@ -596,9 +627,9 @@ private:
     if (Comp.Elems.isVector()) {
       report_fatal_error("Vectors are not supported.");
     } else {
-      Value *Tmp = IRB.CreateAlloca(BS.PL.ProvenanceTy, nullptr);
-      IRB.CreateCall(BS.BsanFuncShadowLoad, {ObjAddr, Tmp});
-      ProvenancePtrScalar ProvPtr(IRB, BS.PL, Tmp);
+      Value *Slot = allocStackSlot(IRB, false);
+      IRB.CreateCall(BS.BsanFuncShadowLoad, {ObjAddr, Slot});
+      ProvenancePtrScalar ProvPtr(IRB, BS.PL, Slot);
       return Provenance::load(IRB, BS.PL, ProvPtr);
     }
   }
@@ -685,9 +716,10 @@ private:
     Value *Operand = CB.getOperand(0);
     Value *SrcAddr = IRB.CreateLoad(BS.PtrTy, Operand, true);
 
-    Value *Tmp = IRB.CreateAlloca(BS.PL.ProvenanceTy, nullptr);
-    IRB.CreateCall(BS.BsanFuncShadowLoad, {Operand, Tmp});
-    ProvenancePtrScalar SrcProvPtr(IRB, BS.PL, Tmp);
+    Value *Slot = allocStackSlot(IRB, false);
+    IRB.CreateCall(BS.BsanFuncShadowLoad, {Operand, Slot});
+    ProvenancePtrScalar SrcProvPtr(IRB, BS.PL, Slot);
+
     ProvenanceScalar SrcProv = ProvenanceScalar::load(IRB, BS.PL, SrcProvPtr);
     ProvenanceScalar RetaggedProv = instrumentRetag(IRB, CB, SrcAddr, SrcProv);
     IRB.CreateCall(BS.BsanFuncShadowStore,
@@ -723,10 +755,9 @@ private:
           {Target, RI.Size, RI.IsProtected, RI.IsFreeze, RI.IsUnpin, RI.PtrKind,
            RI.ImArray, ImArrayLen, TargetProv.Tag, TargetProv.Info});
 
-      if (RI.IsProtected->getZExtValue() != 0) {
-        Value *SlotPtr = allocStackSlot(IRB, true);
-        TargetProv.store(IRB, BS.PL, SlotPtr);
-      }
+      bool IsProtected = RI.IsProtected->getZExtValue() != 0;
+      Value *SlotPtr = allocStackSlot(IRB, IsProtected);
+      TargetProv.store(IRB, BS.PL, SlotPtr);
     }
     return TargetProv;
   }
@@ -1035,6 +1066,7 @@ private:
 
     SmallVector<ProvenanceDesc> Components =
         getProvenanceDesc(IRB, BS.DL, LI.getType());
+
     Value *Base = LI.getPointerOperand();
     for (const auto &[Idx, Comp] : llvm::enumerate(Components)) {
       Value *ByteOffset = Comp.ByteOffset.getValue(IRB, BS.IntptrTy);
@@ -1205,21 +1237,6 @@ private:
 
   void popFrame(IRBuilder<> &IRB, Instruction &I, Value *RetVal) {
     BasicBlock *BB = IRB.GetInsertBlock();
-    if (RetVal) {
-      SmallVector<ProvenanceDesc> ProvDesc =
-          getProvenanceDesc(IRB, BS.DL, RetVal->getType());
-
-      Value *RetvalByteWidth = BS.Zero;
-      for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
-        Value *Slot = ptradd(IRB, BS.RetvalTLS, RetvalByteWidth);
-        Provenance Prov = assertProvenance(IRB, Desc.Elems, {RetVal, Idx});
-        ProvenancePtr Dest = ProvenancePtr(IRB, BS.PL, Slot, Desc.Elems);
-        Prov.store(IRB, BS.PL, Dest);
-        Value *NumProv = IRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
-        Value *ByteWidth = IRB.CreateMul(NumProv, BS.PL.ProvenanceSize);
-        RetvalByteWidth = IRB.CreateAdd(RetvalByteWidth, ByteWidth);
-      }
-    }
 
     if (NumFnEntryRetags) {
       Value *FrameLen =
@@ -1228,8 +1245,6 @@ private:
       Value *FrameBottom = ptradd(IRB, FrameTop, IRB.CreateNeg(Offset));
       IRB.CreateCall(BS.BsanFuncPopFrame, {FrameBottom, FrameLen});
     }
-
-    IRB.CreateStore(FrameTop, BS.ProvStack);
 
     if (StaticAllocaVec.size() > 0) {
       for (AllocaInst *AI : StaticAllocaVec) {
@@ -1246,6 +1261,24 @@ private:
       IRB.CreateCall(BS.BsanFuncDeallocStack, {Ptr, Root.Tag, Root.Info});
       IRB.CreateCall(BS.BsanFuncDestroyStackSlot, {Root.Info});
     }
+
+    if (RetVal) {
+      SmallVector<ProvenanceDesc> ProvDesc =
+          getProvenanceDesc(IRB, BS.DL, RetVal->getType());
+
+      Value *RetvalByteWidth = BS.Zero;
+      for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
+        Value *Slot = ptradd(IRB, BS.RetvalTLS, RetvalByteWidth);
+        Provenance Prov = assertProvenance(IRB, Desc.Elems, {RetVal, Idx});
+        ProvenancePtr Dest = ProvenancePtr(IRB, BS.PL, Slot, Desc.Elems);
+        Prov.store(IRB, BS.PL, Dest);
+        Value *NumProv = IRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
+        Value *ByteWidth = IRB.CreateMul(NumProv, BS.PL.ProvenanceSize);
+        RetvalByteWidth = IRB.CreateAdd(RetvalByteWidth, ByteWidth);
+      }
+    }
+
+    IRB.CreateStore(FrameTop, BS.ProvStack);
   }
 
   void visitReturnInst(ReturnInst &I) {

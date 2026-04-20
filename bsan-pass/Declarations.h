@@ -10,7 +10,6 @@
 #define BSAN_DEBUG_FN(name) BSAN_DEBUG_PREFIX name
 #define RUST_FN(name) RUST_PREFIX name
 
-// @__rust_retag(ptr, ptr, i64, i64)
 const char kBsanRustIntrinsicRetagPrefix[] = RUST_FN("retag");
 const char kBsanRustIntrinsicRetagReg[] = RUST_FN("retag_reg");
 const char kBsanRustIntrinsicRetagMem[] = RUST_FN("retag_mem");
