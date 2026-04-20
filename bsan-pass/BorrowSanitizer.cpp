@@ -210,39 +210,24 @@ offsetIntoProvenanceIndex(IRBuilder<> &IRB, const DataLayout *DL,
 // BorrowSanitizer's primary instrumentation pass into multiple sub-passes.
 class ShadowStackAllocator {
 private:
-  // We track the total number of stack slots used by this function
-  // with a single alloca that gets promoted to a register.
+  // We track the total number of stack slots used by this
+  // function with a single alloca that gets promoted to a register.
   AllocaInst *GlobalOffsetAlloc = nullptr;
-  // If we need to allocate a slot for an instruction,
-  // then we load the incoming offset at the beginning of
-  // its basic block. We increment it for subsequent
-  // allocations in the same block, and then store it
-  // back at the end of the block.
-  DenseMap<BasicBlock *, Value *> BlockOffsets;
   // All shadow stack operations are dominated
   // by function-entry retags. We need to know
   // how many of these happened to be able to
   // remove their protectors when the function
   // returns.
   AllocaInst *FnEntryOffset = nullptr;
-  // If a block is in a loop, then we only want it to count
-  // once toward the global shadow stack offset. Subsequent
-  // visits to this block should reuse the same stack slots.
-  struct LoopBlockInfo {
-    // The initial offset at the beginning of the block.
-    // This is stored and incremented in `BlockOffsets`.
-    // We need access to the original value here so that we can
-    // cache it.
-    Value *IncomingGlobalOffset;
-    // The "cached" initial offset for this block.
-    AllocaInst *CachedOffsetAlloc;
-    // Indicates whether this is the first time that this
-    // block has been visited.
-    Value *IsFirstIteration;
-  };
-
-  DenseMap<BasicBlock *, LoopBlockInfo> LoopBlocks;
-
+  // If we need to allocate a slot for an instruction,
+  // then we load the incoming offset at the beginning of
+  // its basic block. We increment it for subsequent
+  // allocations in the same block, and then store it
+  // back at the end of the block.
+  DenseMap<BasicBlock *, Value *> BlockOffsets;
+  // All of the allocas that we insert can be promoted
+  // to registers.
+  SmallVector<AllocaInst *> PromoteableAllocas;
   // Creates a counter alloca in the entry block of the
   // function and initializes it to 0. Zero-initialization
   // is crucial, since not all paths through a function will
@@ -252,6 +237,7 @@ private:
     BasicBlock *EntryBB = &BB->getParent()->getEntryBlock();
     IRBuilder<> EntryIRB(&EntryBB->front());
     AllocaInst *EntryAlloc = EntryIRB.CreateAlloca(Init->getType());
+    PromoteableAllocas.push_back(EntryAlloc);
     EntryIRB.CreateStore(Init, EntryAlloc);
     return EntryAlloc;
   }
@@ -264,7 +250,6 @@ private:
     }
     IRB.CreateStore(Offset, FnEntryOffset);
   }
-
   // Returns the total number of stack slots currently allocated
   // in the given basic block.
   Value *&getCurrentOffset(DominatorTree &DT, LoopInfo &LI, IRBuilder<> &IRB,
@@ -288,17 +273,13 @@ private:
       auto OffsetIt = BlockOffsets.find(PredBB);
       if (OffsetIt != BlockOffsets.end()) {
         Value *Offset = OffsetIt->getSecond();
-        // If our predecessor has multiple successors, then it still needs to
-        // commit its final offset to memory end of its block.
-        if (PredBB->getSingleSuccessor()) {
-          auto LoopIt = LoopBlocks.find(PredBB);
-          if (LoopIt != LoopBlocks.end()) {
-            LoopBlocks[InsertBB] = LoopIt->second;
-            LoopBlocks.erase(LoopIt);
-          }
-          BlockOffsets.erase(OffsetIt);
-        }
         BlockOffsets[InsertBB] = Offset;
+        // if this is a linear chain of blocks, then we can skip storing
+        // the offset at the end of the predecessor, and wait until the end
+        // of this block.
+        if (PredBB->getSingleSuccessor()) {
+          BlockOffsets.erase(PredBB);
+        }
         return BlockOffsets[InsertBB];
       }
     }
@@ -312,15 +293,9 @@ private:
       Value *Flag = IRB.CreateICmpEQ(CachedOffset, InitVal);
       Offset = IRB.CreateSelect(Flag, GlobalOffset, CachedOffset);
       IRB.CreateStore(Offset, CachedOffsetAlloc);
-
-      LoopBlockInfo &Info = LoopBlocks[InsertBB];
-      Info.CachedOffsetAlloc = CachedOffsetAlloc;
-      Info.IsFirstIteration = Flag;
-      Info.IncomingGlobalOffset = GlobalOffset;
     } else {
       Offset = GlobalOffset;
     }
-
     BlockOffsets[InsertBB] = Offset;
     return BlockOffsets[InsertBB];
   }
@@ -338,7 +313,6 @@ public:
     }
     return Offset;
   }
-
   // Returns the current offset from the top of the frame. This is used
   // to update the stack pointer before calling functions and to get the
   // total number of function-entry retags before popping a stack frame.
@@ -365,30 +339,13 @@ public:
   void patchStackSlots(DominatorTree &DT) {
     if (!GlobalOffsetAlloc)
       return;
-
-    SmallVector<AllocaInst *, 8> Promoteable;
-    Promoteable.push_back(GlobalOffsetAlloc);
-    if (FnEntryOffset)
-      Promoteable.push_back(FnEntryOffset);
-
     for (auto &[BB, Offset] : BlockOffsets) {
-      auto LoopIt = LoopBlocks.find(BB);
-      if (LoopIt != LoopBlocks.end()) {
-        LoopBlockInfo &Info = LoopIt->second;
-        IRBuilder<> ExitIRB(BB->getTerminator());
-        // We only update the global offset if this was the first time.
-        Value *FinalOffset = ExitIRB.CreateSelect(Info.IsFirstIteration, Offset,
-                                                  Info.IncomingGlobalOffset);
-        ExitIRB.CreateStore(FinalOffset, GlobalOffsetAlloc);
-        Promoteable.push_back(Info.CachedOffsetAlloc);
-      } else {
-        // Acyclic blocks always update the global offset,
-        // since we will never visit them again.
-        IRBuilder<> ExitIRB(BB->getTerminator());
-        ExitIRB.CreateStore(Offset, GlobalOffsetAlloc);
-      }
+      // Acyclic blocks always update the global offset,
+      // since we will never visit them again.
+      IRBuilder<> ExitIRB(BB->getTerminator());
+      ExitIRB.CreateStore(Offset, GlobalOffsetAlloc);
     }
-    PromoteMemToReg(Promoteable, DT);
+    PromoteMemToReg(PromoteableAllocas, DT);
   }
 };
 
@@ -476,7 +433,6 @@ public:
 
     BasicBlock *EntryBlock = &F.getEntryBlock();
     IRBuilder<> EntryIRB(EntryBlock, EntryBlock->getFirstNonPHIIt());
-
     SmallVector<Instruction *, 64> Instructions;
 
     for (BasicBlock *BB : depth_first<BasicBlock *>(&F.getEntryBlock())) {
