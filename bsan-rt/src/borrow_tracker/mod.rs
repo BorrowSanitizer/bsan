@@ -7,6 +7,7 @@ use tree::{AllocRange, Tree};
 use crate::borrow_tracker::tree::{ChildParams, LocationState};
 use crate::diagnostics::{print_tree_diff, AccessCause, PrintTree};
 use crate::errors::{UBInfo, UBResult};
+use crate::helpers::Size;
 use crate::sanitizer_common::Span;
 use crate::{AllocId, BorTag, GlobalCtx, Provenance};
 
@@ -15,14 +16,12 @@ mod helpers;
 mod perms;
 mod range_map;
 pub mod tree;
-mod types;
 
 pub mod unimap;
 pub use foreign_access_skipping::*;
 pub use helpers::*;
 pub use perms::*;
 pub use range_map::*;
-pub use types::*;
 
 #[derive(Debug)]
 pub struct BorrowTracker<'b> {

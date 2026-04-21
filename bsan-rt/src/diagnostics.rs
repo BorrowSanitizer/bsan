@@ -1,25 +1,21 @@
 // Ported from Miri's `diagnostics.rs`
 // Won't be used exactly as it is used in Miri or at all
 // but nice to port in case there are any similar behaviors / as a starting point
-#![allow(unused)]
+
 use alloc::alloc::Global;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::alloc::Allocator;
 use core::fmt;
-use core::marker::PhantomData;
 use core::ops::Range;
 
-use hashbrown::HashMap;
-
 use super::{AccessKind, PermTransition, Permission, ProtectorKind};
-use crate::borrow_tracker::tree::{AllocRange, LocationState, Tree};
+use crate::borrow_tracker::tree::{LocationState, Tree};
 use crate::borrow_tracker::unimap::UniIndex;
-use crate::borrow_tracker::Size;
-use crate::errors::{TransitionError, UBResult};
 use crate::global::ProtectedTagsRef;
+use crate::helpers::Size;
 use crate::sanitizer_common::Span;
-use crate::{println, AllocId, BorTag};
+use crate::BorTag;
 
 /// Cause of an access: either a real access or one
 /// inserted by Tree Borrows due to a reborrow or a deallocation.
@@ -69,11 +65,6 @@ pub struct Event {
     pub access_cause: AccessCause,
     /// Relative position of the tag to the one used for the access.
     pub is_foreign: bool,
-    /// User-visible range of the access.
-    /// `None` means that this is an implicit access to the entire allocation
-    /// (used for the implicit read on protector release).
-    // MIR specfic
-    pub access_range: Option<AllocRange>,
     /// The transition recorded by this event only occurred on a subrange of
     /// `access_range`: a single access on `access_range` triggers several events,
     /// each with their own mutually disjoint `transition_range`. No-op transitions
@@ -115,19 +106,6 @@ impl History {
         }
         self.events.push(event);
     }
-
-    /// Return the last recorded event, if any.
-    pub fn last_event(&self) -> Option<&Event> {
-        self.events.last()
-    }
-
-    pub fn created_at(&self) -> (Span, Permission) {
-        self.created
-    }
-
-    pub fn events_iter(&self) -> core::slice::Iter<'_, Event> {
-        self.events.iter()
-    }
 }
 
 impl HistoryData {
@@ -148,15 +126,7 @@ impl HistoryData {
         );
 
         self.events.push((Some(created.0), msg_creation));
-        for &Event {
-            transition,
-            is_foreign,
-            access_cause,
-            access_range: _,
-            span,
-            transition_range: _,
-        } in &events
-        {
+        for &Event { transition, is_foreign, access_cause, span, transition_range: _ } in &events {
             // NOTE: `transition_range` is explicitly absent from the error message, it has no significance
             // to the user. The meaningful one is `access_range`.
             let access = access_cause.print_as_access(is_foreign);
@@ -205,17 +175,7 @@ impl NodeDebugInfo<Global> {
     }
 }
 
-impl<A> NodeDebugInfo<A>
-where
-    A: Allocator,
-{
-    /// Information for a new node. By default it has no
-    /// name and an empty history. Uses custom allocator.
-    pub fn new_in(tag: BorTag, initial: Permission, span: Span, alloc: A) -> Self {
-        let history = History { tag, created: (span, initial), events: Vec::new_in(alloc) };
-        Self { tag, name: None, history }
-    }
-
+impl NodeDebugInfo {
     /// Add a name to the tag. If a same tag is associated to several pointers,
     /// it can have several names which will be separated by commas.
     pub fn add_name(&mut self, name: &str) {
@@ -228,56 +188,13 @@ where
     }
 }
 
-impl<A> fmt::Display for NodeDebugInfo<A>
-where
-    A: Allocator,
-{
+impl fmt::Display for NodeDebugInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(ref name) = self.name {
             write!(f, "{tag:?} ({name})", tag = self.tag)
         } else {
             write!(f, "{tag:?}", tag = self.tag)
         }
-    }
-}
-
-impl<A> Tree<A>
-where
-    A: Allocator,
-{
-    /// Climb the tree to get the tag of a distant ancestor.
-    /// Allows operations on tags that are unreachable by the program
-    /// but still exist in the tree. Not guaranteed to perform consistently
-    /// if `provenance-gc=1`.
-    fn nth_parent(&self, tag: BorTag, nth_parent: u8) -> Option<BorTag> {
-        let mut idx = self.tag_mapping.get(&tag).unwrap();
-        for _ in 0..nth_parent {
-            let node = self.nodes.get(idx).unwrap();
-            idx = node.parent?;
-        }
-        Some(self.nodes.get(idx).unwrap().tag)
-    }
-
-    /// Debug helper: assign name to tag.
-    pub fn give_pointer_debug_name(
-        &mut self,
-        tag: BorTag,
-        nth_parent: u8,
-        name: &str,
-    ) -> UBResult<()> {
-        let tag = self.nth_parent(tag, nth_parent).unwrap();
-        let idx = self.tag_mapping.get(&tag).unwrap();
-        if let Some(node) = self.nodes.get_mut(idx) {
-            node.debug_info.add_name(name);
-        } else {
-            println!("Tag {tag:?} (to be named '{name}') not found!");
-        }
-        Ok(())
-    }
-
-    /// Debug helper: determines if the tree contains a tag.
-    pub fn is_allocation_of(&self, tag: BorTag) -> bool {
-        self.tag_mapping.contains_key(&tag)
     }
 }
 
@@ -299,25 +216,6 @@ impl History {
     }
 }
 
-/// Failures that can occur during the execution of Tree Borrows procedures.
-pub(super) struct TbError<'node, A: Allocator = Global> {
-    /// What failure occurred.
-    pub error_kind: TransitionError,
-    /// The allocation in which the error is happening.
-    pub alloc_id: AllocId,
-    /// The offset (into the allocation) at which the conflict occurred.
-    pub error_offset: u64,
-    /// The tag on which the error was triggered.
-    /// On protector violations, this is the tag that was protected.
-    /// On accesses rejected due to insufficient permissions, this is the
-    /// tag that lacked those permissions.
-    pub conflicting_info: &'node NodeDebugInfo<A>,
-    // What kind of access caused this error (read, write, reborrow, deallocation)
-    pub access_cause: AccessCause,
-    /// Which tag the access that caused this error was made through, i.e.
-    /// which tag was used to read/write/deallocate.
-    pub accessed_info: &'node NodeDebugInfo<A>,
-}
 type S = &'static str;
 /// Pretty-printing details
 ///

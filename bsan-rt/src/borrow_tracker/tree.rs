@@ -927,7 +927,6 @@ where
                     is_foreign: rel_pos.is_foreign(),
                     transition_range: perms_range,
                     span,
-                    access_range: access_range_and_kind.map(|x| x.0),
                 });
             }
             Ok(())

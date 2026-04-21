@@ -14,7 +14,7 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{fmt, ptr, slice};
 
-use borrow_tracker::{AccessKind, RetagInfo, RetagPtrKind, Size};
+use borrow_tracker::{AccessKind, RetagInfo, RetagPtrKind};
 use libc_print::std_name::*;
 use spin::Mutex;
 
@@ -32,6 +32,7 @@ mod errors;
 mod memory;
 
 use crate::borrow_tracker::tree::Tree;
+use crate::helpers::Size;
 use crate::sanitizer_common::Span;
 
 #[thread_local]
