@@ -7,6 +7,7 @@
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/StackLifetime.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/AttributeMask.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/DataLayout.h"
@@ -545,6 +546,7 @@ private:
         FrameTop = Dest;
       }
     }
+    EntryIRB.CreateStore(FrameTop, BS.ProvStack);
 
     FnPrologueEnd = EntryIRB.CreateIntrinsic(Intrinsic::donothing, {});
     LifetimeInfo = std::make_unique<StackLifetime>(
@@ -655,6 +657,24 @@ private:
       if (ClHandleAsmConservative)
         visitAsmInstruction(CB);
       return;
+    }
+
+    if (auto *Call = dyn_cast<CallInst>(&CB)) {
+
+      // We are going to insert code that relies on the fact that the callee
+      // will become a non-readonly function after it is instrumented by us. To
+      // prevent this code from being optimized out, mark that function
+      // non-readonly in advance.
+      // TODO: We can likely do better than dropping memory() completely here.
+      AttributeMask B;
+      B.addAttribute(Attribute::Memory).addAttribute(Attribute::Speculatable);
+
+      Call->removeFnAttrs(B);
+      if (Function *Func = Call->getCalledFunction()) {
+        Func->removeFnAttrs(B);
+      }
+
+      maybeMarkSanitizerLibraryCallNoBuiltin(Call, TLI);
     }
 
     // If we've made it here, then we don't have a hard-coded way to handle this
@@ -1360,6 +1380,11 @@ bool BorrowSanitizer::instrumentFunction(Function &F,
   initializeCallbacks(*F.getParent(), TLI);
   BorrowSanitizerVisitor Visitor(F, *this, TLI, DT);
   Visitor.run();
+
+  // Clear out memory attributes.
+  AttributeMask B;
+  B.addAttribute(Attribute::Memory).addAttribute(Attribute::Speculatable);
+  F.removeFnAttrs(B);
 
   F.addFnAttr(Attribute::DisableSanitizerInstrumentation);
   return true;
