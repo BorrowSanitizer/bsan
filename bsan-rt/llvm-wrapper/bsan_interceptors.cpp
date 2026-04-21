@@ -15,6 +15,9 @@ DECLARE_REAL(void *, malloc, SIZE_T)
 DECLARE_REAL(void, free, void *)
 
 bool inst_caller(void *sym) {
+  if (__BSAN_PROV_STACK == nullptr) {
+    return false;
+  }
   if (__BSAN_TLS_MARKER) {
     bool cond = __BSAN_TLS_MARKER == sym;
     if (cond) {
@@ -43,12 +46,9 @@ struct DlsymAlloc : public DlSymAllocator<DlsymAlloc> {
   static bool UseImpl() { return !BSAN_INITED; }
 };
 
-typedef int (*MainFn)(int, char **, char **);
-
 struct InterceptorContext {
   Mutex AtExitLock;
   Vector<struct BSanAtExitRecord *> AtExitStack;
-  MainFn Entrypoint = nullptr;
   InterceptorContext() : AtExitStack() {}
 };
 
@@ -133,8 +133,6 @@ INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
   if (INST_CALLER(calloc)) {
     BorTag Tag = __bsan_new_bor_tag();
     *RetSlot = {Tag, __bsan_alloc(ptr, nmemb * size, Tag, span)};
-  } else {
-    *RetSlot = {0, nullptr};
   }
   return ptr;
 }
@@ -150,12 +148,10 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
     HANDLE_ERROR(pc, bp);
   }
   void *nptr = REAL(realloc)(ptr, size);
-  Provenance *RetSlot = GetRetValSlot(0);
   if (is_inst) {
+    Provenance *RetSlot = GetRetValSlot(0);
     BorTag Tag = __bsan_new_bor_tag();
     *RetSlot = {Tag, __bsan_alloc(nptr, size, Tag, span)};
-  } else {
-    *RetSlot = {0, nullptr};
   }
   return nptr;
 }

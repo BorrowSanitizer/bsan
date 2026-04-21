@@ -16,8 +16,6 @@ using namespace __bsan;
 #define TLS_SIZE 100
 
 SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance __BSAN_PARAM_TLS[TLS_SIZE];
-SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance
-    __BSAN_RETVAL_TLS[TLS_SIZE];
 SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_TLS_MARKER = nullptr;
 
 bool BSAN_INITED = false;
@@ -26,14 +24,16 @@ bool BSAN_DEINIT_RUNNING;
 
 const Provenance WILDCARD = {0, nullptr};
 const Provenance INVALID = {1, nullptr};
+THREADLOCAL uptr RetvalCount = 0;
+THREADLOCAL uptr AddrRead = 0;
 
 namespace __bsan {
 
 Provenance *GetArgSlot(uptr Idx) { return &__BSAN_PARAM_TLS[Idx]; }
-Provenance *GetRetValSlot(uptr Idx) { return &__BSAN_RETVAL_TLS[Idx]; }
+Provenance *GetRetValSlot(uptr Idx) { return __BSAN_PROV_STACK - (Idx + 1); }
 
 void ClearArgSlot(uptr Idx) { __BSAN_PARAM_TLS[Idx] = WILDCARD; }
-void ClearRetValSlot(uptr Idx) { __BSAN_RETVAL_TLS[Idx] = WILDCARD; }
+void ClearRetValSlot(uptr Idx) { *GetRetValSlot(Idx) = WILDCARD; }
 
 void PrintStackTrace(StackTrace &stack) {
   Printf("stack backtrace:\n");
@@ -130,13 +130,12 @@ SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_mark_tls(void *callee) {
 /// the return value.
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_validate_param_tls(void *current_fn,
                                                              uptr len) {
-  if (__BSAN_TLS_MARKER == 0 || current_fn == __BSAN_TLS_MARKER) {
-    __BSAN_TLS_MARKER = 0;
-  } else {
+  if (__BSAN_TLS_MARKER && current_fn != __BSAN_TLS_MARKER) {
     for (uptr i = 0; i < len; ++i) {
       *GetArgSlot(i) = WILDCARD;
     }
   }
+  __BSAN_TLS_MARKER = 0;
 }
 
 /// Ensures that the provenance array for the return value is valid.
@@ -145,11 +144,11 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_validate_param_tls(void *current_fn,
 /// fill it with wildcard provenance values for each pointer being returned. We
 /// also need to restore the boundary marker to the value it had before the
 /// function that was called.
-SANITIZER_INTERFACE_ATTRIBUTE void __bsan_validate_retval_tls(void *prev_marker,
-                                                              uptr len) {
+SANITIZER_INTERFACE_ATTRIBUTE void
+__bsan_validate_retval_tls(void *prev_marker, Provenance *frame, uptr len) {
   if (__BSAN_TLS_MARKER) {
     for (uptr i = 0; i < len; ++i) {
-      *GetRetValSlot(i) = WILDCARD;
+      frame[i] = WILDCARD;
     }
   }
   __BSAN_TLS_MARKER = prev_marker;
@@ -265,26 +264,6 @@ __bsan_pop_frame(const Provenance *frame_start, uptr prot) {
 
 SANITIZER_WEAK_ATTRIBUTE void
 __bsan_pop_frame_impl(const Provenance *frame_start, uptr prot, Span pc) {}
-
-// Define this somewhere out of the fast path (e.g., in bsan_report.cpp)
-// Use SANITIZER_INTERFACE_ATTRIBUTE if this is called from instrumented code,
-// or just NOINLINE if it's internal.
-NOINLINE void __bsan_report_error(uptr pc, uptr bp, void *ptr,
-                                  uptr access_size) {
-  // 1. Guarantee the frame pointer is intact for the unwinder
-  ENABLE_FRAME_POINTER;
-
-  // 2. Fetch standard unwinding flags rather than hardcoding
-  bool fast_unwind = common_flags()->fast_unwind_on_fatal;
-  u32 max_depth = 3; // Or hardcode a safe depth like 50
-
-  // 3. Unwind and report
-  UNINITIALIZED BufferedStackTrace stack;
-  stack.Unwind(pc, bp, nullptr, fast_unwind, max_depth);
-
-  PrintStackTrace(stack);
-  Die();
-}
 
 SANITIZER_WEAK_ATTRIBUTE void __bsan_read_impl(void *ptr, uptr access_size,
                                                BorTag bor_tag,

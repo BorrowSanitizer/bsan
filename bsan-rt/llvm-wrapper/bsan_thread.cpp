@@ -1,10 +1,12 @@
 #include "bsan_thread.h"
+#include "bsan.h"
 #include "sanitizer_common/sanitizer_atomic.h"
 
 using namespace __sanitizer;
 using namespace __bsan;
 
-SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_PROV_STACK = nullptr;
+SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance *__BSAN_PROV_STACK =
+    nullptr;
 
 atomic_uintptr_t THREAD_ID_CTR;
 
@@ -23,7 +25,7 @@ void BsanThread::Init() {
   GetThreadStackTopAndBottom(IsMainThread(), &stack_top_, &stack_bottom_);
   prov_stack_size_ = stack_top_ - stack_bottom_;
   prov_stack_ = MmapOrDie(prov_stack_size_, __func__);
-  __BSAN_PROV_STACK = (void *)(((u8 *)prov_stack_) + prov_stack_size_);
+  __BSAN_PROV_STACK = (Provenance *)(((u8 *)prov_stack_) + prov_stack_size_);
 }
 
 void BsanThread::TSDDtor(void *tsd) {
@@ -41,5 +43,6 @@ thread_return_t BsanThread::ThreadStart() {
   if (!start_routine_) {
     return 0;
   }
+  __BSAN_TLS_MARKER = (void *)-1;
   return start_routine_(arg_);
 }

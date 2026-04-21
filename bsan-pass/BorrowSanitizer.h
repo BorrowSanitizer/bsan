@@ -108,7 +108,6 @@ public:
   // Thread-local storage for paramters
   // and return values.
   Value *ParamTLS = nullptr;
-  Value *RetvalTLS = nullptr;
   Value *ProvStack = nullptr;
   Value *TLSMarker = nullptr;
   Value *BorTagCounter = nullptr;

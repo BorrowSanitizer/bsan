@@ -86,8 +86,8 @@ Provenance Provenance::load(IRBuilder<> &IRB, const ProvenanceLayout &PL,
   Type *IntTy = PL.getIntTy(ProvPtr.Elems);
   Type *PtrTy = PL.getPtrTy(ProvPtr.Elems);
 
-  LoadInst *Tag = IRB.CreateLoad(IntTy, ProvPtr.TagPtr, true);
-  LoadInst *Info = IRB.CreateLoad(PtrTy, ProvPtr.InfoPtr, true);
+  LoadInst *Tag = IRB.CreateLoad(IntTy, ProvPtr.TagPtr);
+  LoadInst *Info = IRB.CreateLoad(PtrTy, ProvPtr.InfoPtr);
 
   return Provenance(Tag, Info, ProvPtr.Elems);
 }
@@ -111,8 +111,8 @@ void Provenance::store(IRBuilder<> &IRB, const ProvenanceLayout &PL,
 void Provenance::store(IRBuilder<> &IRB, const ProvenanceLayout &PL,
                        ProvenancePtr Dest) {
 
-  StoreInst *Tag = IRB.CreateStore(this->Tag, Dest.TagPtr, true);
-  StoreInst *Info = IRB.CreateStore(this->Info, Dest.InfoPtr, true);
+  StoreInst *Tag = IRB.CreateStore(this->Tag, Dest.TagPtr);
+  StoreInst *Info = IRB.CreateStore(this->Info, Dest.InfoPtr);
 }
 
 Provenance Provenance::wildcard(IRBuilder<> &IRB, const ProvenanceLayout &PL,

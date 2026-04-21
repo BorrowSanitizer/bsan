@@ -11,7 +11,6 @@ using __sanitizer::uptr;
 
 extern THREADLOCAL uptr __BSAN_HAD_ERROR;
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __BSAN_TRUST;
-extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_PROV_STACK;
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_TLS_MARKER;
 
 typedef uptr Span;
@@ -38,6 +37,8 @@ struct Provenance {
   AllocInfo *Info;
 };
 
+extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance *__BSAN_PROV_STACK;
+
 // Private BorrowSanitizer interface
 extern "C" {
 
@@ -60,8 +61,8 @@ SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_mark_tls(void *callee);
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_validate_param_tls(void *current_fn,
                                                              uptr len);
 
-SANITIZER_INTERFACE_ATTRIBUTE void __bsan_validate_retval_tls(void *prev_marker,
-                                                              uptr len);
+SANITIZER_INTERFACE_ATTRIBUTE void
+__bsan_validate_retval_tls(void *prev_marker, Provenance *frame, uptr len);
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_print_stack_trace(Span pc,
                                                             uptr depth);
@@ -78,7 +79,6 @@ SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_read_file(const char *path,
 } // extern "C"
 
 extern "C" {
-
 SANITIZER_WEAK_ATTRIBUTE AllocInfo *__bsan_alloc(void *base_addr, uptr size,
                                                  BorTag bor_tag, Span pc);
 
