@@ -224,7 +224,7 @@ struct ProvenanceKey {
 };
 
 struct ProvenanceMap {
-  DenseMap<Value *, DenseMap<unsigned, Provenance>> Inner;
+  DenseMap<Value *, SmallDenseMap<unsigned, Provenance>> Inner;
 
 public:
   Provenance *find(ProvenanceKey Key) {
@@ -243,7 +243,7 @@ public:
   void transfer(Value *Src, Value *Dest) {
     auto It = Inner.find(Src);
     if (It != Inner.end()) {
-      DenseMap<unsigned, Provenance> *DestMap = &Inner[Dest];
+      SmallDenseMap<unsigned, Provenance> *DestMap = &Inner[Dest];
       for (const auto &[Idx, Prov] : It->second) {
         (*DestMap)[Idx] = Prov;
       }

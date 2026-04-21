@@ -10,7 +10,6 @@
 #define BSAN_DEBUG_FN(name) BSAN_DEBUG_PREFIX name
 #define RUST_FN(name) RUST_PREFIX name
 
-// @__rust_retag(ptr, ptr, i64, i64)
 const char kBsanRustIntrinsicRetagPrefix[] = RUST_FN("retag");
 const char kBsanRustIntrinsicRetagReg[] = RUST_FN("retag_reg");
 const char kBsanRustIntrinsicRetagMem[] = RUST_FN("retag_mem");
@@ -45,20 +44,15 @@ const char kBsanFuncExposeTagName[] = BSAN_FN("expose_tag");
 const char kBsanFuncReadName[] = BSAN_FN("read");
 const char kBsanFuncWriteName[] = BSAN_FN("write");
 
-const char kBsanFuncValidateRetvalTLSName[] = BSAN_FN("validate_retval_tls");
-const char kBsanFuncValidateParamTLSName[] = BSAN_FN("validate_param_tls");
-const char kBsanFuncMarkTLSName[] = BSAN_FN("mark_tls");
+const char kBsanFuncValidateRetvalName[] = BSAN_FN("validate_retval");
+const char kBsanFuncValidateParamsName[] = BSAN_FN("validate_params");
+const char kBsanFuncMarkName[] = BSAN_FN("mark");
 
 const char kBsanDebugPrefix[] = BSAN_DEBUG_FN();
 
 const char kBsanProvStackName[] = "__BSAN_PROV_STACK";
-const char kBsanParamTLSName[] = "__BSAN_PARAM_TLS";
-const char kBsanRetvalTLSName[] = "__BSAN_RETVAL_TLS";
-const char kBsanTLSMarkerName[] = "__BSAN_TLS_MARKER";
+const char kBsanMarkerName[] = "__BSAN_MARKER";
 
 const char kBsanBorTagCounterName[] = "__BSAN_BOR_TAG_CTR";
-const char kBsanAllocIdCounterName[] = "__BSAN_ALLOC_ID_CTR";
-
-static const unsigned kTLSSize = 100;
 
 #endif // BORROWSANITIZER_DECLARATIONS

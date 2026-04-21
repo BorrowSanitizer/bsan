@@ -85,9 +85,9 @@ public:
 
   FunctionCallee BsanFuncPopFrame;
 
-  FunctionCallee BsanFuncMarkTLS;
-  FunctionCallee BsanFuncValidateRetvalTLS;
-  FunctionCallee BsanFuncValidateParamTLS;
+  FunctionCallee BsanFuncMark;
+  FunctionCallee BsanFuncValidateRetval;
+  FunctionCallee BsanFuncValidateParams;
 
   FunctionCallee BsanFuncShadowLoad;
   FunctionCallee BsanFuncShadowStore;
@@ -107,10 +107,8 @@ public:
 
   // Thread-local storage for paramters
   // and return values.
-  Value *ParamTLS = nullptr;
-  Value *RetvalTLS = nullptr;
   Value *ProvStack = nullptr;
-  Value *TLSMarker = nullptr;
+  Value *Marker = nullptr;
   Value *BorTagCounter = nullptr;
 
   Constant *Zero = nullptr;
