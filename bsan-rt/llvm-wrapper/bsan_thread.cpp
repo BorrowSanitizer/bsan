@@ -43,6 +43,6 @@ thread_return_t BsanThread::ThreadStart() {
   if (!start_routine_) {
     return 0;
   }
-  __BSAN_TLS_MARKER = (void *)-1;
+  __BSAN_MARKER = (void *)-1;
   return start_routine_(arg_);
 }

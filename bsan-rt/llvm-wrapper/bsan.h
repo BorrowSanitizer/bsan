@@ -11,7 +11,7 @@ using __sanitizer::uptr;
 
 extern THREADLOCAL uptr __BSAN_HAD_ERROR;
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __BSAN_TRUST;
-extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_TLS_MARKER;
+extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_MARKER;
 
 typedef uptr Span;
 
@@ -56,19 +56,14 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memcpy(void *dest, const void *src,
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memset(void *s, int c, uptr n);
 
-SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_mark_tls(void *callee);
+SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_mark(void *callee);
 
 SANITIZER_INTERFACE_ATTRIBUTE void
-__bsan_validate_param_tls(void *current_fn, Provenance *frame, uptr len);
+__bsan_validate_params(void *current_fn, Provenance *frame, uptr len);
 
 SANITIZER_INTERFACE_ATTRIBUTE void
-__bsan_validate_retval_tls(void *prev_marker, Provenance *frame, uptr len);
+__bsan_validate_retval(void *prev_marker, Provenance *frame, uptr len);
 
-SANITIZER_INTERFACE_ATTRIBUTE void __bsan_print_stack_trace(Span pc,
-                                                            uptr depth);
-SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_get_top_frame_pc(uptr pc);
-SANITIZER_INTERFACE_ATTRIBUTE u32 __bsan_stack_depot_put(uptr pc, uptr bp,
-                                                         u32 max_depth);
 SANITIZER_INTERFACE_ATTRIBUTE u32 __bsan_symbolize_pc(uptr pc, char *file_buf,
                                                       uptr file_buf_len,
                                                       u32 *line, u32 *column);

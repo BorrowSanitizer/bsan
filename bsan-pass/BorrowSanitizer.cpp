@@ -85,7 +85,7 @@ bool shouldInstrumentAlloca(const DataLayout &DL, const AllocaInst &AI) {
           !AllocSize.value().isZero());
 }
 
-bool needsTLSValidation(const Function *Callee) {
+bool needsBoundaryValidation(const Function *Callee) {
   return !Callee ||
          (Callee->isDeclaration() || Callee->hasExternalLinkage() ||
           Callee->hasExternalWeakLinkage() || Callee->hasAddressTaken());
@@ -536,7 +536,7 @@ private:
     if (Argument *Arg = dyn_cast<Argument>(Key.V)) {
       // We always need to load the provenance for arguments right at the
       // beginning of the function. Otherwise, subsequent function calls could
-      // overwrite them before they can be read from TLS
+      // overwrite them before they can be read from the shadow stack.
       IRBuilder<> EntryIRB(FnPrologueEnd);
       auto It = ArgumentProvenance.find(Arg);
       if (It != ArgumentProvenance.end()) {
@@ -626,9 +626,9 @@ private:
     FrameHeaderBottom =
         ptradd(EntryIRB, FrameTop, EntryIRB.CreateNeg(ByteOffset));
 
-    if (needsTLSValidation(&F)) {
+    if (needsBoundaryValidation(&F)) {
       if (!shouldTrustFunction(TLI, &F)) {
-        EntryIRB.CreateCall(BS.BsanFuncValidateParamTLS,
+        EntryIRB.CreateCall(BS.BsanFuncValidateParams,
                             {&F, FrameHeaderBottom, NumParamProv});
       }
     }
@@ -849,16 +849,16 @@ private:
     // values from it, but we also need to know the number of provenance
     // values associated with the return value to perform initialization.
     Value *Slot = getStackOffset(Before, false);
-    if (needsTLSValidation(Callee)) {
+    if (needsBoundaryValidation(Callee)) {
       Value *Marker;
 
       if (shouldTrustFunction(TLI, &CB)) {
-        Marker = Before.CreateCall(BS.BsanFuncMarkTLS,
+        Marker = Before.CreateCall(BS.BsanFuncMark,
                                    {ConstantPointerNull::get(BS.PtrTy)});
-        After.CreateStore(Marker, BS.TLSMarker);
+        After.CreateStore(Marker, BS.Marker);
       } else {
-        Marker = Before.CreateCall(BS.BsanFuncMarkTLS, {CB.getCalledOperand()});
-        After.CreateCall(BS.BsanFuncValidateRetvalTLS,
+        Marker = Before.CreateCall(BS.BsanFuncMark, {CB.getCalledOperand()});
+        After.CreateCall(BS.BsanFuncValidateRetval,
                          {Marker, Slot, NumReturnProv});
       }
 
@@ -873,7 +873,7 @@ private:
         BasicBlock *UnwindDest = II->getUnwindDest();
         IRBuilder<> UnwindIRB(UnwindDest, UnwindDest->getFirstInsertionPt());
         Value *ToRestore = UnwindIRB.CreateLoad(BS.PtrTy, MarkerAlloca);
-        UnwindIRB.CreateStore(ToRestore, BS.TLSMarker);
+        UnwindIRB.CreateStore(ToRestore, BS.Marker);
       }
     }
     for (auto &[Idx, Ptr] : ProvenancePointers) {
@@ -1404,16 +1404,13 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncDeallocStack = M.getOrInsertFunction(
       kBsanFuncDeallocStackName, AL, IRB.getVoidTy(), PtrTy, IntptrTy, PtrTy);
 
-  BsanFuncMarkTLS =
-      M.getOrInsertFunction(kBsanFuncMarkTLSName, AL, PtrTy, PtrTy);
+  BsanFuncMark = M.getOrInsertFunction(kBsanFuncMarkName, AL, PtrTy, PtrTy);
 
-  BsanFuncValidateParamTLS =
-      M.getOrInsertFunction(kBsanFuncValidateParamTLSName, AL, IRB.getVoidTy(),
-                            PtrTy, PtrTy, IntptrTy);
+  BsanFuncValidateParams = M.getOrInsertFunction(
+      kBsanFuncValidateParamsName, AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
 
-  BsanFuncValidateRetvalTLS =
-      M.getOrInsertFunction(kBsanFuncValidateRetvalTLSName, AL, IRB.getVoidTy(),
-                            PtrTy, PtrTy, IntptrTy);
+  BsanFuncValidateRetval = M.getOrInsertFunction(
+      kBsanFuncValidateRetvalName, AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
 
   BsanFuncShadowLoad = M.getOrInsertFunction(kBsanFuncGetShadowLoadName, AL,
                                              IRB.getVoidTy(), PtrTy, PtrTy);
@@ -1452,7 +1449,7 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 void BorrowSanitizer::createUserspaceApi(Module &M,
                                          const TargetLibraryInfo &TLI) {
   IRBuilder<> IRB(*C);
-  TLSMarker = getOrInsertTLSGlobal(M, kBsanTLSMarkerName, PtrTy);
+  Marker = getOrInsertTLSGlobal(M, kBsanMarkerName, PtrTy);
   ProvStack = getOrInsertTLSGlobal(M, kBsanProvStackName, PtrTy);
   BorTagCounter = getOrInsertGlobal(M, kBsanBorTagCounterName, IntptrTy);
 }

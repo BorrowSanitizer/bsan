@@ -18,10 +18,10 @@ bool inst_caller(void *sym) {
   if (__BSAN_PROV_STACK == nullptr) {
     return false;
   }
-  if (__BSAN_TLS_MARKER) {
-    bool cond = __BSAN_TLS_MARKER == sym;
+  if (__BSAN_MARKER) {
+    bool cond = __BSAN_MARKER == sym;
     if (cond) {
-      __BSAN_TLS_MARKER = 0;
+      __BSAN_MARKER = 0;
     }
     return cond;
   } else {

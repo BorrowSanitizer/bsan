@@ -13,7 +13,7 @@
 using namespace __sanitizer;
 using namespace __bsan;
 
-SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_TLS_MARKER = nullptr;
+SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_MARKER = nullptr;
 
 bool BSAN_INITED = false;
 bool BSAN_INIT_RUNNING;
@@ -108,9 +108,9 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_deinit() {
 /// been called from uninstrumented code, we check to see if our caller's frame
 /// pointer matches this boundary marker to determine whether we can trust our
 /// thread-local provenance arrays.
-SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_mark_tls(void *callee) {
-  void *prev_marker = __BSAN_TLS_MARKER;
-  __BSAN_TLS_MARKER = callee;
+SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_mark(void *callee) {
+  void *prev_marker = __BSAN_MARKER;
+  __BSAN_MARKER = callee;
   return prev_marker;
 }
 
@@ -121,13 +121,13 @@ SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_mark_tls(void *callee) {
 /// when we are back within the caller, we can trust the provenance array for
 /// the return value.
 SANITIZER_INTERFACE_ATTRIBUTE void
-__bsan_validate_param_tls(void *current_fn, Provenance *frame_start, uptr len) {
-  if (__BSAN_TLS_MARKER && current_fn != __BSAN_TLS_MARKER) {
+__bsan_validate_params(void *current_fn, Provenance *frame_start, uptr len) {
+  if (__BSAN_MARKER && current_fn != __BSAN_MARKER) {
     for (uptr i = 0; i < len; ++i) {
       frame_start[i] = WILDCARD;
     }
   }
-  __BSAN_TLS_MARKER = 0;
+  __BSAN_MARKER = 0;
 }
 
 /// Ensures that the provenance array for the return value is valid.
@@ -137,13 +137,13 @@ __bsan_validate_param_tls(void *current_fn, Provenance *frame_start, uptr len) {
 /// also need to restore the boundary marker to the value it had before the
 /// function that was called.
 SANITIZER_INTERFACE_ATTRIBUTE void
-__bsan_validate_retval_tls(void *prev_marker, Provenance *frame, uptr len) {
-  if (__BSAN_TLS_MARKER) {
+__bsan_validate_retval(void *prev_marker, Provenance *frame, uptr len) {
+  if (__BSAN_MARKER) {
     for (uptr i = 0; i < len; ++i) {
       frame[i] = WILDCARD;
     }
   }
-  __BSAN_TLS_MARKER = prev_marker;
+  __BSAN_MARKER = prev_marker;
 }
 
 // Get the top frame PC address from the current PC
