@@ -58,8 +58,8 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memset(void *s, int c, uptr n);
 
 SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_mark_tls(void *callee);
 
-SANITIZER_INTERFACE_ATTRIBUTE void __bsan_validate_param_tls(void *current_fn,
-                                                             uptr len);
+SANITIZER_INTERFACE_ATTRIBUTE void
+__bsan_validate_param_tls(void *current_fn, Provenance *frame, uptr len);
 
 SANITIZER_INTERFACE_ATTRIBUTE void
 __bsan_validate_retval_tls(void *prev_marker, Provenance *frame, uptr len);
@@ -164,10 +164,8 @@ extern bool BSAN_DEINIT_RUNNING;
 namespace __bsan {
 void BsanTSDInit();
 void InitializeInterceptors();
-Provenance *GetArgSlot(uptr Idx);
-Provenance *GetRetValSlot(uptr Idx);
-void ClearArgSlot(uptr Idx);
-void ClearRetValSlot(uptr Idx);
+Provenance *GetSlot(uptr Idx);
+void ClearSlot(uptr Idx);
 void PrintStackTrace(StackTrace &stack);
 } // namespace __bsan
 

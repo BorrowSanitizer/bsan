@@ -49,7 +49,8 @@ bool inSCC(DominatorTree &DT, LoopInfo &LI, BasicBlock *BB) {
     return true;
   // It's still possible for us to have irreducible control flow, in which
   // case LLVM would not recognize a loop, but it would still be possible for
-  // us to enter this basic block again.
+  // us to enter this basic block again. We would use LLVM's CycleInfo instead,
+  // which would catch this, but it does not support incremental updates yet.
   for (BasicBlock *SuccBB : successors(BB)) {
     if (isPotentiallyReachable(SuccBB, BB, nullptr, &DT, &LI)) {
       return true;
@@ -204,7 +205,7 @@ offsetIntoProvenanceIndex(IRBuilder<> &IRB, const DataLayout *DL,
 // easy to scan and avoid consuming excess memory. Note: we use a combination of
 // allocas and mem2reg to efficiently track stack offsets. This greatly
 // simplifies the implementation but the same can be accomplished using only phi
-// nodes.
+// nodes. The result is equivalent either way.
 class ShadowStackAllocator {
 private:
   // We track the total number of stack slots used by this
@@ -357,36 +358,33 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   DominatorTree &DT;
   LoopInfo LI;
 
-  // The end of the "prologue" of the function where we initialize our
-  // instrumentation. This is a call to `llvm.donothing()`.
+  // The end of the prologue of the function, where we initialize our
+  // instrumentation. This is a call to llvm.donothing.
   Instruction *FnPrologueEnd;
-  // If a stack allocation does not have a dedicated `lifetime.start`, then we
+  // If a stack allocation does not have a dedicated lifetime.start, then we
   // allocate metadata for it within the entry block. We use a liveness pass to
   // determine which allocations need to be freed, so no additional handling is
   // necessary to determine where to free these allocations, even if they do not
-  // have a `lifetime.end`, either.
+  // have a lifetime.end, either.
   SmallDenseSet<AllocaInst *> HasLifetimeStart;
 
   SmallVector<AllocaInst *, 8> StaticAllocaVec;
 
-  // Pointers to the sections of the thread-local array (BS.ParamTLS) where the
+  // Pointers to the sections of the thread-local array where the
   // provenance values for each argument are stored. Whenever we need to get the
   // provenance for an argument, we take its pointer from this array and then
   // insert the necessary instructions to load it from thread-local storage
   // within the prologue of the function.
   SmallDenseMap<Argument *, SmallVector<ProvenancePtr>> ArgumentProvenance;
 
-  // With the exception of `allocas`, each value is associated with a unique
-  // provenance value. Provenanced values are indexed by each provenance
-  // carrying component. For example, if `ProvenanceComponents[V]` has length 3,
-  // then `ProvenanceMap[std::make_pair(V, 2)]` would return the third
-  // provenance value within `V`.
+  // With the exception of allocas, each value is associated with a unique
+  // provenance value.
   ProvenanceMap BaseProvMap;
 
-  // Pointer-type arguments with the `byval` attribute point to a different
+  // Pointer-type arguments with the byval attribute point to a different
   // allocation than was originally allocated for the argument in the calling
   // context. This means that provenance passed by the caller will not be valid.
-  // Instead, we treat this similar to an `alloca` and ignore our caller's
+  // Instead, we treat this similar to an alloca and ignore our caller's
   // provenance. However, we still need to account for it when assigning slots
   // in our thread-local storage.
   SmallVector<Value *, 2> ByValArgs;
@@ -411,8 +409,9 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // The start of the current frame of protected tags. This is the "top" of the
   // frame, since we decrement to allocate slots.
   Value *FrameTop = nullptr;
+  Value *FrameHeaderBottom = nullptr;
 
-  // We use LLVM's lifetime analysis to determine which `allocas` are alive at
+  // We use LLVM's lifetime analysis to determine which allocas are alive at
   // every exit point.
   std::unique_ptr<StackLifetime> LifetimeInfo;
   ShadowStackAllocator ShadowStack;
@@ -593,6 +592,8 @@ private:
   // start and end of the function prologue.
   void initStack(IRBuilder<> &EntryIRB) {
     Value *NumParamProv = BS.Zero;
+    FrameTop = EntryIRB.CreateLoad(BS.PtrTy, BS.ProvStack);
+
     for (auto &Arg : F.args()) {
       if (Arg.hasAttribute(Attribute::ByVal)) {
         Type *Ty = Arg.getParamByValType();
@@ -608,27 +609,29 @@ private:
         SmallVector<ProvenanceDesc> ProvDesc =
             getProvenanceDesc(EntryIRB, BS.DL, Arg.getType());
         for (auto &Desc : ProvDesc) {
-          Value *CurrentArrayByteOffset =
+          Value *NumProv = EntryIRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
+          NumParamProv = EntryIRB.CreateAdd(NumParamProv, NumProv);
+          Value *ByteOffset =
               EntryIRB.CreateMul(NumParamProv, BS.PL.ProvenanceSize);
           Value *CurrentArraySlot =
-              ptradd(EntryIRB, BS.ParamTLS, CurrentArrayByteOffset);
+              ptradd(EntryIRB, FrameTop, EntryIRB.CreateNeg(ByteOffset));
           ProvenancePtr Ptr =
               ProvenancePtr(EntryIRB, BS.PL, CurrentArraySlot, Desc.Elems);
           ArgumentProvenance[&Arg].push_back(Ptr);
-
-          Value *NumProv = EntryIRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
-          NumParamProv = EntryIRB.CreateAdd(NumParamProv, NumProv);
         }
       }
     }
 
+    Value *ByteOffset = EntryIRB.CreateMul(NumParamProv, BS.PL.ProvenanceSize);
+    FrameHeaderBottom =
+        ptradd(EntryIRB, FrameTop, EntryIRB.CreateNeg(ByteOffset));
+
     if (needsTLSValidation(&F)) {
       if (!shouldTrustFunction(TLI, &F)) {
-        EntryIRB.CreateCall(BS.BsanFuncValidateParamTLS, {&F, NumParamProv});
+        EntryIRB.CreateCall(BS.BsanFuncValidateParamTLS,
+                            {&F, FrameHeaderBottom, NumParamProv});
       }
     }
-
-    FrameTop = EntryIRB.CreateLoad(BS.PtrTy, BS.ProvStack);
 
     if (!StaticAllocaVec.empty()) {
       for (AllocaInst *AI : StaticAllocaVec) {
@@ -722,14 +725,14 @@ private:
     Value *SlotOffset =
         ShadowStack.alloc(DT, LI, IRB, Elems, BS.IntptrTy, IsFnEntry);
     Value *ProvOffset = IRB.CreateMul(SlotOffset, BS.PL.ProvenanceSize);
-    return ptradd(IRB, FrameTop, IRB.CreateNeg(ProvOffset));
+    return ptradd(IRB, FrameHeaderBottom, IRB.CreateNeg(ProvOffset));
   }
 
   Value *getStackOffset(IRBuilder<> &IRB, bool IsFnEntry) {
     Value *CurrOffset =
         ShadowStack.getOutgoingOffset(DT, LI, IRB, BS.IntptrTy, IsFnEntry);
     Value *ProvOffset = IRB.CreateMul(CurrOffset, BS.PL.ProvenanceSize);
-    return ptradd(IRB, FrameTop, IRB.CreateNeg(ProvOffset));
+    return ptradd(IRB, FrameHeaderBottom, IRB.CreateNeg(ProvOffset));
   }
 
   using InstVisitor<BorrowSanitizerVisitor>::visit;
@@ -782,21 +785,21 @@ private:
     // provenance value everywhere it's been stored here, unless we're dealing
     // with a situation where function bindings are incorrect, which is
     // undefined behavior.
-    Value *ParamByteWidth = BS.Zero;
+    Value *NumParamProv = BS.Zero;
     for (const auto &[i, Arg] : llvm::enumerate(CB.args())) {
       SmallVector<ProvenanceDesc> ProvDesc =
           getProvenanceDesc(Before, BS.DL, Arg->getType());
       for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
-        Value *Slot = ptradd(Before, BS.ParamTLS, ParamByteWidth);
+        Value *NumProv = Before.CreateElementCount(BS.IntptrTy, Desc.Elems);
+        NumParamProv = Before.CreateAdd(NumParamProv, NumProv);
+        Value *ByteOffset =
+            Before.CreateMul(NumParamProv, BS.PL.ProvenanceSize);
+
+        Value *Slot = ptradd(Before, StackOffset, Before.CreateNeg(ByteOffset));
 
         Provenance ProvSrc = assertProvenance(Before, Desc.Elems, {Arg, Idx});
         ProvenancePtr Dest = ProvenancePtr(Before, BS.PL, Slot, Desc.Elems);
-
         ProvSrc.store(Before, BS.PL, Dest);
-
-        Value *NumProv = Before.CreateElementCount(BS.IntptrTy, Desc.Elems);
-        Value *ByteWidth = Before.CreateMul(NumProv, BS.PL.ProvenanceSize);
-        ParamByteWidth = Before.CreateAdd(ParamByteWidth, ByteWidth);
       }
     }
 
@@ -1231,7 +1234,8 @@ private:
       Value *FrameLen =
           ShadowStack.getOutgoingOffset(DT, LI, IRB, BS.IntptrTy, true);
       Value *Offset = IRB.CreateMul(FrameLen, BS.PL.ProvenanceSize);
-      Value *FrameBottom = ptradd(IRB, FrameTop, IRB.CreateNeg(Offset));
+      Value *FrameBottom =
+          ptradd(IRB, FrameHeaderBottom, IRB.CreateNeg(Offset));
       IRB.CreateCall(BS.BsanFuncPopFrame, {FrameBottom, FrameLen});
     }
 
@@ -1403,8 +1407,9 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncMarkTLS =
       M.getOrInsertFunction(kBsanFuncMarkTLSName, AL, PtrTy, PtrTy);
 
-  BsanFuncValidateParamTLS = M.getOrInsertFunction(
-      kBsanFuncValidateParamTLSName, AL, IRB.getVoidTy(), PtrTy, IntptrTy);
+  BsanFuncValidateParamTLS =
+      M.getOrInsertFunction(kBsanFuncValidateParamTLSName, AL, IRB.getVoidTy(),
+                            PtrTy, PtrTy, IntptrTy);
 
   BsanFuncValidateRetvalTLS =
       M.getOrInsertFunction(kBsanFuncValidateRetvalTLSName, AL, IRB.getVoidTy(),
@@ -1447,8 +1452,6 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 void BorrowSanitizer::createUserspaceApi(Module &M,
                                          const TargetLibraryInfo &TLI) {
   IRBuilder<> IRB(*C);
-  ParamTLS = getOrInsertTLSGlobal(M, kBsanParamTLSName,
-                                  ArrayType::get(PL.ProvenanceTy, kTLSSize));
   TLSMarker = getOrInsertTLSGlobal(M, kBsanTLSMarkerName, PtrTy);
   ProvStack = getOrInsertTLSGlobal(M, kBsanProvStackName, PtrTy);
   BorTagCounter = getOrInsertGlobal(M, kBsanBorTagCounterName, IntptrTy);

@@ -95,7 +95,7 @@ INTERCEPTOR(void *, malloc, SIZE_T size) {
     return DlsymAlloc::Allocate(size);
   void *ptr = REAL(malloc)(size);
   if (INST_CALLER(malloc)) {
-    Provenance *RetSlot = GetRetValSlot(0);
+    Provenance *RetSlot = GetSlot(0);
     BorTag Tag = __bsan_new_bor_tag();
     *RetSlot = {Tag, __bsan_alloc(ptr, size, Tag, span)};
   }
@@ -117,7 +117,7 @@ INTERCEPTOR(void, free, void *ptr) {
   if (DlsymAlloc::PointerIsMine(ptr))
     return DlsymAlloc::Free(ptr);
   if (INST_CALLER(free)) {
-    Provenance *Slot = GetArgSlot(0);
+    Provenance *Slot = GetSlot(0);
     __bsan_dealloc(ptr, Slot->Tag, Slot->Info, span);
     HANDLE_ERROR(pc, bp);
   }
@@ -129,7 +129,7 @@ INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
   if (DlsymAlloc::Use())
     return DlsymAlloc::Callocate(nmemb, size);
   void *ptr = REAL(calloc)(nmemb, size);
-  Provenance *RetSlot = GetRetValSlot(0);
+  Provenance *RetSlot = GetSlot(0);
   if (INST_CALLER(calloc)) {
     BorTag Tag = __bsan_new_bor_tag();
     *RetSlot = {Tag, __bsan_alloc(ptr, nmemb * size, Tag, span)};
@@ -143,13 +143,13 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
     return DlsymAlloc::Realloc(ptr, size);
   bool is_inst = INST_CALLER(realloc);
   if (is_inst) {
-    Provenance *Slot = GetArgSlot(0);
+    Provenance *Slot = GetSlot(0);
     __bsan_dealloc(ptr, Slot->Tag, Slot->Info, span);
     HANDLE_ERROR(pc, bp);
   }
   void *nptr = REAL(realloc)(ptr, size);
   if (is_inst) {
-    Provenance *RetSlot = GetRetValSlot(0);
+    Provenance *RetSlot = GetSlot(0);
     BorTag Tag = __bsan_new_bor_tag();
     *RetSlot = {Tag, __bsan_alloc(nptr, size, Tag, span)};
   }
@@ -207,13 +207,13 @@ void BSanAtExitWrapper() {
     interceptor_ctx()->AtExitStack.PopBack();
   }
 
-  ClearArgSlot(0);
+  ClearSlot(0);
   ((void (*)())r->func)();
   InternalFree(r);
 }
 
 void BSanCxaAtExitWrapper(void *arg) {
-  ClearArgSlot(0);
+  ClearSlot(0);
   BSanAtExitRecord *r = (BSanAtExitRecord *)arg;
   // libc before 2.27 had race which caused occasional double handler execution
   // https://sourceware.org/ml/libc-alpha/2017-08/msg01204.html
