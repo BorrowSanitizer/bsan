@@ -12,14 +12,12 @@ use crate::sanitizer_common::Span;
 use crate::{AllocId, BorTag, GlobalCtx, Provenance};
 
 mod foreign_access_skipping;
-mod helpers;
 mod perms;
 mod range_map;
 pub mod tree;
 
 pub mod unimap;
 pub use foreign_access_skipping::*;
-pub use helpers::*;
 pub use perms::*;
 pub use range_map::*;
 

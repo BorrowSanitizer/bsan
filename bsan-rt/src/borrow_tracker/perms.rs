@@ -1,9 +1,8 @@
 // This file was ported from Miri
 #![allow(unreachable_patterns)]
 use core::cmp::Ordering;
-use core::{fmt, mem};
+use core::{fmt, mem, slice};
 
-use super::helpers::{AccessKind, AccessRelatedness};
 use crate::Size;
 
 #[repr(u8)]
@@ -97,11 +96,56 @@ impl<'a> RetagInfo<'a> {
     ) -> Self {
         let im_data = unsafe { mem::transmute::<*const [usize; 2], *const [Size; 2]>(im_data) };
         let im_layout =
-            (!im_data.is_null()).then(|| unsafe { core::slice::from_raw_parts(im_data, im_len) });
+            (!im_data.is_null()).then(|| unsafe { slice::from_raw_parts(im_data, im_len) });
 
         let perm = NewPermission::new(is_protected != 0, ty_is_freeze != 0, ptr_kind);
 
         Self { size, perm, im_layout }
+    }
+}
+
+// This file was ported from Miri
+use core::fmt::Display;
+
+/// Indicates which kind of access is being performed.
+#[repr(u8)]
+#[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]
+pub enum AccessKind {
+    Read = 1,
+    Write = 2,
+}
+
+impl Display for AccessKind {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            AccessKind::Read => write!(f, "read"),
+            AccessKind::Write => write!(f, "write"),
+        }
+    }
+}
+
+/// Relative position of the access
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccessRelatedness {
+    /// The accessed pointer is the current one
+    This,
+    /// The accessed pointer is a (transitive) child of the current one.
+    // Current pointer is excluded (unlike in some other places of this module
+    // where "child" is inclusive).
+    StrictChildAccess,
+    /// The accessed pointer is a (transitive) parent of the current one.
+    // Current pointer is excluded.
+    AncestorAccess,
+    /// The accessed pointer is neither of the above.
+    // It's a cousin/uncle/etc., something in a side branch.
+    CousinAccess,
+}
+
+impl AccessRelatedness {
+    /// Check that access is either Ancestor or Distant, i.e. not
+    /// a transitive child (initial pointer included).
+    pub fn is_foreign(self) -> bool {
+        matches!(self, AccessRelatedness::AncestorAccess | AccessRelatedness::CousinAccess)
     }
 }
 

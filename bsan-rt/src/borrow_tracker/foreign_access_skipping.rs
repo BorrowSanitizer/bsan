@@ -1,5 +1,5 @@
-// This file was ported from Miri
-use super::helpers::{AccessKind, AccessRelatedness};
+use crate::borrow_tracker::{AccessKind, AccessRelatedness};
+
 /// To speed up tree traversals, we want to skip traversing subtrees when we know the traversal will have no effect.
 /// This is often the case for foreign accesses, since usually foreign accesses happen several times in a row, but also
 /// foreign accesses are idempotent. In particular, see tests `foreign_read_is_noop_after_foreign_write` and `all_transitions_idempotent`.

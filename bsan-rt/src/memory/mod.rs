@@ -7,11 +7,11 @@
 mod heap;
 pub use heap::Heap;
 use heap::Heapable;
-use libc::{pthread_attr_destroy, pthread_attr_init, pthread_attr_t, rlimit, _SC_PAGESIZE};
+use libc::_SC_PAGESIZE;
 
 mod shadow;
 use core::ffi::c_void;
-use core::mem::{self, MaybeUninit};
+use core::mem::{self};
 use core::num::NonZero;
 use core::ptr::{self, NonNull};
 
@@ -25,47 +25,6 @@ pub const BSAN_MAP_FLAGS: i32 =
     libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_ANON | libc::MAP_NORESERVE;
 #[cfg(miri)]
 pub const BSAN_MAP_FLAGS: i32 = libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_ANON;
-
-#[derive(Debug, Copy, Clone)]
-pub struct StackSize(NonZero<usize>);
-
-#[allow(clippy::from_over_into)]
-impl Into<NonZero<usize>> for StackSize {
-    fn into(self) -> NonZero<usize> {
-        self.0
-    }
-}
-
-#[allow(unused)]
-impl StackSize {
-    pub fn from_rlimit() -> Self {
-        let mut limits = MaybeUninit::<rlimit>::uninit();
-
-        let exit_code = unsafe { libc::getrlimit(libc::RLIMIT_STACK, limits.as_mut_ptr()) };
-        assert!(exit_code == 0, "`getrlimit` with `RLIMIT_STACK failed: {exit_code}");
-
-        let size = unsafe { limits.assume_init() }.rlim_cur as usize;
-        unsafe { StackSize(NonZero::new_unchecked(size)) }
-    }
-
-    pub fn from_pthread() -> Self {
-        let mut attr = MaybeUninit::<pthread_attr_t>::uninit();
-
-        let attr_init = unsafe { pthread_attr_init(attr.as_mut_ptr()) };
-        assert!(attr_init == 0, "`pthread_attr_init` failed: {attr_init}");
-
-        let mut size = MaybeUninit::<libc::size_t>::uninit();
-        let size_init =
-            unsafe { libc::pthread_attr_getstacksize(attr.as_mut_ptr(), size.as_mut_ptr()) };
-        assert!(size_init == 0, "`pthread_attr_getstacksize` failed: {size_init}");
-
-        let attr_destroy = unsafe { pthread_attr_destroy(attr.as_mut_ptr()) };
-        assert!(attr_destroy == 0, "`pthread_attr_destroy` failed: {attr_destroy}");
-
-        let size = unsafe { NonZero::new_unchecked(size.assume_init()) };
-        StackSize(size)
-    }
-}
 
 static mut PAGE_SIZE_CACHED: Option<NonZero<usize>> = None;
 
@@ -170,18 +129,7 @@ pub unsafe fn munmap<T>(ptr: NonNull<T>, size_bytes: impl Into<NonZero<usize>>) 
 
 #[cfg(test)]
 mod tests {
-    use crate::memory::{next_greater_multiple_unchecked, StackSize};
-
-    #[test]
-    fn stack_size() {
-        StackSize::from_rlimit();
-        std::thread::spawn(move || {
-            StackSize::from_pthread();
-        })
-        .join()
-        .unwrap();
-    }
-
+    use crate::memory::next_greater_multiple_unchecked;
     #[test]
     fn rounding() {
         unsafe { assert_eq!(next_greater_multiple_unchecked(4, 4), 8) }
