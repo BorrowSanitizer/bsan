@@ -13,12 +13,7 @@
 using namespace __sanitizer;
 using namespace __bsan;
 
-#define TLS_SIZE 100
-
-SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance __BSAN_PARAM_TLS[TLS_SIZE];
-SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance
-    __BSAN_RETVAL_TLS[TLS_SIZE];
-SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_TLS_MARKER = nullptr;
+SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__BSAN_MARKER = nullptr;
 
 bool BSAN_INITED = false;
 bool BSAN_INIT_RUNNING;
@@ -34,11 +29,8 @@ u32 GetStackTraceLen() {
   return static_cast<u32>(stacktrace_max_len) + 1;
 }
 
-Provenance *GetArgSlot(uptr Idx) { return &__BSAN_PARAM_TLS[Idx]; }
-Provenance *GetRetValSlot(uptr Idx) { return &__BSAN_RETVAL_TLS[Idx]; }
-
-void ClearArgSlot(uptr Idx) { __BSAN_PARAM_TLS[Idx] = WILDCARD; }
-void ClearRetValSlot(uptr Idx) { __BSAN_RETVAL_TLS[Idx] = WILDCARD; }
+Provenance *GetSlot(uptr Idx) { return __BSAN_PROV_STACK - (Idx + 1); }
+void ClearSlot(uptr Idx) { *GetSlot(Idx) = WILDCARD; }
 
 void PrintStackTrace(StackTrace &stack) {
   Printf("stack backtrace:\n");
@@ -121,9 +113,9 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_deinit() {
 /// been called from uninstrumented code, we check to see if our caller's frame
 /// pointer matches this boundary marker to determine whether we can trust our
 /// thread-local provenance arrays.
-SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_mark_tls(void *callee) {
-  void *prev_marker = __BSAN_TLS_MARKER;
-  __BSAN_TLS_MARKER = callee;
+SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_mark(void *callee) {
+  void *prev_marker = __BSAN_MARKER;
+  __BSAN_MARKER = callee;
   return prev_marker;
 }
 
@@ -133,15 +125,14 @@ SANITIZER_INTERFACE_ATTRIBUTE void *__bsan_mark_tls(void *callee) {
 /// boundary marker, then we reset the boundary marker to null, signaling that
 /// when we are back within the caller, we can trust the provenance array for
 /// the return value.
-SANITIZER_INTERFACE_ATTRIBUTE void __bsan_validate_param_tls(void *current_fn,
-                                                             uptr len) {
-  if (__BSAN_TLS_MARKER == 0 || current_fn == __BSAN_TLS_MARKER) {
-    __BSAN_TLS_MARKER = 0;
-  } else {
+SANITIZER_INTERFACE_ATTRIBUTE void
+__bsan_validate_params(void *current_fn, Provenance *frame_start, uptr len) {
+  if (__BSAN_MARKER && current_fn != __BSAN_MARKER) {
     for (uptr i = 0; i < len; ++i) {
-      *GetArgSlot(i) = WILDCARD;
+      frame_start[i] = WILDCARD;
     }
   }
+  __BSAN_MARKER = 0;
 }
 
 /// Ensures that the provenance array for the return value is valid.
@@ -150,14 +141,14 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_validate_param_tls(void *current_fn,
 /// fill it with wildcard provenance values for each pointer being returned. We
 /// also need to restore the boundary marker to the value it had before the
 /// function that was called.
-SANITIZER_INTERFACE_ATTRIBUTE void __bsan_validate_retval_tls(void *prev_marker,
-                                                              uptr len) {
-  if (__BSAN_TLS_MARKER) {
+SANITIZER_INTERFACE_ATTRIBUTE void
+__bsan_validate_retval(void *prev_marker, Provenance *frame, uptr len) {
+  if (__BSAN_MARKER) {
     for (uptr i = 0; i < len; ++i) {
-      *GetRetValSlot(i) = WILDCARD;
+      frame[i] = WILDCARD;
     }
   }
-  __BSAN_TLS_MARKER = prev_marker;
+  __BSAN_MARKER = prev_marker;
 }
 
 // Get the top frame PC address from the current PC
@@ -352,7 +343,7 @@ __bsan_dealloc_stack_impl(BorTag bor_tag, AllocInfo *alloc_info, Span pc) {}
 SANITIZER_WEAK_ATTRIBUTE void __bsan_print(BorTag bor_tag,
                                            AllocInfo *alloc_info) {}
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_print(void *ptr) {
-  Provenance *Slot = GetArgSlot(0);
+  Provenance *Slot = GetSlot(0);
   __bsan_print(Slot->Tag, Slot->Info);
 }
 
@@ -360,28 +351,28 @@ SANITIZER_WEAK_ATTRIBUTE void __bsan_print_borrow_state(BorTag bor_tag,
                                                         AllocInfo *alloc_info) {
 }
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_print_borrow_state(void *ptr) {
-  Provenance *Slot = GetArgSlot(0);
+  Provenance *Slot = GetSlot(0);
   __bsan_print_borrow_state(Slot->Tag, Slot->Info);
 }
 
 SANITIZER_WEAK_ATTRIBUTE void __bsan_tree_size(BorTag bor_tag,
                                                AllocInfo *alloc_info) {}
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_tree_size(void *ptr) {
-  Provenance *Slot = GetArgSlot(0);
+  Provenance *Slot = GetSlot(0);
   __bsan_tree_size(Slot->Tag, Slot->Info);
 }
 
 SANITIZER_WEAK_ATTRIBUTE void __bsan_snapshot(BorTag bor_tag,
                                               AllocInfo *alloc_info) {}
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_snapshot(void *ptr) {
-  Provenance *Slot = GetArgSlot(0);
+  Provenance *Slot = GetSlot(0);
   __bsan_snapshot(Slot->Tag, Slot->Info);
 }
 
 SANITIZER_WEAK_ATTRIBUTE void __bsan_print_diff(BorTag bor_tag,
                                                 AllocInfo *alloc_info) {}
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_print_diff(void *ptr) {
-  Provenance *Slot = GetArgSlot(0);
+  Provenance *Slot = GetSlot(0);
   __bsan_print_diff(Slot->Tag, Slot->Info);
 }
 
