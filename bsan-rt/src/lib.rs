@@ -1,6 +1,7 @@
 #![cfg_attr(not(test), no_std)]
 #![feature(thread_local)]
 #![feature(allocator_api)]
+#![feature(never_type)]
 #![allow(internal_features)]
 #![feature(core_intrinsics)]
 #![feature(test)]
@@ -13,27 +14,25 @@ use core::panic::PanicInfo;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{fmt, ptr, slice};
-
-use borrow_tracker::{AccessKind, RetagInfo, RetagPtrKind};
+mod borrow_tracker;
 use libc_print::std_name::*;
 use spin::Mutex;
+use tree_borrows::AccessKind;
 
 mod global;
 use global::*;
 mod helpers;
 mod sanitizer_common;
 
-mod borrow_tracker;
-use borrow_tracker::*;
-
-mod diagnostics;
-
 mod errors;
 mod memory;
 
-use crate::borrow_tracker::tree::Tree;
+mod tree_borrows;
+
+use crate::borrow_tracker::BorrowTracker;
 use crate::helpers::Size;
 use crate::sanitizer_common::Span;
+use crate::tree_borrows::Tree;
 
 #[thread_local]
 #[unsafe(no_mangle)]
@@ -105,13 +104,8 @@ impl AllocId {
         AllocId(1)
     }
 
-    /// A global or stack allocation, which cannot be manually freed
-    pub const fn sticky() -> Self {
-        AllocId(2)
-    }
-
     pub const fn min() -> Self {
-        AllocId(3)
+        AllocId(2)
     }
 }
 
@@ -131,6 +125,12 @@ impl fmt::Debug for AllocId {
     }
 }
 
+impl fmt::Display for AllocId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_fmt(format_args!("{:?}", self))
+    }
+}
+
 #[unsafe(no_mangle)]
 pub static __BSAN_BOR_TAG_CTR: AtomicUsize = AtomicUsize::new(2);
 
@@ -140,14 +140,22 @@ pub static __BSAN_BOR_TAG_CTR: AtomicUsize = AtomicUsize::new(2);
 pub struct BorTag(usize);
 
 impl BorTag {
+    #[inline]
+    pub fn is_wildcard(&self) -> bool {
+        *self == Self::wildcard()
+    }
+
+    #[inline]
     pub const fn wildcard() -> Self {
         BorTag(0)
     }
 
+    #[inline]
     pub const fn invalid() -> Self {
         BorTag(1)
     }
 
+    #[inline]
     pub fn get(&self) -> usize {
         self.0
     }
@@ -200,12 +208,6 @@ impl Provenance {
     }
 }
 
-#[unsafe(no_mangle)]
-static __BSAN_WILDCARD_PROVENANCE: Provenance = Provenance::wildcard();
-
-#[unsafe(no_mangle)]
-static __BSAN_NULL_PROVENANCE: Provenance = Provenance::null();
-
 #[derive(Clone, Copy)]
 pub(crate) union FreeListAddrUnion {
     pub addr: usize,
@@ -228,7 +230,7 @@ pub(crate) struct AllocInfo {
     pub alloc_id: AllocId,
     pub base_addr: FreeListAddrUnion,
     pub size: usize,
-    pub tree_lock: Option<Mutex<tree::Tree>>,
+    pub tree_lock: Option<Mutex<Tree>>,
 }
 
 impl AllocInfo {
@@ -246,12 +248,7 @@ impl AllocInfo {
             alloc_id: AllocId::default(),
             base_addr: FreeListAddrUnion { addr: base_addr.addr() },
             size,
-            tree_lock: Some(Mutex::new(Tree::new_in(
-                bor_tag,
-                Size::from_bytes(size),
-                span,
-                alloc::alloc::Global,
-            ))),
+            tree_lock: Some(Mutex::new(Tree::new(bor_tag, Size::from_bytes(size), span))),
         }
     }
 
@@ -275,6 +272,17 @@ pub(crate) enum AllocInfoSummary {
     Null,
     /// When Prov is valid, only drop the tree_lock field
     Valid { alloc_id: AllocId, base_addr: FreeListAddrUnion, size: usize },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RetagInfo<'a> {
+    pub size: usize,
+    pub is_protected: bool,
+    pub is_unpin: bool,
+    pub is_mutable: bool,
+    pub is_box: bool,
+    pub im_layout: Option<&'a [[Size; 2]]>,
+    pub unpin_layout: Option<&'a [[Size; 2]]>,
 }
 
 /// Initializes the global state of the runtime library.
@@ -307,13 +315,15 @@ unsafe extern "C-unwind" fn __bsan_new_bor_tag() -> BorTag {
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_retag_impl(
     object_addr: *mut c_void,
-    access_size: usize,
-    is_protected: u8,
-    ty_is_freeze: u8,
-    _ty_is_unpin: u8,
-    ptr_kind: RetagPtrKind,
-    im_data: *const [usize; 2],
+    size: usize,
+    is_protected: bool,
+    is_unpin: bool,
+    is_mutable: bool,
+    is_box: bool,
+    im_data: *const [Size; 2],
     im_len: usize,
+    unpin_data: *const [Size; 2],
+    unpin_len: usize,
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
     pc: Span,
@@ -321,15 +331,25 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
     debug_bsan!("retag", object_addr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-    let retag_info = unsafe {
-        RetagInfo::from_raw(access_size, is_protected, ty_is_freeze, ptr_kind, im_data, im_len)
+
+    let opt_slice = |ptr, len| -> Option<_> {
+        (!im_data.is_null()).then(|| unsafe { slice::from_raw_parts(ptr, len) })
     };
-    BorrowTracker::retag(ctx, prov, object_addr, access_size, retag_info, pc).unwrap_or_else(
-        |err| {
-            ctx.handle_error(err, pc);
-            bor_tag
-        },
-    )
+
+    let retag_info = RetagInfo {
+        size,
+        is_protected,
+        is_mutable,
+        is_unpin,
+        is_box,
+        unpin_layout: opt_slice(unpin_data, unpin_len),
+        im_layout: opt_slice(im_data, im_len),
+    };
+
+    BorrowTracker::retag(ctx, prov, object_addr, retag_info, pc).unwrap_or_else(|err| {
+        ctx.handle_error(err, pc);
+        bor_tag
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -469,31 +489,12 @@ unsafe extern "C-unwind" fn __bsan_shadow_transfer(
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_shadow_clear(dst: *mut c_void, size: usize) {
     let ctx = unsafe { global_ctx() };
-    ctx.shadow_heap().clear(dst.addr(), size, __BSAN_WILDCARD_PROVENANCE)
+    ctx.shadow_heap().clear(dst.addr(), size)
 }
 
-/// Loads the provenance of a given address from shadow memory and stores
-/// the result in the return pointer.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_shadow_load(addr: *mut c_void, dest: NonNull<Provenance>) {
-    unsafe {
-        let ctx = global_ctx();
-        let prov = ctx.shadow_heap().get_src(addr.addr()).read();
-        dest.write(prov);
-    }
-}
-
-/// Stores the given provenance value into shadow memory at the location for the given address.
-#[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_shadow_store(
-    bor_tag: BorTag,
-    alloc_info: *mut AllocInfo,
-    ptr: *mut c_void,
-) {
-    let ctx = unsafe { global_ctx() };
-    let prov = Provenance { bor_tag, alloc_info };
-    let dest = ctx.shadow_heap().get_dest(ptr.addr());
-    unsafe { dest.write(prov) };
+unsafe extern "C-unwind" fn __bsan_shadow(addr: *mut c_void) -> NonNull<Provenance> {
+    unsafe { global_ctx() }.shadow_heap().get(addr.addr())
 }
 
 /// Reserves a stack slot for allocation metadata.

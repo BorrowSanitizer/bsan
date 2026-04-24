@@ -4,7 +4,6 @@ use core::{fmt, ops};
 use hashbrown::{HashMap, HashSet};
 use rustc_hash::FxBuildHasher;
 
-#[allow(unused)]
 pub type FxHashSet<T, A = Global> = HashSet<T, FxBuildHasher, A>;
 pub type FxHashMap<K, V, A = Global> = HashMap<K, V, FxBuildHasher, A>;
 
@@ -48,9 +47,17 @@ impl fmt::Debug for Size {
 
 impl ops::Add for Size {
     type Output = Size;
-
     fn add(self, other: Size) -> Size {
         Size::from_bytes(self.bytes().checked_add(other.bytes()).unwrap_or_else(|| {
+            panic!("Size::add: {} + {} doesn't fit in u64", self.bytes(), other.bytes())
+        }))
+    }
+}
+
+impl ops::Sub for Size {
+    type Output = Size;
+    fn sub(self, other: Size) -> Size {
+        Size::from_bytes(self.bytes().checked_sub(other.bytes()).unwrap_or_else(|| {
             panic!("Size::add: {} + {} doesn't fit in u64", self.bytes(), other.bytes())
         }))
     }
@@ -95,4 +102,66 @@ macro_rules! vec_in {
             vec
         }
     );
+}
+
+#[derive(Copy, Clone, PartialEq)]
+pub struct AllocRange {
+    pub start: Size,
+    pub size: Size,
+}
+
+#[inline]
+pub fn alloc_range(start: Size, size: Size) -> AllocRange {
+    AllocRange { start, size }
+}
+
+impl AllocRange {
+    #[inline]
+    pub fn end(self) -> Size {
+        self.start + self.size // This does overflow checking.
+    }
+
+    /// Returns the `subrange` within this range; panics if it is not a subrange.
+    #[inline]
+    pub fn subrange(self, subrange: AllocRange) -> AllocRange {
+        let sub_start = self.start + subrange.start;
+        let range = alloc_range(sub_start, subrange.size);
+        assert!(range.end() <= self.end(), "access outside the bounds for given AllocRange");
+        range
+    }
+
+    #[inline]
+    pub fn relative_to(&self, start: Size) -> Option<AllocRange> {
+        self.within_range(start).then_some(Self {
+            start: Size::from_bytes(start.bytes() - self.start.bytes()),
+            size: self.size,
+        })
+    }
+
+    #[inline]
+    pub fn within_range(&self, size: Size) -> bool {
+        size >= self.start && size < self.end()
+    }
+}
+
+impl fmt::Debug for AllocRange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_fmt(format_args!("[{0:#x}..{1:#x}]", self.start.bytes(), self.end().bytes()))
+    }
+}
+
+impl fmt::Display for AllocRange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_fmt(format_args!("{:?}", self))
+    }
+}
+
+pub trait ToUsize {
+    fn to_usize(self) -> usize;
+}
+
+impl ToUsize for u32 {
+    fn to_usize(self) -> usize {
+        self.try_into().unwrap()
+    }
 }
