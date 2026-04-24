@@ -653,8 +653,6 @@ private:
       LifetimeInfo->run();
     }
 
-    EntryIRB.CreateStore(FrameHeaderBottom, BS.ProvStack);
-
     FnPrologueEnd = EntryIRB.CreateIntrinsic(Intrinsic::donothing, {});
   }
 
@@ -955,12 +953,15 @@ private:
   }
 
   void visitIntrinsicInst(IntrinsicInst &I) {
+    IRBuilder<> Before(&I);
+    Value *StackOffset = getStackOffset(Before, false);
+    Before.CreateStore(StackOffset, BS.ProvStack);
     switch (I.getIntrinsicID()) {
     case Intrinsic::lifetime_start: {
-      instrumentLifetimeStart(I);
+      return instrumentLifetimeStart(I);
     } break;
     case Intrinsic::lifetime_end: {
-      instrumentLifetimeEnd(I);
+      return instrumentLifetimeEnd(I);
     } break;
     }
   }
