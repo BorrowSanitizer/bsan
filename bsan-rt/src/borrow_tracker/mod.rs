@@ -108,6 +108,11 @@ impl<'b> BorrowTracker<'b> {
                 return if access_size != 0 { Err(UBInfo::UseAfterFree) } else { Ok(None) };
             };
 
+            let tree = tree.lock();
+            if !tree.tag_mapping.contains_key(&prov.bor_tag) {
+                return if access_size != 0 { Err(UBInfo::UseAfterFree) } else { Ok(None) };
+            }
+
             let offset = start.addr().wrapping_sub(base_addr);
             if start.addr() < base_addr || (offset + access_size > alloc_size) {
                 return if access_size != 0 {
@@ -121,7 +126,6 @@ impl<'b> BorrowTracker<'b> {
             let size = Size::from_bytes(access_size);
             let range = AllocRange { start, size };
 
-            let tree = tree.lock();
             f(Self { alloc_id, prov, range, tree }).map(|r| Some(r))
         }
     }
