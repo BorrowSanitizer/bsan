@@ -1,22 +1,22 @@
 error: Undefined Behavior: deallocation through <TAG>(WeakProtector) at ALLOC[0x0] is forbidden
-   --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
+    --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
    |
 LL | unsafe { libc::free(ptr as *mut libc::c_void) }
    |
-    = help: the allocation of the accessed tag <TAG>(WeakProtector) also contains the strongly protected tag <TAG>(StrongProtector)
-    = help: the strongly protected tag <TAG>(StrongProtector) disallows deallocations
+     = help: the allocation of the accessed tag <TAG>(WeakProtector) also contains the strongly protected tag <TAG>(StrongProtector)
+     = help: the strongly protected tag <TAG>(StrongProtector) disallows deallocations
 help: the accessed tag <TAG>(WeakProtector) was created here
-   --> RUSTLIB/core/src/mem/mod.rs:LL:CC
+    --> RUSTLIB/core/src/mem/mod.rs:LL:CC
    |
 LL | pub const fn drop<T>(_x: T)
    |
 help: the strongly protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
-   --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/deallocate_against_protector1.rs:LL:CC
+    --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/deallocate_against_protector1.rs:LL:CC
    |
 LL | inner(Box::leak(Box::new(0)), |x| {
    |
 help: the strongly protected tag <TAG>(StrongProtector) later transitioned due to a deallocation (acting as a child write access)
-   --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
+    --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
    |
 LL | unsafe { libc::free(ptr as *mut libc::c_void) }
    |
@@ -27,5 +27,5 @@ stack backtrace:
  at RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
 1: __rustc::__rdl_dealloc
  at RUSTLIB/std/src/alloc.rs:LL:CC
-2: alloc::alloc::dealloc
+2: alloc::alloc::dealloc_nonnull
  at RUSTLIB/alloc/src/alloc.rs:LL:CC

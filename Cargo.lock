@@ -156,6 +156,7 @@ dependencies = [
 name = "bsan_rt"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
  "bytemuck",
  "hashbrown 0.16.1",
  "libc",

@@ -1,5 +1,5 @@
 //@run:0
-#![feature(async_fn_traits, async_trait_bounds)]
+#![feature(async_trait_bounds)]
 
 use std::future::Future;
 use std::pin::pin;

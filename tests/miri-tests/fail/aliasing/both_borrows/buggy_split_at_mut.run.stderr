@@ -7,7 +7,7 @@ LL | b[1] = 6;
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/buggy_split_at_mut.rs:LL:CC
    |
-LL | from_raw_parts_mut(ptr.offset(mid as isize), len - mid),
+LL | let (a, b) = safe::split_at_mut(&mut array, 0);
    |
 help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/buggy_split_at_mut.rs:LL:CC

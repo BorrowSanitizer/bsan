@@ -11,6 +11,7 @@ libc-print = { version = "0.1.23" }
 spin = "0.10.0"
 bytemuck = { version = "1.21", default-features = false }
 smallvec = "1.15.1"
+bitflags = "2.11.1"
 
 [lib]
 name = "bsan_rt_core"

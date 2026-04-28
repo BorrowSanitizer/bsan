@@ -1,25 +1,25 @@
 error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-   --> RUSTLIB/core/src/hint.rs:LL:CC
+ --> bsan/tests/fail/aliasing/forbidden_child_access.rs:LL:CC
    |
-LL | pub const fn black_box<T>(dummy: T) -> T {
+LL | std::hint::black_box(r1);
    |
-    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow
+  = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
-   --> bsan/tests/fail/aliasing/forbidden_child_access.rs:LL:CC
+ --> bsan/tests/fail/aliasing/forbidden_child_access.rs:LL:CC
    |
 LL | let r1 = unsafe { &mut *ptr };
    |
 help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
-   --> bsan/tests/fail/aliasing/forbidden_child_access.rs:LL:CC
+ --> bsan/tests/fail/aliasing/forbidden_child_access.rs:LL:CC
    |
 LL | *r2 += 1;
    |
 help: this transition corresponds to a loss of read and write permissions
 
 stack backtrace:
-0: core::hint::black_box
- at RUSTLIB/core/src/hint.rs:481
-1: forbidden_child_access::main
+0: forbidden_child_access::main
  at bsan/tests/fail/aliasing/forbidden_child_access.rs:LL:CC
-2: <fn() as core::ops::function::FnOnce<()>>::call_once
+1: <fn() as core::ops::function::FnOnce<()>>::call_once
  at RUSTLIB/core/src/ops/function.rs:LL:CC
+2: std::sys::backtrace::__rust_begin_short_backtrace
+ at RUSTLIB/std/src/sys/backtrace.rs:LL:CC

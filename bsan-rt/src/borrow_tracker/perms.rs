@@ -1,26 +1,10 @@
 // This file was ported from Miri
 #![allow(unreachable_patterns)]
 use core::cmp::Ordering;
-use core::{fmt, mem};
+use core::fmt;
 
 use super::helpers::{AccessKind, AccessRelatedness};
-use crate::Size;
-
-#[repr(u8)]
-#[allow(unused)]
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum RetagPtrKind {
-    Box = 0,
-    Ref = 1,
-    RefMut = 2,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RetagInfo<'a> {
-    pub size: usize,
-    pub perm: NewPermission,
-    pub im_layout: Option<&'a [[Size; 2]]>,
-}
+use crate::{RetagFlags, RetagInfo};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct NewPermission {
@@ -40,17 +24,22 @@ pub struct NewPermission {
 }
 
 impl NewPermission {
-    pub fn new(is_protected: bool, ty_is_freeze: bool, ptr_kind: RetagPtrKind) -> Self {
-        let freeze_perm = if matches!(ptr_kind, RetagPtrKind::Ref) {
-            Permission::new_frozen()
-        } else {
-            Permission::new_reserved_frz()
-        };
+    pub fn new(info: RetagInfo<'_>) -> Self {
+        let is_mutable: bool = info.flags.contains(RetagFlags::IS_MUTABLE);
+        let is_protected = info.flags.contains(RetagFlags::IS_PROTECTED);
+        let ty_is_freeze = info.flags.contains(RetagFlags::IS_FREEZE);
+        let is_box = info.flags.contains(RetagFlags::IS_BOX);
+        let freeze_perm =
+            if is_mutable { Permission::new_reserved_frz() } else { Permission::new_frozen() };
 
-        let nonfreeze_perm = match ptr_kind {
-            RetagPtrKind::Ref => Permission::new_cell(),
-            _ if is_protected => Permission::new_reserved_frz(),
-            _ => Permission::new_reserved_im(),
+        let nonfreeze_perm = if is_mutable {
+            if is_protected {
+                Permission::new_reserved_frz()
+            } else {
+                Permission::new_reserved_im()
+            }
+        } else {
+            Permission::new_cell()
         };
 
         // Everything except for `Cell` gets an initial access.
@@ -62,15 +51,13 @@ impl NewPermission {
             nonfreeze_perm,
             nonfreeze_access: initial_access(&nonfreeze_perm).then_some(AccessKind::Read),
             ty_is_freeze,
-            protector: is_protected.then_some(
-                if matches!(ptr_kind, RetagPtrKind::Ref | RetagPtrKind::RefMut) {
-                    // Strong protector for references
-                    ProtectorKind::StrongProtector
-                } else {
-                    // Weak protector for boxes
-                    ProtectorKind::WeakProtector
-                },
-            ),
+            protector: is_protected.then_some(if is_box {
+                // Weak protector for boxes
+                ProtectorKind::WeakProtector
+            } else {
+                // Strong protector for references
+                ProtectorKind::StrongProtector
+            }),
         }
     }
 
@@ -80,28 +67,6 @@ impl NewPermission {
         } else {
             self.nonfreeze_perm
         }
-    }
-}
-
-impl<'a> RetagInfo<'a> {
-    /// # Safety
-    /// The first 32 bits of `perm` must contain the `Permission`,
-    /// the `ProtectorKind`, and the `AccessKind, in that order.`
-    pub unsafe fn from_raw(
-        size: usize,
-        is_protected: u8,
-        ty_is_freeze: u8,
-        ptr_kind: RetagPtrKind,
-        im_data: *const [usize; 2],
-        im_len: usize,
-    ) -> Self {
-        let im_data = unsafe { mem::transmute::<*const [usize; 2], *const [Size; 2]>(im_data) };
-        let im_layout =
-            (!im_data.is_null()).then(|| unsafe { core::slice::from_raw_parts(im_data, im_len) });
-
-        let perm = NewPermission::new(is_protected != 0, ty_is_freeze != 0, ptr_kind);
-
-        Self { size, perm, im_layout }
     }
 }
 
