@@ -1,6 +1,5 @@
 // Our build script combines many preexisting components from Miri's build script
 // and the Rust compiler's bootstrap script.
-#![feature(io_error_more)]
 use std::path::PathBuf;
 
 use anyhow::Result;
