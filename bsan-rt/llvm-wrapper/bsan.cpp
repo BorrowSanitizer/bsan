@@ -19,6 +19,15 @@ bool BSAN_INITED = false;
 bool BSAN_INIT_RUNNING;
 bool BSAN_DEINIT_RUNNING;
 
+static atomic_uint8_t gc_stop_flag;
+static void *gc_thread_handler;
+
+static void *GCThreadFn(void *) {
+  while (!atomic_load(&gc_stop_flag, memory_order_acquire))
+    SleepForMillis(100);
+  return nullptr;
+}
+
 const Provenance WILDCARD = {0, nullptr};
 const Provenance INVALID = {1, nullptr};
 
@@ -88,6 +97,11 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_init() {
   InitializeFlags();
   __bsan_internal_init();
   InitializePlatformEarly();
+
+  // start gc thread
+  atomic_store(&gc_stop_flag, 0, memory_order_release);
+  gc_thread_handler = internal_start_thread(GCThreadFn, nullptr);
+
   InitializeInterceptors();
   BsanTSDInit();
   BsanThread *main_thread = BsanThread::Create(nullptr, nullptr);
@@ -102,6 +116,11 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_deinit() {
   if (!BSAN_INITED)
     return;
   BSAN_DEINIT_RUNNING = true;
+
+  // end gc thread
+  atomic_store(&gc_stop_flag, 1, memory_order_release);
+  internal_join_thread(gc_thread_handler);
+
   __bsan_internal_deinit();
   BSAN_DEINIT_RUNNING = false;
   BSAN_INITED = false;
