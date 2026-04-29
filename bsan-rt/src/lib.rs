@@ -303,7 +303,6 @@ unsafe extern "C-unwind" fn __bsan_new_bor_tag() -> BorTag {
     BorTag::default()
 }
 
-
 bitflags::bitflags! {
     #[repr(C)]
     #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -311,14 +310,13 @@ bitflags::bitflags! {
         /// If this is a function-entry retag.
         const IS_PROTECTED = 1 << 0;
         /// If this is a mutable reference or a `Box`.
-        const IS_MUTABLE = 1 << 2;
+        const IS_MUTABLE = 1 << 1;
+        /// If this is a `Box`.
+        const IS_BOX = 1 << 2;
         /// If the pointee type is `Freeze`
         const IS_FREEZE = 1 << 3;
-        /// If this is a `Box`.
-        const IS_BOX = 1 << 4;
     }
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RetagInfo<'a> {
