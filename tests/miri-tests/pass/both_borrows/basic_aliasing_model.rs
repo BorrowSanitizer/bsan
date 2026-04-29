@@ -1,7 +1,6 @@
 //@run:0
 //miri: @revisions: stack tree
 //miri: @[tree]compile-flags: -Zmiri-tree-borrows
-#![feature(allocator_api)]
 use std::alloc::{Layout, alloc, dealloc};
 use std::cell::Cell;
 use std::ptr;

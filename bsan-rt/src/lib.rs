@@ -1,9 +1,10 @@
 #![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(test), feature(core_intrinsics))]
+#![cfg_attr(test, feature(test))]
 #![feature(thread_local)]
 #![feature(allocator_api)]
 #![allow(internal_features)]
-#![feature(core_intrinsics)]
-#![feature(test)]
+
 #[macro_use]
 extern crate alloc;
 use core::ffi::c_void;
@@ -12,9 +13,9 @@ use core::fmt::Debug;
 use core::panic::PanicInfo;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use core::{fmt, ptr};
+use core::{fmt, ptr, slice};
 
-use borrow_tracker::{AccessKind, RetagInfo, RetagPtrKind, Size};
+use borrow_tracker::{AccessKind, Size};
 use libc_print::std_name::*;
 use spin::Mutex;
 
@@ -302,17 +303,39 @@ unsafe extern "C-unwind" fn __bsan_new_bor_tag() -> BorTag {
     BorTag::default()
 }
 
+bitflags::bitflags! {
+    #[repr(C)]
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    pub struct RetagFlags: u8 {
+        /// If this is a function-entry retag.
+        const IS_PROTECTED = 1 << 0;
+        /// If this is a mutable reference or a `Box`.
+        const IS_MUTABLE = 1 << 1;
+        /// If this is a `Box`.
+        const IS_BOX = 1 << 2;
+        /// If the pointee type is `Freeze`
+        const IS_FREEZE = 1 << 3;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RetagInfo<'a> {
+    pub size: usize,
+    pub flags: RetagFlags,
+    pub im_layout: Option<&'a [[Size; 2]]>,
+    pub pin_layout: Option<&'a [[Size; 2]]>,
+}
+
 /// Creates a new borrow tag for the given provenance object.
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_retag_impl(
     object_addr: *mut c_void,
-    access_size: usize,
-    is_protected: u8,
-    ty_is_freeze: u8,
-    _ty_is_unpin: u8,
-    ptr_kind: RetagPtrKind,
-    im_data: *const [usize; 2],
+    size: usize,
+    flags: RetagFlags,
+    im_data: *const [Size; 2],
     im_len: usize,
+    pin_data: *const [Size; 2],
+    pin_len: usize,
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
     pc: Span,
@@ -320,15 +343,22 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
     debug_bsan!("retag", object_addr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-    let retag_info = unsafe {
-        RetagInfo::from_raw(access_size, is_protected, ty_is_freeze, ptr_kind, im_data, im_len)
+
+    let opt_slice = |ptr, len| -> Option<_> {
+        (!im_data.is_null()).then(|| unsafe { slice::from_raw_parts(ptr, len) })
     };
-    BorrowTracker::retag(ctx, prov, object_addr, access_size, retag_info, pc).unwrap_or_else(
-        |err| {
-            ctx.handle_error(err, pc);
-            bor_tag
-        },
-    )
+
+    let retag_info = RetagInfo {
+        size,
+        flags,
+        im_layout: opt_slice(im_data, im_len),
+        pin_layout: opt_slice(pin_data, pin_len),
+    };
+
+    BorrowTracker::retag(ctx, prov, object_addr, size, retag_info, pc).unwrap_or_else(|err| {
+        ctx.handle_error(err, pc);
+        bor_tag
+    })
 }
 
 #[unsafe(no_mangle)]

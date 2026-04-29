@@ -1,7 +1,6 @@
 #include "BorrowSanitizer.h"
 #include "Declarations.h"
 #include "Provenance.h"
-#include "Retag.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/GlobalsModRef.h"
@@ -195,6 +194,45 @@ offsetIntoProvenanceIndex(IRBuilder<> &IRB, const DataLayout *DL,
     report_fatal_error("Cannot index into a non-struct or non-array type.");
   }
   }
+}
+
+} // namespace
+
+namespace {
+class RetagInfo {
+public:
+  Value *Ptr;
+  Value *ImArray;
+  Value *PinArray;
+  ConstantInt *Size;
+  ConstantInt *Perms;
+
+  RetagInfo(const CallBase *CB) {
+    assert(CB->arg_size() == 5);
+    Ptr = CB->getOperand(0);
+    Size = cast<ConstantInt>(CB->getOperand(1));
+    Perms = cast<ConstantInt>(CB->getOperand(2));
+    ImArray = CB->getOperand(3);
+    PinArray = CB->getOperand(4);
+  }
+  bool isProtected() {
+    // The least significant bit of the permission indicates
+    // if this is a function-entry retag.
+    return (Perms->getZExtValue() & 0x1) != 0;
+  }
+};
+
+bool isRetag(const CallBase *CB) {
+  Function *Callee = CB->getCalledFunction();
+  return CB->arg_size() == 5 && Callee &&
+         Callee->getName().starts_with(kBsanRustIntrinsicRetagPrefix);
+}
+
+bool isFnEntryRetag(const CallBase *CB) {
+  if (isRetag(CB)) {
+    return RetagInfo(CB).isProtected();
+  }
+  return false;
 }
 
 } // namespace
@@ -678,6 +716,18 @@ private:
                                std::nullopt, AtomicOrdering::Monotonic);
   }
 
+  Value *getLayoutArrayLength(Value *Start) {
+    if (GlobalVariable *GV = dyn_cast<GlobalVariable>(Start)) {
+      if (ConstantDataArray *CA =
+              dyn_cast<ConstantDataArray>(GV->getInitializer())) {
+        unsigned NumPointerSizedPairs =
+            CA->getNumElements() / (BS.DL->getTypeAllocSize(BS.IntptrTy) * 2);
+        return ConstantInt::get(BS.IntptrTy, NumPointerSizedPairs);
+      }
+    }
+    return BS.Zero;
+  }
+
   void instrumentRetagMem(CallBase &CB) {
     IRBuilder<> IRB(&CB);
     Value *Operand = CB.getOperand(0);
@@ -707,23 +757,15 @@ private:
     if (TargetProv != BS.WildcardProvenance) {
       RetagInfo RI(&CB);
 
-      Value *ImArrayLen = BS.Zero;
-      if (GlobalVariable *GV = dyn_cast<GlobalVariable>(RI.ImArray)) {
-        if (ConstantDataArray *CA =
-                dyn_cast<ConstantDataArray>(GV->getInitializer())) {
-          uint64_t NumPointerSizedPairs =
-              CA->getNumElements() / (BS.DL->getTypeAllocSize(BS.IntptrTy) * 2);
-          ImArrayLen = ConstantInt::get(BS.IntptrTy, NumPointerSizedPairs);
-        }
-      }
+      Value *ImArrayLen = getLayoutArrayLength(RI.ImArray);
+      Value *PinArrayLen = getLayoutArrayLength(RI.PinArray);
 
-      TargetProv.Tag = IRB.CreateCall(
-          BS.BsanFuncRetag,
-          {Target, RI.Size, RI.IsProtected, RI.IsFreeze, RI.IsUnpin, RI.PtrKind,
-           RI.ImArray, ImArrayLen, TargetProv.Tag, TargetProv.Info});
+      TargetProv.Tag = IRB.CreateCall(BS.BsanFuncRetag,
+                                      {Target, RI.Size, RI.Perms, RI.ImArray,
+                                       ImArrayLen, RI.PinArray, PinArrayLen,
+                                       TargetProv.Tag, TargetProv.Info});
 
-      bool IsProtected = RI.IsProtected->getZExtValue() != 0;
-      Value *SlotPtr = allocStackSlot(IRB, IsProtected);
+      Value *SlotPtr = allocStackSlot(IRB, RI.isProtected());
       TargetProv.store(IRB, BS.PL, SlotPtr);
     }
     return TargetProv;
@@ -994,7 +1036,7 @@ private:
   }
 
   void instrumentLifetimeStart(IntrinsicInst &II) {
-    AllocaInst *AI = findAllocaForValue(II.getArgOperand(1), true);
+    AllocaInst *AI = findAllocaForValue(II.getArgOperand(0), true);
     IRBuilder<> IRB(&II);
     ProvenanceScalar CurrentProv = assertProvenanceScalar(II.getParent(), AI);
     if (CurrentProv != BS.WildcardProvenance) {
@@ -1005,7 +1047,7 @@ private:
   }
 
   void instrumentLifetimeEnd(IntrinsicInst &II) {
-    AllocaInst *AI = findAllocaForValue(II.getArgOperand(1), true);
+    AllocaInst *AI = findAllocaForValue(II.getArgOperand(0), true);
     IRBuilder<> IRB(&II);
     ProvenanceScalar Root = assertProvenanceScalar(II.getParent(), AI);
     if (Root != BS.WildcardProvenance) {
@@ -1385,9 +1427,9 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   AL = AL.addFnAttribute(*C, Attribute::NoUnwind);
 
-  BsanFuncRetag = M.getOrInsertFunction(
-      kBsanFuncRetagName, AL, IntptrTy, PtrTy, IntptrTy, Int8Ty, Int8Ty, Int8Ty,
-      Int8Ty, PtrTy, IntptrTy, IntptrTy, PtrTy);
+  BsanFuncRetag = M.getOrInsertFunction(kBsanFuncRetagName, AL, IntptrTy, PtrTy,
+                                        IntptrTy, Int8Ty, PtrTy, IntptrTy,
+                                        PtrTy, IntptrTy, IntptrTy, PtrTy);
 
   BsanFuncPopFrame = M.getOrInsertFunction(
       kBsanFuncPopFrame, AL, IRB.getVoidTy(), PtrTy, IntptrTy, IntptrTy);

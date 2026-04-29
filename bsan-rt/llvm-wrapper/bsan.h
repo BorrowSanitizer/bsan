@@ -81,14 +81,14 @@ SANITIZER_WEAK_ATTRIBUTE void __bsan_dealloc(void *ptr, BorTag bor_tag,
                                              AllocInfo *alloc_info, Span pc);
 
 SANITIZER_INTERFACE_ATTRIBUTE BorTag
-__bsan_retag(void *object_addr, uptr access_size, u8 is_prot, u8 is_freeze,
-             u8 is_unpin, u8 ptr_kind, const uptr im_data[2], uptr im_len,
-             BorTag bor_tag, AllocInfo *alloc_info);
+__bsan_retag(void *object_addr, uptr access_size, u8 flags,
+             const uptr im_data[2], uptr im_len, const uptr pin_data[2],
+             uptr pin_len, BorTag bor_tag, AllocInfo *alloc_info);
 
 SANITIZER_WEAK_ATTRIBUTE BorTag
-__bsan_retag_impl(void *object_addr, uptr access_size, u8 is_prot, u8 is_freeze,
-                  u8 is_unpin, u8 ptr_kind, const uptr im_data[2], uptr im_len,
-                  BorTag bor_tag, AllocInfo *alloc_info, Span pc);
+__bsan_retag_impl(void *object_addr, uptr access_size, u8 flags,
+                  const uptr im_data[2], uptr im_len, const uptr pin_data[2],
+                  uptr pin_len, BorTag bor_tag, AllocInfo *alloc_info, Span pc);
 
 SANITIZER_WEAK_ATTRIBUTE void __bsan_internal_init();
 

@@ -8,7 +8,7 @@ use crate::borrow_tracker::tree::{ChildParams, LocationState};
 use crate::diagnostics::{print_tree_diff, AccessCause, PrintTree};
 use crate::errors::{UBInfo, UBResult};
 use crate::sanitizer_common::Span;
-use crate::{AllocId, BorTag, GlobalCtx, Provenance};
+use crate::{AllocId, BorTag, GlobalCtx, Provenance, RetagInfo};
 
 mod foreign_access_skipping;
 mod helpers;
@@ -151,6 +151,9 @@ impl<'b> BorrowTracker<'b> {
         retag_info: RetagInfo<'_>,
         span: Span,
     ) -> UBResult<BorTag> {
+        if retag_info.pin_layout.is_some() {
+            return Ok(self.prov.bor_tag);
+        }
         let alloc_id = self.alloc_id;
         let parent_tag = self.prov.bor_tag;
         let new_tag = BorTag::default();
@@ -158,9 +161,10 @@ impl<'b> BorrowTracker<'b> {
         if !self.tree().tag_mapping.contains_key(&self.prov.bor_tag) {
             return Err(UBInfo::UseAfterFree);
         }
+        let perm: NewPermission = NewPermission::new(retag_info);
 
-        let protected = retag_info.perm.protector.is_some();
-        if let Some(protector) = retag_info.perm.protector {
+        let protected = perm.protector.is_some();
+        if let Some(protector) = perm.protector {
             // We register the protection in two different places.
             // This makes creating a protector slower, but checking whether a tag
             // is protected faster.
@@ -170,9 +174,9 @@ impl<'b> BorrowTracker<'b> {
         // Compute initial "inside" permissions.
         let loc_state = |frozen: bool| -> LocationState {
             let (perm, access) = if frozen {
-                (retag_info.perm.freeze_perm, retag_info.perm.freeze_access)
+                (perm.freeze_perm, perm.freeze_access)
             } else {
-                (retag_info.perm.nonfreeze_perm, retag_info.perm.nonfreeze_access.is_some())
+                (perm.nonfreeze_perm, perm.nonfreeze_access.is_some())
             };
             let sifa = perm.strongest_idempotent_foreign_access(protected);
             if access {
@@ -182,7 +186,7 @@ impl<'b> BorrowTracker<'b> {
             }
         };
 
-        let initial_state = loc_state(retag_info.perm.ty_is_freeze);
+        let initial_state = loc_state(perm.ty_is_freeze);
         let mut inside_perms = RangeMap::new_in(
             Size::from_bytes(retag_info.size),
             initial_state,
@@ -223,7 +227,7 @@ impl<'b> BorrowTracker<'b> {
             parent_tag,
             new_tag,
             inside_perms,
-            default_perm: retag_info.perm.default_perm(),
+            default_perm: perm.default_perm(),
             protected,
             span,
         };

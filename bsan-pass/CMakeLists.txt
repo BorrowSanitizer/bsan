@@ -10,7 +10,6 @@ execute_process(
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${LLVM_CXXFLAGS}")
 
 set(BSAN_SOURCES
-  Retag.cpp
   BorrowSanitizer.cpp
   BorrowSanitizerPass.cpp
   Provenance.cpp
@@ -21,7 +20,6 @@ set(BSAN_HEADERS
   BorrowSanitizerPass.h
   Provenance.h
   Declarations.h
-  Retag.h
 )
 
 set(CMAKE_CXX_CLANG_TIDY clang-tidy;-warnings-as-errors=*)
