@@ -26,6 +26,7 @@ void BsanThread::Init() {
   prov_stack_size_ = stack_top_ - stack_bottom_;
   prov_stack_ = MmapOrDie(prov_stack_size_, __func__);
   __BSAN_PROV_STACK = (Provenance *)(((u8 *)prov_stack_) + prov_stack_size_);
+  __bsan_local_init(&__BSAN_PROV_STACK);
 }
 
 void BsanThread::TSDDtor(void *tsd) {

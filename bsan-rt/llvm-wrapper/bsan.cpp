@@ -249,6 +249,10 @@ SANITIZER_WEAK_ATTRIBUTE void __bsan_internal_init() {}
 
 SANITIZER_WEAK_ATTRIBUTE void __bsan_internal_deinit() {}
 
+SANITIZER_WEAK_ATTRIBUTE void __bsan_local_init(Provenance **prov) {}
+
+SANITIZER_WEAK_ATTRIBUTE void __bsan_local_deinit() {}
+
 // Weak tagging operations
 SANITIZER_WEAK_ATTRIBUTE BorTag __bsan_new_bor_tag() { return 0; }
 
