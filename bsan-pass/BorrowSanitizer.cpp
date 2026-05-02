@@ -48,13 +48,14 @@ static cl::opt<bool> ClHandleAsmConservative(
              "outputs to wildcard Provenance"),
     cl::Hidden, cl::init(true));
 
-static bool needsBoundaryValidation(const Function *Callee) {
+bool BorrowSanitizer::needsBoundaryValidation(const Function *Callee) {
   return !Callee ||
          (Callee->isDeclaration() || Callee->hasExternalLinkage() ||
           Callee->hasExternalWeakLinkage() || Callee->hasAddressTaken());
 }
 
-static bool shouldTrustFunction(const TargetLibraryInfo *TLI, const Value *V) {
+bool BorrowSanitizer::shouldTrustFunction(const TargetLibraryInfo *TLI,
+                                          const Value *V) {
   if (isAllocationFn(V, TLI)) {
     return true;
   }
@@ -79,7 +80,8 @@ static Value *ptradd(IRBuilder<> &IRB, Value *Pointer, Value *Offset) {
 }
 
 // We only instrument allocations that have a non-zero size.
-static bool shouldInstrumentAlloca(const DataLayout &DL, const AllocaInst &AI) {
+bool BorrowSanitizer::shouldInstrumentAlloca(const DataLayout &DL,
+                                             const AllocaInst &AI) {
   // Although Rust emits retags for ZSTs, tracking
   // allocations leads to false positive errors—probably
   // due to interactions with lowering.
@@ -479,7 +481,7 @@ public:
           continue;
         if (I.getOpcode() == Instruction::Alloca) {
           AllocaInst &AI = static_cast<AllocaInst &>(I);
-          if (shouldInstrumentAlloca(*BS.DL, AI) && AI.isStaticAlloca())
+          if (BS.shouldInstrumentAlloca(*BS.DL, AI) && AI.isStaticAlloca())
             StaticAllocaVec.push_back(&AI);
           continue;
         }
@@ -492,7 +494,7 @@ public:
           if (auto *LI = dyn_cast<LifetimeIntrinsic>(CB)) {
             if (CB->getIntrinsicID() == Intrinsic::lifetime_start) {
               AllocaInst *AI = findAllocaForValue(LI->getArgOperand(1), true);
-              if (AI && shouldInstrumentAlloca(*BS.DL, *AI)) {
+              if (AI && BS.shouldInstrumentAlloca(*BS.DL, *AI)) {
                 HasLifetimeStart.insert(AI);
               }
             }
@@ -666,8 +668,8 @@ private:
     FrameHeaderBottom =
         ptradd(EntryIRB, FrameTop, EntryIRB.CreateNeg(ByteOffset));
 
-    if (needsBoundaryValidation(&F)) {
-      if (!shouldTrustFunction(TLI, &F)) {
+    if (BS.needsBoundaryValidation(&F)) {
+      if (!BS.shouldTrustFunction(TLI, &F)) {
         EntryIRB.CreateCall(BS.BsanFuncValidateParams,
                             {&F, FrameHeaderBottom, NumParamProv});
       }
@@ -901,10 +903,10 @@ private:
     // values from it, but we also need to know the number of provenance
     // values associated with the return value to perform initialization.
     Value *Slot = getStackOffset(Before, false);
-    if (needsBoundaryValidation(Callee)) {
+    if (BS.needsBoundaryValidation(Callee)) {
       Value *Marker;
 
-      if (shouldTrustFunction(TLI, &CB)) {
+      if (BS.shouldTrustFunction(TLI, &CB)) {
         Marker = Before.CreateCall(BS.BsanFuncMark,
                                    {ConstantPointerNull::get(BS.PtrTy)});
         After.CreateStore(Marker, BS.Marker);

@@ -118,6 +118,10 @@ public:
   Constant *False = nullptr;
 
   DenseSet<Function *> ExternCalledFns;
+
+  bool shouldTrustFunction(const TargetLibraryInfo *TLI, const Value *V);
+  bool shouldInstrumentAlloca(const DataLayout &DL, const AllocaInst &AI);
+  bool needsBoundaryValidation(const Function *Callee);
 };
 
 } // namespace llvm
