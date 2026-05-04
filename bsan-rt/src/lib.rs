@@ -339,6 +339,14 @@ unsafe extern "C-unwind" fn __bsan_local_init(prov: *mut NonNull<Provenance>) {
 }
 
 #[unsafe(no_mangle)]
+unsafe extern "C-unwind" fn __bsan_local_deinit() {
+    unsafe {
+        let ctx = global_ctx();
+        deinit_local_ctx(ctx);
+    }
+}
+
+#[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_new_bor_tag() -> BorTag {
     BorTag::default()
 }

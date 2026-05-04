@@ -38,6 +38,7 @@ void BsanThread::Destroy() {
   UnmapOrDie(prov_stack_, prov_stack_size_);
   uptr size = RoundUpTo(sizeof(BsanThread), GetPageSizeCached());
   UnmapOrDie(this, size);
+  __bsan_local_deinit();
 }
 
 thread_return_t BsanThread::ThreadStart() {

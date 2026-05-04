@@ -9,7 +9,7 @@ use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::errors::{ErrorFormatContext, UBInfo};
 use crate::helpers::FxHashMap;
-use crate::local::{self, LocalCtx};
+use crate::local::LocalCtx;
 use crate::memory::{Heap, ShadowHeap};
 use crate::*;
 
@@ -99,8 +99,12 @@ impl GlobalCtx {
         unsafe { self.alloc_metadata_map.dealloc(ptr) }
     }
 
-    pub(crate) fn register_thread(&self, local_ctx_ptr: NonNull<LocalCtx>) {
-        self.threads.write().insert(ThreadId::default(), local_ctx_ptr);
+    pub(crate) fn register_thread(&self, thread_id: ThreadId, local_ctx_ptr: NonNull<LocalCtx>) {
+        self.threads.write().insert(thread_id, local_ctx_ptr);
+    }
+
+    pub(crate) fn deregister_thread(&self, thread: ThreadId) {
+        self.threads.write().remove(&thread);
     }
 
     pub fn shadow_heap(&self) -> &ShadowHeap<Provenance> {
