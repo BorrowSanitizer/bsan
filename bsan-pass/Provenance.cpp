@@ -4,6 +4,18 @@
 
 using namespace llvm;
 
+// Provides a list of the locations of provenance values inside a type.
+SmallVector<ProvenanceDesc>
+ProvenanceLayout::getProvenanceDesc(IRBuilder<> &IRB, Type *Ty) {
+  SmallVector<ProvenanceDesc> Desc;
+  if (Ty->isSized()) {
+    Value *Zero = ConstantInt::get(IRB.getIntPtrTy(*DL), 0);
+    getProvenanceDesc(IRB, Desc, Ty, Zero, Zero);
+  }
+  return Desc;
+}
+
+
 // Populates a vector with the list of locations of provenance
 // values within a type.
 std::tuple<Value *, Value *> ProvenanceLayout::getProvenanceDesc(
@@ -47,16 +59,6 @@ std::tuple<Value *, Value *> ProvenanceLayout::getProvenanceDesc(
   return std::make_tuple(NextByteOffset, NextProvOffset);
 }
 
-// Provides a list of the locations of provenance values inside a type.
-SmallVector<ProvenanceDesc>
-ProvenanceLayout::getProvenanceDesc(IRBuilder<> &IRB, Type *Ty) {
-  SmallVector<ProvenanceDesc> Desc;
-  if (Ty->isSized()) {
-    Value *Zero = ConstantInt::get(IRB.getIntPtrTy(*DL), 0);
-    getProvenanceDesc(IRB, Desc, Ty, Zero, Zero);
-  }
-  return Desc;
-}
 
 void Provenance::addIncoming(BasicBlock *IncomingBlock,
                              Provenance &IncomingProv) {
