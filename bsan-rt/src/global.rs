@@ -85,7 +85,7 @@ impl GlobalCtx {
         Self {
             protected_tags: RwLock::new(ProtectedTags::default()),
             alloc_metadata_map: Heap::new(),
-            shadow_heap: ShadowHeap::new(&raw const __BSAN_WILDCARD_PROVENANCE),
+            shadow_heap: ShadowHeap::new(),
             snapshots: RwLock::new(FxHashMap::default()),
             threads: RwLock::new(FxHashMap::default()),
         }
