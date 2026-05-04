@@ -28,11 +28,13 @@ mod borrow_tracker;
 use borrow_tracker::*;
 
 mod diagnostics;
+mod local;
 
 mod errors;
 mod memory;
 
 use crate::borrow_tracker::tree::Tree;
+use crate::local::*;
 use crate::sanitizer_common::Span;
 
 #[thread_local]
@@ -127,6 +129,36 @@ impl fmt::Debug for AllocId {
             write!(f, "a{}", self.0)
         } else {
             write!(f, "alloc{}", self.0)
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub static __BSAN_THREAD_ID_CTR: AtomicUsize = AtomicUsize::new(3);
+
+/// Unique identifier for a thread
+#[repr(transparent)]
+#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ThreadId(usize);
+
+impl ThreadId {
+    pub fn get(&self) -> usize {
+        self.0
+    }
+}
+
+impl Default for ThreadId {
+    fn default() -> Self {
+        ThreadId(__BSAN_THREAD_ID_CTR.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl fmt::Debug for ThreadId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if f.alternate() {
+            write!(f, "t{}", self.0)
+        } else {
+            write!(f, "thread{}", self.0)
         }
     }
 }
@@ -295,6 +327,22 @@ unsafe extern "C-unwind" fn __bsan_internal_init() {
 unsafe extern "C-unwind" fn __bsan_internal_deinit() {
     unsafe {
         deinit_global_ctx();
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C-unwind" fn __bsan_local_init(prov: *mut NonNull<Provenance>) {
+    unsafe {
+        let ctx = global_ctx();
+        init_local_ctx(ctx, prov);
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C-unwind" fn __bsan_local_deinit() {
+    unsafe {
+        let ctx = global_ctx();
+        deinit_local_ctx(ctx);
     }
 }
 
