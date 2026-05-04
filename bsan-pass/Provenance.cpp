@@ -15,7 +15,6 @@ ProvenanceLayout::getProvenanceDesc(IRBuilder<> &IRB, Type *Ty) {
   return Desc;
 }
 
-
 // Populates a vector with the list of locations of provenance
 // values within a type.
 std::tuple<Value *, Value *> ProvenanceLayout::getProvenanceDesc(
@@ -58,7 +57,6 @@ std::tuple<Value *, Value *> ProvenanceLayout::getProvenanceDesc(
   Value *NextByteOffset = IRB.CreateAdd(ByteOffset, TypeSize);
   return std::make_tuple(NextByteOffset, NextProvOffset);
 }
-
 
 void Provenance::addIncoming(BasicBlock *IncomingBlock,
                              Provenance &IncomingProv) {
