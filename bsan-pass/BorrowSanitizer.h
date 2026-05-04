@@ -89,8 +89,8 @@ public:
   FunctionCallee BsanFuncValidateRetval;
   FunctionCallee BsanFuncValidateParams;
 
-  FunctionCallee BsanFuncShadowLoad;
-  FunctionCallee BsanFuncShadowStore;
+  FunctionCallee BsanFuncShadow;
+  FunctionCallee BsanFuncRcStore;
 
   FunctionCallee BsanFuncMemSet;
   FunctionCallee BsanFuncMemMove;

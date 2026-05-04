@@ -609,9 +609,8 @@ private:
     if (Prov.Elems.isVector()) {
       report_fatal_error("Vectors are not supported.");
     } else {
-      ProvenanceScalar Scalar = Prov.assertScalar();
-      Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncShadowStore,
-                                            {Scalar.Tag, Scalar.Info, ObjAddr});
+      Value *Shadow = IRB.CreateCall(BS.BsanFuncShadow, {ObjAddr});
+      IRB.CreateCall(BS.BsanFuncRcStore, {Prov.Tag, Prov.Info, Shadow});
     }
   }
 
@@ -624,9 +623,12 @@ private:
       report_fatal_error("Vectors are not supported.");
     } else {
       Value *Slot = allocStackSlot(IRB, false);
-      IRB.CreateCall(BS.BsanFuncShadowLoad, {ObjAddr, Slot});
-      ProvenancePtrScalar ProvPtr(IRB, BS.PL, Slot);
-      return Provenance::load(IRB, BS.PL, ProvPtr);
+      Value *Shadow = IRB.CreateCall(BS.BsanFuncShadow, {ObjAddr});
+      ProvenanceScalar Prov = ProvenanceScalar::load(
+          IRB, BS.PL, ProvenancePtrScalar(IRB, BS.PL, Shadow));
+      ProvenancePtrScalar Dest(IRB, BS.PL, Slot);
+      Prov.store(IRB, BS.PL, Dest);
+      return Prov;
     }
   }
 
@@ -736,15 +738,12 @@ private:
     IRBuilder<> IRB(&CB);
     Value *Operand = CB.getOperand(0);
     Value *SrcAddr = IRB.CreateLoad(BS.PtrTy, Operand);
-
-    Value *Slot = allocStackSlot(IRB, false);
-    IRB.CreateCall(BS.BsanFuncShadowLoad, {Operand, Slot});
-    ProvenancePtrScalar SrcProvPtr(IRB, BS.PL, Slot);
-
+    Value *Shadow = IRB.CreateCall(BS.BsanFuncShadow, {Operand});
+    ProvenancePtrScalar SrcProvPtr(IRB, BS.PL, Shadow);
     ProvenanceScalar SrcProv = ProvenanceScalar::load(IRB, BS.PL, SrcProvPtr);
     ProvenanceScalar RetaggedProv = instrumentRetag(IRB, CB, SrcAddr, SrcProv);
-    IRB.CreateCall(BS.BsanFuncShadowStore,
-                   {RetaggedProv.Tag, RetaggedProv.Info, Operand});
+    IRB.CreateCall(BS.BsanFuncRcStore,
+                   {RetaggedProv.Tag, RetaggedProv.Info, Shadow});
   }
 
   void instrumentRetagReg(CallBase &CB) {
@@ -1458,11 +1457,10 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncValidateRetval = M.getOrInsertFunction(
       BSAN_FN("validate_retval"), AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
 
-  BsanFuncShadowLoad = M.getOrInsertFunction(BSAN_FN("shadow_load"), AL,
-                                             IRB.getVoidTy(), PtrTy, PtrTy);
+  BsanFuncShadow = M.getOrInsertFunction(BSAN_FN("shadow"), AL, PtrTy, PtrTy);
 
-  BsanFuncShadowStore = M.getOrInsertFunction(
-      BSAN_FN("shadow_store"), AL, IRB.getVoidTy(), IntptrTy, PtrTy, PtrTy);
+  BsanFuncRcStore = M.getOrInsertFunction(
+      BSAN_FN("rc_store"), AL, IRB.getVoidTy(), IntptrTy, PtrTy, PtrTy);
 
   BsanFuncShadowClear = M.getOrInsertFunction(BSAN_FN("shadow_clear"), AL,
                                               IRB.getVoidTy(), PtrTy, IntptrTy);

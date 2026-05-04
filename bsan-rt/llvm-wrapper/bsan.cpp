@@ -326,8 +326,15 @@ SANITIZER_WEAK_ATTRIBUTE void __bsan_write_impl(void *ptr, uptr access_size,
 
 SANITIZER_WEAK_ATTRIBUTE void
 __bsan_shadow_transfer(void *dest, const void *src, uptr access_size) {}
+
 SANITIZER_WEAK_ATTRIBUTE void __bsan_shadow_clear(void *dest,
                                                   uptr access_size) {}
+
+SANITIZER_WEAK_ATTRIBUTE void *__bsan_shadow(void *dest) { return GetSlot(0); }
+
+SANITIZER_WEAK_ATTRIBUTE void
+__bsan_rc_store(BorTag bor_tag, AllocInfo *alloc_info, void *dest) {}
+
 SANITIZER_WEAK_ATTRIBUTE AllocInfo *__bsan_reserve_stack_slot() {
   return nullptr;
 }
