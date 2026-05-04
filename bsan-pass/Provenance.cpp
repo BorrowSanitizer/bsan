@@ -4,8 +4,8 @@
 
 using namespace llvm;
 
-// Recursively populates a given vector with the list of descriptions of where
-// provenance values live within a type.
+// Populates a vector with the list of locations of provenance
+// values within a type.
 std::tuple<Value *, Value *> ProvenanceLayout::getProvenanceDesc(
     IRBuilder<> &IRB, SmallVector<ProvenanceDesc> &ProvDesc, Type *CurrentTy,
     Value *ByteOffset, Value *ProvOffset) {
@@ -47,7 +47,7 @@ std::tuple<Value *, Value *> ProvenanceLayout::getProvenanceDesc(
   return std::make_tuple(NextByteOffset, NextProvOffset);
 }
 
-// Returns the descriptions for where provenance values are stored for a type.
+// Provides a list of the locations of provenance values inside a type.
 SmallVector<ProvenanceDesc>
 ProvenanceLayout::getProvenanceDesc(IRBuilder<> &IRB, Type *Ty) {
   SmallVector<ProvenanceDesc> Desc;
@@ -60,7 +60,10 @@ ProvenanceLayout::getProvenanceDesc(IRBuilder<> &IRB, Type *Ty) {
 
 void Provenance::addIncoming(BasicBlock *IncomingBlock,
                              Provenance &IncomingProv) {
+  assert(isa<PHINode>(this->Tag));
   PHINode *TagNode = cast<PHINode>(this->Tag);
+
+  assert(isa<PHINode>(this->Info));
   PHINode *InfoNode = cast<PHINode>(this->Info);
 
   TagNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Tag);

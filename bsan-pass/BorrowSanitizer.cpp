@@ -1101,37 +1101,26 @@ private:
   // Computes the offset in terms of provenance components for an index into an
   // aggregate or array value. Used for implementing `extractvalue` and
   // `insertvalue`.
-  std::tuple<Type *, unsigned> offsetIntoProvenanceIndex(IRBuilder<> &IRB,
-                                                         Type *CurrentTy,
-                                                         unsigned Idx,
-                                                         unsigned PrevOffset) {
-    switch (CurrentTy->getTypeID()) {
-    case Type::StructTyID: {
-      StructType *ST = cast<StructType>(CurrentTy);
-      assert(Idx < ST->getNumElements() &&
-             "Index out of bounds for struct type.");
-      uint64_t Offset = PrevOffset;
+  std::pair<Type *, unsigned> getProvenanceOffset(IRBuilder<> &IRB, Type *Ty,
+                                                  unsigned Idx) {
+    if (auto *ST = dyn_cast<StructType>(Ty)) {
+      unsigned Offset = 0;
       for (unsigned CurrIdx = 0; CurrIdx < Idx; ++CurrIdx) {
         Type *ElemType = ST->getElementType(CurrIdx);
         SmallVector<ProvenanceDesc> ProvDesc =
             BS.PL.getProvenanceDesc(IRB, ElemType);
         Offset += ProvDesc.size();
       }
-      return std::make_tuple(ST->getElementType(Idx), Offset);
-    } break;
-    case Type::ArrayTyID: {
-      ArrayType *AT = cast<ArrayType>(CurrentTy);
-      assert(Idx < AT->getNumElements() &&
-             "Index out of bounds for array type.");
+      return {ST->getElementType(Idx), Offset};
+    }
+
+    if (auto *AT = dyn_cast<ArrayType>(Ty)) {
       SmallVector<ProvenanceDesc> ProvDesc =
           BS.PL.getProvenanceDesc(IRB, AT->getElementType());
-      return std::make_tuple(AT->getElementType(),
-                             PrevOffset + ProvDesc.size());
-    } break;
-    default: {
-      report_fatal_error("Cannot index into a non-struct or non-array type.");
+      return {AT->getElementType(), ProvDesc.size() * Idx};
     }
-    }
+
+    report_fatal_error("Cannot index into a non-struct or non-array type.");
   }
 
   void visitExtractValueInst(ExtractValueInst &EI) {
@@ -1142,15 +1131,16 @@ private:
         BS.PL.getProvenanceDesc(IRB, EI.getType());
 
     Type *CurrType = AggregateSrc->getType();
-    uint64_t StartingIdx = 0;
+    uint64_t StartIdx = 0;
     for (auto &Idx : EI.indices()) {
-      std::tie(CurrType, StartingIdx) =
-          offsetIntoProvenanceIndex(IRB, CurrType, Idx, StartingIdx);
+      unsigned IdxOffset = 0;
+      std::tie(CurrType, IdxOffset) = getProvenanceOffset(IRB, CurrType, Idx);
+      StartIdx += IdxOffset;
     }
 
     for (auto [Offset, Desc] : llvm::enumerate(DestProvDesc)) {
-      Provenance Prov = assertProvenance(IRB, Desc.Elems,
-                                         {AggregateSrc, StartingIdx + Offset});
+      Provenance Prov =
+          assertProvenance(IRB, Desc.Elems, {AggregateSrc, StartIdx + Offset});
       setProvenance({&EI, Offset}, Prov);
     }
   }
@@ -1163,15 +1153,16 @@ private:
         BS.PL.getProvenanceDesc(IRB, ToInsert->getType());
 
     Type *CurrType = II.getType();
-    uint64_t StartingIdx = 0;
+    uint64_t StartIdx = 0;
     for (auto &Idx : II.indices()) {
-      std::tie(CurrType, StartingIdx) =
-          offsetIntoProvenanceIndex(IRB, CurrType, Idx, StartingIdx);
+      unsigned IdxOffset = 0;
+      std::tie(CurrType, IdxOffset) = getProvenanceOffset(IRB, CurrType, Idx);
+      StartIdx += IdxOffset;
     }
 
     for (auto [Offset, Desc] : llvm::enumerate(SrcProvDesc)) {
       Provenance Prov = assertProvenance(IRB, Desc.Elems, {ToInsert, Offset});
-      setProvenance({&II, StartingIdx + Offset}, Prov);
+      setProvenance({&II, StartIdx + Offset}, Prov);
     }
   }
 
