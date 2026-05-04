@@ -1,5 +1,4 @@
 #include "BorrowSanitizer.h"
-#include "Declarations.h"
 #include "Provenance.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
@@ -29,6 +28,14 @@
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
+#define BSAN_PREFIX "__bsan_"
+#define BSAN_STATIC_PREFIX "__BSAN_"
+#define RUST_PREFIX "__rust_"
+
+#define BSAN_FN(name) BSAN_PREFIX name
+#define BSAN_STATIC(name) BSAN_STATIC_PREFIX name
+#define RUST_FN(name) RUST_PREFIX name
+
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
@@ -41,56 +48,14 @@ static cl::opt<bool> ClHandleAsmConservative(
              "outputs to wildcard Provenance"),
     cl::Hidden, cl::init(true));
 
-namespace {
-
-bool inSCC(DominatorTree &DT, LoopInfo &LI, BasicBlock *BB) {
-  if (LI.getLoopFor(BB))
-    return true;
-  // It's still possible for us to have irreducible control flow, in which
-  // case LLVM would not recognize a loop, but it would still be possible for
-  // us to enter this basic block again. We would use LLVM's CycleInfo instead,
-  // which would catch this, but it does not support incremental updates yet.
-  for (BasicBlock *SuccBB : successors(BB)) {
-    if (isPotentiallyReachable(SuccBB, BB, nullptr, &DT, &LI)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/// Helper class to attach debug information of the given instruction onto new
-/// instructions inserted after.
-class NextNodeIRBuilder : public IRBuilder<> {
-public:
-  explicit NextNodeIRBuilder(Instruction *IP) : IRBuilder<>(IP->getNextNode()) {
-    SetCurrentDebugLocation(IP->getDebugLoc());
-  }
-};
-
-Value *ptradd(IRBuilder<> &IRB, Value *Pointer, Value *Offset) {
-  if (match(Offset, m_Zero()))
-    return Pointer;
-  return IRB.CreateGEP(IRB.getInt8Ty(), Pointer, Offset);
-}
-
-// We only instrument allocations that have a non-zero size.
-bool shouldInstrumentAlloca(const DataLayout &DL, const AllocaInst &AI) {
-  // Although Rust emits retags for ZSTs, tracking
-  // allocations leads to false positive errors—probably
-  // due to interactions with lowering.
-  Type *AllocType = AI.getAllocatedType();
-  std::optional<TypeSize> AllocSize = AI.getAllocationSize(DL);
-  return (AllocType->isSized() && AllocSize.has_value() &&
-          !AllocSize.value().isZero());
-}
-
-bool needsBoundaryValidation(const Function *Callee) {
+bool BorrowSanitizer::needsBoundaryValidation(const Function *Callee) {
   return !Callee ||
          (Callee->isDeclaration() || Callee->hasExternalLinkage() ||
           Callee->hasExternalWeakLinkage() || Callee->hasAddressTaken());
 }
 
-bool shouldTrustFunction(const TargetLibraryInfo *TLI, const Value *V) {
+bool BorrowSanitizer::shouldTrustFunction(const TargetLibraryInfo *TLI,
+                                          const Value *V) {
   if (isAllocationFn(V, TLI)) {
     return true;
   }
@@ -108,9 +73,27 @@ bool shouldTrustFunction(const TargetLibraryInfo *TLI, const Value *V) {
   return false;
 }
 
+static Value *ptradd(IRBuilder<> &IRB, Value *Pointer, Value *Offset) {
+  if (match(Offset, m_Zero()))
+    return Pointer;
+  return IRB.CreateGEP(IRB.getInt8Ty(), Pointer, Offset);
+}
+
+// We only instrument allocations that have a non-zero size.
+bool BorrowSanitizer::shouldInstrumentAlloca(const DataLayout &DL,
+                                             const AllocaInst &AI) {
+  // Although Rust emits retags for ZSTs, tracking
+  // allocations leads to false positive errors—probably
+  // due to interactions with lowering.
+  Type *AllocType = AI.getAllocatedType();
+  std::optional<TypeSize> AllocSize = AI.getAllocationSize(DL);
+  return (AllocType->isSized() && AllocSize.has_value() &&
+          !AllocSize.value().isZero());
+}
+
 // Recursively populates a given vector with the list of descriptions of where
 // provenance values live within a type.
-std::tuple<Value *, Value *>
+static std::tuple<Value *, Value *>
 getProvenanceDesc(IRBuilder<> &IRB, const DataLayout *DL,
                   SmallVector<ProvenanceDesc> &ProvDesc, Type *ParentTy,
                   Type *CurrentTy, Value *ByteOffset, Value *ProvOffset) {
@@ -154,8 +137,8 @@ getProvenanceDesc(IRBuilder<> &IRB, const DataLayout *DL,
 }
 
 // Returns the descriptions for where provenance values are stored for a type.
-SmallVector<ProvenanceDesc> getProvenanceDesc(IRBuilder<> &IRB,
-                                              const DataLayout *DL, Type *Ty) {
+static SmallVector<ProvenanceDesc>
+getProvenanceDesc(IRBuilder<> &IRB, const DataLayout *DL, Type *Ty) {
   SmallVector<ProvenanceDesc> Desc;
   ConstantInt *Zero = ConstantInt::get(IRB.getIntPtrTy(*DL), 0);
   getProvenanceDesc(IRB, DL, Desc, Ty, Ty, Zero, Zero);
@@ -165,7 +148,7 @@ SmallVector<ProvenanceDesc> getProvenanceDesc(IRBuilder<> &IRB,
 // Computes the offset in terms of provenance components for an index into an
 // aggregate or array value. Used for implementing `extractvalue` and
 // `insertvalue`.
-std::tuple<Type *, uint64_t>
+static std::tuple<Type *, uint64_t>
 offsetIntoProvenanceIndex(IRBuilder<> &IRB, const DataLayout *DL,
                           Type *CurrentTy, uint64_t Idx,
                           uint64_t PrevOffset = 0) {
@@ -196,9 +179,31 @@ offsetIntoProvenanceIndex(IRBuilder<> &IRB, const DataLayout *DL,
   }
 }
 
-} // namespace
+static bool inSCC(DominatorTree &DT, LoopInfo &LI, BasicBlock *BB) {
+  if (LI.getLoopFor(BB))
+    return true;
+  // It's still possible for us to have irreducible control flow, in which
+  // case LLVM would not recognize a loop, but it would still be possible for
+  // us to enter this basic block again. We would use LLVM's CycleInfo instead,
+  // which would catch this, but it does not support incremental updates yet.
+  for (BasicBlock *SuccBB : successors(BB)) {
+    if (isPotentiallyReachable(SuccBB, BB, nullptr, &DT, &LI)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 namespace {
+/// Helper class to attach debug information of the given instruction onto new
+/// instructions inserted after.
+class NextNodeIRBuilder : public IRBuilder<> {
+public:
+  explicit NextNodeIRBuilder(Instruction *IP) : IRBuilder<>(IP->getNextNode()) {
+    SetCurrentDebugLocation(IP->getDebugLoc());
+  }
+};
+
 class RetagInfo {
 public:
   Value *Ptr;
@@ -221,21 +226,20 @@ public:
     return (Perms->getZExtValue() & 0x1) != 0;
   }
 };
+} // namespace
 
-bool isRetag(const CallBase *CB) {
+static bool isRetag(const CallBase *CB) {
   Function *Callee = CB->getCalledFunction();
   return CB->arg_size() == 5 && Callee &&
-         Callee->getName().starts_with(kBsanRustIntrinsicRetagPrefix);
+         Callee->getName().starts_with(RUST_FN("retag"));
 }
 
-bool isFnEntryRetag(const CallBase *CB) {
+static bool isFnEntryRetag(const CallBase *CB) {
   if (isRetag(CB)) {
     return RetagInfo(CB).isProtected();
   }
   return false;
 }
-
-} // namespace
 
 // BorrowSanitizer uses a shadow stack to track the provenance values
 // that are accessible in memory and to pass provenance between functions.
@@ -477,7 +481,7 @@ public:
           continue;
         if (I.getOpcode() == Instruction::Alloca) {
           AllocaInst &AI = static_cast<AllocaInst &>(I);
-          if (shouldInstrumentAlloca(*BS.DL, AI) && AI.isStaticAlloca())
+          if (BS.shouldInstrumentAlloca(*BS.DL, AI) && AI.isStaticAlloca())
             StaticAllocaVec.push_back(&AI);
           continue;
         }
@@ -490,7 +494,7 @@ public:
           if (auto *LI = dyn_cast<LifetimeIntrinsic>(CB)) {
             if (CB->getIntrinsicID() == Intrinsic::lifetime_start) {
               AllocaInst *AI = findAllocaForValue(LI->getArgOperand(1), true);
-              if (AI && shouldInstrumentAlloca(*BS.DL, *AI)) {
+              if (AI && BS.shouldInstrumentAlloca(*BS.DL, *AI)) {
                 HasLifetimeStart.insert(AI);
               }
             }
@@ -664,8 +668,8 @@ private:
     FrameHeaderBottom =
         ptradd(EntryIRB, FrameTop, EntryIRB.CreateNeg(ByteOffset));
 
-    if (needsBoundaryValidation(&F)) {
-      if (!shouldTrustFunction(TLI, &F)) {
+    if (BS.needsBoundaryValidation(&F)) {
+      if (!BS.shouldTrustFunction(TLI, &F)) {
         EntryIRB.CreateCall(BS.BsanFuncValidateParams,
                             {&F, FrameHeaderBottom, NumParamProv});
       }
@@ -899,10 +903,10 @@ private:
     // values from it, but we also need to know the number of provenance
     // values associated with the return value to perform initialization.
     Value *Slot = getStackOffset(Before, false);
-    if (needsBoundaryValidation(Callee)) {
+    if (BS.needsBoundaryValidation(Callee)) {
       Value *Marker;
 
-      if (shouldTrustFunction(TLI, &CB)) {
+      if (BS.shouldTrustFunction(TLI, &CB)) {
         Marker = Before.CreateCall(BS.BsanFuncMark,
                                    {ConstantPointerNull::get(BS.PtrTy)});
         After.CreateStore(Marker, BS.Marker);
@@ -1317,14 +1321,14 @@ Instruction *BorrowSanitizer::createBsanModuleDtor(Module &M) {
 
   BsanDtorFunction = Function::createWithDefaultAttr(
       FunctionType::get(IRB.getVoidTy(), false), GlobalValue::InternalLinkage,
-      0, kBsanModuleDtorName, &M);
+      0, "bsan.module_dtor", &M);
   BsanDtorFunction->addFnAttr(Attribute::NoUnwind);
 
   BasicBlock *BsanDtorBB = BasicBlock::Create(*C, "", BsanDtorFunction);
   ReturnInst *BsanDtorRet = ReturnInst::Create(*C, BsanDtorBB);
 
   auto *FnTy = FunctionType::get(IRB.getVoidTy(), false);
-  FunctionCallee DeinitFn = M.getOrInsertFunction(kBsanFuncDeinitName, FnTy);
+  FunctionCallee DeinitFn = M.getOrInsertFunction(BSAN_FN("deinit"), FnTy);
 
   IRB.SetInsertPoint(BsanDtorRet);
   CallInst *DeinitCall = IRB.CreateCall(DeinitFn, {});
@@ -1336,7 +1340,7 @@ Instruction *BorrowSanitizer::createBsanModuleDtor(Module &M) {
 bool BorrowSanitizer::instrumentModule(Module &M) {
   // TODO: add version check.
   std::tie(BsanCtorFunction, std::ignore) = createSanitizerCtorAndInitFunctions(
-      M, kBsanModuleCtorName, kBsanFuncInitName, /*InitArgTypes=*/{},
+      M, "bsan.module_ctor", BSAN_FN("init"), /*InitArgTypes=*/{},
       /*InitArgs=*/{}, "");
 
   bool CtorComdat = false;
@@ -1352,10 +1356,10 @@ bool BorrowSanitizer::instrumentModule(Module &M) {
   // (1) global instrumentation is not TU-specific
   // (2) target is ELF.
   if (CtorComdat && TargetTriple.isOSBinFormatELF()) {
-    BsanCtorFunction->setComdat(M.getOrInsertComdat(kBsanModuleCtorName));
+    BsanCtorFunction->setComdat(M.getOrInsertComdat("bsan.module_ctor"));
     appendToGlobalCtors(M, BsanCtorFunction, Priority, BsanCtorFunction);
 
-    BsanDtorFunction->setComdat(M.getOrInsertComdat(kBsanModuleDtorName));
+    BsanDtorFunction->setComdat(M.getOrInsertComdat("bsan.module_dtor"));
     appendToGlobalDtors(M, BsanDtorFunction, Priority, BsanDtorFunction);
   } else {
     appendToGlobalCtors(M, BsanCtorFunction, Priority);
@@ -1427,57 +1431,57 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   AL = AL.addFnAttribute(*C, Attribute::NoUnwind);
 
-  BsanFuncRetag = M.getOrInsertFunction(kBsanFuncRetagName, AL, IntptrTy, PtrTy,
+  BsanFuncRetag = M.getOrInsertFunction(BSAN_FN("retag"), AL, IntptrTy, PtrTy,
                                         IntptrTy, Int8Ty, PtrTy, IntptrTy,
                                         PtrTy, IntptrTy, IntptrTy, PtrTy);
 
   BsanFuncPopFrame = M.getOrInsertFunction(
-      kBsanFuncPopFrame, AL, IRB.getVoidTy(), PtrTy, IntptrTy, IntptrTy);
+      BSAN_FN("pop_frame"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, IntptrTy);
 
-  BsanFuncRead = M.getOrInsertFunction(kBsanFuncReadName, AL, IRB.getVoidTy(),
+  BsanFuncRead = M.getOrInsertFunction(BSAN_FN("read"), AL, IRB.getVoidTy(),
                                        PtrTy, IntptrTy, IntptrTy, PtrTy);
 
-  BsanFuncWrite = M.getOrInsertFunction(kBsanFuncWriteName, AL, IRB.getVoidTy(),
+  BsanFuncWrite = M.getOrInsertFunction(BSAN_FN("write"), AL, IRB.getVoidTy(),
                                         PtrTy, IntptrTy, IntptrTy, PtrTy);
 
   BsanFuncAllocStack =
-      M.getOrInsertFunction(kBsanFuncAllocStackName, AL, IRB.getVoidTy(), PtrTy,
+      M.getOrInsertFunction(BSAN_FN("alloc_stack"), AL, IRB.getVoidTy(), PtrTy,
                             IntptrTy, IntptrTy, PtrTy);
   BsanFuncDeallocStack = M.getOrInsertFunction(
-      kBsanFuncDeallocStackName, AL, IRB.getVoidTy(), PtrTy, IntptrTy, PtrTy);
+      BSAN_FN("dealloc_stack"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, PtrTy);
 
-  BsanFuncMark = M.getOrInsertFunction(kBsanFuncMarkName, AL, PtrTy, PtrTy);
+  BsanFuncMark = M.getOrInsertFunction(BSAN_FN("mark"), AL, PtrTy, PtrTy);
 
   BsanFuncValidateParams = M.getOrInsertFunction(
-      kBsanFuncValidateParamsName, AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
+      BSAN_FN("validate_params"), AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
 
   BsanFuncValidateRetval = M.getOrInsertFunction(
-      kBsanFuncValidateRetvalName, AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
+      BSAN_FN("validate_retval"), AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
 
-  BsanFuncShadowLoad = M.getOrInsertFunction(kBsanFuncGetShadowLoadName, AL,
+  BsanFuncShadowLoad = M.getOrInsertFunction(BSAN_FN("shadow_load"), AL,
                                              IRB.getVoidTy(), PtrTy, PtrTy);
 
   BsanFuncShadowStore = M.getOrInsertFunction(
-      kBsanFuncGetShadowStoreName, AL, IRB.getVoidTy(), IntptrTy, PtrTy, PtrTy);
+      BSAN_FN("shadow_store"), AL, IRB.getVoidTy(), IntptrTy, PtrTy, PtrTy);
 
-  BsanFuncShadowClear = M.getOrInsertFunction(kBsanFuncShadowClearName, AL,
+  BsanFuncShadowClear = M.getOrInsertFunction(BSAN_FN("shadow_clear"), AL,
                                               IRB.getVoidTy(), PtrTy, IntptrTy);
 
-  BsanFuncMemCpy = M.getOrInsertFunction(
-      kBsanFuncMemCpyName, AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
+  BsanFuncMemCpy = M.getOrInsertFunction(BSAN_FN("memcpy"), AL, IRB.getVoidTy(),
+                                         PtrTy, PtrTy, IntptrTy);
 
   BsanFuncMemMove = M.getOrInsertFunction(
-      kBsanFuncMemMoveName, AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
+      BSAN_FN("memmove"), AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
 
-  BsanFuncMemSet = M.getOrInsertFunction(
-      kBsanFuncMemSetName, AL, IRB.getVoidTy(), PtrTy, Int32Ty, IntptrTy);
+  BsanFuncMemSet = M.getOrInsertFunction(BSAN_FN("memset"), AL, IRB.getVoidTy(),
+                                         PtrTy, Int32Ty, IntptrTy);
 
   BsanFuncReserveStackSlot =
-      M.getOrInsertFunction(kBsanFuncReserveStackSlotName,
+      M.getOrInsertFunction(BSAN_FN("reserve_stack_slot"),
                             FunctionType::get(PtrTy, /*isVarArg=*/false), AL);
 
   BsanFuncDestroyStackSlot = M.getOrInsertFunction(
-      kBsanFuncDestroyStackSlotName, AL, IRB.getVoidTy(), PtrTy);
+      BSAN_FN("destroy_stack_slot"), AL, IRB.getVoidTy(), PtrTy);
 
   EHPersonality Pers = getDefaultEHPersonality(TargetTriple);
   DefaultPersonalityFn =
@@ -1491,9 +1495,9 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 void BorrowSanitizer::createUserspaceApi(Module &M,
                                          const TargetLibraryInfo &TLI) {
   IRBuilder<> IRB(*C);
-  Marker = getOrInsertTLSGlobal(M, kBsanMarkerName, PtrTy);
-  ProvStack = getOrInsertTLSGlobal(M, kBsanProvStackName, PtrTy);
-  BorTagCounter = getOrInsertGlobal(M, kBsanBorTagCounterName, IntptrTy);
+  Marker = getOrInsertTLSGlobal(M, BSAN_STATIC("MARKER"), PtrTy);
+  ProvStack = getOrInsertTLSGlobal(M, BSAN_STATIC("PROV_STACK"), PtrTy);
+  BorTagCounter = getOrInsertGlobal(M, BSAN_STATIC("BOR_TAG_CTR"), IntptrTy);
 }
 
 bool BorrowSanitizer::instrumentFunction(Function &F,
@@ -1506,11 +1510,11 @@ bool BorrowSanitizer::instrumentFunction(Function &F,
     return false;
   }
 
-  if (F.getName().starts_with(kBsanPrefix)) {
+  if (F.getName().starts_with(BSAN_PREFIX)) {
     return false;
   }
 
-  if (F.getName().starts_with(kBsanRustIntrinsicRetagPrefix)) {
+  if (F.getName().starts_with(RUST_FN("retag"))) {
     return false;
   }
 

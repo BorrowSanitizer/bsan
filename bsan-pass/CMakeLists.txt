@@ -19,7 +19,6 @@ set(BSAN_HEADERS
   BorrowSanitizer.h
   BorrowSanitizerPass.h
   Provenance.h
-  Declarations.h
 )
 
 set(CMAKE_CXX_CLANG_TIDY clang-tidy;-warnings-as-errors=*)
