@@ -410,6 +410,12 @@ impl Buildable for CompilerRt {
         let target = path!(target_dir / self.artifact(env));
         Ok(Some(target))
     }
+    fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+        env.in_mode(Mode::Release, |env| {
+            let built = self.build(env, args)?.expect("Compiler-rt was not built.");
+            env.copy_to_sysroot_libdir(&built)
+        })
+    }
 }
 
 struct BsanRtCore;

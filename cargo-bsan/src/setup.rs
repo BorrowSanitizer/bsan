@@ -13,6 +13,10 @@ use crate::arg::*;
 use crate::llvm::LlvmTools;
 use crate::util::*;
 
+const RUST_RT: &str = "libbsan_rt";
+const LLVM_RT: &str = "libclang_rt.bsan";
+const LLVM_PLUGIN: &str = "libbsan_plugin";
+
 pub struct EnvConfig {
     pub verbose: bool,
     pub quiet: bool,
@@ -53,7 +57,7 @@ pub struct Dependencies {
 }
 
 impl Dependencies {
-    pub fn setup(host_sysroot: &Sysroot) -> Self {
+    pub fn setup(version: &VersionMeta, host_sysroot: &Sysroot) -> Self {
         let ensure_library_var = |var: &str, sysroot: &Sysroot, libname: &str| {
             env::var_os(var).map(|o| o.into()).or_else(|| {
                 let plugin: PathBuf = (*sysroot).join("lib").join(libname).to_path_buf();
@@ -65,7 +69,8 @@ impl Dependencies {
             })
         };
 
-        let Some(llvm_pass) = ensure_library_var("BSAN_PLUGIN", host_sysroot, "libbsan_plugin.so")
+        let Some(llvm_pass) =
+            ensure_library_var("BSAN_PLUGIN", host_sysroot, &format!("{LLVM_PLUGIN}.so"))
         else {
             show_error!(
                 "failed to locate the BorrowSanitizer LLVM plugin (libbsan_plugin.so) within the host sysroot: {}",
@@ -73,9 +78,25 @@ impl Dependencies {
             );
         };
 
-        let Some(runtime) = ensure_library_var("BSAN_RT", host_sysroot, "libbsan_rt.a") else {
+        let nop = env::var_os("BSAN_NOP").is_some();
+
+        let runtime_libname = if nop {
+            let host = &version.host;
+            let components: Vec<&str> = host.split("-").collect();
+            if let Some(arch) = components.first() {
+                format!("{LLVM_RT}-{arch}.a")
+            } else {
+                show_error!(
+                    "Failed to resolve the host architecture from the target triple: {host}"
+                );
+            }
+        } else {
+            format!("{RUST_RT}.a")
+        };
+
+        let Some(runtime) = ensure_library_var("BSAN_RT", host_sysroot, &runtime_libname) else {
             show_error!(
-                "failed to locate the BorrowSanitizer runtime (libbsan_rt.a) within the host sysroot."
+                "failed to locate the BorrowSanitizer runtime ({runtime_libname}) within the host sysroot."
             );
         };
 

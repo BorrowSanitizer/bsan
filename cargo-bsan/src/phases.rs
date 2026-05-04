@@ -110,7 +110,7 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     }
 
     let llvm_tools = LlvmTools::new(&rustc_version, &host_sysroot);
-    let deps = Dependencies::setup(&host_sysroot);
+    let deps = Dependencies::setup(&rustc_version, &host_sysroot);
 
     setup_sysroot(&subcommand, &rustc_version, &deps, &llvm_tools, &target_sysroot, &env);
 

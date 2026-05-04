@@ -15,7 +15,7 @@ def fail(msg):
     sys.exit(1)
 
 
-def cargo_bsan(cmd, quiet=True):
+def cargo_bsan(cmd, quiet=True, nop=False):
     args = ["cargo", "bsan", cmd] + CARGO_EXTRA_FLAGS
     if quiet:
         args += ["-q"]
@@ -145,11 +145,16 @@ def test_cargo_bsan_run():
         cargo_bsan("run"),
         stdout_ref="run.stdout.ref",
     )
+    test(
+        "`cargo bsan run` (nop)",
+        cargo_bsan("run"),
+        stdout_ref="run.stdout.ref",
+        env={"BSAN_NOP": "1"},
+    )
     test_no_rebuild(
         "`cargo bsan run` (no rebuild)",
         cargo_bsan("run", quiet=False),
     )
-
 
 def test_cargo_bsan_test():
     test(
@@ -157,7 +162,12 @@ def test_cargo_bsan_test():
         cargo_bsan("test"),
         stdout_ref="test.stdout.ref",
     )
-
+    test(
+        "`cargo bsan test` (nop)",
+        cargo_bsan("test"),
+        stdout_ref="test.stdout.ref",
+        env={"BSAN_NOP": "1"},
+    )
 
 args_parser = argparse.ArgumentParser(description="`cargo bsan` testing")
 args_parser.add_argument(
