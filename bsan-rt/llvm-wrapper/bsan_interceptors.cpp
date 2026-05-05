@@ -1,5 +1,6 @@
 #include "bsan.h"
 #include "bsan_thread.h"
+#include "bsan_interface_internal.h"
 #include "interception/interception.h"
 #include "sanitizer_common/sanitizer_allocator.h"
 #include "sanitizer_common/sanitizer_allocator_dlsym.h"
@@ -14,37 +15,24 @@ using namespace __bsan;
 DECLARE_REAL(void *, malloc, SIZE_T)
 DECLARE_REAL(void, free, void *)
 
-bool inst_caller(void *sym) {
-  if (__BSAN_PROV_STACK == nullptr) {
-    return false;
-  }
-  if (__BSAN_MARKER) {
-    bool cond = __BSAN_MARKER == sym;
-    if (cond) {
-      __BSAN_MARKER = 0;
-    }
-    return cond;
-  } else {
-    return true;
-  }
-}
-
-#define INST_CALLER(f) inst_caller((void *)f)
-
-#define ENSURE_BSAN_INITED()                                                   \
-  do {                                                                         \
-    CHECK(!BSAN_INIT_RUNNING);                                                 \
-    if (!BSAN_INITED) {                                                        \
-      __bsan_init();                                                           \
-    }                                                                          \
-  } while (0)
-
 extern "C" int pthread_attr_init(void *attr);
 extern "C" int pthread_attr_destroy(void *attr);
 
 struct DlsymAlloc : public DlSymAllocator<DlsymAlloc> {
-  static bool UseImpl() { return !BSAN_INITED; }
+  static bool UseImpl() { return !bsan_inited; }
 };
+
+#define INST_CALLER(f) CallerIsInstrumented((void *)f)
+
+
+#define ENSURE_BSAN_INITED()                                                   \
+  do {                                                                         \
+    CHECK(!bsan_init_running);                                                 \
+    if (!bsan_inited) {                                                        \
+      __bsan_init();                                                           \
+    }                                                                          \
+  } while (0)
+
 
 struct InterceptorContext {
   Mutex AtExitLock;
@@ -159,7 +147,7 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
 extern "C" {
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memset(void *dest, int c, uptr n) {
-  if (!BSAN_INITED || BSAN_INIT_RUNNING) {
+  if (!bsan_inited || bsan_init_running) {
     internal_memset(dest, c, n);
   } else {
     ENSURE_BSAN_INITED();
@@ -170,7 +158,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memset(void *dest, int c, uptr n) {
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memmove(void *dest, const void *src,
                                                   uptr n) {
-  if (!BSAN_INITED || BSAN_INIT_RUNNING) {
+  if (!bsan_inited || bsan_init_running) {
     internal_memmove(dest, src, n);
   } else {
     ENSURE_BSAN_INITED();
@@ -181,7 +169,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memmove(void *dest, const void *src,
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memcpy(void *dest, const void *src,
                                                  uptr n) {
-  if (!BSAN_INITED || BSAN_INIT_RUNNING) {
+  if (!bsan_inited || bsan_init_running) {
     internal_memcpy(dest, src, n);
   } else {
     ENSURE_BSAN_INITED();
@@ -228,7 +216,7 @@ static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso);
 // Unpoison argument shadow for C++ module destructors.
 INTERCEPTOR(int, __cxa_thread_atexit_impl, void (*func)(void *), void *arg,
             void *dso_handle) {
-  if (BSAN_INIT_RUNNING)
+  if (bsan_init_running)
     return REAL(__cxa_thread_atexit_impl)(func, arg, dso_handle);
   return setup_at_exit_wrapper((void (*)())func, arg, dso_handle);
 }
@@ -236,7 +224,7 @@ INTERCEPTOR(int, __cxa_thread_atexit_impl, void (*func)(void *), void *arg,
 // Unpoison argument shadow for C++ module destructors.
 INTERCEPTOR(int, __cxa_atexit, void (*func)(void *), void *arg,
             void *dso_handle) {
-  if (BSAN_INIT_RUNNING)
+  if (bsan_init_running)
     return REAL(__cxa_atexit)(func, arg, dso_handle);
   return setup_at_exit_wrapper((void (*)())func, arg, dso_handle);
 }
@@ -244,7 +232,7 @@ INTERCEPTOR(int, __cxa_atexit, void (*func)(void *), void *arg,
 // Unpoison argument shadow for C++ module destructors.
 INTERCEPTOR(int, atexit, void (*func)()) {
   // Avoid calling real atexit as it is unreachable on at least on Linux.
-  if (BSAN_INIT_RUNNING)
+  if (bsan_init_running)
     return REAL(__cxa_atexit)((void (*)(void *a))func, 0, 0);
   return setup_at_exit_wrapper((void (*)())func, 0, 0);
 }
