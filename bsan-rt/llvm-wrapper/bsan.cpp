@@ -137,6 +137,9 @@ using namespace __bsan;
 
 extern "C" {
 
+SANITIZER_WEAK_ATTRIBUTE
+void __bsan_internal_init() {}
+
 void __bsan_init() {
   CHECK(!bsan_init_running);
   if (bsan_inited)
@@ -159,6 +162,9 @@ void __bsan_init() {
   bsan_init_running = false;
   bsan_inited = true;
 }
+
+SANITIZER_WEAK_ATTRIBUTE
+void __bsan_internal_deinit() {}
 
 void __bsan_deinit() {
   CHECK(!bsan_deinit_running);
@@ -276,13 +282,6 @@ void __bsan_free_buffer(char *buf, uptr size) {
     UnmapOrDie(buf, size);
   }
 }
-
-// Weak (de)init
-SANITIZER_WEAK_ATTRIBUTE
-void __bsan_internal_init() {}
-
-SANITIZER_WEAK_ATTRIBUTE
-void __bsan_internal_deinit() {}
 
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_local_init(Provenance **prov) {}
