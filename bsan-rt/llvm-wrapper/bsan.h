@@ -4,12 +4,12 @@
 #include "sanitizer_common/sanitizer_internal_defs.h"
 #include "sanitizer_common/sanitizer_stacktrace.h"
 
+using __sanitizer::atomic_uintptr_t;
 using __sanitizer::StackTrace;
 using __sanitizer::u32;
 using __sanitizer::u64;
 using __sanitizer::u8;
 using __sanitizer::uptr;
-using __sanitizer::atomic_uintptr_t;
 
 extern THREADLOCAL uptr __BSAN_HAD_ERROR;
 
@@ -25,8 +25,8 @@ struct Provenance {
 
 const Provenance WILDCARD = {0, nullptr};
 
-extern SANITIZER_INTERFACE_ATTRIBUTE
-THREADLOCAL Provenance *__bsan_shadow_stack;
+extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance
+    *__bsan_shadow_stack;
 
 namespace __bsan {
 

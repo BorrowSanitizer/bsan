@@ -1,6 +1,6 @@
 #include "bsan.h"
-#include "bsan_thread.h"
 #include "bsan_interface_internal.h"
+#include "bsan_thread.h"
 #include "interception/interception.h"
 #include "sanitizer_common/sanitizer_allocator.h"
 #include "sanitizer_common/sanitizer_allocator_dlsym.h"
@@ -24,7 +24,6 @@ struct DlsymAlloc : public DlSymAllocator<DlsymAlloc> {
 
 #define INST_CALLER(f) CallerIsInstrumented((void *)f)
 
-
 #define ENSURE_BSAN_INITED()                                                   \
   do {                                                                         \
     CHECK(!bsan_init_running);                                                 \
@@ -32,7 +31,6 @@ struct DlsymAlloc : public DlSymAllocator<DlsymAlloc> {
       __bsan_init();                                                           \
     }                                                                          \
   } while (0)
-
 
 struct InterceptorContext {
   Mutex AtExitLock;

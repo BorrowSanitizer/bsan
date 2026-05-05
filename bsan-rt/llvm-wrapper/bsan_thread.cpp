@@ -1,5 +1,5 @@
-#include "bsan.h"
 #include "bsan_thread.h"
+#include "bsan.h"
 #include "bsan_interface_internal.h"
 #include "sanitizer_common/sanitizer_atomic.h"
 
