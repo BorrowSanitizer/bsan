@@ -32,6 +32,9 @@ THREADLOCAL Provenance *__bsan_shadow_stack = nullptr;
 
 namespace __bsan {
 
+// Much like other MemorySanitizer, we use a thread-local flag to detect
+// if we are currently invoking the unwinder or symbolizer. Both of these
+// will conflict with interceptors.
 static THREADLOCAL int is_in_symbolizer_or_unwinder;
 static void EnterSymbolizerOrUnwider() { ++is_in_symbolizer_or_unwinder; }
 static void ExitSymbolizerOrUnwider() { --is_in_symbolizer_or_unwinder; }
@@ -45,16 +48,26 @@ struct UnwinderScope {
 bool bsan_inited = false;
 bool bsan_init_running = false;
 bool bsan_deinit_running = false;
+
+// Every thread has a unique ID
 atomic_uintptr_t thread_id{0};
 
+// Returns the desired length for the current stack trace.
+// We add '1' to skip printing our runtime symbols in traces.
 u32 GetStackTraceLen() {
   uptr stacktrace_max_len = flags()->stacktrace_max_len;
   return static_cast<u32>(stacktrace_max_len) + 1;
 }
 
+// Returns a pointer to the slot on the shadow stack at the given index.
+// The shadow stack grows downward, so we subtract by the given index
+// plus one to adjust the for the the zero-th slot.
 Provenance *GetSlot(uptr Idx) { return __bsan_shadow_stack - (Idx + 1); }
+
+// Clears the provenance from the given stack slot.
 void ClearSlot(uptr Idx) { *GetSlot(Idx) = WILDCARD; }
 
+// Prints a stack trace, using Rust's formatting.
 void PrintStackTrace(StackTrace &stack) {
   Printf("stack backtrace:\n");
   if (GetEnv("BSAN_SYMBOLIZER") == nullptr) {
@@ -135,13 +148,14 @@ void __bsan_init() {
   __bsan_internal_init();
   InitializePlatformEarly();
 
-  InitializeGC();
   InitializeInterceptors();
   InitializeTSD();
 
   BsanThread *main_thread = BsanThread::Create(nullptr, nullptr);
   SetCurrentThread(main_thread);
   main_thread->Init();
+  InitializeGC();
+
   bsan_init_running = false;
   bsan_inited = true;
 }

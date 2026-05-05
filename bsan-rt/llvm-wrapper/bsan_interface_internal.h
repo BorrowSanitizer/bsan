@@ -25,15 +25,6 @@ SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_memset(void *s, int c, uptr n);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void *__bsan_mark(void *callee);
-
-SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_validate_params(void *current_fn, Provenance *frame, uptr len);
-
-SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_validate_retval(void *prev_marker, Provenance *frame, uptr len);
-
-SANITIZER_INTERFACE_ATTRIBUTE
 u32 __bsan_symbolize_pc(uptr pc, char *file_buf, uptr file_buf_len, u32 *line,
                         u32 *column);
 
@@ -45,12 +36,6 @@ AllocInfo *__bsan_alloc(void *base_addr, uptr size, BorTag bor_tag, Span pc);
 
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info, Span pc);
-
-SANITIZER_WEAK_ATTRIBUTE
-void __bsan_internal_init();
-
-SANITIZER_WEAK_ATTRIBUTE
-void __bsan_internal_deinit();
 
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_local_init(Provenance **prov);
