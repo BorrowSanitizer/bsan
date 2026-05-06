@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use core::mem::MaybeUninit;
 use core::num::NonZero;
 use core::ops::{BitAnd, Shr};
 use core::ptr::NonNull;
@@ -119,8 +120,6 @@ impl TableIndex {
 pub struct ShadowHeap<T> {
     /// Non-null pointer to the L1 page table array, allocated via mmap at initialization.
     table: NonNull<L1Array<T>>,
-    /// Stable address (const pointer) of the default shadow value used when no L2 page has been allocated for a given address.
-    default: *const T,
     /// Thread-safe list of allocated L2 page indices, used for cleanup and iteration over populated shadow memory regions.
     l2_blocks: RwLock<Vec<usize>>,
 }
@@ -138,17 +137,11 @@ impl<T: Sized> ShadowHeap<T> {
 impl<T: Sized + Copy> ShadowHeap<T> {
     /// We assume that `new` is only called during program initialization, so only by the main thread.
     /// So there should be no deadlock / synchronization issues.
-    // TODO(obr): it seems like we need the `default` pointer only for the `get_src()` function because
-    // bsan-rt's API right now returns a pointer to the provenance entry for subsequent load/store operations.
-    // If we change the API to do load/store in one step, then we might be able to eliminate the need for a default pointer
-    // and just return the default value directly.
-    pub fn new(default: *const T) -> Self {
+    pub fn new() -> Self {
         let table = mmap(Self::L1_SIZE).cast::<L1Array<T>>();
-
         // We can skip initialzation of each L1Entry because mmap returns a zeroed page and
         // we use ZeroableRwLock which is zero-initialized as RwLock::new(None)
-
-        Self { table, default, l2_blocks: RwLock::new(Vec::<usize>::new()) }
+        Self { table, l2_blocks: RwLock::new(Vec::<usize>::new()) }
     }
 
     #[inline]
@@ -183,7 +176,7 @@ impl<T: Sized + Copy> ShadowHeap<T> {
         l2_page
     }
 
-    pub fn clear(&self, dst: usize, num_bytes: usize, value: T) {
+    pub fn clear(&self, dst: usize, num_bytes: usize) {
         // We allow writing partial provenance values here, because if a pointer
         // is partially overwritten, then it should become invalid.
         let mut dst_index = TableIndex::new(dst);
@@ -197,7 +190,8 @@ impl<T: Sized + Copy> ShadowHeap<T> {
         while prov_remaining > 0 {
             if let Some(l2_dest) = self.get_l2(dst_index) {
                 unsafe {
-                    (*l2_dest.as_ptr())[dst_index.l2_index] = value;
+                    (*l2_dest.as_ptr())[dst_index.l2_index] =
+                        MaybeUninit::<T>::zeroed().assume_init();
                 }
                 dst_index = dst_index.add(1);
                 prov_remaining -= 1;
@@ -256,7 +250,7 @@ impl<T: Sized + Copy> ShadowHeap<T> {
                     for offset in 0..num_can_write {
                         ptr::write(
                             &raw mut (*l2_table_dst.as_ptr())[dst_index.l2_index + offset],
-                            *self.default,
+                            MaybeUninit::<T>::zeroed().assume_init(),
                         );
                     }
                 }
@@ -268,16 +262,7 @@ impl<T: Sized + Copy> ShadowHeap<T> {
         }
     }
 
-    pub fn get_src(&self, addr: usize) -> *const T {
-        let idx = TableIndex::new(addr);
-        unsafe {
-            self.get_l2(idx)
-                .map(|l2_page| &raw const (*l2_page.as_ptr())[idx.l2_index])
-                .unwrap_or(self.default)
-        }
-    }
-
-    pub fn get_dest(&self, addr: usize) -> NonNull<T> {
+    pub fn get(&self, addr: usize) -> NonNull<T> {
         let idx = TableIndex::new(addr);
         unsafe {
             let l2_page = self.ensure_l2(idx);
@@ -360,35 +345,35 @@ mod tests {
 
     #[test]
     fn test_shadow_heap_creation() {
-        ShadowHeap::<TestProv>::new(&raw const DEFAULT_TEST_PROV);
+        ShadowHeap::<TestProv>::new();
     }
 
     #[test]
     fn test_load_null_prov() {
-        let heap = ShadowHeap::<TestProv>::new(&raw const DEFAULT_TEST_PROV);
-        let prov = unsafe { *heap.get_src(18) };
+        let heap = ShadowHeap::<TestProv>::new();
+        let prov = unsafe { heap.get(18).read() };
         assert_eq!(prov, DEFAULT_TEST_PROV);
     }
 
     #[test]
     fn test_store_and_load_prov() {
-        let heap = ShadowHeap::<TestProv>::new(&raw const DEFAULT_TEST_PROV);
+        let heap = ShadowHeap::<TestProv>::new();
         let test_prov = TestProv { value: 42 };
         // Use an address that will split into non-zero indices for both L1 and L2
         let addr = 0x1234_5678_1234_5678;
         unsafe {
-            let dest = heap.get_dest(addr);
+            let dest = heap.get(addr);
             *dest.as_ptr() = test_prov;
         }
         unsafe {
-            let loaded_prov = *heap.get_src(addr);
+            let loaded_prov = heap.get(addr).read();
             assert_eq!(loaded_prov.value, test_prov.value);
         }
     }
 
     #[test]
     fn clear() {
-        let heap = ShadowHeap::<TestProv>::new(&raw const DEFAULT_TEST_PROV);
+        let heap = ShadowHeap::<TestProv>::new();
         let src_address: usize = 0;
         let prov = TestProv { value: 81 };
 
@@ -397,15 +382,15 @@ mod tests {
         for offset in 0..max {
             let offset_bytes = offset * PTR_BYTES;
             unsafe {
-                let dest = heap.get_dest(src_address + offset_bytes);
+                let dest = heap.get(src_address + offset_bytes);
                 *dest.as_ptr() = prov;
             }
         }
 
-        heap.clear(src_address, max * PTR_BYTES, TestProv::default());
+        heap.clear(src_address, max * PTR_BYTES);
         for offset in 0..max {
             let offset_bytes = offset * PTR_BYTES;
-            let compare_prov = unsafe { *heap.get_src(src_address + offset_bytes) };
+            let compare_prov = unsafe { heap.get(src_address + offset_bytes).read() };
             assert_eq!(compare_prov, TestProv::default())
         }
     }
@@ -423,29 +408,29 @@ mod tests {
         for offset in 0..three_quarter_max {
             let offset_bytes = offset * PTR_BYTES;
             unsafe {
-                *heap.get_dest(src_address + offset_bytes).as_ptr() = prov;
+                *heap.get(src_address + offset_bytes).as_ptr() = prov;
             }
-            let compare_prov = unsafe { *heap.get_src(src_address + offset_bytes) };
+            let compare_prov = unsafe { heap.get(src_address + offset_bytes).read() };
             assert_eq!(prov, compare_prov)
         }
         heap.memcpy(dst_address, src_address, max * PTR_BYTES);
 
         for offset in 0..three_quarter_max {
             let offset_bytes = offset * PTR_BYTES;
-            let compare_prov = unsafe { *heap.get_src(dst_address + offset_bytes) };
+            let compare_prov = unsafe { heap.get(dst_address + offset_bytes).read() };
             assert_eq!(prov, compare_prov)
         }
 
         for offset in (three_quarter_max + 1)..max {
             let offset_bytes = offset * PTR_BYTES;
-            let compare_prov = unsafe { *heap.get_src(dst_address + offset_bytes) };
+            let compare_prov = unsafe { heap.get(dst_address + offset_bytes).read() };
             assert_eq!(compare_prov, TestProv::default())
         }
     }
 
     #[bench]
     fn memcpy_bench(b: &mut test::Bencher) {
-        let heap = ShadowHeap::<TestProv>::new(&raw const DEFAULT_TEST_PROV);
+        let heap = ShadowHeap::<TestProv>::new();
         b.iter(|| {
             inner_memcpy(&heap, 1024 * 1024);
         });
@@ -454,14 +439,14 @@ mod tests {
     #[bench]
     fn create_memcpy_destroy(b: &mut test::Bencher) {
         b.iter(|| {
-            let heap = ShadowHeap::<TestProv>::new(&raw const DEFAULT_TEST_PROV);
+            let heap = ShadowHeap::<TestProv>::new();
             inner_memcpy(&heap, 1024 * 1024);
         });
     }
 
     #[test]
     fn memcpy() {
-        let heap = ShadowHeap::<TestProv>::new(&raw const DEFAULT_TEST_PROV);
+        let heap = ShadowHeap::<TestProv>::new();
         inner_memcpy(&heap, 40)
     }
 
@@ -478,7 +463,7 @@ mod tests {
     }
     #[test]
     fn smoke() {
-        let heap = ShadowHeap::<TestProv>::new(&raw const DEFAULT_TEST_PROV);
+        let heap = ShadowHeap::<TestProv>::new();
         // Create test data
         const NUM_OPERATIONS: usize = 10;
         const BASE_ADDR: usize = 0x7FFF_FFFF_AA00;
@@ -491,16 +476,16 @@ mod tests {
         unsafe {
             for (i, test_value) in test_values.iter().enumerate().take(NUM_OPERATIONS) {
                 let addr = BASE_ADDR + (i * 8);
-                *heap.get_dest(addr).as_ptr() = *test_value;
-                let prov = *heap.get_src(addr);
+                *heap.get(addr).as_ptr() = *test_value;
+                let prov = heap.get(addr).read();
                 assert_eq!(prov.value, test_value.value);
             }
 
             for (i, test_value) in test_values.iter().enumerate().take(NUM_OPERATIONS) {
                 let addr = BASE_ADDR + (i * 8);
-                let prov = *heap.get_src(addr);
+                let prov = heap.get(addr).read();
                 assert_eq!(prov.value, test_value.value);
-                *heap.get_dest(addr).as_ptr() = *test_value;
+                *heap.get(addr).as_ptr() = *test_value;
             }
         }
     }
@@ -528,8 +513,7 @@ mod tests {
     #[test]
     fn concurrent_l2_allocation_same_entry() {
         use std::sync::Arc;
-        let test_prov = &DEFAULT_TEST_PROV as *const TestProv;
-        let heap = Arc::new(ShadowHeap::<TestProv>::new(test_prov));
+        let heap = Arc::new(ShadowHeap::<TestProv>::new());
         // Use the same L1 index to maximize collision probability
         const BASE_ADDR: usize = 0x1000_0000;
         const NUM_THREADS: u32 = 16;
@@ -544,10 +528,10 @@ mod tests {
             barrier.wait();
 
             unsafe {
-                let dest = heap.get_dest(addr);
+                let dest = heap.get(addr);
                 *dest.as_ptr() = test_value;
 
-                let loaded: TestProv = *heap.get_src(addr);
+                let loaded: TestProv = heap.get(addr).read();
                 assert_eq!(loaded, test_value);
             }
         })

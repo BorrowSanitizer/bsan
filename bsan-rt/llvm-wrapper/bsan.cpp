@@ -401,11 +401,10 @@ void __bsan_pop_frame(const Provenance *frame_start, uptr prot,
 }
 
 // Debugging.
-
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_print(BorTag bor_tag, AllocInfo *alloc_info) {}
 
-void __bsan_debug_print(void *ptr) {
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_print(void *ptr) {
   Provenance *Slot = GetSlot(0);
   __bsan_print(Slot->Tag, Slot->Info);
 }
