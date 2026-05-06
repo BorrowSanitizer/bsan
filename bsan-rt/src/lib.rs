@@ -541,30 +541,24 @@ unsafe extern "C-unwind" fn __bsan_shadow_transfer(
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_shadow_clear(dst: *mut c_void, size: usize) {
     let ctx = unsafe { global_ctx() };
-    ctx.shadow_heap().clear(dst.addr(), size, __BSAN_WILDCARD_PROVENANCE)
+    ctx.shadow_heap().clear(dst.addr(), size)
 }
 
 /// Loads the provenance of a given address from shadow memory and stores
 /// the result in the return pointer.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_shadow_load(addr: *mut c_void, dest: NonNull<Provenance>) {
-    unsafe {
-        let ctx = global_ctx();
-        let prov = ctx.shadow_heap().get_src(addr.addr()).read();
-        dest.write(prov);
-    }
+unsafe extern "C-unwind" fn __bsan_shadow(addr: *mut c_void) -> NonNull<Provenance> {
+    unsafe { global_ctx().shadow_heap().get(addr.addr()) }
 }
 
 /// Stores the given provenance value into shadow memory at the location for the given address.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_shadow_store(
+unsafe extern "C-unwind" fn __bsan_rc_store(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
-    ptr: *mut c_void,
+    dest: NonNull<Provenance>,
 ) {
-    let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-    let dest = ctx.shadow_heap().get_dest(ptr.addr());
     unsafe { dest.write(prov) };
 }
 

@@ -520,8 +520,8 @@ private:
     if (Prov.Elems.isVector()) {
       report_fatal_error("Vectors are not supported.");
     } else {
-      Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncShadowStore,
-                                            {Prov.Tag, Prov.Info, ObjAddr});
+      Value *Shadow = IRB.CreateCall(BS.BsanFuncShadow, {ObjAddr});
+      IRB.CreateCall(BS.BsanFuncRcStore, {Prov.Tag, Prov.Info, Shadow});
     }
   }
 
@@ -534,8 +534,10 @@ private:
       report_fatal_error("Vectors are not supported.");
     } else {
       Value *Slot = allocStackSlot(IRB, false);
-      IRB.CreateCall(BS.BsanFuncShadowLoad, {ObjAddr, Slot});
-      return Provenance::load(IRB, BS.PL, Slot);
+      Value *Shadow = IRB.CreateCall(BS.BsanFuncShadow, {ObjAddr});
+      Provenance Prov = Provenance::load(IRB, BS.PL, Shadow);
+      Prov.store(IRB, BS.PL, Slot);
+      return Prov;
     }
   }
 
@@ -644,13 +646,11 @@ private:
     IRBuilder<> IRB(&CB);
     Value *Operand = CB.getOperand(0);
     Value *SrcAddr = IRB.CreateLoad(BS.PtrTy, Operand);
-
-    Value *Slot = allocStackSlot(IRB, false);
-    IRB.CreateCall(BS.BsanFuncShadowLoad, {Operand, Slot});
-    Provenance SrcProv = Provenance::load(IRB, BS.PL, Slot);
+    Value *Shadow = IRB.CreateCall(BS.BsanFuncShadow, {Operand});
+    Provenance SrcProv = Provenance::load(IRB, BS.PL, Shadow);
     Provenance RetaggedProv = instrumentRetag(IRB, CB, SrcAddr, SrcProv);
-    IRB.CreateCall(BS.BsanFuncShadowStore,
-                   {RetaggedProv.Tag, RetaggedProv.Info, Operand});
+    IRB.CreateCall(BS.BsanFuncRcStore,
+                   {RetaggedProv.Tag, RetaggedProv.Info, Shadow});
   }
 
   void instrumentRetagReg(CallBase &CB) {
@@ -1380,11 +1380,10 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncValidateRetval = M.getOrInsertFunction(
       BSAN_FN("validate_retval"), AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
 
-  BsanFuncShadowLoad = M.getOrInsertFunction(BSAN_FN("shadow_load"), AL,
-                                             IRB.getVoidTy(), PtrTy, PtrTy);
+  BsanFuncShadow = M.getOrInsertFunction(BSAN_FN("shadow"), AL, PtrTy, PtrTy);
 
-  BsanFuncShadowStore = M.getOrInsertFunction(
-      BSAN_FN("shadow_store"), AL, IRB.getVoidTy(), IntptrTy, PtrTy, PtrTy);
+  BsanFuncRcStore = M.getOrInsertFunction(
+      BSAN_FN("rc_store"), AL, IRB.getVoidTy(), IntptrTy, PtrTy, PtrTy);
 
   BsanFuncShadowClear = M.getOrInsertFunction(BSAN_FN("shadow_clear"), AL,
                                               IRB.getVoidTy(), PtrTy, IntptrTy);
