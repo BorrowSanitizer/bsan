@@ -1,6 +1,5 @@
 #!/bin/bash
 set -e
-
 ##################### DOCUMENTATION #####################
 # This script executes the bencher binary from https://bencher.dev/docs/tutorial/quick-start/
 # The script requires a BENCHER_TOKEN and BENCHER_PROJECT as arguments to 
@@ -10,15 +9,11 @@ set -e
 # ensure that this script is executed from the root directory of the repository. 
 #########################################################
 
-# set working directory to the script's directory (absolute path)
-WORKDIR="$(cd "$(dirname "$0")" && pwd)"
+WORKDIR="$(pwd)"
 
-
-####### Argument Parsing #################################################
-# print Usage if no arguments are provided
 if [ "$#" -lt 3 ]; then
     echo "Usage: $0 <BENCHER_PROJECT> <BENCHER_TOKEN> <BENCHER_BIN_PATH> [BENCHER_FLAGS...]"
-    echo "If you run this script locally, supply `--testbed <yourname-yourmachine>` as BENCHER_FLAGS to identify your system in bencher.dev"
+    echo "If you run this script locally, supply \`--testbed <yourname-yourmachine>\` as BENCHER_FLAGS to identify your system in bencher.dev"
     exit 1
 fi
 
@@ -28,14 +23,12 @@ BENCHER_BIN=$3
 shift 3
 BENCHER_FLAGS="$@"
 RUN_BENCHER="$BENCHER_BIN run --project $BENCHER_PROJECT --token $BENCHER_TOKEN $BENCHER_FLAGS"  
-###############################################
-
 
 RUNS=10
 WARMUP=3
 
 # Execute simple Rust programs
-PROGRAMS_DIR="$WORKDIR/benches/programs/src/bin"
+PROGRAMS_DIR="$WORKDIR/tests/benches/programs/"
 for file_path in "$PROGRAMS_DIR"/*.rs; do
     echo "Processing file: $file_path"
     filename=$(basename "$file_path")
@@ -50,7 +43,7 @@ for file_path in "$PROGRAMS_DIR"/*.rs; do
 done
 
 # Exectute Rust test suites in crates
-CRATES_DIR="$WORKDIR/benches/crates"
+CRATES_DIR="$WORKDIR/tests/benches/crates"
 for crate_path in "$CRATES_DIR"/*; do
     pushd "$crate_path"
     crate=$(basename "$crate_path")
@@ -67,8 +60,6 @@ for crate_path in "$CRATES_DIR"/*; do
     rm "$crate.json" # clean up the generated json file after bencher.dev has read it
     popd
 done
-
-
 
 # Execute libtest benches in bsan-rt
 echo "Running libtest benches in bsan-rt..."
