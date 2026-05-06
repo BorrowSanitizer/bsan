@@ -32,7 +32,7 @@ jobs:
     - uses: bencherdev/bencher@main
     - name: Bencher
       run: |
-          ./bencher.sh $BENCHER_PROJECT '${{ secrets.BENCHER_API_TOKENS }}' /github/home/.cargo/bin/bencher --testbed 'Github-CI_${{ matrix.config.os }}'
+          ./bsan-script/etc/bencher.sh $BENCHER_PROJECT '${{ secrets.BENCHER_API_TOKENS }}' /github/home/.cargo/bin/bencher --testbed 'Github-CI_${{ matrix.config.os }}'
 
 
        
