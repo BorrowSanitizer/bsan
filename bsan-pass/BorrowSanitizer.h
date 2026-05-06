@@ -2,7 +2,6 @@
 #define LLVM_TRANSFORMS_INSTRUMENTATION_BORROWSANITIZER_H
 
 #include "Provenance.h"
-#include "llvm/Analysis/StackSafetyAnalysis.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 
 namespace llvm {
@@ -15,26 +14,11 @@ public:
     TargetTriple = Triple(M.getTargetTriple());
 
     PL = ProvenanceLayout(C, DL);
-    unsigned PtrSizeBits = M.getDataLayout().getPointerSizeInBits();
-    PtrSize = PtrSizeBits / 8;
-    BoolTy = Type::getInt1Ty(*C);
-    Int8Ty = Type::getInt8Ty(*C);
-    Int16Ty = Type::getInt16Ty(*C);
-    Int32Ty = Type::getInt32Ty(*C);
-    Int64Ty = Type::getInt64Ty(*C);
     PtrTy = PointerType::getUnqual(*C);
-    IntptrTy = Type::getIntNTy(*C, PtrSizeBits);
-
+    unsigned PtrSize = M.getDataLayout().getPointerSize();
+    IntptrTy = Type::getIntNTy(*C, PtrSize * 8);
     Zero = ConstantInt::get(IntptrTy, 0);
     One = ConstantInt::get(IntptrTy, 1);
-
-    True = ConstantInt::get(Int8Ty, 1);
-    False = ConstantInt::get(Int8Ty, 0);
-
-    Constant *InvalidPtr = ConstantPointerNull::get(PtrTy);
-
-    WildcardProvenance = ProvenanceScalar(Zero, InvalidPtr);
-    InvalidProvenance = ProvenanceScalar(One, InvalidPtr);
   }
 
   bool instrumentModule(Module &M);
@@ -58,17 +42,9 @@ public:
   LLVMContext *C;
   const DataLayout *DL;
   ProvenanceLayout PL;
-  const StackSafetyGlobalInfo *const SSGI = nullptr;
 
-  unsigned PtrSize;
   Triple TargetTriple;
-  Type *BoolTy;
-  Type *Int8Ty;
-  Type *Int16Ty;
-  Type *Int32Ty;
-  Type *Int64Ty;
   PointerType *PtrTy;
-
   Type *IntptrTy;
   Align IntptrAlign;
 
@@ -102,9 +78,6 @@ public:
 
   FunctionCallee DefaultPersonalityFn;
 
-  ProvenanceScalar WildcardProvenance;
-  ProvenanceScalar InvalidProvenance;
-
   // Thread-local storage for paramters
   // and return values.
   Value *ProvStack = nullptr;
@@ -113,11 +86,6 @@ public:
 
   Constant *Zero = nullptr;
   Constant *One = nullptr;
-
-  Constant *True = nullptr;
-  Constant *False = nullptr;
-
-  DenseSet<Function *> ExternCalledFns;
 
   bool shouldTrustFunction(const TargetLibraryInfo *TLI, const Value *V);
   bool shouldInstrumentAlloca(const DataLayout &DL, const AllocaInst &AI);

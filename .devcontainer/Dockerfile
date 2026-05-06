@@ -31,6 +31,10 @@ RUN ./xb --skip setup
 FROM base AS image-dev
 COPY --from=build-image-dev /root/.rustup/toolchains/bsan /root/.rustup/toolchains/bsan
 COPY --from=build-image-dev /root/.cargo/ /root/.cargo
+# Install requriements for benchmarking
+RUN curl --proto '=https' --tlsv1.2 -sSfL https://bencher.dev/download/install-cli.sh | sh
+RUN apt-get update && apt-get install -y \
+    hyperfine
 
 FROM base AS build-image-release
 COPY . . 

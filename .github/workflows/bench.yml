@@ -1,14 +1,11 @@
-name: CI
+name: Bench
 on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
   schedule:
     - cron: '0 0 * * *'
   workflow_dispatch: 
 env:
   CARGO_TERM_COLOR: always
+  BENCHER_PROJECT: '244e3ab7-f904-4240-a4f1-53695a02b061'
 jobs:
   build:
     strategy:
@@ -31,5 +28,13 @@ jobs:
     - name: Setup dependencies
       run: |
         ln -s /root/.rustup/ $HOME/.rustup
-    - name: CI
-      run: ./xb ci
+        sudo apt-get update && sudo apt-get install -y hyperfine jq
+    - uses: bencherdev/bencher@main
+    - name: Bencher
+      run: |
+          ./bencher.sh $BENCHER_PROJECT '${{ secrets.BENCHER_API_TOKENS }}' /github/home/.cargo/bin/bencher --testbed 'Github-CI_${{ matrix.config.os }}'
+
+
+       
+        
+
