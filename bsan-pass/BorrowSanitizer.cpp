@@ -535,10 +535,8 @@ private:
     } else {
       Value *Slot = allocStackSlot(IRB, false);
       Value *Shadow = IRB.CreateCall(BS.BsanFuncShadow, {ObjAddr});
-      ProvenanceScalar Prov = ProvenanceScalar::load(
-          IRB, BS.PL, ProvenancePtrScalar(IRB, BS.PL, Shadow));
-      ProvenancePtrScalar Dest(IRB, BS.PL, Slot);
-      Prov.store(IRB, BS.PL, Dest);
+      Provenance Prov = Provenance::load(IRB, BS.PL, Shadow);
+      Prov.store(IRB, BS.PL, Slot);
       return Prov;
     }
   }
@@ -649,9 +647,8 @@ private:
     Value *Operand = CB.getOperand(0);
     Value *SrcAddr = IRB.CreateLoad(BS.PtrTy, Operand);
     Value *Shadow = IRB.CreateCall(BS.BsanFuncShadow, {Operand});
-    ProvenancePtrScalar SrcProvPtr(IRB, BS.PL, Shadow);
-    ProvenanceScalar SrcProv = ProvenanceScalar::load(IRB, BS.PL, SrcProvPtr);
-    ProvenanceScalar RetaggedProv = instrumentRetag(IRB, CB, SrcAddr, SrcProv);
+    Provenance SrcProv = Provenance::load(IRB, BS.PL, Shadow);
+    Provenance RetaggedProv = instrumentRetag(IRB, CB, SrcAddr, SrcProv);
     IRB.CreateCall(BS.BsanFuncRcStore,
                    {RetaggedProv.Tag, RetaggedProv.Info, Shadow});
   }
