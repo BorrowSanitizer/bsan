@@ -16,7 +16,7 @@ pub(crate) static LOCAL_CTX: LocalCtxWrapper =
 
 /// The LocalCtx should contain a pointer to the shadow stack,
 /// the length of the shadow stack allocation,
-/// and a pointer to where the thread's __BSAN_PROV_STACK is stored.
+/// and a pointer to where the thread's __bsan_shadow_stack is stored.
 #[allow(unused)]
 #[derive(Debug)]
 pub struct LocalCtx {
