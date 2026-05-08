@@ -23,6 +23,7 @@ class FunctionTaintAnalysis {
     /// Which objects are tainted after exiting this block.
     BitVector TaintedOut;
   };
+
 private:
   Function &F;
   using BlockInfoMap = DenseMap<const BasicBlock *, BlockInfo>;

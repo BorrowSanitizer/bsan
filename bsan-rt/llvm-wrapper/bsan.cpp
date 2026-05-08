@@ -286,7 +286,7 @@ __bsan_protector_end_impl(BorTag bor_tag, AllocInfo *alloc_info, Span pc) {}
 SANITIZER_INTERFACE_ATTRIBUTE void
 __bsan_pop_frame(const Provenance *frame_start, uptr prot,
                  uptr alloca_vec_size) {
-  GET_SPAN_PC_BP;
+  GET_SPAN;
   for (uptr i = 0; i < prot + alloca_vec_size; i++) {
     const Provenance Prov = frame_start[i];
     if (i < prot) {
