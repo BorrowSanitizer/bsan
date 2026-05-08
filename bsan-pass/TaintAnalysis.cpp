@@ -6,9 +6,11 @@
 // cast into a raw pointer, or vice versa, and when any kind of transmutation 
 // happens. If a pointer is tainted, we need to instrument it from the point it
 // gained ownership to tthe end of the lifetime of its underlying object. If a
-// place is tainted, then any pointers that are loaded from it become tainted. 
+// place is tainted, then any pointers that are loaded from it become tainted. We
+// use two forms of intrinsic functions (`__rust_taint_reg` and `__rust_taint_mem`)
+// to distinguish between each case.
 //
-// As a result, we will remove runtime checks for components that are exclusively
+// Using this analysis, we can remove runtime checks for components that are exclusively
 // accessed via safe or unsafe operations, respectively. Only components that cross 
 // the "safe/unsafe boundary" are capable of having aliasing-related undefined behavior. 
 //
