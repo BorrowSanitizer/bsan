@@ -1,9 +1,10 @@
 // This module was ported from Miri (commit:072a9fa) and modified by our team.
+// RetagMode and implicit writes are not implemented yet.
 use crate::errors::UBResult;
 use crate::global::{GlobalCtx, ProtectedTags};
 use crate::helpers::{AllocRange, Size};
 use crate::tree_borrows::perms::AccessKind;
-use crate::{AllocId, BorTag, RetagInfo};
+use crate::{AllocId, BorTag, RetagFlags, RetagInfo, Span};
 
 pub mod data_structures;
 pub mod diagnostics;
@@ -24,8 +25,8 @@ type GlobalState = ProtectedTags;
 
 impl Tree {
     /// Create a new allocation, i.e. a new tree
-    pub fn new_allocation(id: AllocId, size: Size, state: &GlobalCtx) -> Self {
-        todo!()
+    pub fn new_allocation(tag: BorTag, size: Size, span: Span) -> Self {
+        Tree::new(tag, size, span)
     }
 
     /// Check that an access on the entire range is permitted, and update
@@ -89,80 +90,66 @@ impl Tree {
 }
 
 /// Policy for a new borrow.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct NewPermission {
     /// Permission for the frozen part of the range.
-    pub(crate) freeze_perm: Permission,
+    pub freeze_perm: Permission,
     /// Whether a read access should be performed on the frozen part on a retag.
-    pub(crate) freeze_access: bool,
+    pub freeze_access: bool,
     /// Permission for the non-frozen part of the range.
-    pub(crate) nonfreeze_perm: Permission,
-    /// Whether a read access should be performed on the non-frozen
-    /// part on a retag.
-    pub(crate) nonfreeze_access: bool,
-    /// Permission for memory outside the range.
-    pub(crate) outside_perm: Permission,
+    pub nonfreeze_perm: Permission,
+    /// What kind of access should be performed on the non-frozen part on a retag.
+    pub nonfreeze_access: Option<AccessKind>,
+    // Whether the type is frozen.
+    pub ty_is_freeze: bool,
     /// Whether this pointer is part of the arguments of a function call.
     /// `protector` is `Some(_)` for all pointers marked `noalias`.
-    pub(crate) protector: Option<ProtectorKind>,
+    pub protector: Option<ProtectorKind>,
 }
 
-impl<'tcx> NewPermission {
-    /// Determine NewPermission of the reference/Box from the type of the pointee.
-    ///
-    /// A `ref_mutability` of `None` indicates a `Box` type.
-    pub(crate) fn new(info: RetagInfo<'tcx>) -> Self {
-        /*
-        let ty_is_unpin = pointee.is_unpin(*cx.tcx, cx.typing_env())
-            && pointee.is_unsafe_unpin(*cx.tcx, cx.typing_env());
-        let ty_is_freeze = pointee.is_freeze(*cx.tcx, cx.typing_env());
-        let is_protected = retag_kind == RetagKind::FnEntry;
+impl NewPermission {
+    pub fn new(info: RetagInfo<'_>) -> Self {
+        let is_mutable: bool = info.flags.contains(RetagFlags::IS_MUTABLE);
+        let is_protected = info.flags.contains(RetagFlags::IS_PROTECTED);
+        let ty_is_freeze = info.flags.contains(RetagFlags::IS_FREEZE);
+        let is_box = info.flags.contains(RetagFlags::IS_BOX);
+        let freeze_perm =
+            if is_mutable { Permission::new_reserved_frz() } else { Permission::new_frozen() };
 
-        if matches!(ref_mutability, Some(Mutability::Mut) | None if !ty_is_unpin) {
-            // Mutable reference / Box to pinning type: retagging is a NOP.
-            // FIXME: with `UnsafePinned`, this should do proper per-byte tracking.
-            return None;
-        }
-
-        let freeze_perm = match ref_mutability {
-            // Shared references are frozen.
-            Some(Mutability::Not) => Permission::new_frozen(),
-            // Mutable references and Boxes are reserved.
-            _ => Permission::new_reserved_frz(),
-        };
-        let nonfreeze_perm = match ref_mutability {
-            // Shared references are "transparent".
-            Some(Mutability::Not) => Permission::new_cell(),
-            // *Protected* mutable references and boxes are reserved without regarding for interior mutability.
-            _ if is_protected => Permission::new_reserved_frz(),
-            // Unprotected mutable references and boxes start in `ReservedIm`.
-            _ => Permission::new_reserved_im(),
+        let nonfreeze_perm = if is_mutable {
+            if is_protected {
+                Permission::new_reserved_frz()
+            } else {
+                Permission::new_reserved_im()
+            }
+        } else {
+            Permission::new_cell()
         };
 
         // Everything except for `Cell` gets an initial access.
         let initial_access = |perm: &Permission| !perm.is_cell();
 
-        Some(NewPermission {
+        NewPermission {
             freeze_perm,
             freeze_access: initial_access(&freeze_perm),
             nonfreeze_perm,
-            nonfreeze_access: initial_access(&nonfreeze_perm),
-            outside_perm: if ty_is_freeze { freeze_perm } else { nonfreeze_perm },
-            protector: is_protected.then_some(if ref_mutability.is_some() {
-                // Strong protector for references
-                ProtectorKind::StrongProtector
-            } else {
+            nonfreeze_access: initial_access(&nonfreeze_perm).then_some(AccessKind::Read),
+            ty_is_freeze,
+            protector: is_protected.then_some(if is_box {
                 // Weak protector for boxes
                 ProtectorKind::WeakProtector
+            } else {
+                // Strong protector for references
+                ProtectorKind::StrongProtector
             }),
-        })*/
-        todo!()
+        }
     }
-    pub(crate) fn default_perm(self) -> Permission {
-        todo!()
-    }
-    pub(crate) fn is_freeze(&self) -> bool {
-        todo!()
+    pub fn default_perm(&self) -> Permission {
+        if self.ty_is_freeze {
+            self.freeze_perm
+        } else {
+            self.nonfreeze_perm
+        }
     }
 }
 /*

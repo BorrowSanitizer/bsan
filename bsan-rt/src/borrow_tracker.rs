@@ -164,7 +164,7 @@ impl<'b> BorrowTracker<'b> {
             let (perm, access) = if frozen {
                 (perm.freeze_perm, perm.freeze_access)
             } else {
-                (perm.nonfreeze_perm, perm.nonfreeze_access)
+                (perm.nonfreeze_perm, perm.nonfreeze_access.is_some())
             };
             let sifa = perm.strongest_idempotent_foreign_access(protected);
             if access {
@@ -174,7 +174,7 @@ impl<'b> BorrowTracker<'b> {
             }
         };
 
-        let initial_state = loc_state(perm.is_freeze());
+        let initial_state = loc_state(perm.ty_is_freeze);
         let mut inside_perms = DedupRangeMap::new(Size::from_bytes(retag_info.size), initial_state);
 
         if let Some(im_layout) = retag_info.im_layout {

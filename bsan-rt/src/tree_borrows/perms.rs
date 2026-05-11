@@ -23,7 +23,7 @@ impl fmt::Display for AccessKind {
 }
 
 /// The flavor of the protector.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ProtectorKind {
     /// Protected against aliasing violations from other pointers.
     ///

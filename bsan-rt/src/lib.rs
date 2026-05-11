@@ -306,17 +306,6 @@ pub(crate) enum AllocInfoSummary {
     Valid { alloc_id: AllocId, base_addr: FreeListAddrUnion, size: usize },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RetagInfo<'a> {
-    pub size: usize,
-    pub is_protected: bool,
-    pub is_unpin: bool,
-    pub is_mutable: bool,
-    pub is_box: bool,
-    pub im_layout: Option<&'a [[Size; 2]]>,
-    pub unpin_layout: Option<&'a [[Size; 2]]>,
-}
-
 /// Initializes the global state of the runtime library.
 /// The safety of this library is entirely dependent on this
 /// function having been executed. We assume the global invariant that
@@ -373,20 +362,24 @@ bitflags::bitflags! {
         const IS_FREEZE = 1 << 3;
     }
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RetagInfo<'a> {
+    pub size: usize,
+    pub flags: RetagFlags,
+    pub im_layout: Option<&'a [[Size; 2]]>,
+    pub pin_layout: Option<&'a [[Size; 2]]>,
+}
 
 /// Creates a new borrow tag for the given provenance object.
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_retag_impl(
     object_addr: *mut c_void,
     size: usize,
-    is_protected: bool,
-    is_unpin: bool,
-    is_mutable: bool,
-    is_box: bool,
+    flags: RetagFlags,
     im_data: *const [Size; 2],
     im_len: usize,
-    unpin_data: *const [Size; 2],
-    unpin_len: usize,
+    pin_data: *const [Size; 2],
+    pin_len: usize,
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
     pc: Span,
@@ -394,19 +387,15 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
     debug_bsan!("retag", object_addr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-
     let opt_slice = |ptr, len| -> Option<_> {
         (!im_data.is_null()).then(|| unsafe { slice::from_raw_parts(ptr, len) })
     };
 
     let retag_info = RetagInfo {
         size,
-        is_protected,
-        is_mutable,
-        is_unpin,
-        is_box,
-        unpin_layout: opt_slice(unpin_data, unpin_len),
+        flags,
         im_layout: opt_slice(im_data, im_len),
+        pin_layout: opt_slice(pin_data, pin_len),
     };
 
     BorrowTracker::retag(ctx, prov, object_addr, retag_info, pc).unwrap_or_else(|err| {
@@ -640,9 +629,9 @@ extern "C" fn __bsan_print_diff(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
     });
 }
 
-#[cfg(not(test))]
-#[panic_handler]
-fn panic(info: &PanicInfo<'_>) -> ! {
-    eprintln!("The BorrowSanitizer runtime panicked! {:?}", info);
-    core::intrinsics::abort()
-}
+// #[cfg(not(test))]
+// #[panic_handler]
+// fn panic(info: &PanicInfo<'_>) -> ! {
+//     eprintln!("The BorrowSanitizer runtime panicked! {:?}", info);
+//     core::intrinsics::abort()
+// }
