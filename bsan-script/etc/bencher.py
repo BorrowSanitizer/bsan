@@ -119,20 +119,23 @@ def hyperfine_mean(command: str) -> float:
     """Run hyperfine on a single command and return its mean wall time in
     seconds. Aborts the script on failure (no `-i`)."""
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as out_json:
-        out_json = Path(out_json)
+        out_path = Path(out_json.name)
+    try:
         run(
             [
                 "hyperfine",
                 "--runs", str(HYPERFINE_RUNS),
                 "--warmup", str(HYPERFINE_WARMUP),
                 "--shell=none",
-                "--export-json", str(out_json),
+                "--export-json", str(out_path),
                 command,
             ],
             stdout=subprocess.DEVNULL,
         )
-        data = json.loads(out_json.read_text())
+        data = json.loads(out_path.read_text())
         return float(data["results"][0]["mean"])
+    finally:
+        out_path.unlink(missing_ok=True)
 
 @dataclass
 class Aggregate:
@@ -168,8 +171,9 @@ def upload_to_bencher(
             }
         }
     }
-    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as bmf_path:
-        bmf_path = Path(bmf_path)
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as bmf_file:
+        bmf_path = Path(bmf_file.name)
+    try:
         bmf_path.write_text(json.dumps(bmf_doc, indent=2))
         print("BMF payload:")
         print(bmf_path.read_text())
@@ -182,6 +186,8 @@ def upload_to_bencher(
             *extra_flags,
         ]
         run(cmd, cwd=repo_root)
+    finally:
+        bmf_path.unlink(missing_ok=True)
 
 
 def process_config(
