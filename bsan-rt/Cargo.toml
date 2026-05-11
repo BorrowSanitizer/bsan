@@ -14,7 +14,7 @@ smallvec = "1.15.1"
 bitflags = "2.11.1"
 
 [lib]
-name = "bsan_rt_core"
+name = "bsan_rt"
 crate-type = ["staticlib"]
 
 [features]

@@ -102,6 +102,9 @@ impl SanitizerCommon {
 }
 
 unsafe extern "C" {
+    #[thread_local]
+    pub unsafe static mut __bsan_had_error: usize;
+
     /// Symbolize a single PC into "file:line:column" and returns 1 on success.
     fn __bsan_symbolize_pc(
         pc: usize,

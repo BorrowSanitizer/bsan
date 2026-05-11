@@ -69,7 +69,7 @@ INTERCEPTOR(int, pthread_create, void *th, void *attr,
   return res;
 }
 
-extern "C" void *__crt_malloc(SIZE_T size) {
+extern "C" void *__bsan_crt_malloc(SIZE_T size) {
   if (DlsymAlloc::Use())
     return DlsymAlloc::Allocate(size);
   return REAL(malloc)(size);
@@ -82,13 +82,13 @@ INTERCEPTOR(void *, malloc, SIZE_T size) {
   void *ptr = REAL(malloc)(size);
   if (INST_CALLER(malloc)) {
     Provenance *RetSlot = GetSlot(0);
-    BorTag Tag = __bsan_new_bor_tag();
+    BorTag Tag = NewBorTag();
     *RetSlot = {Tag, __bsan_alloc(ptr, size, Tag, span)};
   }
   return ptr;
 }
 
-extern "C" void __crt_free(void *ptr) {
+extern "C" void __bsan_crt_free(void *ptr) {
   if (UNLIKELY(!ptr))
     return;
   if (DlsymAlloc::PointerIsMine(ptr))
@@ -117,7 +117,7 @@ INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
   void *ptr = REAL(calloc)(nmemb, size);
   Provenance *RetSlot = GetSlot(0);
   if (INST_CALLER(calloc)) {
-    BorTag Tag = __bsan_new_bor_tag();
+    BorTag Tag = NewBorTag();
     *RetSlot = {Tag, __bsan_alloc(ptr, nmemb * size, Tag, span)};
   }
   return ptr;
@@ -136,7 +136,7 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
   void *nptr = REAL(realloc)(ptr, size);
   if (is_inst) {
     Provenance *RetSlot = GetSlot(0);
-    BorTag Tag = __bsan_new_bor_tag();
+    BorTag Tag = NewBorTag();
     *RetSlot = {Tag, __bsan_alloc(nptr, size, Tag, span)};
   }
   return nptr;

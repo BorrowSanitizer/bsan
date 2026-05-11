@@ -37,10 +37,6 @@ use crate::borrow_tracker::tree::Tree;
 use crate::local::*;
 use crate::sanitizer_common::Span;
 
-#[thread_local]
-#[unsafe(no_mangle)]
-pub static mut __BSAN_HAD_ERROR: usize = 0;
-
 /// A struct for summarizing debug information about memory operations
 #[cfg(feature = "debug")]
 struct DebugSummary {
@@ -70,7 +66,7 @@ impl fmt::Display for DebugSummary {
 }
 
 macro_rules! debug_bsan {
-    ($op:literal, $ptr:ident, $bor_tag:ident, $alloc_info:expr) => {
+    ($op:literal, $p:ident, $bor_tag:ident, $alloc_info:expr) => {
         #[cfg(feature = "debug")]
         {
             #[allow(unused_unsafe)]
@@ -79,7 +75,7 @@ macro_rules! debug_bsan {
                 1 => AllocInfoSummary::Null,
                 _ => unsafe { &*$alloc_info }.summarize(),
             };
-            let summary = DebugSummary { op: $op, ptr: $ptr.addr(), bor_tag: $bor_tag, info };
+            let summary = DebugSummary { op: $op, ptr: 0, bor_tag: $bor_tag, info };
             libc_print::std_name::println!("{}", summary);
         }
     };
@@ -163,8 +159,10 @@ impl fmt::Debug for ThreadId {
     }
 }
 
-#[unsafe(no_mangle)]
-pub static __bsan_bor_tag_ctr: AtomicUsize = AtomicUsize::new(2);
+unsafe extern "C" {
+    #[link_name = "__bsan_bor_tag_ctr"]
+    unsafe static __BSAN_BOR_TAG_CTR: AtomicUsize;
+}
 
 /// Unique identifier for a node within the tree
 #[repr(transparent)]
@@ -187,7 +185,7 @@ impl BorTag {
 
 impl Default for BorTag {
     fn default() -> Self {
-        BorTag(__bsan_bor_tag_ctr.fetch_add(1, Ordering::Relaxed))
+        BorTag(unsafe { __BSAN_BOR_TAG_CTR.fetch_add(1, Ordering::Relaxed) })
     }
 }
 
@@ -346,11 +344,6 @@ unsafe extern "C-unwind" fn __bsan_local_deinit() {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_new_bor_tag() -> BorTag {
-    BorTag::default()
-}
-
 bitflags::bitflags! {
     #[repr(C)]
     #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -391,7 +384,6 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
     debug_bsan!("retag", object_addr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-
     let opt_slice = |ptr, len| -> Option<_> {
         (!im_data.is_null()).then(|| unsafe { slice::from_raw_parts(ptr, len) })
     };
