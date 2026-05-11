@@ -21,6 +21,7 @@ def cargo_bsan(cmd, quiet=True, nop=False):
         args += ["-q"]
     if nop:
         args += ["--nop"]
+        args += ["-F nop"]
     return args
 
 
@@ -166,7 +167,7 @@ def test_cargo_bsan_test():
     test(
         "`cargo bsan test` (nop)",
         cargo_bsan("test", nop=True),
-        stdout_ref="test.stdout.ref",
+        stdout_ref="test.nop.stdout.ref",
     )
 
 args_parser = argparse.ArgumentParser(description="`cargo bsan` testing")
