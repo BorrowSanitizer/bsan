@@ -119,6 +119,7 @@ def hyperfine_mean(command: str) -> float:
     """Run hyperfine on a single command and return its mean wall time in
     seconds. Aborts the script on failure (no `-i`)."""
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as out_json:
+        out_json = Path(out_json)
         run(
             [
                 "hyperfine",
