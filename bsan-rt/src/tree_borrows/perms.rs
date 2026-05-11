@@ -1,23 +1,109 @@
+// This file was ported from Miri
+#![allow(unreachable_patterns)]
 use core::cmp::{Ordering, PartialOrd};
-use core::fmt;
+use core::{fmt, mem};
 
-use super::diagnostics::TransitionError;
-use super::tree::AccessRelatedness;
+use crate::AccessKind;
+use crate::tree_borrows::tree::AccessRelatedness;
+use crate::tree_borrows::diagnostics::TransitionError;
+use crate::Size;
 
-/// Indicates which kind of access is being performed.
 #[repr(u8)]
-#[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]
-pub enum AccessKind {
-    Read = 1,
-    Write = 2,
+#[allow(unused)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum RetagPtrKind {
+    Box = 0,
+    Ref = 1,
+    RefMut = 2,
 }
 
-impl fmt::Display for AccessKind {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            AccessKind::Read => write!(f, "read"),
-            AccessKind::Write => write!(f, "write"),
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RetagInfo<'a> {
+    pub size: usize,
+    pub perm: NewPermission,
+    pub im_layout: Option<&'a [[Size; 2]]>,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub struct NewPermission {
+    /// Permission for the frozen part of the range.
+    pub freeze_perm: Permission,
+    /// Whether a read access should be performed on the frozen part on a retag.
+    pub freeze_access: bool,
+    /// Permission for the non-frozen part of the range.
+    pub nonfreeze_perm: Permission,
+    /// What kind of access should be performed on the non-frozen part on a retag.
+    pub nonfreeze_access: Option<AccessKind>,
+    // Whether the type is frozen.
+    pub ty_is_freeze: bool,
+    /// Whether this pointer is part of the arguments of a function call.
+    /// `protector` is `Some(_)` for all pointers marked `noalias`.
+    pub protector: Option<ProtectorKind>,
+}
+
+impl NewPermission {
+    pub fn new(is_protected: bool, ty_is_freeze: bool, ptr_kind: RetagPtrKind) -> Self {
+        let freeze_perm = if matches!(ptr_kind, RetagPtrKind::Ref) {
+            Permission::new_frozen()
+        } else {
+            Permission::new_reserved_frz()
+        };
+
+        let nonfreeze_perm = match ptr_kind {
+            RetagPtrKind::Ref => Permission::new_cell(),
+            _ if is_protected => Permission::new_reserved_frz(),
+            _ => Permission::new_reserved_im(),
+        };
+
+        // Everything except for `Cell` gets an initial access.
+        let initial_access = |perm: &Permission| !perm.is_cell();
+
+        NewPermission {
+            freeze_perm,
+            freeze_access: initial_access(&freeze_perm),
+            nonfreeze_perm,
+            nonfreeze_access: initial_access(&nonfreeze_perm).then_some(AccessKind::Read),
+            ty_is_freeze,
+            protector: is_protected.then_some(
+                if matches!(ptr_kind, RetagPtrKind::Ref | RetagPtrKind::RefMut) {
+                    // Strong protector for references
+                    ProtectorKind::StrongProtector
+                } else {
+                    // Weak protector for boxes
+                    ProtectorKind::WeakProtector
+                },
+            ),
         }
+    }
+
+    pub fn default_perm(&self) -> Permission {
+        if self.ty_is_freeze {
+            self.freeze_perm
+        } else {
+            self.nonfreeze_perm
+        }
+    }
+}
+
+impl<'a> RetagInfo<'a> {
+    /// # Safety
+    /// The first 32 bits of `perm` must contain the `Permission`,
+    /// the `ProtectorKind`, and the `AccessKind, in that order.`
+    pub unsafe fn from_raw(
+        size: usize,
+        is_protected: u8,
+        ty_is_freeze: u8,
+        ptr_kind: RetagPtrKind,
+        im_data: *const [usize; 2],
+        im_len: usize,
+    ) -> Self {
+        let im_data = unsafe { mem::transmute::<*const [usize; 2], *const [Size; 2]>(im_data) };
+        let im_layout =
+            (!im_data.is_null()).then(|| unsafe { core::slice::from_raw_parts(im_data, im_len) });
+
+        let perm = NewPermission::new(is_protected != 0, ty_is_freeze != 0, ptr_kind);
+
+        Self { size, perm, im_layout }
     }
 }
 

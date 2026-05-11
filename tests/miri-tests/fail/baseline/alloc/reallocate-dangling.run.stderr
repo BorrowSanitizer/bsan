@@ -9,5 +9,5 @@ stack backtrace:
  at RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
 1: __rustc::__rdl_realloc
  at RUSTLIB/std/src/alloc.rs:LL:CC
-2: alloc::alloc::realloc
+2: alloc::alloc::realloc_nonnull
  at RUSTLIB/alloc/src/alloc.rs:LL:CC

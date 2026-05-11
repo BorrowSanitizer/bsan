@@ -2,6 +2,7 @@
 //miri: @revisions: stack tree
 //miri: @[tree]compile-flags: -Zmiri-tree-borrows
 //miri: @compile-flags: -Zmiri-strict-provenance
+// failing on aarch
 
 use std::sync::mpsc::{channel, sync_channel};
 use std::thread;

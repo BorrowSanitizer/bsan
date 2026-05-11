@@ -18,3 +18,5 @@
 
 BSAN_FLAG(bool, disable_node_debug_info, false,
           "Disable NodeDebugInfo diagnostics from the tree.")
+BSAN_FLAG(uptr, stacktrace_max_len, 3,
+          "Maximum number of frames captured for BorrowSanitizer stack traces.")

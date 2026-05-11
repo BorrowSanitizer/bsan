@@ -8,6 +8,7 @@ use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::errors::{ErrorFormatContext, UBInfo};
 use crate::helpers::FxHashMap;
+use crate::local::LocalCtx;
 use crate::memory::{Heap, ShadowHeap};
 use crate::tree_borrows::{ProtectorKind, Tree};
 use crate::*;
@@ -76,6 +77,7 @@ pub struct GlobalCtx {
     shadow_heap: ShadowHeap<Provenance>,
     alloc_metadata_map: Heap<AllocInfo>,
     snapshots: RwLock<FxHashMap<AllocId, Tree>>,
+    threads: RwLock<FxHashMap<ThreadId, NonNull<LocalCtx>>>,
 }
 
 impl GlobalCtx {
@@ -85,6 +87,7 @@ impl GlobalCtx {
             alloc_metadata_map: Heap::new(),
             shadow_heap: ShadowHeap::new(),
             snapshots: RwLock::new(FxHashMap::default()),
+            threads: RwLock::new(FxHashMap::default()),
         }
     }
 
@@ -94,6 +97,14 @@ impl GlobalCtx {
 
     pub(crate) unsafe fn destroy_alloc_info(&self, ptr: NonNull<AllocInfo>) {
         unsafe { self.alloc_metadata_map.dealloc(ptr) }
+    }
+
+    pub(crate) fn register_thread(&self, thread_id: ThreadId, local_ctx_ptr: NonNull<LocalCtx>) {
+        self.threads.write().insert(thread_id, local_ctx_ptr);
+    }
+
+    pub(crate) fn deregister_thread(&self, thread: ThreadId) {
+        self.threads.write().remove(&thread);
     }
 
     pub fn shadow_heap(&self) -> &ShadowHeap<Provenance> {

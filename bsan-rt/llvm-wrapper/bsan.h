@@ -25,7 +25,7 @@ typedef uptr Span;
 #define HANDLE_ERROR(pc, bp)                                                   \
   if (__BSAN_HAD_ERROR) {                                                      \
     UNINITIALIZED BufferedStackTrace stack;                                    \
-    stack.Unwind(pc, bp, nullptr, true, 4);                                    \
+    stack.Unwind(pc, bp, nullptr, true, __bsan::GetStackTraceLen());           \
     PrintStackTrace(stack);                                                    \
     Die();                                                                     \
   }
@@ -81,26 +81,34 @@ SANITIZER_WEAK_ATTRIBUTE void __bsan_dealloc(void *ptr, BorTag bor_tag,
                                              AllocInfo *alloc_info, Span pc);
 
 SANITIZER_INTERFACE_ATTRIBUTE BorTag
-__bsan_retag(void *object_addr, uptr access_size, u8 is_prot, u8 is_freeze,
-             u8 is_unpin, u8 ptr_kind, const uptr im_data[2], uptr im_len,
-             BorTag bor_tag, AllocInfo *alloc_info);
+__bsan_retag(void *object_addr, uptr access_size, u8 flags,
+             const uptr im_data[2], uptr im_len, const uptr pin_data[2],
+             uptr pin_len, BorTag bor_tag, AllocInfo *alloc_info);
 
 SANITIZER_WEAK_ATTRIBUTE BorTag
-__bsan_retag_impl(void *object_addr, uptr access_size, u8 is_prot, u8 is_freeze,
-                  u8 is_unpin, u8 ptr_kind, const uptr im_data[2], uptr im_len,
-                  BorTag bor_tag, AllocInfo *alloc_info, Span pc);
+__bsan_retag_impl(void *object_addr, uptr access_size, u8 flags,
+                  const uptr im_data[2], uptr im_len, const uptr pin_data[2],
+                  uptr pin_len, BorTag bor_tag, AllocInfo *alloc_info, Span pc);
 
 SANITIZER_WEAK_ATTRIBUTE void __bsan_internal_init();
 
 SANITIZER_WEAK_ATTRIBUTE void __bsan_internal_deinit();
 
+SANITIZER_WEAK_ATTRIBUTE void __bsan_local_init(Provenance **prov);
+
+SANITIZER_WEAK_ATTRIBUTE void __bsan_local_deinit();
+
 SANITIZER_WEAK_ATTRIBUTE BorTag __bsan_new_bor_tag();
 
 SANITIZER_INTERFACE_ATTRIBUTE void
-__bsan_pop_frame(const Provenance *frame_start, uptr protected_);
+__bsan_protector_end(BorTag bor_tag, AllocInfo *alloc_info, Span pc);
 
 SANITIZER_WEAK_ATTRIBUTE void
-__bsan_pop_frame_impl(const Provenance *frame_start, uptr protected_, Span pc);
+__bsan_protector_end_impl(BorTag bor_tag, AllocInfo *alloc_info, Span pc);
+
+SANITIZER_INTERFACE_ATTRIBUTE void
+__bsan_pop_frame(const Provenance *frame_start, uptr protected_,
+                 uptr alloca_vec_size);
 
 SANITIZER_INTERFACE_ATTRIBUTE void
 __bsan_read(void *ptr, uptr access_size, BorTag bor_tag, AllocInfo *alloc_info);
@@ -129,15 +137,17 @@ SANITIZER_WEAK_ATTRIBUTE void __bsan_alloc_stack_impl(void *base_addr,
 SANITIZER_INTERFACE_ATTRIBUTE void
 __bsan_dealloc_stack(void *ptr, BorTag bor_tag, AllocInfo *alloc_info);
 
-SANITIZER_WEAK_ATTRIBUTE void __bsan_dealloc_stack_impl(void *ptr,
-                                                        BorTag bor_tag,
-                                                        AllocInfo *alloc_info,
-                                                        Span pc);
+SANITIZER_WEAK_ATTRIBUTE void
+__bsan_dealloc_stack_impl(BorTag bor_tag, AllocInfo *alloc_info, Span pc);
 
 SANITIZER_WEAK_ATTRIBUTE void
 __bsan_shadow_transfer(void *dest, const void *src, uptr access_size);
 
 SANITIZER_WEAK_ATTRIBUTE void __bsan_shadow_clear(void *dest, uptr access_size);
+
+SANITIZER_WEAK_ATTRIBUTE void *__bsan_shadow(void *dest);
+SANITIZER_WEAK_ATTRIBUTE void
+__bsan_rc_store(BorTag bor_tag, AllocInfo *alloc_info, void *dest);
 
 SANITIZER_WEAK_ATTRIBUTE AllocInfo *__bsan_reserve_stack_slot();
 
@@ -159,6 +169,7 @@ extern bool BSAN_DEINIT_RUNNING;
 namespace __bsan {
 void BsanTSDInit();
 void InitializeInterceptors();
+u32 GetStackTraceLen();
 Provenance *GetSlot(uptr Idx);
 void ClearSlot(uptr Idx);
 void PrintStackTrace(StackTrace &stack);

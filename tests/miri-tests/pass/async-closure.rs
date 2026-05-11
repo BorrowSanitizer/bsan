@@ -1,5 +1,4 @@
 //@run:0
-#![feature(async_fn_traits)]
 
 use std::future::Future;
 use std::ops::{AsyncFn, AsyncFnMut, AsyncFnOnce};

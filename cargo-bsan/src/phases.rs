@@ -48,10 +48,9 @@ pub const BSAN_DEFAULT_RUSTFLAGS: &[&str] = &[
     "--cfg=bsan",
     "-Copt-level=0",
     "-Zmir-opt-level=0",
-    "-Zcodegen-emit-retag=true",
+    "-Zcodegen-emit-retag",
     "-Cforce-frame-pointers=yes",
     "-Zmir-preserve-ub",
-    "-Zllvm-emit-lifetime-markers",
     "-Zinline-llvm=no",
     "-Cembed-bitcode=yes",
     "-Cdebuginfo=2",
@@ -111,7 +110,7 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     }
 
     let llvm_tools = LlvmTools::new(&rustc_version, &host_sysroot);
-    let deps = Dependencies::setup(&host_sysroot);
+    let deps = Dependencies::setup(&rustc_version, &host_sysroot);
 
     setup_sysroot(&subcommand, &rustc_version, &deps, &llvm_tools, &target_sysroot, &env);
 
