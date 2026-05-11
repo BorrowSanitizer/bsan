@@ -17,7 +17,7 @@ HYPERFINE_RUNS = 10
 HYPERFINE_WARMUP = 3
 
 NATIVE_CARGO = ["cargo", "test", "--lib"]
-INSTR_CARGO = ["cargo", "bsan", "test", "--lib"]
+INSTR_CARGO = ["cargo", "bsan", "test", "--nop", "--lib"]
 
 def _merge_env(extra_env: dict[str, str] | None) -> dict[str, str] | None:
     """Merge extra_env on top of os.environ. Returns None if extra_env is
@@ -210,7 +210,7 @@ def process_config(
     if not crate or not version:
         sys.exit(f"Error: {config_path} missing 'name' or 'version'.\n---\n{cfg}\n")
 
-    bench_name = f"{crate}@{version}"
+    bench_name = f"{crate}@{version} (nop)"
     print(f"Running: {bench_name}")
     if excluded_tests:
         print(f"Excluding:")
@@ -232,7 +232,7 @@ def process_config(
     except subprocess.CalledProcessError:
         pass
 
-    instr_built = compile_test_binary(INSTR_CARGO, "instrumented", cwd=src_dir, extra_env={"BSAN_NOP": "1"})
+    instr_built = compile_test_binary(INSTR_CARGO, "instrumented (nop)", cwd=src_dir)
     instr_bin = crate_scratch / "instr_test_bin"
     shutil.copy2(instr_built, instr_bin)
     instr_bin.chmod(0o755)
