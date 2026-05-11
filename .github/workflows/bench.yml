@@ -33,5 +33,5 @@ jobs:
     - uses: bencherdev/bencher@main
     - name: Bencher
       run: |
-          python3 ./bsan-script/etc/bencher.py ./tests/benches/ $BENCHER_PROJECT '${{ secrets.BENCHER_API_TOKENS }}' /github/home/.cargo/bin/bencher --testbed 'Github-CI-${{ matrix.config.os }}'
+          python3 ./bsan-script/etc/bencher.py ./tests/benches/ $BENCHER_PROJECT '${{ secrets.BENCHER_API_TOKENS }}' $(which bencher) --testbed 'Github-CI-${{ matrix.config.os }}'
       
