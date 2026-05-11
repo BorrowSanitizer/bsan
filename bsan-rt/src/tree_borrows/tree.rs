@@ -1,3 +1,4 @@
+// Ported from Miri (commit:072a9fa) with minimal edits: removed ProvenanceExtra & VisitProvenance
 //! In this file we handle the "Tree" part of Tree Borrows, i.e. all tree
 //! traversal functions, optimizations to trim branches, and keeping track of
 //! the relative position of the access to each node being updated. This of course
@@ -34,7 +35,7 @@ mod tests;
 
 /// Data for a reference at single *location*.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) struct LocationState {
+pub(crate) struct LocationState {
     /// A location is "accessed" when it is child-accessed for the first time (and the initial
     /// retag initializes the location for the range covered by the type), and it then stays
     /// accessed forever.
@@ -63,6 +64,7 @@ impl LocationState {
     /// `sifa` is the (strongest) idempotent foreign access, see `foreign_access_skipping.rs`
     pub fn new_non_accessed(permission: Permission, sifa: IdempotentForeignAccess) -> Self {
         assert!(permission.is_initial() || permission.is_disabled());
+        assert!(!permission.is_unique());
         Self { permission, accessed: false, idempotent_foreign_access: sifa }
     }
 
@@ -71,6 +73,12 @@ impl LocationState {
     /// `sifa` is the (strongest) idempotent foreign access, see `foreign_access_skipping.rs`
     pub fn new_accessed(permission: Permission, sifa: IdempotentForeignAccess) -> Self {
         Self { permission, accessed: true, idempotent_foreign_access: sifa }
+    }
+
+    /// Checks whether the current location state is ever reachable in a real execution.
+    pub fn possible(&self) -> bool {
+        // `Unique` can only be reached on actually accessed locations.
+        self.accessed || !self.permission.is_unique()
     }
 
     /// Check if the location has been accessed, i.e. if it has
@@ -150,6 +158,7 @@ impl LocationState {
         if protected && self.accessed && transition.produces_disabled() {
             return Err(TransitionError::ProtectedDisabled(old_perm));
         }
+        debug_assert!(self.possible());
         Ok(transition)
     }
 
@@ -275,7 +284,7 @@ pub struct Tree {
     /// The parent-child relationship in `Node` is encoded in terms of these same
     /// keys, so traversing the entire tree needs exactly one access to
     /// `tag_mapping`.
-    pub(super) tag_mapping: UniKeyMap<BorTag>,
+    pub(crate) tag_mapping: UniKeyMap<BorTag>,
     /// All nodes of this tree.
     pub(super) nodes: UniValMap<Node>,
     /// Associates with each location its state and wildcard access tracking.
@@ -380,7 +389,7 @@ impl Tree {
     /// `base_offset`. These may nor may not be already marked as "accessed".
     /// `outside_perm` defines the initial permission for the rest of the allocation.
     /// These are definitely not "accessed".
-    pub(super) fn new_child(
+    pub(crate) fn new_child(
         &mut self,
         base_offset: Size,
         parent_tag: BorTag,
@@ -397,6 +406,7 @@ impl Tree {
             Some(self.tag_mapping.get(&parent_tag).unwrap())
         };
         assert!(outside_perm.is_initial());
+        assert!(!outside_perm.is_unique());
 
         let default_strongest_idempotent =
             outside_perm.strongest_idempotent_foreign_access(protected);
@@ -687,7 +697,7 @@ impl Tree {
         for (loc_range, loc) in self.locations.iter_mut_all() {
             // Only visit accessed permissions
             if let Some(p) = loc.perms.get(source_idx)
-                && let Some(access_kind) = p.permission.protector_end_access()
+                && let Some(access_kind) = p.permission.associated_access()
                 && p.accessed
             {
                 let diagnostics = DiagnosticInfo {

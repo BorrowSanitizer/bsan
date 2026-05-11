@@ -1,14 +1,16 @@
+// This module was ported from Miri (commit:072a9fa) and modified by our team.
 use crate::errors::UBResult;
 use crate::global::{GlobalCtx, ProtectedTags};
 use crate::helpers::{AllocRange, Size};
+use crate::tree_borrows::perms::AccessKind;
 use crate::{AllocId, BorTag, RetagInfo};
 
-mod data_structures;
+pub mod data_structures;
 pub mod diagnostics;
 mod exhaustive;
 mod foreign_access_skipping;
-mod perms;
-mod tree;
+pub mod perms;
+pub mod tree;
 mod tree_visitor;
 mod wildcard;
 
@@ -90,26 +92,26 @@ impl Tree {
 #[derive(Debug, Clone, Copy)]
 pub struct NewPermission {
     /// Permission for the frozen part of the range.
-    freeze_perm: Permission,
+    pub(crate) freeze_perm: Permission,
     /// Whether a read access should be performed on the frozen part on a retag.
-    freeze_access: bool,
+    pub(crate) freeze_access: bool,
     /// Permission for the non-frozen part of the range.
-    nonfreeze_perm: Permission,
+    pub(crate) nonfreeze_perm: Permission,
     /// Whether a read access should be performed on the non-frozen
     /// part on a retag.
-    nonfreeze_access: bool,
+    pub(crate) nonfreeze_access: bool,
     /// Permission for memory outside the range.
-    outside_perm: Permission,
+    pub(crate) outside_perm: Permission,
     /// Whether this pointer is part of the arguments of a function call.
     /// `protector` is `Some(_)` for all pointers marked `noalias`.
-    protector: Option<ProtectorKind>,
+    pub(crate) protector: Option<ProtectorKind>,
 }
 
 impl<'tcx> NewPermission {
     /// Determine NewPermission of the reference/Box from the type of the pointee.
     ///
     /// A `ref_mutability` of `None` indicates a `Box` type.
-    fn new(info: RetagInfo<'tcx>) -> Option<Self> {
+    pub(crate) fn new(info: RetagInfo<'tcx>) -> Self {
         /*
         let ty_is_unpin = pointee.is_unpin(*cx.tcx, cx.typing_env())
             && pointee.is_unsafe_unpin(*cx.tcx, cx.typing_env());
@@ -154,6 +156,12 @@ impl<'tcx> NewPermission {
                 ProtectorKind::WeakProtector
             }),
         })*/
+        todo!()
+    }
+    pub(crate) fn default_perm(self) -> Permission {
+        todo!()
+    }
+    pub(crate) fn is_freeze(&self) -> bool {
         todo!()
     }
 }

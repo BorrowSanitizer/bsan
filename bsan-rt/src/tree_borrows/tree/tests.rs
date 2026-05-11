@@ -1,3 +1,4 @@
+// Ported from Miri (commit:072a9fa)
 //! Tests for the tree
 #![cfg(test)]
 
@@ -9,11 +10,15 @@ use super::*;
 impl Exhaustive for LocationState {
     fn exhaustive() -> Box<dyn Iterator<Item = Self>> {
         // We keep `latest_foreign_access` at `None` as that's just a cache.
-        Box::new(<(Permission, bool)>::exhaustive().map(|(permission, accessed)| Self {
-            permission,
-            accessed,
-            idempotent_foreign_access: IdempotentForeignAccess::default(),
-        }))
+        Box::new(
+            <(Permission, bool)>::exhaustive()
+                .map(|(permission, accessed)| Self {
+                    permission,
+                    accessed,
+                    idempotent_foreign_access: IdempotentForeignAccess::default(),
+                })
+                .filter(|x| x.possible()),
+        )
     }
 }
 
@@ -446,17 +451,19 @@ mod spurious_read {
         /// Perform a read on the given pointer if its state is `accessed`.
         /// Must be called just after reborrowing a pointer, and just after
         /// removing a protector.
-        fn read_if_accessed(self, ptr: PtrSelector) -> Result<Self, ()> {
+        fn retag_dependent_access(self, ptr: PtrSelector) -> Result<Self, ()> {
             let accessed = match ptr {
-                PtrSelector::X => self.x.state.accessed,
-                PtrSelector::Y => self.y.state.accessed,
+                PtrSelector::X =>
+                    self.x.state.permission.associated_access().filter(|_| self.x.state.accessed),
+                PtrSelector::Y =>
+                    self.y.state.permission.associated_access().filter(|_| self.y.state.accessed),
                 PtrSelector::Other =>
                     panic!(
                         "the `accessed` status of `PtrSelector::Other` is unknown, do not pass it to `read_if_accessed`"
                     ),
             };
-            if accessed {
-                self.perform_test_access(&TestAccess { ptr, kind: AccessKind::Read })
+            if let Some(kind) = accessed {
+                self.perform_test_access(&TestAccess { ptr, kind })
             } else {
                 Ok(self)
             }
@@ -465,13 +472,13 @@ mod spurious_read {
         /// Remove the protector of `x`, including the implicit read on function exit.
         fn end_protector_x(self) -> Result<Self, ()> {
             let x = self.x.end_protector();
-            Self { x, ..self }.read_if_accessed(PtrSelector::X)
+            Self { x, ..self }.retag_dependent_access(PtrSelector::X)
         }
 
         /// Remove the protector of `y`, including the implicit read on function exit.
         fn end_protector_y(self) -> Result<Self, ()> {
             let y = self.y.end_protector();
-            Self { y, ..self }.read_if_accessed(PtrSelector::Y)
+            Self { y, ..self }.retag_dependent_access(PtrSelector::Y)
         }
 
         fn retag_y(self, new_y: LocStateProt) -> Result<Self, ()> {
@@ -481,7 +488,7 @@ mod spurious_read {
             }
             // `xy_rel` changes to "mutually foreign" now: `y` can no longer be a parent of `x`.
             Self { y: new_y, xy_rel: RelPosXY::MutuallyForeign, ..self }
-                .read_if_accessed(PtrSelector::Y)
+                .retag_dependent_access(PtrSelector::Y)
         }
 
         fn perform_test_event<RetX, RetY>(self, evt: &TestEvent<RetX, RetY>) -> Result<Self, ()> {
@@ -558,13 +565,13 @@ mod spurious_read {
             // most of the work lies in remembering the path up to the current state.
             while let Some((state, path)) = handle.pop() {
                 for evt in <TestEvent<RetX, RetY>>::exhaustive() {
-                    if let Ok(next) = state.clone().perform_test_event(&evt)
-                        && seen.insert(next.clone())
-                    {
-                        let mut evts = path.clone();
-                        evts.events.push(evt);
-                        paths.push((next.clone(), evts.clone()));
-                        handle.push((next, evts));
+                    if let Ok(next) = state.clone().perform_test_event(&evt) {
+                        if seen.insert(next.clone()) {
+                            let mut evts = path.clone();
+                            evts.events.push(evt);
+                            paths.push((next.clone(), evts.clone()));
+                            handle.push((next, evts));
+                        }
                     }
                 }
             }
@@ -707,7 +714,7 @@ mod spurious_read {
         fn initial_state(&self) -> Result<LocStateProtPair, ()> {
             let (x, y) = self.retag_permissions();
             let state = LocStateProtPair { xy_rel: self.xy_rel, x, y };
-            state.read_if_accessed(PtrSelector::X)
+            state.retag_dependent_access(PtrSelector::X)
         }
     }
 
@@ -742,7 +749,7 @@ mod spurious_read {
                             .distinguishable::</*X*/ AllowRet, /*Y*/ AllowRet>(&final_target)
                             .then_some(format!("{final_target}"))
                     } else {
-                        Some("UB".to_string())
+                        Some(format!("UB"))
                     }
                 };
                 if let Some(final_target) = distinguishable {

@@ -1,3 +1,4 @@
+// Ported from Miri (commit:072a9fa)
 //! Exhaustive testing utilities.
 //! (These are used in Tree Borrows `#[test]`s for thorough verification
 //! of the behavior of the state machine of permissions,

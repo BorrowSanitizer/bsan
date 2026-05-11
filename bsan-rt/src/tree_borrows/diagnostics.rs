@@ -1,3 +1,4 @@
+// Ported from Miri (commit:072a9fa) with minimal edits: defined TreeBorrowsUb
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
@@ -8,14 +9,14 @@ use super::perms::{AccessKind, PermTransition, Permission, ProtectorKind};
 use super::tree::LocationState;
 use crate::helpers::{AllocRange, FxHashMap};
 use crate::tree_borrows::Tree;
-use crate::*;
+use crate::{eprintln, *};
 
 /// Cause of an access: either a real access or one
 /// inserted by Tree Borrows due to a reborrow or a deallocation.
 #[derive(Clone, Copy, Debug)]
 pub enum AccessCause {
     Explicit(AccessKind),
-    Reborrow,
+    Reborrow(AccessKind),
     Dealloc,
     FnExit(AccessKind),
 }
@@ -24,7 +25,7 @@ impl fmt::Display for AccessCause {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Explicit(kind) => write!(f, "{kind}"),
-            Self::Reborrow => write!(f, "reborrow"),
+            Self::Reborrow(_) => write!(f, "reborrow"),
             Self::Dealloc => write!(f, "deallocation"),
             // This is dead code, since the protector release access itself can never
             // cause UB (while the protector is active, if some other access invalidates
@@ -40,7 +41,7 @@ impl AccessCause {
         let rel = if is_foreign { "foreign" } else { "child" };
         match self {
             Self::Explicit(kind) => format!("{rel} {kind}"),
-            Self::Reborrow => format!("reborrow (acting as a {rel} read access)"),
+            Self::Reborrow(kind) => format!("reborrow (acting as a {rel} {kind})"),
             Self::Dealloc => format!("deallocation (acting as a {rel} write access)"),
             Self::FnExit(kind) => format!("protector release (acting as a {rel} {kind})"),
         }
@@ -158,7 +159,7 @@ impl HistoryData {
             let access = access_cause.print_as_access(is_foreign);
             let access_range_text = match access_range {
                 Some(r) => format!("at offsets {r}"),
-                None => "on every location previously accessed by this tag".to_string(),
+                None => format!("on every location previously accessed by this tag"),
             };
             self.events.push((
                 Some(span),
@@ -224,7 +225,7 @@ impl fmt::Display for NodeDebugInfo {
     }
 }
 
-impl Tree {
+impl<'tcx> Tree {
     /// Climb the tree to get the tag of a distant ancestor.
     /// Allows operations on tags that are unreachable by the program
     /// but still exist in the tree. Not guaranteed to perform consistently
@@ -245,7 +246,7 @@ impl Tree {
         if let Some(node) = self.nodes.get_mut(idx) {
             node.debug_info.add_name(name);
         } else {
-            crate::eprintln!("Tag {tag:?} (to be named '{name}') not found!");
+            eprintln!("Tag {tag:?} (to be named '{name}') not found!");
         }
     }
 
@@ -780,14 +781,14 @@ impl DisplayRepr {
                     block_width
                 }
             };
-            crate::eprintln!("{}", char_repeat(wr.top, max_width));
+            eprintln!("{}", char_repeat(wr.top, max_width));
             if print_warning {
-                crate::eprintln!("{}", wr.warning_text,);
+                eprintln!("{}", wr.warning_text,);
             }
             for line in block {
-                crate::eprintln!("{line}");
+                eprintln!("{line}");
             }
-            crate::eprintln!("{}", char_repeat(wr.bot, max_width));
+            eprintln!("{}", char_repeat(wr.bot, max_width));
         }
 
         // Here is the function that does the heavy lifting
@@ -878,7 +879,7 @@ const DEFAULT_FORMATTER: DisplayFmt = DisplayFmt {
     accessed: DisplayFmtAccess { yes: " ", no: "?", meh: "-" },
 };
 
-impl Tree {
+impl<'tcx> Tree {
     /// Display the contents of the tree.
     pub fn print_tree(
         &self,
@@ -894,7 +895,7 @@ impl Tree {
             .collect::<Vec<_>>();
 
         if main_tree.is_none() && wildcard_subtrees.is_empty() {
-            crate::eprintln!(
+            eprintln!(
                 "This allocation does not contain named tags. Use `miri_print_borrow_state(_, true)` to also print unnamed tags."
             );
         }

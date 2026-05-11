@@ -14,7 +14,7 @@ use core::fmt::Debug;
 use core::panic::PanicInfo;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use core::{fmt, ptr};
+use core::{fmt, ptr, slice};
 mod borrow_tracker;
 use libc_print::std_name::*;
 use spin::Mutex;
@@ -31,9 +31,11 @@ mod local;
 mod errors;
 mod memory;
 
-use crate::tree_borrows::tree::Tree;
-use crate::tree_borrows::RetagPtrKind;
+use crate::helpers::Size;
+use crate::local::{deinit_local_ctx, init_local_ctx};
 use crate::sanitizer_common::Span;
+use crate::tree_borrows::perms::AccessKind;
+use crate::tree_borrows::tree::Tree;
 
 #[thread_local]
 #[unsafe(no_mangle)]
@@ -131,7 +133,6 @@ impl fmt::Display for AllocId {
         f.write_fmt(format_args!("{:?}", self))
     }
 }
-
 
 #[unsafe(no_mangle)]
 pub static __BSAN_THREAD_ID_CTR: AtomicUsize = AtomicUsize::new(3);
@@ -371,14 +372,6 @@ bitflags::bitflags! {
         /// If the pointee type is `Freeze`
         const IS_FREEZE = 1 << 3;
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RetagInfo<'a> {
-    pub size: usize,
-    pub flags: RetagFlags,
-    pub im_layout: Option<&'a [[Size; 2]]>,
-    pub pin_layout: Option<&'a [[Size; 2]]>,
 }
 
 /// Creates a new borrow tag for the given provenance object.

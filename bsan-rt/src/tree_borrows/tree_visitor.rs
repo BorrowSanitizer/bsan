@@ -1,3 +1,4 @@
+// Ported from Miri (commit:072a9fa)
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 

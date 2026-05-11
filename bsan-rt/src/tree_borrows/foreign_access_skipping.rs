@@ -1,5 +1,6 @@
-use super::perms::AccessKind;
+// Ported from Miri (commit:072a9fa)
 use super::tree::AccessRelatedness;
+use super::AccessKind;
 
 /// To speed up tree traversals, we want to skip traversing subtrees when we know the traversal will have no effect.
 /// This is often the case for foreign accesses, since usually foreign accesses happen several times in a row, but also

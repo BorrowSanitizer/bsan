@@ -6,8 +6,12 @@ use spin::MutexGuard;
 use crate::errors::{UBInfo, UBResult};
 use crate::helpers::{AllocRange, Size};
 use crate::sanitizer_common::Span;
-use crate::tree_borrows::{AccessKind, Tree};
-use crate::{AllocId, BorTag, GlobalCtx, Provenance, RetagInfo};
+use crate::tree_borrows::data_structures::DedupRangeMap;
+use crate::tree_borrows::diagnostics::AccessCause;
+use crate::tree_borrows::perms::AccessKind;
+use crate::tree_borrows::tree::LocationState;
+use crate::tree_borrows::NewPermission;
+use crate::{AllocId, BorTag, GlobalCtx, Provenance, RetagInfo, Tree};
 
 #[derive(Debug)]
 pub struct BorrowTracker<'b> {
@@ -93,6 +97,11 @@ impl<'b> BorrowTracker<'b> {
                 return if access_size != 0 { Err(UBInfo::UseAfterFree) } else { Ok(None) };
             };
 
+            let tree = tree.lock();
+            if !tree.tag_mapping.contains_key(&prov.bor_tag) {
+                return if access_size != 0 { Err(UBInfo::UseAfterFree) } else { Ok(None) };
+            }
+
             let offset = start.addr().wrapping_sub(base_addr);
             if start.addr() < base_addr || (offset + access_size > alloc_size) {
                 return if access_size != 0 {
@@ -106,7 +115,6 @@ impl<'b> BorrowTracker<'b> {
             let size = Size::from_bytes(access_size);
             let range = AllocRange { start, size };
 
-            let tree = tree.lock();
             f(Self { alloc_id, prov, range, tree }).map(|r| Some(r))
         }
     }
@@ -131,11 +139,95 @@ impl<'b> BorrowTracker<'b> {
         retag_info: RetagInfo<'_>,
         span: Span,
     ) -> UBResult<BorTag> {
-        todo!()
+        if retag_info.im_layout.is_some() {
+            return Ok(self.prov.bor_tag);
+        }
+        let alloc_id = self.alloc_id;
+        let parent_tag = self.prov.bor_tag;
+        let new_tag = BorTag::default();
+
+        if !self.tree().tag_mapping.contains_key(&self.prov.bor_tag) {
+            return Err(UBInfo::UseAfterFree);
+        }
+        let perm: NewPermission = NewPermission::new(retag_info);
+
+        let protected = perm.protector.is_some();
+        if let Some(protector) = perm.protector {
+            // We register the protection in two different places.
+            // This makes creating a protector slower, but checking whether a tag
+            // is protected faster.
+            global_ctx.protected_tags_mut().add_protector(new_tag, protector);
+        }
+
+        // Compute initial "inside" permissions.
+        let loc_state = |frozen: bool| -> LocationState {
+            let (perm, access) = if frozen {
+                (perm.freeze_perm, perm.freeze_access)
+            } else {
+                (perm.nonfreeze_perm, perm.nonfreeze_access)
+            };
+            let sifa = perm.strongest_idempotent_foreign_access(protected);
+            if access {
+                LocationState::new_accessed(perm, sifa)
+            } else {
+                LocationState::new_non_accessed(perm, sifa)
+            }
+        };
+
+        let initial_state = loc_state(perm.is_freeze());
+        let mut inside_perms = DedupRangeMap::new(Size::from_bytes(retag_info.size), initial_state);
+
+        if let Some(im_layout) = retag_info.im_layout {
+            for [start, size] in im_layout {
+                inside_perms.iter_mut(*start, *size).for_each(|(_, loc)| *loc = loc_state(false));
+            }
+        }
+
+        let base_offset = self.range.start;
+        for (perm_range, perm) in inside_perms.iter_all() {
+            if perm.accessed() {
+                // Some reborrows incur a read access to the parent.
+                // Adjust range to be relative to allocation start
+                let range_in_alloc = AllocRange {
+                    start: Size::from_bytes(perm_range.start) + base_offset,
+                    size: Size::from_bytes(perm_range.end - perm_range.start),
+                };
+
+                // Perform the access (update the Tree Borrows FSM)
+                self.tree_mut().perform_access(
+                    parent_tag,
+                    range_in_alloc,
+                    AccessKind::Read,
+                    AccessCause::Reborrow(AccessKind::Read),
+                    &global_ctx.protected_tags(),
+                    alloc_id,
+                    span,
+                )?;
+            }
+        }
+
+        // base offset should be the offset, from zero, where the retag is taking place within the allocation.
+        let _ = self.tree_mut().new_child(
+            base_offset,
+            parent_tag,
+            new_tag,
+            inside_perms,
+            perm.default_perm(),
+            protected,
+            span,
+        );
+
+        Ok(new_tag)
     }
 
     pub fn protector_end(&mut self, global_ctx: &GlobalCtx, span: Span) -> UBResult<()> {
-        todo!()
+        let (bor_tag, alloc_id) = (self.prov.bor_tag, self.alloc_id);
+        self.tree_mut().perform_protector_end_access(
+            bor_tag,
+            &global_ctx.protected_tags(),
+            alloc_id,
+            span,
+        )
     }
 
     pub fn access(
@@ -144,26 +236,45 @@ impl<'b> BorrowTracker<'b> {
         access_kind: AccessKind,
         span: Span,
     ) -> UBResult<()> {
-        todo!()
+        let (range, bor_tag, alloc_id) = (self.range, self.prov.bor_tag, self.alloc_id);
+        self.tree_mut().perform_access(
+            bor_tag,
+            range,
+            access_kind,
+            AccessCause::Explicit(access_kind),
+            &global_ctx.protected_tags(),
+            alloc_id,
+            span,
+        )
     }
 
     pub fn dealloc(&mut self, global_ctx: &GlobalCtx, span: Span) -> UBResult<()> {
-        todo!()
+        let (range, bor_tag, alloc_id) = (self.range, self.prov.bor_tag, self.alloc_id);
+        let tree = self.tree_mut();
+        tree.dealloc(bor_tag, range, &global_ctx.protected_tags(), alloc_id, span)?;
+        let info = unsafe { &mut *self.prov.alloc_info };
+        drop(info.tree_lock.take());
+        Ok(())
     }
 
     pub fn debug_take_snapshot(&self, ctx: &GlobalCtx) {
-        todo!()
+        let tree = self.tree();
+        ctx.take_snapshot(self.alloc_id, tree.clone());
     }
 
     pub fn debug_print_diff(&self, ctx: &GlobalCtx) {
+        // ctx.with_snapshot(self.alloc_id, |old_tree| {
+        //     print_tree_diff(self.tree(), old_tree, &ctx.protected_tags());
+        // });
         todo!()
     }
 
     pub fn debug_print_tree(&self, ctx: &GlobalCtx, show_unnamed: bool) {
+        // self.tree().print_tree(&ctx.protected_tags(), show_unnamed);
         todo!()
     }
 
     pub fn debug_tree_size(&self) -> usize {
-        todo!()
+        self.tree().tag_mapping.len()
     }
 }

@@ -1,12 +1,46 @@
-// This file was ported from Miri
+// Ported from Miri (commit:072a9fa) with minimal edits: defined AccessKind, ProtectorKind, & RetagPtrKind
 #![allow(unreachable_patterns)]
 use core::cmp::{Ordering, PartialOrd};
-use core::{fmt, mem};
+use core::fmt;
 
-use crate::AccessKind;
-use crate::tree_borrows::tree::AccessRelatedness;
 use crate::tree_borrows::diagnostics::TransitionError;
-use crate::Size;
+use crate::tree_borrows::tree::AccessRelatedness;
+
+/// Indicates which kind of access is being performed.
+#[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]
+pub enum AccessKind {
+    Read,
+    Write,
+}
+
+impl fmt::Display for AccessKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AccessKind::Read => write!(f, "read access"),
+            AccessKind::Write => write!(f, "write access"),
+        }
+    }
+}
+
+/// The flavor of the protector.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ProtectorKind {
+    /// Protected against aliasing violations from other pointers.
+    ///
+    /// Items protected like this cause UB when they are invalidated, *but* the pointer itself may
+    /// still be used to issue a deallocation.
+    ///
+    /// This is required for LLVM IR pointers that are `noalias` but *not* `dereferenceable`.
+    WeakProtector,
+
+    /// Protected against any kind of invalidation.
+    ///
+    /// Items protected like this cause UB when they are invalidated or the memory is deallocated.
+    /// This is strictly stronger protection than `WeakProtector`.
+    ///
+    /// This is required for LLVM IR pointers that are `dereferenceable` (and also allows `noalias`).
+    StrongProtector,
+}
 
 #[repr(u8)]
 #[allow(unused)]
@@ -15,116 +49,6 @@ pub enum RetagPtrKind {
     Box = 0,
     Ref = 1,
     RefMut = 2,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RetagInfo<'a> {
-    pub size: usize,
-    pub perm: NewPermission,
-    pub im_layout: Option<&'a [[Size; 2]]>,
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-pub struct NewPermission {
-    /// Permission for the frozen part of the range.
-    pub freeze_perm: Permission,
-    /// Whether a read access should be performed on the frozen part on a retag.
-    pub freeze_access: bool,
-    /// Permission for the non-frozen part of the range.
-    pub nonfreeze_perm: Permission,
-    /// What kind of access should be performed on the non-frozen part on a retag.
-    pub nonfreeze_access: Option<AccessKind>,
-    // Whether the type is frozen.
-    pub ty_is_freeze: bool,
-    /// Whether this pointer is part of the arguments of a function call.
-    /// `protector` is `Some(_)` for all pointers marked `noalias`.
-    pub protector: Option<ProtectorKind>,
-}
-
-impl NewPermission {
-    pub fn new(is_protected: bool, ty_is_freeze: bool, ptr_kind: RetagPtrKind) -> Self {
-        let freeze_perm = if matches!(ptr_kind, RetagPtrKind::Ref) {
-            Permission::new_frozen()
-        } else {
-            Permission::new_reserved_frz()
-        };
-
-        let nonfreeze_perm = match ptr_kind {
-            RetagPtrKind::Ref => Permission::new_cell(),
-            _ if is_protected => Permission::new_reserved_frz(),
-            _ => Permission::new_reserved_im(),
-        };
-
-        // Everything except for `Cell` gets an initial access.
-        let initial_access = |perm: &Permission| !perm.is_cell();
-
-        NewPermission {
-            freeze_perm,
-            freeze_access: initial_access(&freeze_perm),
-            nonfreeze_perm,
-            nonfreeze_access: initial_access(&nonfreeze_perm).then_some(AccessKind::Read),
-            ty_is_freeze,
-            protector: is_protected.then_some(
-                if matches!(ptr_kind, RetagPtrKind::Ref | RetagPtrKind::RefMut) {
-                    // Strong protector for references
-                    ProtectorKind::StrongProtector
-                } else {
-                    // Weak protector for boxes
-                    ProtectorKind::WeakProtector
-                },
-            ),
-        }
-    }
-
-    pub fn default_perm(&self) -> Permission {
-        if self.ty_is_freeze {
-            self.freeze_perm
-        } else {
-            self.nonfreeze_perm
-        }
-    }
-}
-
-impl<'a> RetagInfo<'a> {
-    /// # Safety
-    /// The first 32 bits of `perm` must contain the `Permission`,
-    /// the `ProtectorKind`, and the `AccessKind, in that order.`
-    pub unsafe fn from_raw(
-        size: usize,
-        is_protected: u8,
-        ty_is_freeze: u8,
-        ptr_kind: RetagPtrKind,
-        im_data: *const [usize; 2],
-        im_len: usize,
-    ) -> Self {
-        let im_data = unsafe { mem::transmute::<*const [usize; 2], *const [Size; 2]>(im_data) };
-        let im_layout =
-            (!im_data.is_null()).then(|| unsafe { core::slice::from_raw_parts(im_data, im_len) });
-
-        let perm = NewPermission::new(is_protected != 0, ty_is_freeze != 0, ptr_kind);
-
-        Self { size, perm, im_layout }
-    }
-}
-
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ProtectorKind {
-    /// Protected against aliasing violations from other pointers.
-    ///
-    /// Items protected like this cause UB when they are invalidated, *but* the pointer itself may
-    /// still be used to issue a deallocation.
-    ///
-    /// This is required for LLVM IR pointers that are `noalias` but *not* `dereferenceable`.
-    WeakProtector = 1,
-
-    /// Protected against any kind of invalidation.
-    ///
-    /// Items protected like this cause UB when they are invalidated or the memory is deallocated.
-    /// This is strictly stronger protection than `WeakProtector`.
-    ///
-    /// This is required for LLVM IR pointers that are `dereferenceable` (and also allows `noalias`).
-    StrongProtector = 2,
 }
 
 /// The activation states of a pointer.
@@ -213,7 +137,7 @@ impl PartialOrd for PermissionPriv {
 impl PermissionPriv {
     /// Check if `self` can be the initial state of a pointer.
     fn is_initial(&self) -> bool {
-        matches!(self, ReservedFrz { conflicted: false } | Frozen | ReservedIM | Cell)
+        matches!(self, ReservedFrz { conflicted: false } | Frozen | ReservedIM | Cell | Unique)
     }
 
     /// Reject `ReservedIM` that cannot exist in the presence of a protector.
@@ -388,14 +312,17 @@ impl Permission {
         self.inner == Cell
     }
 
-    /// Default initial permission of the root of a new tree at inbounds positions.
-    /// Must *only* be used for the root, this is not in general an "initial" permission!
+    /// Check if `self` is a Permission of type `Unique`
+    pub fn is_unique(&self) -> bool {
+        self.inner == Unique
+    }
+
+    /// Create a new Permission of type `Unique`
     pub fn new_unique() -> Self {
         Self { inner: Unique }
     }
 
-    /// Default initial permission of a reborrowed mutable reference that is either
-    /// protected or not interior mutable.
+    /// Create a new Permission of type `ReservedFrz` with conflictedReserved set to false
     pub fn new_reserved_frz() -> Self {
         Self { inner: ReservedFrz { conflicted: false } }
     }
@@ -427,8 +354,8 @@ impl Permission {
         self.inner.compatible_with_protector()
     }
 
-    /// What kind of access to perform before releasing the protector.
-    pub fn protector_end_access(&self) -> Option<AccessKind> {
+    /// What kind of access to perform before releasing the protector or on a reborrow.
+    pub fn associated_access(&self) -> Option<AccessKind> {
         match self.inner {
             // Do not do perform access if it is a `Cell`, as this
             // can cause data races when using thread-safe data types.
