@@ -1,14 +1,10 @@
 #include "bsan_thread.h"
 #include "bsan.h"
+#include "bsan_interface_internal.h"
 #include "sanitizer_common/sanitizer_atomic.h"
 
 using namespace __sanitizer;
 using namespace __bsan;
-
-SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance *__BSAN_PROV_STACK =
-    nullptr;
-
-atomic_uintptr_t THREAD_ID_CTR;
 
 BsanThread *BsanThread::Create(thread_callback_t start_routine, void *arg) {
   uptr PageSize = GetPageSizeCached();
@@ -17,7 +13,7 @@ BsanThread *BsanThread::Create(thread_callback_t start_routine, void *arg) {
   thread->start_routine_ = start_routine;
   thread->arg_ = arg;
   thread->destructor_iterations_ = GetPthreadDestructorIterations();
-  thread->id = atomic_fetch_add(&THREAD_ID_CTR, 1, memory_order_relaxed);
+  thread->id = atomic_fetch_add(&thread_id, 1, memory_order_relaxed);
   return thread;
 }
 
@@ -25,8 +21,8 @@ void BsanThread::Init() {
   GetThreadStackTopAndBottom(IsMainThread(), &stack_top_, &stack_bottom_);
   prov_stack_size_ = stack_top_ - stack_bottom_;
   prov_stack_ = MmapOrDie(prov_stack_size_, __func__);
-  __BSAN_PROV_STACK = (Provenance *)(((u8 *)prov_stack_) + prov_stack_size_);
-  __bsan_local_init(&__BSAN_PROV_STACK);
+  __bsan_shadow_stack = (Provenance *)(((u8 *)prov_stack_) + prov_stack_size_);
+  __bsan_local_init(&__bsan_shadow_stack);
 }
 
 void BsanThread::TSDDtor(void *tsd) {
@@ -45,6 +41,5 @@ thread_return_t BsanThread::ThreadStart() {
   if (!start_routine_) {
     return 0;
   }
-  __BSAN_MARKER = (void *)-1;
   return start_routine_(arg_);
 }

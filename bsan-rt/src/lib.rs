@@ -164,7 +164,7 @@ impl fmt::Debug for ThreadId {
 }
 
 #[unsafe(no_mangle)]
-pub static __BSAN_BOR_TAG_CTR: AtomicUsize = AtomicUsize::new(2);
+pub static __bsan_bor_tag_ctr: AtomicUsize = AtomicUsize::new(2);
 
 /// Unique identifier for a node within the tree
 #[repr(transparent)]
@@ -187,7 +187,7 @@ impl BorTag {
 
 impl Default for BorTag {
     fn default() -> Self {
-        BorTag(__BSAN_BOR_TAG_CTR.fetch_add(1, Ordering::Relaxed))
+        BorTag(__bsan_bor_tag_ctr.fetch_add(1, Ordering::Relaxed))
     }
 }
 
