@@ -115,22 +115,23 @@ def list_tests(test_bin: Path) -> list[str]:
             tests.append(line[:-len(": test")])
     return tests
 
-def hyperfine_mean(out_json: Path, command: str) -> float:
+def hyperfine_mean(command: str) -> float:
     """Run hyperfine on a single command and return its mean wall time in
     seconds. Aborts the script on failure (no `-i`)."""
-    run(
-        [
-            "hyperfine",
-            "--runs", str(HYPERFINE_RUNS),
-            "--warmup", str(HYPERFINE_WARMUP),
-            "--shell=none",
-            "--export-json", str(out_json),
-            command,
-        ],
-        stdout=subprocess.DEVNULL,
-    )
-    data = json.loads(out_json.read_text())
-    return float(data["results"][0]["mean"])
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as out_json:
+        run(
+            [
+                "hyperfine",
+                "--runs", str(HYPERFINE_RUNS),
+                "--warmup", str(HYPERFINE_WARMUP),
+                "--shell=none",
+                "--export-json", str(out_json),
+                command,
+            ],
+            stdout=subprocess.DEVNULL,
+        )
+        data = json.loads(out_json.read_text())
+        return float(data["results"][0]["mean"])
 
 @dataclass
 class Aggregate:
@@ -150,7 +151,6 @@ def aggregate_ratios(ratios: list[float]) -> Aggregate:
 def upload_to_bencher(
     bench_name: str,
     agg: Aggregate,
-    bmf_path: Path,
     bencher_bin: str,
     project: str,
     token: str,
@@ -167,18 +167,20 @@ def upload_to_bencher(
             }
         }
     }
-    bmf_path.write_text(json.dumps(bmf_doc, indent=2))
-    print("BMF payload:")
-    print(bmf_path.read_text())
-    cmd = [
-        bencher_bin, "run",
-        "--project", project,
-        "--token", token,
-        "--adapter", "json",
-        "--file", str(bmf_path),
-        *extra_flags,
-    ]
-    run(cmd, cwd=repo_root)
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as bmf_path:
+        bmf_path = Path(bmf_path)
+        bmf_path.write_text(json.dumps(bmf_doc, indent=2))
+        print("BMF payload:")
+        print(bmf_path.read_text())
+        cmd = [
+            bencher_bin, "run",
+            "--project", project,
+            "--token", token,
+            "--adapter", "json",
+            "--file", str(bmf_path),
+            *extra_flags,
+        ]
+        run(cmd, cwd=repo_root)
 
 
 def process_config(
@@ -195,7 +197,7 @@ def process_config(
     version = cfg.get("version")
     excluded_tests = set(cfg.get("exclude") or [])
     if not crate or not version:
-        sys.exit(f"Error: invalid config: {config_path}\n---\n{cfg}\n")
+        sys.exit(f"Error: invalid config: {config_path}\n{cfg}")
 
     bench_name = f"{crate}@{version} (nop)"
     print(f"Running: {bench_name}")
@@ -203,13 +205,11 @@ def process_config(
         print("Excluding:")
         for test_name in excluded_tests:
             print(f"- {test_name}")
-    crate_scratch = scratch / bench_name
-    crate_scratch.mkdir(parents=True, exist_ok=True)
 
-    src_dir = download_crate(crate, version, crate_scratch)
+    src_dir = download_crate(crate, version, scratch)
 
     native_built = compile_test_binary(NATIVE_CARGO, "native", cwd=src_dir)
-    native_bin = crate_scratch / "native_test_bin"
+    native_bin = scratch / "native_test_bin"
     shutil.copy2(native_built, native_bin)
     native_bin.chmod(0o755)
 
@@ -219,7 +219,7 @@ def process_config(
         pass
 
     nop_built = compile_test_binary(NOP_CARGO, "nop", cwd=src_dir)
-    nop_bin = crate_scratch / "nop_test_bin"
+    nop_bin = scratch / "nop_test_bin"
     shutil.copy2(nop_built, nop_bin)
     nop_bin.chmod(0o755)
 
@@ -234,14 +234,8 @@ def process_config(
     ratios: list[float] = []
     for t in tests:
         print(f"  -> {t}")
-        safe = "".join(c if c.isalnum() or c == "_" else "_" for c in t)
-        n_json = crate_scratch / f"native-{safe}.json"
-        i_json = crate_scratch / f"instr-{safe}.json"
-        # --shell=none means the command string is split into argv, so
-        # spaces are the only separator. Rust test names can't contain
-        # spaces, so this is safe.
-        n_mean = hyperfine_mean(n_json, f"{native_bin} --exact {t} --nocapture")
-        i_mean = hyperfine_mean(i_json, f"{nop_bin} --exact {t} --nocapture")
+        n_mean = hyperfine_mean(f"{native_bin} --exact {t} --nocapture")
+        i_mean = hyperfine_mean(f"{nop_bin} --exact {t} --nocapture")
         assert(n_mean > 0 and i_mean > 0)
         ratio = i_mean / n_mean
         print(f" - native={n_mean}s  inst={i_mean}s  ratio={ratio}")
@@ -252,12 +246,8 @@ def process_config(
         f"Median relative execution time for {bench_name}: {agg.median}  "
         f"(min={agg.minimum} max={agg.maximum})"
     )
-    safe_name = "".join(
-        c if c.isalnum() or c in "_.@-" else "_" for c in bench_name
-    )
-    bmf_path = crate_scratch / f"{safe_name}.bmf.json"
     upload_to_bencher(
-       bench_name, agg, bmf_path,
+       bench_name, agg,
         bencher_bin=bencher_bin,
         project=project,
         token=token,
@@ -283,29 +273,27 @@ def main(argv: list[str]) -> int:
     )
     
     args = parser.parse_args(argv)
-    
     for tool in ["cargo", "hyperfine", args.bencher_bin]:
         require_tool(tool)
     if not args.config_dir.is_dir():
         sys.exit(f"Error: config dir '{args.config_dir}' does not exist.")
     configs = sorted(args.config_dir.glob("*.json"))
-
     if not configs:
         sys.exit(f"Error: no .json configs found in {args.config_dir}")
-    repo_root = Path.cwd()
 
+    repo_root = Path.cwd()
     with tempfile.TemporaryDirectory() as scratch_str:
         scratch = Path(scratch_str)
         for cfg in configs:
             process_config(
-                cfg, scratch,
+                cfg, scratch, 
                 bencher_bin=args.bencher_bin,
                 project=args.bencher_project,
                 token=args.bencher_token,
                 extra_flags=args.bencher_flags,
                 repo_root=repo_root,
             )
-    return 0
+        return 0
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
