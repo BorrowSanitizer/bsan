@@ -11,8 +11,6 @@ using __sanitizer::u64;
 using __sanitizer::u8;
 using __sanitizer::uptr;
 
-extern THREADLOCAL uptr __BSAN_HAD_ERROR;
-
 typedef uptr Span;
 typedef uptr BorTag;
 typedef uptr ThreadId;
@@ -28,6 +26,10 @@ const Provenance WILDCARD = {0, nullptr};
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance
     *__bsan_shadow_stack;
 
+extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __bsan_had_error;
+
+extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uintptr_t __bsan_bor_tag_ctr;
+
 namespace __bsan {
 
 extern THREADLOCAL void *bsan_thread;
@@ -35,6 +37,8 @@ extern bool bsan_inited;
 extern bool bsan_init_running;
 extern bool bsan_deinit_running;
 extern atomic_uintptr_t thread_id;
+
+BorTag NewBorTag();
 
 void InitializeGC();
 void DeinitializeGC();
@@ -57,7 +61,7 @@ bool CallerIsInstrumented(void *sym);
   uptr bp = GET_CURRENT_FRAME();
 
 #define HANDLE_ERROR(pc, bp)                                                   \
-  if (__BSAN_HAD_ERROR) {                                                      \
+  if (__bsan_had_error) {                                                      \
     UNINITIALIZED BufferedStackTrace stack;                                    \
     stack.Unwind(pc, bp, nullptr, true, __bsan::GetStackTraceLen());           \
     PrintStackTrace(stack);                                                    \

@@ -30,6 +30,14 @@ THREADLOCAL void *__bsan_marker = nullptr;
 SANITIZER_INTERFACE_ATTRIBUTE
 THREADLOCAL Provenance *__bsan_shadow_stack = nullptr;
 
+// A flag set by the Rust core runtime to indicate to the LLVM
+// wrapper that an error has occurred.
+SANITIZER_INTERFACE_ATTRIBUTE
+THREADLOCAL uptr __bsan_had_error = 0;
+
+SANITIZER_INTERFACE_ATTRIBUTE
+atomic_uintptr_t __bsan_bor_tag_ctr{2};
+
 namespace __bsan {
 
 // Much like other MemorySanitizer, we use a thread-local flag to detect
@@ -51,6 +59,10 @@ bool bsan_deinit_running = false;
 
 // Every thread has a unique ID
 atomic_uintptr_t thread_id{0};
+
+BorTag NewBorTag() {
+  return atomic_fetch_add(&__bsan_bor_tag_ctr, 1, memory_order_relaxed);
+}
 
 // Returns the desired length for the current stack trace.
 // We add '1' to skip printing our runtime symbols in traces.
@@ -289,10 +301,6 @@ void __bsan_local_init(Provenance **prov) {}
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_local_deinit() {}
 
-// Weak tagging operations
-SANITIZER_WEAK_ATTRIBUTE
-BorTag __bsan_new_bor_tag() { return 0; }
-
 SANITIZER_WEAK_ATTRIBUTE
 BorTag __bsan_retag_impl(void *object_addr, uptr access_size, u8 flags,
                          const uptr im_data[2], uptr im_len,
@@ -337,11 +345,19 @@ void __bsan_write(void *ptr, uptr access_size, BorTag bor_tag,
   HANDLE_ERROR(pc, bp);
 }
 
+SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE Provenance *
+__bsan_shadow(void *addr) {
+  return GetSlot(0);
+}
+
 SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE void
 __bsan_shadow_transfer(void *dest, const void *src, uptr access_size) {}
 
 SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE void
 __bsan_shadow_clear(void *dest, uptr access_size) {}
+
+SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE void
+__bsan_rc_store(BorTag Tag, AllocInfo *Info, Provenance *Dest) {}
 
 SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE AllocInfo *
 __bsan_reserve_stack_slot() {
@@ -441,9 +457,6 @@ void __bsan_debug_print_diff(void *ptr) {
   __bsan_print_diff(Slot->Tag, Slot->Info);
 }
 
-void __bsan_abort() {
-  // Printf("BorrowSanitizer: aborting due to a fatal error.\n");
-  Die();
-}
+void __bsan_abort() { Die(); }
 
 } // extern "C"

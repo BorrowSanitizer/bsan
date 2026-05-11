@@ -43,9 +43,6 @@ void __bsan_local_init(Provenance **prov);
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_local_deinit();
 
-SANITIZER_WEAK_ATTRIBUTE
-BorTag __bsan_new_bor_tag();
-
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_read(void *ptr, uptr access_size, BorTag bor_tag,
                  AllocInfo *alloc_info);
