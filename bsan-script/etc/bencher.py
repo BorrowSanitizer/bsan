@@ -1,7 +1,9 @@
-
+# This script calculates BorrowSanitizer's relative execution time
+# across all test cases for a crate, and uploads the result to Bencher.
+from dataclasses import dataclass
 import argparse
+import statistics
 import json
-import math
 import os
 import shutil
 import subprocess
@@ -9,53 +11,45 @@ import sys
 import tarfile
 import tempfile
 import urllib.request
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 HYPERFINE_RUNS = 10
 HYPERFINE_WARMUP = 3
 
+# Uninstrumented native execution
 NATIVE_CARGO = ["cargo", "test", "--lib"]
-INSTR_CARGO = ["cargo", "bsan", "test", "--nop", "--lib"]
 
-def _merge_env(extra_env: dict[str, str] | None) -> dict[str, str] | None:
-    """Merge extra_env on top of os.environ. Returns None if extra_env is
-    None, so subprocess inherits the parent environment unchanged."""
-    if extra_env is None:
-        return None
-    merged = os.environ.copy()
-    merged.update(extra_env)
-    return merged
-
+# Instrumented native execution in our "nop" mode, which 
+# adds in our runtime checks, but does not enable the core Rust
+# library with our Tree Borrows implementation. Every check is a
+# nop. This is significantly less expensive than running BorrowSanitizer
+# in full, and it helps debug issues associated with the LLVM components
+# of the tool.
+NOP_CARGO = ["cargo", "bsan", "test", "--nop", "--lib"]
 
 def run(
     cmd: list[str],
-    *,
-    extra_env: dict[str, str] | None = None,
     **kwargs,
 ) -> subprocess.CompletedProcess:
     """Run a command, raising CalledProcessError on non-zero exit.
 
-    extra_env is merged on top of the current environment (not replacing it).
+    The command inherits the current environment.
     """
-    return subprocess.run(cmd, check=True, env=_merge_env(extra_env), **kwargs)
+    return subprocess.run(cmd, check=True, env=os.environ.copy(), **kwargs)
 
 
 def run_capture(
     cmd: list[str],
-    *,
-    extra_env: dict[str, str] | None = None,
     **kwargs,
 ) -> str:
     """Run a command and return stdout as a string.
 
-    extra_env is merged on top of the current environment (not replacing it).
+    The command inherits the current environment.
     """
     proc = subprocess.run(
         cmd, check=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        env=_merge_env(extra_env),
+        env=os.environ.copy(),
         **kwargs,
     )
     return proc.stdout
@@ -65,8 +59,8 @@ def require_tool(name: str) -> None:
         sys.exit(f"Error: '{name}' is required but not installed.")
 
 def download_crate(crate: str, version: str, dest_dir: Path) -> Path:
-    """Download <crate>@<version> from crates.io into dest_dir, extract it,
-    and return the path to the extracted source directory."""
+    """Downloads <crate>@<version> from crates.io into dest_dir, extracts it,
+    and returns the path to the extracted contents."""
     url = f"https://crates.io/api/v1/crates/{crate}/{version}/download"
     tarball = dest_dir / f"{crate}-{version}.crate"
 
@@ -86,20 +80,16 @@ def download_crate(crate: str, version: str, dest_dir: Path) -> Path:
         sys.exit(f"Error: expected extracted directory {extracted} not found.")
     return extracted
 
-def compile_test_binary(cargo_cmd: list[str], label: str, cwd: Path, extra_env: dict[str, str] | None = None) -> Path:
-    """Compile the test binary for the given cargo invocation and return its
+def compile_test_binary(cargo_cmd: list[str], label: str, cwd: Path) -> Path:
+    """Compiles the test binary for the given cargo invocation and return its
     path. Aborts on compile failure or if no test executable is produced."""
     print(f">>> compiling test binary ({label}): {' '.join(cargo_cmd)}",
           file=sys.stderr)
-
-    run(cargo_cmd + ["--no-run", "--quiet"], cwd=cwd, extra_env=extra_env)
-
+    run(cargo_cmd + ["--no-run", "--quiet"], cwd=cwd)
     msg_json = run_capture(
         cargo_cmd + ["--no-run", "--message-format=json"],
         cwd=cwd,
-        extra_env=extra_env
     )
-
     for line in msg_json.splitlines():
         if not line.strip():
             continue
@@ -110,6 +100,7 @@ def compile_test_binary(cargo_cmd: list[str], label: str, cwd: Path, extra_env: 
         exe = msg.get("executable")
         target = msg.get("target") or {}
         if exe and target.get("test"):
+            print(">>> done.")
             return Path(exe)
 
     sys.exit(f"Error: could not locate {label} test binary.")
@@ -143,18 +134,15 @@ def hyperfine_mean(out_json: Path, command: str) -> float:
 
 @dataclass
 class Aggregate:
-    geomean: float
+    median: float
     minimum: float
     maximum: float
 
 def aggregate_ratios(ratios: list[float]) -> Aggregate:
     if not ratios:
         sys.exit("Error: no ratios to aggregate.")
-    if any(r <= 0 for r in ratios):
-        sys.exit(f"Error: non-positive ratio in {ratios}; cannot take geomean.")
-    log_mean = sum(math.log(r) for r in ratios) / len(ratios)
     return Aggregate(
-        geomean=math.exp(log_mean),
+        median=statistics.median(ratios),
         minimum=min(ratios),
         maximum=max(ratios),
     )
@@ -173,7 +161,7 @@ def upload_to_bencher(
     bmf_doc = {
         bench_name: {
             "relative_execution_time": {
-                "value": agg.geomean,
+                "value": agg.median,
                 "lower_value": agg.minimum,
                 "upper_value": agg.maximum,
             }
@@ -182,7 +170,6 @@ def upload_to_bencher(
     bmf_path.write_text(json.dumps(bmf_doc, indent=2))
     print("BMF payload:")
     print(bmf_path.read_text())
-
     cmd = [
         bencher_bin, "run",
         "--project", project,
@@ -208,15 +195,14 @@ def process_config(
     version = cfg.get("version")
     excluded_tests = set(cfg.get("exclude") or [])
     if not crate or not version:
-        sys.exit(f"Error: {config_path} missing 'name' or 'version'.\n---\n{cfg}\n")
+        sys.exit(f"Error: invalid config: {config_path}\n---\n{cfg}\n")
 
     bench_name = f"{crate}@{version} (nop)"
     print(f"Running: {bench_name}")
     if excluded_tests:
-        print(f"Excluding:")
+        print("Excluding:")
         for test_name in excluded_tests:
-            print(f"- {test_name}\n---")
-
+            print(f"- {test_name}")
     crate_scratch = scratch / bench_name
     crate_scratch.mkdir(parents=True, exist_ok=True)
 
@@ -232,10 +218,10 @@ def process_config(
     except subprocess.CalledProcessError:
         pass
 
-    instr_built = compile_test_binary(INSTR_CARGO, "instrumented (nop)", cwd=src_dir)
-    instr_bin = crate_scratch / "instr_test_bin"
-    shutil.copy2(instr_built, instr_bin)
-    instr_bin.chmod(0o755)
+    nop_built = compile_test_binary(NOP_CARGO, "nop", cwd=src_dir)
+    nop_bin = crate_scratch / "nop_test_bin"
+    shutil.copy2(nop_built, nop_bin)
+    nop_bin.chmod(0o755)
 
     all_tests = list_tests(native_bin)
     if not all_tests:
@@ -251,22 +237,19 @@ def process_config(
         safe = "".join(c if c.isalnum() or c == "_" else "_" for c in t)
         n_json = crate_scratch / f"native-{safe}.json"
         i_json = crate_scratch / f"instr-{safe}.json"
-
         # --shell=none means the command string is split into argv, so
         # spaces are the only separator. Rust test names can't contain
         # spaces, so this is safe.
         n_mean = hyperfine_mean(n_json, f"{native_bin} --exact {t} --nocapture")
-        i_mean = hyperfine_mean(i_json, f"{instr_bin} --exact {t} --nocapture")
-
+        i_mean = hyperfine_mean(i_json, f"{nop_bin} --exact {t} --nocapture")
         assert(n_mean > 0 and i_mean > 0)
         ratio = i_mean / n_mean
-
         print(f" - native={n_mean}s  inst={i_mean}s  ratio={ratio}")
         ratios.append(ratio)
         
     agg = aggregate_ratios(ratios)
     print(
-        f"Geomean ratio for {bench_name}: {agg.geomean}  "
+        f"Median relative execution time for {bench_name}: {agg.median}  "
         f"(min={agg.minimum} max={agg.maximum})"
     )
     safe_name = "".join(
