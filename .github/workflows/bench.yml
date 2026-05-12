@@ -47,12 +47,16 @@ jobs:
         pattern: results_*
         merge-multiple: true
         path: results/
+    - name: Set merged filename
+      id: merged_filename
+      run: echo "name=results_$(date +%Y-%m-%d_%H-%M-%S)" >> $GITHUB_OUTPUT
     - name: Merge JSON files
       run: |
-        jq -s '[.[]]' results/*.json > results.json
+        jq -s '[.[]]' results/*.json > ${{ steps.merged_filename.outputs.name }}.json
     - name: Upload merged results
       uses: actions/upload-artifact@v4
       with:
-        name: results
-        path: results.json
+        name: ${{ steps.merged_filename.outputs.name }}
+        path: ${{ steps.merged_filename.outputs.name }}.json
         retention-days: 30
+        
