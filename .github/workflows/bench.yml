@@ -30,7 +30,7 @@ jobs:
       id: filename
       run: echo "results=results_$(date +%Y%m%d_%H%M%S)_${{ matrix.config.target }}.json" >> $GITHUB_OUTPUT
     - name: Benchmarks
-      run: python3 ./bsan-script/etc/bench.py ./bsan-script/etc/crates.json ${{ steps.filename.outputs.results }} ${{ matrix.config.target }}
+      run: python3 ./bsan-script/etc/bench.py ./tests/benches/crates.json ${{ steps.filename.outputs.results }} ${{ matrix.config.target }}
     - uses: actions/upload-artifact@v4
       with:
         name: results_${{ matrix.config.target }}
