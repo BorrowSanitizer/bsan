@@ -38,9 +38,6 @@
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
-/*
- * CLI Argument for handling inline assembly
- */
 static cl::opt<bool> ClHandleAsmConservative(
     "bsan-asm-conservative",
     cl::desc("Conservatively handle inline assembly by setting all pointer "
@@ -733,8 +730,20 @@ private:
     // function. We need to pass its arguments into our thread-local array and
     // then read the provenance for the return value.
     IRBuilder<> Before(&CB);
-    Value *StackOffset = getStackOffset(Before, false);
-    Before.CreateStore(StackOffset, BS.ProvStack);
+
+    Value *StackOffset;
+    // if this is `mustail`, then we want to pop the frame,
+    // and store the arguments within the frame header, as if the
+    // call instruction that we are instrumenting was the next instruction
+    // after this function returned.
+    if (CB.isMustTailCall()) {
+      popFrame(Before, CB, nullptr);
+      StackOffset = FrameTop;
+    } else {
+      // Otherwise, we compute the current offset into the shadow stack.
+      StackOffset = getStackOffset(Before, false);
+      Before.CreateStore(StackOffset, BS.ProvStack);
+    }
 
     // Store the provenance for each argument into the thread-local storage for
     // parameters. The process for computing provenance components is
@@ -759,9 +768,10 @@ private:
       }
     }
 
-    // if this call is musttail then it needs to stay adjacent to a ret
-    if (CB.isMustTailCall())
+    // Skip the epilogue for musttail calls, which need to be adjacent to `ret`.
+    if (CB.isMustTailCall()) {
       return;
+    }
 
     // We need to do some extra work here to compute where to insert our
     // instructions, since some function calls occur within terminators.
@@ -1224,6 +1234,10 @@ private:
   }
 
   void visitReturnInst(ReturnInst &I) {
+    // musttail calls already pop the frame before the callsite.
+    if (auto *CB = dyn_cast_or_null<CallBase>(I.getPrevNode()))
+      if (CB->isMustTailCall())
+        return;
     IRBuilder<> IRB(&I);
     popFrame(IRB, I, I.getReturnValue());
   }
