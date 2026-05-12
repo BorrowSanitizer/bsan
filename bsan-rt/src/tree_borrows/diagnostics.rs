@@ -1,4 +1,4 @@
-// Ported from Miri (commit:072a9fa) with minimal edits: defined TreeBorrowsUb, print_tree_diff
+// Ported from Miri (commit:3911011) with edits: defined TreeBorrowsUb, print_tree_diff
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::alloc::Allocator;
@@ -28,11 +28,7 @@ impl fmt::Display for AccessCause {
             Self::Explicit(kind) => write!(f, "{kind}"),
             Self::Reborrow => write!(f, "reborrow"),
             Self::Dealloc => write!(f, "deallocation"),
-            // This is dead code, since the protector release access itself can never
-            // cause UB (while the protector is active, if some other access invalidates
-            // further use of the protected tag, that is immediate UB).
-            // Describing the cause of UB is the only time this function is called.
-            Self::FnExit(_) => unreachable!("protector accesses can never be the source of UB"),
+            Self::FnExit(kind) => write!(f, "protector release (acting as a {kind})"),
         }
     }
 }
@@ -134,8 +130,6 @@ impl History {
 
 impl HistoryData {
     // Format events from `new_history` into those recorded by `self`.
-    //
-    // NOTE: also converts `Span` to `SpanData`.
     fn extend(&mut self, new_history: History, tag_name: &'static str, show_initial_state: bool) {
         let History { tag, created, events } = new_history;
         let this = format!("the {tag_name} tag {tag:?}");
@@ -316,9 +310,9 @@ pub(super) struct TbError<'node> {
 }
 
 pub struct TreeBorrowsUb {
-    title: String,
-    details: Vec<String>,
-    history: HistoryData,
+    pub(crate) title: String,
+    pub(crate) details: Vec<String>,
+    pub(crate) history: HistoryData,
 }
 
 impl TbError<'_> {

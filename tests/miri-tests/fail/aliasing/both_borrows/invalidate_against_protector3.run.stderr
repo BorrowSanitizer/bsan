@@ -1,10 +1,10 @@
-error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+error: Undefined Behavior: write access through <TAG>(unprotected) (root of the allocation) at ALLOC[0x0] is forbidden
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/invalidate_against_protector3.rs:LL:CC
    |
 LL | unsafe { *x = 0 };
    |
-   = help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
-   = help: this write would cause the protected tag <TAG>(StrongProtector) (currently Frozen) to become Disabled
+   = help: the accessed tag <TAG>(unprotected) (root of the allocation) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
+   = help: this foreign write access would cause the protected tag <TAG>(StrongProtector) (currently Frozen) to become Disabled
    = help: protected tags must never be Disabled
 help: the accessed tag <TAG>(unprotected) was created here
   --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC

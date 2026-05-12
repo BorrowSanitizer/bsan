@@ -1,4 +1,5 @@
 use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 use core::cmp::max;
 
 use hashbrown::HashMap;
@@ -51,8 +52,35 @@ impl ErrorFormatContext {
         result
     }
 
-    fn display_tree_error(&mut self, _error: TreeBorrowsUb, _symbol: Symbol) -> String {
-        let buffer = String::new();
+    fn display_tree_error(&mut self, mut error: TreeBorrowsUb, symbol: Symbol) -> String {
+        let mut buffer = String::new();
+
+        let mut max_indentation = symbol.line_length();
+        let event_symbols: Vec<(Symbol, String)> = error
+            .history
+            .events
+            .drain(..)
+            .map(|evt| {
+                let symbol = SanitizerCommon::symbolize(evt.0.unwrap_or(Span::dummy()));
+                max_indentation = max_indentation.max(symbol.line_length());
+                (symbol, evt.1)
+            })
+            .collect();
+
+        buffer.push_str(&error.title);
+        buffer.push('\n');
+
+        buffer.push_str(&self.format_symbol(symbol, max_indentation));
+
+        for detail in error.details {
+            buffer.push_str(&format!("{} = help: {}\n", " ".repeat(max_indentation), detail));
+        }
+
+        for (symbol, msg) in event_symbols {
+            buffer.push_str(&format!("help: {}\n", msg));
+            buffer.push_str(&self.format_symbol(symbol, max_indentation));
+        }
+        buffer.push('\n');
         buffer
     }
 

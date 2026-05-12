@@ -1,4 +1,4 @@
-// Ported from Miri (commit:072a9fa) with minimal edits: removed implicit write tests
+// Ported from Miri (commit:ce9844e)
 //! Tests for the tree
 #![cfg(test)]
 

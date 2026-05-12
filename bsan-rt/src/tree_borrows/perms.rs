@@ -1,4 +1,4 @@
-// Ported from Miri (commit:072a9fa) with minimal edits: defined AccessKind, ProtectorKind, & RetagPtrKind
+// Ported from Miri (commit:ce9844e) with edits: defined AccessKind, ProtectorKind, & RetagPtrKind
 #![allow(unreachable_patterns)]
 use core::cmp::{Ordering, PartialOrd};
 use core::fmt;
@@ -318,7 +318,8 @@ impl Permission {
         Self { inner: Unique }
     }
 
-    /// Create a new Permission of type `ReservedFrz` with conflictedReserved set to false
+    /// Default initial permission of a reborrowed mutable reference that is either
+    /// protected or not interior mutable.
     pub fn new_reserved_frz() -> Self {
         Self { inner: ReservedFrz { conflicted: false } }
     }
@@ -556,7 +557,7 @@ pub mod diagnostics {
         /// - `err` should not be `ProtectedDisabled(Disabled)`, because the protected
         ///   tag should not have been `Disabled` in the first place (if this occurs it means
         ///   we have unprotected tags that become protected)
-        pub fn is_relevant(&self, err: TransitionError) -> bool {
+        pub(in super::super) fn is_relevant(&self, err: TransitionError) -> bool {
             // NOTE: `super::super` is the visibility of `TransitionError`
             assert!(self.is_possible());
             if self.is_noop() {

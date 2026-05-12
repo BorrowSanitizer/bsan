@@ -1,4 +1,4 @@
-// Ported from Miri (commit:072a9fa) with minimal edits: removed ProvenanceExtra & VisitProvenance
+// Ported from Miri (commit:072a9fa) with edits: removed ProvenanceExtra & VisitProvenance
 //! In this file we handle the "Tree" part of Tree Borrows, i.e. all tree
 //! traversal functions, optimizations to trim branches, and keeping track of
 //! the relative position of the access to each node being updated. This of course
