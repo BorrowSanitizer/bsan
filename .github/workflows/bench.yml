@@ -1,11 +1,8 @@
 name: Bench
 on:
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 1/12 * * *'
   workflow_dispatch: 
-env:
-  CARGO_TERM_COLOR: always
-  BENCHER_PROJECT: '244e3ab7-f904-4240-a4f1-53695a02b061'
 jobs:
   build:
     strategy:
@@ -15,7 +12,7 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-24.04
     runs-on: '${{ matrix.config.os }}'
     container:
       image: ghcr.io/borrowsanitizer/bsan:latest
@@ -29,12 +26,13 @@ jobs:
       run: |
         ln -s /root/.rustup/ $HOME/.rustup
         sudo apt-get update && sudo apt-get install -y hyperfine jq
-    - uses: bencherdev/bencher@main
-    - name: Bencher
-      run: |
-          ./bsan-script/etc/bencher.sh $BENCHER_PROJECT '${{ secrets.BENCHER_API_TOKENS }}' /github/home/.cargo/bin/bencher --testbed 'Github-CI_${{ matrix.config.os }}'
-
-
-       
-        
-
+    - name: Set output filename
+      id: filename
+      run: echo "results=results_$(date +%Y%m%d_%H%M%S)_${{ matrix.config.target }}.json" >> $GITHUB_OUTPUT
+    - name: Benchmarks
+      run: python3 ./bsan-script/etc/bench.py ./bsan-script/etc/crates.json ${{ steps.filename.outputs.results }} ${{ matrix.config.target }}
+    - uses: actions/upload-artifact@v4
+      with:
+        name: results_${{ matrix.config.target }}
+        path: ${{ steps.filename.outputs.results }}
+        retention-days: 30

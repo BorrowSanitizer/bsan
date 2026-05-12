@@ -1,0 +1,9 @@
+[
+   {
+        "name": "hashbrown",
+        "version": "0.17.0",
+        "exclude": [
+            "map::test_map::test_lots_of_insertions"
+        ]
+    }
+]
