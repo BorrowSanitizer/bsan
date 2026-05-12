@@ -11,3 +11,4 @@ CMakeFiles
 .toolchain
 .vscode
 .nix-rust
+*.json

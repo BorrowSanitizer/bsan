@@ -137,67 +137,9 @@ def hyperfine_mean(command: str) -> float:
     finally:
         out_path.unlink(missing_ok=True)
 
-@dataclass
-class Aggregate:
-    median: float
-    minimum: float
-    maximum: float
-
-def aggregate_ratios(ratios: list[float]) -> Aggregate:
-    if not ratios:
-        sys.exit("Error: no ratios to aggregate.")
-    return Aggregate(
-        median=statistics.median(ratios),
-        minimum=min(ratios),
-        maximum=max(ratios),
-    )
-
-def upload_to_bencher(
-    bench_name: str,
-    agg: Aggregate,
-    bencher_bin: str,
-    project: str,
-    token: str,
-    extra_flags: list[str],
-    repo_root: Path,
-) -> None:
-    """Write a single-datapoint BMF file and hand it off to `bencher run`."""
-    bmf_doc = {
-        bench_name: {
-            "relative_execution_time": {
-                "value": agg.median,
-                "lower_value": agg.minimum,
-                "upper_value": agg.maximum,
-            }
-        }
-    }
-    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as bmf_file:
-        bmf_path = Path(bmf_file.name)
-    try:
-        bmf_path.write_text(json.dumps(bmf_doc, indent=2))
-        print("BMF payload:")
-        print(bmf_path.read_text())
-        cmd = [
-            bencher_bin, "run",
-            "--project", project,
-            "--token", token,
-            "--adapter", "json",
-            "--file", str(bmf_path),
-            *extra_flags,
-        ]
-        run(cmd, cwd=repo_root)
-    finally:
-        bmf_path.unlink(missing_ok=True)
-
-
 def process_config(
     config_path: Path,
     scratch: Path,
-    bencher_bin: str,
-    project: str,
-    token: str,
-    extra_flags: list[str],
-    repo_root: Path,
 ) -> None:
     cfg = json.loads(config_path.read_text())
     crate = cfg.get("name")
@@ -248,39 +190,29 @@ def process_config(
         print(f" - native={n_mean}s  inst={i_mean}s  ratio={ratio}")
         ratios.append(ratio)
         
-    agg = aggregate_ratios(ratios)
+    median=statistics.median(ratios)
     print(
-        f"Median relative execution time for {bench_name}: {agg.median}  "
-        f"(min={agg.minimum} max={agg.maximum})"
+        f"Median relative execution time for {bench_name}: {median}"
     )
-    upload_to_bencher(
-       bench_name, agg,
-        bencher_bin=bencher_bin,
-        project=project,
-        token=token,
-        extra_flags=extra_flags,
-        repo_root=repo_root,
-    )
+    result = {
+        "name": bench_name,
+        "unit": "Median Relative Execution Time",
+        "value": median
+    }
+    return result
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="Benchmark relative execution time and upload to bencher.",
+        description="Benchmark relative execution time",
         usage=(
-            "%(prog)s <config_dir> <bencher_project> <bencher_token> "
-            "<bencher_bin> [bencher_flags...]"
+            "%(prog)s <config_dir> <output_json>"
         ),
     )
     parser.add_argument("config_dir", type=Path)
-    parser.add_argument("bencher_project")
-    parser.add_argument("bencher_token")
-    parser.add_argument("bencher_bin")
-    parser.add_argument(
-        "bencher_flags", nargs=argparse.REMAINDER,
-        help="Extra flags forwarded to `bencher run`.",
-    )
-    
+    parser.add_argument("output_json", type=Path)
+
     args = parser.parse_args(argv)
-    for tool in ["cargo", "hyperfine", args.bencher_bin]:
+    for tool in ["cargo", "hyperfine"]:
         require_tool(tool)
     if not args.config_dir.is_dir():
         sys.exit(f"Error: config dir '{args.config_dir}' does not exist.")
@@ -288,19 +220,16 @@ def main(argv: list[str]) -> int:
     if not configs:
         sys.exit(f"Error: no .json configs found in {args.config_dir}")
 
-    repo_root = Path.cwd()
+    results = []
     with tempfile.TemporaryDirectory() as scratch_str:
         scratch = Path(scratch_str)
         for cfg in configs:
-            process_config(
-                cfg, scratch, 
-                bencher_bin=args.bencher_bin,
-                project=args.bencher_project,
-                token=args.bencher_token,
-                extra_flags=args.bencher_flags,
-                repo_root=repo_root,
-            )
-        return 0
+            result = process_config(cfg, scratch)
+            results.append(result)
+
+    args.output_json.write_text(json.dumps(results, indent=4))
+    print(f"Results written to {args.output_json}")
+    return 0
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
