@@ -70,7 +70,7 @@ impl fmt::Display for DebugSummary {
 }
 
 macro_rules! debug_bsan {
-    ($op:literal, $ptr:ident, $bor_tag:ident, $alloc_info:expr) => {
+    ($op:literal, $p:ident, $bor_tag:ident, $alloc_info:expr) => {
         #[cfg(feature = "debug")]
         {
             #[allow(unused_unsafe)]
@@ -79,7 +79,7 @@ macro_rules! debug_bsan {
                 1 => AllocInfoSummary::Null,
                 _ => unsafe { &*$alloc_info }.summarize(),
             };
-            let summary = DebugSummary { op: $op, ptr: $ptr.addr(), bor_tag: $bor_tag, info };
+            let summary = DebugSummary { op: $op, ptr: 0, bor_tag: $bor_tag, info };
             libc_print::std_name::println!("{}", summary);
         }
     };
@@ -107,8 +107,13 @@ impl AllocId {
         AllocId(1)
     }
 
-    pub const fn min() -> Self {
+    /// A global or stack allocation, which cannot be manually freed
+    pub const fn sticky() -> Self {
         AllocId(2)
+    }
+
+    pub const fn min() -> Self {
+        AllocId(3)
     }
 }
 
@@ -163,8 +168,11 @@ impl fmt::Debug for ThreadId {
         }
     }
 }
-#[unsafe(no_mangle)]
-pub static __BSAN_BOR_TAG_CTR: AtomicUsize = AtomicUsize::new(2);
+
+unsafe extern "C" {
+    #[link_name = "__bsan_bor_tag_ctr"]
+    unsafe static __BSAN_BOR_TAG_CTR: AtomicUsize;
+}
 
 /// Unique identifier for a node within the tree
 #[repr(transparent)]
@@ -195,7 +203,7 @@ impl BorTag {
 
 impl Default for BorTag {
     fn default() -> Self {
-        BorTag(__BSAN_BOR_TAG_CTR.fetch_add(1, Ordering::Relaxed))
+        BorTag(unsafe { __BSAN_BOR_TAG_CTR.fetch_add(1, Ordering::Relaxed) })
     }
 }
 
@@ -239,6 +247,12 @@ impl Provenance {
         Provenance { bor_tag: BorTag::wildcard(), alloc_info: core::ptr::null_mut() }
     }
 }
+
+#[unsafe(no_mangle)]
+static __BSAN_WILDCARD_PROVENANCE: Provenance = Provenance::wildcard();
+
+#[unsafe(no_mangle)]
+static __BSAN_NULL_PROVENANCE: Provenance = Provenance::null();
 
 #[derive(Clone, Copy)]
 pub(crate) union FreeListAddrUnion {
@@ -343,11 +357,6 @@ unsafe extern "C-unwind" fn __bsan_local_deinit() {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_new_bor_tag() -> BorTag {
-    BorTag::default()
-}
-
 bitflags::bitflags! {
     #[repr(C)]
     #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -362,6 +371,7 @@ bitflags::bitflags! {
         const IS_FREEZE = 1 << 3;
     }
 }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RetagInfo<'a> {
     pub size: usize,
@@ -539,6 +549,8 @@ unsafe extern "C-unwind" fn __bsan_shadow_clear(dst: *mut c_void, size: usize) {
     ctx.shadow_heap().clear(dst.addr(), size)
 }
 
+/// Loads the provenance of a given address from shadow memory and stores
+/// the result in the return pointer.
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_shadow(addr: *mut c_void) -> NonNull<Provenance> {
     unsafe { global_ctx().shadow_heap().get(addr.addr()) }

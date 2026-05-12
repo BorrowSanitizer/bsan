@@ -3,7 +3,7 @@
 //! to comments and the names of environment variables.
 use std::env;
 use std::ffi::OsStr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
 use rustc_build_sysroot::{BuildMode, SysrootBuilder, SysrootConfig, SysrootStatus};
@@ -21,6 +21,7 @@ pub struct EnvConfig {
     pub verbose: bool,
     pub quiet: bool,
     pub lto: bool,
+    pub nop: bool,
 }
 
 impl EnvConfig {
@@ -28,14 +29,16 @@ impl EnvConfig {
         let verbose = has_arg_flag("-v");
         let quiet = has_arg_flag("-q") || has_arg_flag("--quiet");
         let lto = has_arg_flag("--lto");
-        Self { verbose, quiet, lto }
+        let nop = has_arg_flag("--nop");
+        Self { verbose, quiet, lto, nop }
     }
 
     pub fn from_env() -> Self {
         let verbose = env::var_os("BSAN_VERBOSE").is_some();
         let quiet = env::var_os("BSAN_QUIET").is_some();
         let lto = env::var_os("BSAN_LTO").is_some();
-        Self { verbose, quiet, lto }
+        let nop: bool = env::var_os("BSAN_NOP").is_some();
+        Self { verbose, quiet, lto, nop }
     }
 
     pub fn populate_env(&self, cmd: &mut Command) {
@@ -48,11 +51,15 @@ impl EnvConfig {
         if self.lto {
             cmd.env("BSAN_LTO", "1");
         }
+        if self.nop {
+            cmd.env("BSAN_NOP", "1");
+        }
     }
 }
 
 pub struct Dependencies {
-    pub runtime: PathBuf,
+    pub rust_runtime: PathBuf,
+    pub llvm_runtime: PathBuf,
     pub llvm_pass: PathBuf,
 }
 
@@ -78,9 +85,16 @@ impl Dependencies {
             );
         };
 
-        let nop = env::var_os("BSAN_NOP").is_some();
+        let rust_runtime_name = format!("{RUST_RT}.a");
+        let Some(rust_runtime) =
+            ensure_library_var("BSAN_RT_RUST", host_sysroot, &rust_runtime_name)
+        else {
+            show_error!(
+                "failed to locate the BorrowSanitizer core runtime ({rust_runtime_name}) within the host sysroot."
+            );
+        };
 
-        let runtime_libname = if nop {
+        let llvm_runtime_name = {
             let host = &version.host;
             let components: Vec<&str> = host.split("-").collect();
             if let Some(arch) = components.first() {
@@ -90,28 +104,55 @@ impl Dependencies {
                     "Failed to resolve the host architecture from the target triple: {host}"
                 );
             }
-        } else {
-            format!("{RUST_RT}.a")
         };
-
-        let Some(runtime) = ensure_library_var("BSAN_RT", host_sysroot, &runtime_libname) else {
+        let Some(llvm_runtime) =
+            ensure_library_var("BSAN_RT_LLVM", host_sysroot, &llvm_runtime_name)
+        else {
             show_error!(
-                "failed to locate the BorrowSanitizer runtime ({runtime_libname}) within the host sysroot."
+                "failed to locate the BorrowSanitizer LLVM runtime ({llvm_runtime_name}) within the host sysroot."
             );
         };
 
-        Self { runtime, llvm_pass }
+        Self { rust_runtime, llvm_runtime, llvm_pass }
     }
 
     pub fn populate_env(&self, cmd: &mut Command) {
-        cmd.env("BSAN_RT", &self.runtime);
+        cmd.env("BSAN_RT_LLVM", &self.llvm_runtime);
+        cmd.env("BSAN_RT_RUST", &self.rust_runtime);
         cmd.env("BSAN_PLUGIN", &self.llvm_pass);
     }
 
     pub fn from_env() -> Self {
-        let runtime = expect_env_path("BSAN_RT");
+        let llvm_runtime = expect_env_path("BSAN_RT_LLVM");
+        let rust_runtime = expect_env_path("BSAN_RT_RUST");
         let llvm_pass = expect_env_path("BSAN_PLUGIN");
-        Self { runtime, llvm_pass }
+        Self { rust_runtime, llvm_runtime, llvm_pass }
+    }
+
+    pub fn llvm_runtime(&self) -> (PathBuf, String) {
+        Self::rt_include(&self.llvm_runtime).unwrap_or_else(|| {
+            show_error!(
+                "Invalid format for LLVM runtime (`BSAN_RT_LLVM`): {}",
+                self.llvm_runtime.display()
+            )
+        })
+    }
+
+    pub fn rust_runtime(&self) -> (PathBuf, String) {
+        Self::rt_include(&self.rust_runtime).unwrap_or_else(|| {
+            show_error!(
+                "Invalid format for LLVM runtime (`BSAN_RT_RUST`): {}",
+                self.llvm_runtime.display()
+            )
+        })
+    }
+
+    fn rt_include(runtime: &Path) -> Option<(PathBuf, String)> {
+        let parent_dir = runtime.parent().map(|p| p.to_path_buf())?;
+        let file_name = runtime.file_name().and_then(|n| n.to_str())?;
+        let stem = file_name.strip_suffix(".a")?;
+        let link_name = stem.strip_prefix("lib")?.to_string();
+        Some((parent_dir, link_name))
     }
 }
 

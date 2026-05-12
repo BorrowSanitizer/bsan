@@ -7,14 +7,14 @@ namespace __bsan {
 
 static pthread_key_t TSD_KEY;
 static bool TSD_KEY_INITED = false;
-THREADLOCAL void *BSAN_CURR_THREAD = nullptr;
+THREADLOCAL void *bsan_thread = nullptr;
 
-BsanThread *GetCurrentThread() { return (BsanThread *)BSAN_CURR_THREAD; }
+BsanThread *GetCurrentThread() { return (BsanThread *)bsan_thread; }
 
 void SetCurrentThread(BsanThread *t) {
   // Make sure we do not reset the current BsanThread.
-  CHECK_EQ(0, BSAN_CURR_THREAD);
-  BSAN_CURR_THREAD = t;
+  CHECK_EQ(0, bsan_thread);
+  bsan_thread = t;
   // Make sure that BsanTSDDtor gets called at the end.
   CHECK(TSD_KEY_INITED);
   pthread_setspecific(TSD_KEY, (void *)t);
@@ -28,13 +28,13 @@ void BsanTSDDtor(void *tsd) {
     return;
   }
   ScopedBlockSignals block(nullptr);
-  BSAN_CURR_THREAD = nullptr;
+  bsan_thread = nullptr;
   // Make sure that signal handler can not see a stale current thread pointer.
   atomic_signal_fence(memory_order_seq_cst);
   BsanThread::TSDDtor(tsd);
 }
 
-void BsanTSDInit() {
+void InitializeTSD() {
   CHECK(!TSD_KEY_INITED);
   TSD_KEY_INITED = true;
   CHECK_EQ(0, pthread_key_create(&TSD_KEY, BsanTSDDtor));

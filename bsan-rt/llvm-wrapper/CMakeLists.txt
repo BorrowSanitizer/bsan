@@ -3,6 +3,7 @@ set(BSAN_SUPPORTED_ARCH ${SANITIZER_COMMON_SUPPORTED_ARCH})
 # Runtime library sources and build flags.
 set(BSAN_SOURCES
   bsan.cpp
+  bsan_gc.cpp
   bsan_flags.cpp
   bsan_interceptors.cpp
   bsan_linux.cpp
@@ -13,6 +14,7 @@ SET(BSAN_HEADERS
   bsan.h
   bsan_flags.h
   bsan_thread.h
+  bsan_interface_internal.h
 )
 
 add_custom_target(clang-format

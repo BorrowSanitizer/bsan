@@ -123,7 +123,7 @@ impl GlobalCtx {
         let mut ctx = ErrorFormatContext::default();
         crate::eprint!("error: {}", ctx.display_ub(ub_info, pc));
         unsafe {
-            __BSAN_HAD_ERROR = 1;
+            crate::sanitizer_common::__bsan_had_error = 1;
         }
     }
 
@@ -148,8 +148,8 @@ mod global_alloc {
 
     #[cfg(not(test))]
     unsafe extern "C" {
-        fn __crt_malloc(size: usize) -> *mut core::ffi::c_void;
-        fn __crt_free(ptr: *mut core::ffi::c_void);
+        fn __bsan_crt_malloc(size: usize) -> *mut core::ffi::c_void;
+        fn __bsan_crt_free(ptr: *mut core::ffi::c_void);
     }
 
     use core::alloc::{GlobalAlloc, Layout};
@@ -165,7 +165,7 @@ mod global_alloc {
             }
             #[cfg(not(test))]
             unsafe {
-                __crt_malloc(layout.size()).cast::<u8>()
+                __bsan_crt_malloc(layout.size()).cast::<u8>()
             }
         }
         unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
@@ -175,7 +175,7 @@ mod global_alloc {
             }
             #[cfg(not(test))]
             unsafe {
-                __crt_free(ptr.cast::<c_void>());
+                __bsan_crt_free(ptr.cast::<c_void>());
             }
         }
     }

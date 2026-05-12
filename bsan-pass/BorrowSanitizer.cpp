@@ -29,10 +29,9 @@
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
 #define BSAN_PREFIX "__bsan_"
-#define BSAN_STATIC_PREFIX "__BSAN_"
 #define RUST_PREFIX "__rust_"
 
-#define BSAN_FN(name) BSAN_PREFIX name
+#define BSAN(name) BSAN_PREFIX name
 #define BSAN_STATIC(name) BSAN_STATIC_PREFIX name
 #define RUST_FN(name) RUST_PREFIX name
 
@@ -1247,7 +1246,7 @@ Instruction *BorrowSanitizer::createBsanModuleDtor(Module &M) {
   ReturnInst *BsanDtorRet = ReturnInst::Create(*C, BsanDtorBB);
 
   auto *FnTy = FunctionType::get(IRB.getVoidTy(), false);
-  FunctionCallee DeinitFn = M.getOrInsertFunction(BSAN_FN("deinit"), FnTy);
+  FunctionCallee DeinitFn = M.getOrInsertFunction(BSAN("deinit"), FnTy);
 
   IRB.SetInsertPoint(BsanDtorRet);
   CallInst *DeinitCall = IRB.CreateCall(DeinitFn, {});
@@ -1259,7 +1258,7 @@ Instruction *BorrowSanitizer::createBsanModuleDtor(Module &M) {
 bool BorrowSanitizer::instrumentModule(Module &M) {
   // TODO: add version check.
   std::tie(BsanCtorFunction, std::ignore) = createSanitizerCtorAndInitFunctions(
-      M, "bsan.module_ctor", BSAN_FN("init"), /*InitArgTypes=*/{},
+      M, "bsan.module_ctor", BSAN("init"), /*InitArgTypes=*/{},
       /*InitArgs=*/{}, "");
 
   bool CtorComdat = false;
@@ -1353,56 +1352,56 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   AL = AL.addFnAttribute(*C, Attribute::NoUnwind);
 
-  BsanFuncRetag = M.getOrInsertFunction(BSAN_FN("retag"), AL, IntptrTy, PtrTy,
+  BsanFuncRetag = M.getOrInsertFunction(BSAN("retag"), AL, IntptrTy, PtrTy,
                                         IntptrTy, Int8Ty, PtrTy, IntptrTy,
                                         PtrTy, IntptrTy, IntptrTy, PtrTy);
 
   BsanFuncPopFrame = M.getOrInsertFunction(
-      BSAN_FN("pop_frame"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, IntptrTy);
+      BSAN("pop_frame"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, IntptrTy);
 
-  BsanFuncRead = M.getOrInsertFunction(BSAN_FN("read"), AL, IRB.getVoidTy(),
-                                       PtrTy, IntptrTy, IntptrTy, PtrTy);
+  BsanFuncRead = M.getOrInsertFunction(BSAN("read"), AL, IRB.getVoidTy(), PtrTy,
+                                       IntptrTy, IntptrTy, PtrTy);
 
-  BsanFuncWrite = M.getOrInsertFunction(BSAN_FN("write"), AL, IRB.getVoidTy(),
+  BsanFuncWrite = M.getOrInsertFunction(BSAN("write"), AL, IRB.getVoidTy(),
                                         PtrTy, IntptrTy, IntptrTy, PtrTy);
 
   BsanFuncAllocStack =
-      M.getOrInsertFunction(BSAN_FN("alloc_stack"), AL, IRB.getVoidTy(), PtrTy,
+      M.getOrInsertFunction(BSAN("alloc_stack"), AL, IRB.getVoidTy(), PtrTy,
                             IntptrTy, IntptrTy, PtrTy);
   BsanFuncDeallocStack = M.getOrInsertFunction(
-      BSAN_FN("dealloc_stack"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, PtrTy);
+      BSAN("dealloc_stack"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, PtrTy);
 
-  BsanFuncMark = M.getOrInsertFunction(BSAN_FN("mark"), AL, PtrTy, PtrTy);
+  BsanFuncMark = M.getOrInsertFunction(BSAN("mark"), AL, PtrTy, PtrTy);
 
   BsanFuncValidateParams = M.getOrInsertFunction(
-      BSAN_FN("validate_params"), AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
+      BSAN("validate_params"), AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
 
   BsanFuncValidateRetval = M.getOrInsertFunction(
-      BSAN_FN("validate_retval"), AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
+      BSAN("validate_retval"), AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
 
-  BsanFuncShadow = M.getOrInsertFunction(BSAN_FN("shadow"), AL, PtrTy, PtrTy);
+  BsanFuncShadow = M.getOrInsertFunction(BSAN("shadow"), AL, PtrTy, PtrTy);
 
-  BsanFuncRcStore = M.getOrInsertFunction(
-      BSAN_FN("rc_store"), AL, IRB.getVoidTy(), IntptrTy, PtrTy, PtrTy);
+  BsanFuncRcStore = M.getOrInsertFunction(BSAN("rc_store"), AL, IRB.getVoidTy(),
+                                          IntptrTy, PtrTy, PtrTy);
 
-  BsanFuncShadowClear = M.getOrInsertFunction(BSAN_FN("shadow_clear"), AL,
+  BsanFuncShadowClear = M.getOrInsertFunction(BSAN("shadow_clear"), AL,
                                               IRB.getVoidTy(), PtrTy, IntptrTy);
 
-  BsanFuncMemCpy = M.getOrInsertFunction(BSAN_FN("memcpy"), AL, IRB.getVoidTy(),
+  BsanFuncMemCpy = M.getOrInsertFunction(BSAN("memcpy"), AL, IRB.getVoidTy(),
                                          PtrTy, PtrTy, IntptrTy);
 
-  BsanFuncMemMove = M.getOrInsertFunction(
-      BSAN_FN("memmove"), AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
+  BsanFuncMemMove = M.getOrInsertFunction(BSAN("memmove"), AL, IRB.getVoidTy(),
+                                          PtrTy, PtrTy, IntptrTy);
 
-  BsanFuncMemSet = M.getOrInsertFunction(BSAN_FN("memset"), AL, IRB.getVoidTy(),
+  BsanFuncMemSet = M.getOrInsertFunction(BSAN("memset"), AL, IRB.getVoidTy(),
                                          PtrTy, Int32Ty, IntptrTy);
 
   BsanFuncReserveStackSlot =
-      M.getOrInsertFunction(BSAN_FN("reserve_stack_slot"),
+      M.getOrInsertFunction(BSAN("reserve_stack_slot"),
                             FunctionType::get(PtrTy, /*isVarArg=*/false), AL);
 
-  BsanFuncDestroyStackSlot = M.getOrInsertFunction(
-      BSAN_FN("destroy_stack_slot"), AL, IRB.getVoidTy(), PtrTy);
+  BsanFuncDestroyStackSlot = M.getOrInsertFunction(BSAN("destroy_stack_slot"),
+                                                   AL, IRB.getVoidTy(), PtrTy);
 
   EHPersonality Pers = getDefaultEHPersonality(TargetTriple);
   DefaultPersonalityFn =
@@ -1416,9 +1415,9 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 void BorrowSanitizer::createUserspaceApi(Module &M,
                                          const TargetLibraryInfo &TLI) {
   IRBuilder<> IRB(*C);
-  Marker = getOrInsertTLSGlobal(M, BSAN_STATIC("MARKER"), PtrTy);
-  ProvStack = getOrInsertTLSGlobal(M, BSAN_STATIC("PROV_STACK"), PtrTy);
-  BorTagCounter = getOrInsertGlobal(M, BSAN_STATIC("BOR_TAG_CTR"), IntptrTy);
+  Marker = getOrInsertTLSGlobal(M, BSAN("marker"), PtrTy);
+  ProvStack = getOrInsertTLSGlobal(M, BSAN("shadow_stack"), PtrTy);
+  BorTagCounter = getOrInsertGlobal(M, BSAN("bor_tag_ctr"), IntptrTy);
 }
 
 bool BorrowSanitizer::instrumentFunction(Function &F,

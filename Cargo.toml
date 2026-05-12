@@ -19,9 +19,3 @@ tempfile = "3"
 [[test]]
 name = "ui"
 harness = false
-
-[profile.release]
-panic = "abort"
-
-[profile.dev]
-panic = "abort"
