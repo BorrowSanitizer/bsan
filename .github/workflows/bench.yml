@@ -3,6 +3,9 @@ on:
   schedule:
     - cron: '0 1,13 * * *'
   workflow_dispatch:
+permissions:
+  actions: write
+  contents: write
 jobs:
   build:
     strategy:
@@ -41,8 +44,6 @@ jobs:
     name: Merge & Upload
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
     - uses: actions/checkout@v4
     - name: Download artifacts
