@@ -1,5 +1,6 @@
 # This script calculates BorrowSanitizer's relative execution time
-# across all test cases for a crate, and uploads the result to Bencher.
+# across all test cases for a crate, and provides the output in a 
+# .JSON file.
 from dataclasses import dataclass
 import argparse
 import statistics
@@ -138,17 +139,16 @@ def hyperfine_mean(command: str) -> float:
         out_path.unlink(missing_ok=True)
 
 def process_config(
-    config_path: Path,
+    cfg: dict,
     scratch: Path,
 ) -> None:
-    cfg = json.loads(config_path.read_text())
     crate = cfg.get("name")
     version = cfg.get("version")
     excluded_tests = set(cfg.get("exclude") or [])
     if not crate or not version:
-        sys.exit(f"Error: invalid config: {config_path}\n{cfg}")
+        sys.exit(f"Error: invalid per-crate config:\n{cfg}")
 
-    bench_name = f"{crate}@{version} (nop)"
+    bench_name = f"{crate}@{version} (nop) - {}"
     print(f"Running: {bench_name}")
     if excluded_tests:
         print("Excluding:")
@@ -205,25 +205,24 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description="Benchmark relative execution time",
         usage=(
-            "%(prog)s <config_dir> <output_json>"
+            "%(prog)s <crates> <output>"
         ),
     )
-    parser.add_argument("config_dir", type=Path)
+    parser.add_argument("crates_json", type=Path)
     parser.add_argument("output_json", type=Path)
 
     args = parser.parse_args(argv)
     for tool in ["cargo", "hyperfine"]:
         require_tool(tool)
-    if not args.config_dir.is_dir():
-        sys.exit(f"Error: config dir '{args.config_dir}' does not exist.")
-    configs = sorted(args.config_dir.glob("*.json"))
-    if not configs:
-        sys.exit(f"Error: no .json configs found in {args.config_dir}")
+
+    crates_json = args.crates_json
+    if not crates_json.is_file():
+        sys.exit(f"Error: invalid config file: {crates_json}")
 
     results = []
     with tempfile.TemporaryDirectory() as scratch_str:
         scratch = Path(scratch_str)
-        for cfg in configs:
+        for cfg in json.loads(crates_json.read_text()):
             result = process_config(cfg, scratch)
             results.append(result)
 
