@@ -37,7 +37,7 @@ pub struct UniKeyMap<K> {
     /// Key invariant: the contents of `deassigned` are disjoint from the
     /// keys of `mapping`, and together they form the set of contiguous integers
     /// `0 .. (mapping.len() + deassigned.len())`.
-    mapping: FxHashMap<K, u32>,
+    pub(crate) mapping: FxHashMap<K, u32>,
     /// Indexes that can be reused: memory gain when the map gets sparse
     /// due to many deletions.
     deassigned: Vec<u32>,

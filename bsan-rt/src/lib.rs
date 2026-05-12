@@ -629,9 +629,9 @@ extern "C" fn __bsan_print_diff(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
     });
 }
 
-// #[cfg(not(test))]
-// #[panic_handler]
-// fn panic(info: &PanicInfo<'_>) -> ! {
-//     eprintln!("The BorrowSanitizer runtime panicked! {:?}", info);
-//     core::intrinsics::abort()
-// }
+#[cfg(not(test))]
+#[panic_handler]
+fn panic(info: &PanicInfo<'_>) -> ! {
+    eprintln!("The BorrowSanitizer runtime panicked! {:?}", info);
+    core::intrinsics::abort()
+}

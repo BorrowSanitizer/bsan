@@ -263,15 +263,13 @@ impl<'b> BorrowTracker<'b> {
     }
 
     pub fn debug_print_diff(&self, ctx: &GlobalCtx) {
-        // ctx.with_snapshot(self.alloc_id, |old_tree| {
-        //     print_tree_diff(self.tree(), old_tree, &ctx.protected_tags());
-        // });
-        todo!()
+        ctx.with_snapshot(self.alloc_id, |old_tree| {
+            self.tree().print_tree_diff(old_tree, &ctx.protected_tags());
+        });
     }
 
     pub fn debug_print_tree(&self, ctx: &GlobalCtx, show_unnamed: bool) {
-        // self.tree().print_tree(&ctx.protected_tags(), show_unnamed);
-        todo!()
+        self.tree().print_tree(&ctx.protected_tags(), show_unnamed);
     }
 
     pub fn debug_tree_size(&self) -> usize {
