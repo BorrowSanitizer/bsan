@@ -10,15 +10,11 @@ use super::*;
 impl Exhaustive for LocationState {
     fn exhaustive() -> Box<dyn Iterator<Item = Self>> {
         // We keep `latest_foreign_access` at `None` as that's just a cache.
-        Box::new(
-            <(Permission, bool)>::exhaustive()
-                .map(|(permission, accessed)| Self {
-                    permission,
-                    accessed,
-                    idempotent_foreign_access: IdempotentForeignAccess::default(),
-                })
-                .filter(|x| x.possible()),
-        )
+        Box::new(<(Permission, bool)>::exhaustive().map(|(permission, accessed)| Self {
+            permission,
+            accessed,
+            idempotent_foreign_access: IdempotentForeignAccess::default(),
+        }))
     }
 }
 
@@ -451,19 +447,17 @@ mod spurious_read {
         /// Perform a read on the given pointer if its state is `accessed`.
         /// Must be called just after reborrowing a pointer, and just after
         /// removing a protector.
-        fn retag_dependent_access(self, ptr: PtrSelector) -> Result<Self, ()> {
+        fn read_if_accessed(self, ptr: PtrSelector) -> Result<Self, ()> {
             let accessed = match ptr {
-                PtrSelector::X =>
-                    self.x.state.permission.associated_access().filter(|_| self.x.state.accessed),
-                PtrSelector::Y =>
-                    self.y.state.permission.associated_access().filter(|_| self.y.state.accessed),
+                PtrSelector::X => self.x.state.accessed,
+                PtrSelector::Y => self.y.state.accessed,
                 PtrSelector::Other =>
                     panic!(
                         "the `accessed` status of `PtrSelector::Other` is unknown, do not pass it to `read_if_accessed`"
                     ),
             };
-            if let Some(kind) = accessed {
-                self.perform_test_access(&TestAccess { ptr, kind })
+            if accessed {
+                self.perform_test_access(&TestAccess { ptr, kind: AccessKind::Read })
             } else {
                 Ok(self)
             }
@@ -472,13 +466,13 @@ mod spurious_read {
         /// Remove the protector of `x`, including the implicit read on function exit.
         fn end_protector_x(self) -> Result<Self, ()> {
             let x = self.x.end_protector();
-            Self { x, ..self }.retag_dependent_access(PtrSelector::X)
+            Self { x, ..self }.read_if_accessed(PtrSelector::X)
         }
 
         /// Remove the protector of `y`, including the implicit read on function exit.
         fn end_protector_y(self) -> Result<Self, ()> {
             let y = self.y.end_protector();
-            Self { y, ..self }.retag_dependent_access(PtrSelector::Y)
+            Self { y, ..self }.read_if_accessed(PtrSelector::Y)
         }
 
         fn retag_y(self, new_y: LocStateProt) -> Result<Self, ()> {
@@ -488,7 +482,7 @@ mod spurious_read {
             }
             // `xy_rel` changes to "mutually foreign" now: `y` can no longer be a parent of `x`.
             Self { y: new_y, xy_rel: RelPosXY::MutuallyForeign, ..self }
-                .retag_dependent_access(PtrSelector::Y)
+                .read_if_accessed(PtrSelector::Y)
         }
 
         fn perform_test_event<RetX, RetY>(self, evt: &TestEvent<RetX, RetY>) -> Result<Self, ()> {
@@ -714,7 +708,7 @@ mod spurious_read {
         fn initial_state(&self) -> Result<LocStateProtPair, ()> {
             let (x, y) = self.retag_permissions();
             let state = LocStateProtPair { xy_rel: self.xy_rel, x, y };
-            state.retag_dependent_access(PtrSelector::X)
+            state.read_if_accessed(PtrSelector::X)
         }
     }
 

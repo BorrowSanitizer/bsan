@@ -198,7 +198,7 @@ impl<'b> BorrowTracker<'b> {
                     parent_tag,
                     range_in_alloc,
                     AccessKind::Read,
-                    AccessCause::Reborrow(AccessKind::Read),
+                    AccessCause::Reborrow,
                     &global_ctx.protected_tags(),
                     alloc_id,
                     span,
