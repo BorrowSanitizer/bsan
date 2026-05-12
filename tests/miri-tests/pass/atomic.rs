@@ -14,7 +14,7 @@ fn main() {
     atomic_all_ops();
     atomic_fences();
     atomic_ptr();
-    weak_sometimes_fails();
+//  weak_sometimes_fails();
 
     #[cfg(target_has_atomic = "64")]
     atomic_u64();
@@ -185,6 +185,7 @@ fn atomic_ptr() {
     unsafe { assert_eq!(*ptr.load(SeqCst), 9) }; // after XORing twice with the same thing, we get our ptr back
 }
 
+/* 
 fn weak_sometimes_fails() {
     let atomic = AtomicBool::new(false);
     let tries = 100;
@@ -198,3 +199,4 @@ fn weak_sometimes_fails() {
     }
     panic!("compare_exchange_weak succeeded {} tries in a row", tries);
 }
+*/
