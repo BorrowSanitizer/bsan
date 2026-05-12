@@ -19,6 +19,9 @@ def cargo_bsan(cmd, quiet=True, nop=False):
     args = ["cargo", "bsan", cmd] + CARGO_EXTRA_FLAGS
     if quiet:
         args += ["-q"]
+    if nop:
+        args += ["--nop"]
+        args += ["-F nop"]
     return args
 
 
@@ -147,9 +150,8 @@ def test_cargo_bsan_run():
     )
     test(
         "`cargo bsan run` (nop)",
-        cargo_bsan("run"),
+        cargo_bsan("run", nop=True),
         stdout_ref="run.stdout.ref",
-        env={"BSAN_NOP": "1"},
     )
     test_no_rebuild(
         "`cargo bsan run` (no rebuild)",
@@ -164,9 +166,8 @@ def test_cargo_bsan_test():
     )
     test(
         "`cargo bsan test` (nop)",
-        cargo_bsan("test"),
-        stdout_ref="test.stdout.ref",
-        env={"BSAN_NOP": "1"},
+        cargo_bsan("test", nop=True),
+        stdout_ref="test.nop.stdout.ref",
     )
 
 args_parser = argparse.ArgumentParser(description="`cargo bsan` testing")
@@ -178,7 +179,9 @@ ARGS = args_parser.parse_args()
 
 os.chdir(os.path.dirname(os.path.realpath(__file__)))
 
-execute(["cargo", "clean"])
+# remove the target directory for the
+# current test crate
+execute(["rm", "-rf", "target"])
 test_cargo_bsan_setup()
 test_cargo_bsan_run()
 test_cargo_bsan_test()
