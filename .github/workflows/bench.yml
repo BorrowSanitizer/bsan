@@ -1,8 +1,8 @@
 name: Bench
 on:
   schedule:
-    - cron: '0 1/12 * * *'
-  workflow_dispatch: 
+    - cron: '0 1,13 * * *'
+  workflow_dispatch:
 jobs:
   build:
     strategy:
@@ -13,13 +13,13 @@ jobs:
             os: ubuntu-24.04-arm
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-24.04
-    runs-on: '${{ matrix.config.os }}'
+    runs-on: ${{ matrix.config.os }}
     container:
       image: ghcr.io/borrowsanitizer/bsan:latest
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.github_token }}
-    name: '${{ matrix.config.target }}'
+    name: ${{ matrix.config.target }}
     steps:
     - uses: actions/checkout@v4
     - name: Setup dependencies
@@ -28,13 +28,15 @@ jobs:
         sudo apt-get update && sudo apt-get install -y hyperfine jq
     - name: Set output filename
       id: filename
-      run: echo "results=results_$(date +%Y-%m-%d_%H-%M-%S)_${{ matrix.config.target }}.json" >> $GITHUB_OUTPUT
+      run: echo "results=results_$(date +%Y-%m-%d_%H-%M-%S)_${{ matrix.config.target }}" >> $GITHUB_OUTPUT
     - name: Benchmarks
-      run: python3 ./bsan-script/etc/bench.py ./tests/benches/crates.json ${{ steps.filename.outputs.results }} ${{ matrix.config.target }}
-    - uses: actions/upload-artifact@v4
+      run: python3 ./bsan-script/etc/bench.py ./tests/benches/crates.json ${{ steps.filename.outputs.results }}.json ${{ matrix.config.target }}
+    - name: Upload results
+      uses: actions/upload-artifact@v4
       with:
-        name: results_${{ matrix.config.target }}
-        path: ${{ steps.filename.outputs.results }}
+        name: ${{ steps.filename.outputs.results }}
+        path: ${{ steps.filename.outputs.results }}.json
+        retention-days: 30
   merge:
     name: Merge & Upload
     needs: build
@@ -51,12 +53,10 @@ jobs:
       id: merged_filename
       run: echo "name=results_$(date +%Y-%m-%d_%H-%M-%S)" >> $GITHUB_OUTPUT
     - name: Merge JSON files
-      run: |
-        jq -s '[.[]]' results/*.json > ${{ steps.merged_filename.outputs.name }}.json
+      run: jq -s 'add' results/*.json > ${{ steps.merged_filename.outputs.name }}.json
     - name: Upload merged results
       uses: actions/upload-artifact@v4
       with:
         name: ${{ steps.merged_filename.outputs.name }}
         path: ${{ steps.merged_filename.outputs.name }}.json
         retention-days: 30
-        
