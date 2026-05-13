@@ -8,11 +8,11 @@
 //
 // This is just intended as a regression test to make sure we don't reintroduce this problem.
 
+// This test was originally only used for 32-bit architectures in Miri. We modified it as a 64-bit
+// test case, which should fail if pointer to integer conversion is modelled properly.
 #![allow(integer_to_ptr_transmutes)]
-
-#[cfg(target_pointer_width = "32")]
 fn main() {
-    use std::mem::transmute;
+        use std::mem::transmute;
 
     // Make the weird PrimVal.
     let x = 1i32;
@@ -21,6 +21,3 @@ fn main() {
     // Force it through the Memory::write_primval code.
     drop(Box::new(bad));
 }
-
-#[cfg(not(target_pointer_width = "32"))]
-fn main() {}

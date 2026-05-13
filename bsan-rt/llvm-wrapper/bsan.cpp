@@ -183,10 +183,7 @@ void __bsan_deinit() {
   if (!bsan_inited)
     return;
   bsan_deinit_running = true;
-
   DeinitializeGC();
-
-  __bsan_internal_deinit();
   bsan_deinit_running = false;
   bsan_inited = false;
 }
