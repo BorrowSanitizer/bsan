@@ -10,8 +10,8 @@ use crate::tree_borrows::data_structures::DedupRangeMap;
 use crate::tree_borrows::diagnostics::AccessCause;
 use crate::tree_borrows::perms::AccessKind;
 use crate::tree_borrows::tree::LocationState;
-use crate::tree_borrows::NewPermission;
-use crate::{AllocId, BorTag, GlobalCtx, Provenance, RetagInfo, Tree};
+use crate::tree_borrows::{NewPermission, ProtectorKind};
+use crate::{AllocId, BorTag, GlobalCtx, Provenance, RetagFlags, RetagInfo, Tree};
 
 #[derive(Debug)]
 pub struct BorrowTracker<'b> {
@@ -255,6 +255,17 @@ impl<'b> BorrowTracker<'b> {
         let info = unsafe { &mut *self.prov.alloc_info };
         drop(info.tree_lock.take());
         Ok(())
+    }
+
+    pub fn expose_tag(&mut self, global_ctx: &GlobalCtx) -> UBResult<()> {
+        let tag = self.prov.bor_tag;
+        let protected = global_ctx.protected_tags().get_protector_kind(tag).is_some();
+        self.tree_mut().expose_tag(tag, protected);
+        Ok(())
+    }
+
+    pub fn expose(ctx: &GlobalCtx, prov: Provenance) -> UBResult<()> {
+        Self::for_alloc(prov, |mut bt| bt.expose_tag(ctx)).map(|_| ())
     }
 
     pub fn debug_take_snapshot(&self, ctx: &GlobalCtx) {

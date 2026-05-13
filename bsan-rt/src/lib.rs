@@ -415,6 +415,15 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
 }
 
 #[unsafe(no_mangle)]
+extern "C" fn __bsan_expose_tag(bor_tag: BorTag, alloc_info: *mut AllocInfo, pc: Span) {
+    let ctx = unsafe { global_ctx() };
+    let prov = Provenance { bor_tag, alloc_info };
+    if let Err(ub) = BorrowTracker::expose(ctx, prov) {
+        ctx.handle_error(ub, pc);
+    }
+}
+
+#[unsafe(no_mangle)]
 extern "C" fn __bsan_protector_end_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo, pc: Span) {
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
