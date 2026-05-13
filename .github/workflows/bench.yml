@@ -73,4 +73,4 @@ jobs:
         github-token: ${{ secrets.GITHUB_TOKEN }}
         # Push and deploy GitHub pages branch automatically
         auto-push: true
-        benchmark-data-dir-path: /
+        benchmark-data-dir-path: .
