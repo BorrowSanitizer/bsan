@@ -11,6 +11,7 @@ edition = "2021"
 hashbrown = "0.15.4"
 libc = "0.2.174"
 bzip2 = { version = "0.6.0", features = ["bzip2-sys", "static"]}
+mozjs = "0.14.3"
 
 # Make sure we are not part of the rustc workspace.
 [workspace]

@@ -1,0 +1,8 @@
+error: Undefined Behavior: trying to access an allocation that has been freed.
+  --> ./libio/iofclose.rs:LL:CC
+
+stack backtrace:
+0: fclose
+ at libio/iofclose.rs:LL:CC
+1: mozilla::JiffiesSinceBoot(char const*)
+      at bsan_thread.cpp
