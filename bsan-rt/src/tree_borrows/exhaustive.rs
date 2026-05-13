@@ -9,6 +9,7 @@ pub trait Exhaustive: Sized {
     fn exhaustive() -> Box<dyn Iterator<Item = Self>>;
 }
 
+#[allow(unused_macros)]
 macro_rules! precondition {
     ($cond:expr) => {
         if !$cond {
@@ -16,6 +17,8 @@ macro_rules! precondition {
         }
     };
 }
+
+#[allow(unused_imports)]
 pub(crate) use precondition;
 
 // Trivial impls of `Exhaustive` for the standard types with 0, 1 and 2 elements respectively.

@@ -1,10 +1,8 @@
 // This module was ported from Miri (commit:072a9fa) and modified by our team.
 // RetagMode and implicit writes are not implemented yet.
-use crate::errors::UBResult;
-use crate::global::{GlobalCtx, ProtectedTags};
-use crate::helpers::{AllocRange, Size};
+use crate::global::ProtectedTags;
 use crate::tree_borrows::perms::AccessKind;
-use crate::{AllocId, BorTag, RetagFlags, RetagInfo, Span};
+use crate::{RetagFlags, RetagInfo};
 
 pub mod data_structures;
 pub mod diagnostics;
@@ -20,7 +18,6 @@ pub use perms::*;
 use self::perms::Permission;
 pub use self::tree::Tree;
 
-pub type AllocState = Tree;
 type GlobalState = ProtectedTags;
 
 /// Policy for a new borrow.

@@ -4,7 +4,7 @@ error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x0] is 
 LL | mem::replace(unsafe { &mut *self.value.get() }, val)
    |
      = help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(WeakProtector) (i.e., it is not a child)
-     = help: this reborrow would cause the protected tag <TAG>(WeakProtector) (currently Active) to become Disabled
+     = help: this reborrow (acting as a foreign read access) would cause the protected tag <TAG>(WeakProtector) (currently Unique) to become Disabled
      = help: protected tags must never be Disabled
 help: the accessed tag <TAG>(unprotected) was created here
     --> RUSTLIB/core/src/cell.rs:LL:CC
@@ -16,7 +16,7 @@ help: the protected tag <TAG>(WeakProtector) was created here, in the initial st
    |
 LL | fn helper(val: Box<Cell<u8>>, ptr: *const Cell<u8>) -> u8 {
    |
-help: the protected tag <TAG>(WeakProtector) later transitioned due to a child write
+help: the protected tag <TAG>(WeakProtector) later transitioned to Unique due to a child write access at offsets [0x0..0x1]
     --> RUSTLIB/core/src/mem/mod.rs:LL:CC
    |
 LL | crate::intrinsics::write_via_move(dest, src);

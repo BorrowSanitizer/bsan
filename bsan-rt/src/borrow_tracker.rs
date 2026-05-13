@@ -10,8 +10,8 @@ use crate::tree_borrows::data_structures::DedupRangeMap;
 use crate::tree_borrows::diagnostics::AccessCause;
 use crate::tree_borrows::perms::AccessKind;
 use crate::tree_borrows::tree::LocationState;
-use crate::tree_borrows::{NewPermission, ProtectorKind};
-use crate::{AllocId, BorTag, GlobalCtx, Provenance, RetagFlags, RetagInfo, Tree};
+use crate::tree_borrows::NewPermission;
+use crate::{AllocId, BorTag, GlobalCtx, Provenance, RetagInfo, Tree};
 
 #[derive(Debug)]
 pub struct BorrowTracker<'b> {
@@ -139,9 +139,6 @@ impl<'b> BorrowTracker<'b> {
         retag_info: RetagInfo<'_>,
         span: Span,
     ) -> UBResult<BorTag> {
-        if retag_info.im_layout.is_some() {
-            return Ok(self.prov.bor_tag);
-        }
         let alloc_id = self.alloc_id;
         let parent_tag = self.prov.bor_tag;
         let new_tag = BorTag::default();

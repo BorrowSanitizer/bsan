@@ -1,14 +1,13 @@
 // Ported from Miri (commit:3911011) with edits: defined TreeBorrowsUb, print_tree_diff
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use core::alloc::Allocator;
 use core::fmt;
 use core::ops::Range;
 
 use super::data_structures::UniIndex;
 use super::perms::{AccessKind, PermTransition, Permission, ProtectorKind};
 use super::tree::LocationState;
-use crate::helpers::{AllocRange, FxHashMap};
+use crate::helpers::AllocRange;
 use crate::tree_borrows::Tree;
 use crate::{eprintln, *};
 
@@ -28,7 +27,11 @@ impl fmt::Display for AccessCause {
             Self::Explicit(kind) => write!(f, "{kind}"),
             Self::Reborrow => write!(f, "reborrow"),
             Self::Dealloc => write!(f, "deallocation"),
-            Self::FnExit(kind) => write!(f, "protector release (acting as a {kind})"),
+            // This is dead code, since the protector release access itself can never
+            // cause UB (while the protector is active, if some other access invalidates
+            // further use of the protected tag, that is immediate UB).
+            // Describing the cause of UB is the only time this function is called.
+            Self::FnExit(_) => unreachable!("protector accesses can never be the source of UB"),
         }
     }
 }
@@ -452,7 +455,7 @@ struct DisplayFmtWrapper {
 /// will show each permission line as
 /// ```text
 /// 0.. 1.. 2.. 3.. 4.. 5
-/// [Act|Res|Frz|Dis|___]
+/// [Unq|Res|Frz|Dis|___]
 /// ```
 struct DisplayFmtPermission {
     /// Text that starts the permission block.
@@ -463,7 +466,7 @@ struct DisplayFmtPermission {
     close: S,
     /// Text to show when a permission is not initialized.
     /// Should have the same width as a `Permission`'s `.short_name()`, i.e.
-    /// 3 if using the `Res/Act/Frz/Dis` notation.
+    /// 3 if using the `Res/Unq/Frz/Dis` notation.
     uninit: S,
     /// Text to separate the `start` and `end` values of a range.
     range_sep: S,
@@ -521,7 +524,7 @@ struct DisplayFmtPadding {
 /// ```
 /// will show states as
 /// ```text
-///  Act
+///  Unq
 /// ?Res
 /// ____
 /// ```
@@ -545,8 +548,8 @@ struct DisplayFmt {
 }
 impl DisplayFmt {
     /// Print the permission with the format
-    /// ` Res`/` Re*`/` Act`/` Frz`/` Dis` for accessed locations
-    /// and `?Res`/`?Re*`/`?Act`/`?Frz`/`?Dis` for unaccessed locations.
+    /// ` Res`/` Re*`/` Unq`/` Frz`/` Dis` for accessed locations
+    /// and `?Res`/`?Re*`/`?Unq`/`?Frz`/`?Dis` for unaccessed locations.
     fn print_perm(&self, perm: Option<LocationState>) -> String {
         if let Some(perm) = perm {
             format!(
@@ -799,7 +802,7 @@ impl DisplayRepr {
         ) {
             let mut line = String::new();
             // Format the permissions on each range.
-            // Looks like `| Act| Res| Res| Act|`.
+            // Looks like `| Unq| Res| Res| Unq|`.
             line.push_str(fmt.perm.open);
             for (i, (perm, &pad)) in tree.rperm.iter().zip(padding.iter()).enumerate() {
                 if i > 0 {

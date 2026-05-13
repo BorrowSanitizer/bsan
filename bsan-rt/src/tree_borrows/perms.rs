@@ -506,7 +506,7 @@ pub mod diagnostics {
                 ReservedFrz { conflicted: false } => "Res ",
                 ReservedFrz { conflicted: true } => "ResC",
                 ReservedIM => "ReIM",
-                Unique => "Act ",
+                Unique => "Unq ",
                 Frozen => "Frz ",
                 Disabled => "Dis ",
             }
