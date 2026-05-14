@@ -342,6 +342,16 @@ impl Permission {
         self.inner.compatible_with_protector()
     }
 
+    pub fn associated_access(&self) -> Option<AccessKind> {
+        match self.inner {
+            // Do not do perform access if it is a `Cell`, as this
+            // can cause data races when using thread-safe data types.
+            Cell => None,
+            Unique => Some(AccessKind::Write),
+            _ => Some(AccessKind::Read),
+        }
+    }
+
     /// What kind of access to perform before releasing the protector.
     pub fn protector_end_access(&self) -> Option<AccessKind> {
         match self.inner {

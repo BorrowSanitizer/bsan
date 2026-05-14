@@ -212,14 +212,6 @@ void BSanCxaAtExitWrapper(void *arg) {
 static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso);
 
 // Unpoison argument shadow for C++ module destructors.
-INTERCEPTOR(int, __cxa_thread_atexit_impl, void (*func)(void *), void *arg,
-            void *dso_handle) {
-  if (bsan_init_running)
-    return REAL(__cxa_thread_atexit_impl)(func, arg, dso_handle);
-  return setup_at_exit_wrapper((void (*)())func, arg, dso_handle);
-}
-
-// Unpoison argument shadow for C++ module destructors.
 INTERCEPTOR(int, __cxa_atexit, void (*func)(void *), void *arg,
             void *dso_handle) {
   if (bsan_init_running)
@@ -269,7 +261,6 @@ void InitializeInterceptors() {
   INTERCEPT_FUNCTION(realloc);
   INTERCEPT_FUNCTION(atexit);
   INTERCEPT_FUNCTION(__cxa_atexit);
-  INTERCEPT_FUNCTION(__cxa_thread_atexit_impl);
 }
 
 } // namespace __bsan
