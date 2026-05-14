@@ -15,12 +15,6 @@ help: the strongly protected tag <TAG>(StrongProtector) was created here, in the
    |
 LL | inner(Box::leak(Box::new(0)), |x| {
    |
-help: the strongly protected tag <TAG>(StrongProtector) later transitioned due to a deallocation (acting as a child write access)
-    --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
-   |
-LL | unsafe { libc::free(ptr as *mut libc::c_void) }
-   |
-help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
 
 stack backtrace:
 0: <std::alloc::System as core::alloc::global::GlobalAlloc>::dealloc

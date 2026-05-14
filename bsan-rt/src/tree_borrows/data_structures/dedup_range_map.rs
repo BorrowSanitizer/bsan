@@ -1,4 +1,4 @@
-// This file was ported from Miri
+// Ported from Miri (commit:072a9fa)
 //! Implements a map from integer indices to data.
 //! Rather than storing data for every index, internally, this maps entire ranges to the data.
 //! To this end, the APIs all work on ranges, not on individual integers. Ranges are split as
@@ -6,60 +6,31 @@
 //! Users must not depend on whether a range is coalesced or not, even though this is observable
 //! via the iteration APIs.
 
-#![allow(dead_code)]
-use alloc::alloc::Global;
 use alloc::vec::Vec;
-use core::alloc::Allocator;
-use core::cmp::Ordering;
-use core::ops::Range;
-use core::{iter, mem};
+use core::ops;
 
-use super::types::Size;
-use crate::vec_in;
+use crate::helpers::Size;
 
 #[derive(Clone, Debug)]
 struct Elem<T> {
     /// The range covered by this element; never empty.
-    range: Range<u64>,
+    range: ops::Range<u64>,
     /// The data stored for this element.
     data: T,
 }
 #[derive(Clone, Debug)]
-pub struct RangeMap<T, A: Allocator = Global> {
-    v: Vec<Elem<T>, A>,
+pub struct DedupRangeMap<T> {
+    v: Vec<Elem<T>>,
 }
 
-impl<T> RangeMap<T, Global> {
-    // Globally allocated range map
+impl<T> DedupRangeMap<T> {
     /// Creates a new `RangeMap` for the given size, and with the given initial value used for
     /// the entire range.
-    #[inline]
-    pub fn new(size: Size, init: T) -> RangeMap<T, Global> {
+    #[inline(always)]
+    pub fn new(size: Size, init: T) -> DedupRangeMap<T> {
         let size = size.bytes();
-        let v = if size > 0 {
-            vec_in![Global, Elem { range: 0..size, data: init }]
-        } else {
-            Vec::new_in(Global)
-        };
-        RangeMap { v }
-    }
-}
-
-impl<T, A> RangeMap<T, A>
-where
-    A: Allocator,
-{
-    /// Creates a new `RangeMap` for the given size, and with the given initial value used for
-    /// the entire range with a custom allocator.
-    #[inline]
-    pub fn new_in(size: Size, init: T, alloc: A) -> RangeMap<T, A> {
-        let size = size.bytes();
-        let v = if size > 0 {
-            vec_in![alloc, Elem { range: 0..size, data: init }]
-        } else {
-            Vec::new_in(alloc)
-        };
-        RangeMap { v }
+        let v = if size > 0 { vec![Elem { range: 0..size, data: init }] } else { Vec::new() };
+        DedupRangeMap { v }
     }
 
     pub fn size(&self) -> Size {
@@ -70,17 +41,17 @@ where
     /// Finds the index containing the given offset.
     fn find_offset(&self, offset: u64) -> usize {
         self.v
-            .binary_search_by(|elem| -> Ordering {
+            .binary_search_by(|elem| -> core::cmp::Ordering {
                 if offset < elem.range.start {
                     // We are too far right (offset is further left).
                     // (`Greater` means that `elem` is greater than the desired target.)
-                    Ordering::Greater
+                    core::cmp::Ordering::Greater
                 } else if offset >= elem.range.end {
                     // We are too far left (offset is further right).
-                    Ordering::Less
+                    core::cmp::Ordering::Less
                 } else {
                     // This is it!
-                    Ordering::Equal
+                    core::cmp::Ordering::Equal
                 }
             })
             .unwrap()
@@ -93,7 +64,7 @@ where
     /// The iterator also provides the range of the given element.
     /// How exactly the ranges are split can differ even for otherwise identical
     /// maps, so user-visible behavior should never depend on the exact range.
-    pub fn iter(&self, offset: Size, len: Size) -> impl Iterator<Item = (Range<u64>, &T)> {
+    pub fn iter(&self, offset: Size, len: Size) -> impl Iterator<Item = (ops::Range<u64>, &T)> {
         let offset = offset.bytes();
         let len = len.bytes();
         // Compute a slice starting with the elements we care about.
@@ -107,10 +78,7 @@ where
         };
         // The first offset that is not included any more.
         let end = offset + len;
-        assert!(
-            end <= self.size().bytes(),
-            "iterating beyond the bounds of this RangeMap: {offset:?} - {len:?}"
-        );
+        assert!(end <= self.size().bytes(), "iterating beyond the bounds of this RangeMap");
         slice
             .iter()
             .take_while(move |elem| elem.range.start < end)
@@ -121,7 +89,7 @@ where
     /// The iterator also provides the range of the given element.
     /// How exactly the ranges are split can differ even for otherwise identical
     /// maps, so user-visible behavior should never depend on the exact range.
-    pub fn iter_mut_all(&mut self) -> impl Iterator<Item = (Range<u64>, &mut T)> {
+    pub fn iter_mut_all(&mut self) -> impl Iterator<Item = (ops::Range<u64>, &mut T)> {
         self.v.iter_mut().map(|elem| (elem.range.clone(), &mut elem.data))
     }
 
@@ -129,7 +97,7 @@ where
     /// The iterator also provides the range of the given element.
     /// How exactly the ranges are split can differ even for otherwise identical
     /// maps, so user-visible behavior should never depend on the exact range.
-    pub fn iter_all(&self) -> impl Iterator<Item = (Range<u64>, &T)> {
+    pub fn iter_all(&self) -> impl Iterator<Item = (ops::Range<u64>, &T)> {
         self.v.iter().map(|elem| (elem.range.clone(), &elem.data))
     }
 
@@ -172,7 +140,7 @@ where
         &mut self,
         offset: Size,
         len: Size,
-    ) -> impl Iterator<Item = (Range<u64>, &mut T)>
+    ) -> impl Iterator<Item = (ops::Range<u64>, &mut T)>
     where
         T: Clone + PartialEq,
     {
@@ -227,7 +195,7 @@ where
                         let equal_until = self.v[end_idx - 1].range.end; // end of range of last of the equal elements
                         self.v[equal_since_idx].range.end = equal_until;
                         // Delete the rest of them.
-                        self.v.splice(equal_since_idx + 1..end_idx, iter::empty());
+                        self.v.splice(equal_since_idx + 1..end_idx, core::iter::empty());
                         // Adjust `end_idx` because we made the list shorter.
                         end_idx -= removed_elems;
                         // Adjust the count for the cutoff.
@@ -257,13 +225,12 @@ where
     }
 
     /// Remove all adjacent duplicates
-    #[allow(dead_code)]
-    pub fn merge_adjacent_thorough(&mut self, alloc: A)
+    pub fn merge_adjacent_thorough(&mut self)
     where
         T: PartialEq,
     {
-        let clean = Vec::with_capacity_in(self.v.len(), alloc);
-        for elem in mem::replace(&mut self.v, clean) {
+        let clean = Vec::with_capacity(self.v.len());
+        for elem in core::mem::replace(&mut self.v, clean) {
             if let Some(prev) = self.v.last_mut()
                 && prev.data == elem.data
             {
@@ -277,12 +244,11 @@ where
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     /// Query the map at every offset in the range and collect the results.
-    // Don't need to use custom allocator vecs in tests
-    fn to_vec<T: Copy, A: Allocator>(map: &RangeMap<T, A>, offset: usize, len: usize) -> Vec<T> {
+    fn to_vec<T: Copy>(map: &DedupRangeMap<T>, offset: u64, len: u64) -> Vec<T> {
         (offset..offset + len)
             .map(|i| {
                 map.iter(Size::from_bytes(i), Size::from_bytes(1)).next().map(|(_, &t)| t).unwrap()
@@ -292,7 +258,7 @@ mod test {
 
     #[test]
     fn basic_insert() {
-        let mut map = RangeMap::<i32>::new(Size::from_bytes(20), -1);
+        let mut map = DedupRangeMap::<i32>::new(Size::from_bytes(20), -1);
         // Insert.
         for (_, x) in map.iter_mut(Size::from_bytes(10), Size::from_bytes(1)) {
             *x = 42;
@@ -314,7 +280,7 @@ mod test {
 
     #[test]
     fn gaps() {
-        let mut map = RangeMap::<i32>::new(Size::from_bytes(20), -1);
+        let mut map = DedupRangeMap::<i32>::new(Size::from_bytes(20), -1);
         for (_, x) in map.iter_mut(Size::from_bytes(11), Size::from_bytes(1)) {
             *x = 42;
         }
@@ -355,14 +321,26 @@ mod test {
     #[test]
     #[should_panic]
     fn out_of_range_iter_mut() {
-        let mut map = RangeMap::<i32>::new(Size::from_bits(20), -1);
-        let _ = map.iter_mut(Size::from_bytes(11), Size::from_bits(11));
+        let mut map = DedupRangeMap::<i32>::new(Size::from_bytes(20), -1);
+        let _ = map.iter_mut(Size::from_bytes(11), Size::from_bytes(11));
     }
 
     #[test]
     #[should_panic]
     fn out_of_range_iter() {
-        let map = RangeMap::<i32>::new(Size::from_bytes(20), -1);
+        let map = DedupRangeMap::<i32>::new(Size::from_bytes(20), -1);
         let _ = map.iter(Size::from_bytes(11), Size::from_bytes(11));
+    }
+
+    #[test]
+    fn empty_map_iter() {
+        let map = DedupRangeMap::<i32>::new(Size::from_bytes(0), -1);
+        let _ = map.iter(Size::from_bytes(0), Size::from_bytes(0));
+    }
+
+    #[test]
+    fn empty_map_iter_mut() {
+        let mut map = DedupRangeMap::<i32>::new(Size::from_bytes(0), -1);
+        let _ = map.iter_mut(Size::from_bytes(0), Size::from_bytes(0));
     }
 }

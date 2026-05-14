@@ -2,27 +2,16 @@
 use core::ffi::c_void;
 
 use spin::MutexGuard;
-use tree::{AllocRange, Tree};
 
-use crate::borrow_tracker::tree::{ChildParams, LocationState};
-use crate::diagnostics::{print_tree_diff, AccessCause, PrintTree};
 use crate::errors::{UBInfo, UBResult};
+use crate::helpers::{AllocRange, Size};
 use crate::sanitizer_common::Span;
-use crate::{AllocId, BorTag, GlobalCtx, Provenance, RetagInfo};
-
-mod foreign_access_skipping;
-mod helpers;
-mod perms;
-mod range_map;
-pub mod tree;
-mod types;
-
-pub mod unimap;
-pub use foreign_access_skipping::*;
-pub use helpers::*;
-pub use perms::*;
-pub use range_map::*;
-pub use types::*;
+use crate::tree_borrows::data_structures::DedupRangeMap;
+use crate::tree_borrows::diagnostics::AccessCause;
+use crate::tree_borrows::perms::AccessKind;
+use crate::tree_borrows::tree::LocationState;
+use crate::tree_borrows::NewPermission;
+use crate::{AllocId, BorTag, GlobalCtx, Provenance, RetagInfo, Tree};
 
 #[derive(Debug)]
 pub struct BorrowTracker<'b> {
@@ -134,11 +123,10 @@ impl<'b> BorrowTracker<'b> {
         ctx: &GlobalCtx,
         prov: Provenance,
         start: *mut c_void,
-        access_size: usize,
         retag_info: RetagInfo<'_>,
         span: Span,
     ) -> UBResult<BorTag> {
-        Self::for_access(prov, start, Some(access_size), |mut bt| {
+        Self::for_access(prov, start, Some(retag_info.size), |mut bt| {
             bt.retag_inner(ctx, retag_info, span)
         })
         .map(|opt| opt.unwrap_or(prov.bor_tag))
@@ -151,9 +139,6 @@ impl<'b> BorrowTracker<'b> {
         retag_info: RetagInfo<'_>,
         span: Span,
     ) -> UBResult<BorTag> {
-        if retag_info.pin_layout.is_some() {
-            return Ok(self.prov.bor_tag);
-        }
         let alloc_id = self.alloc_id;
         let parent_tag = self.prov.bor_tag;
         let new_tag = BorTag::default();
@@ -187,11 +172,7 @@ impl<'b> BorrowTracker<'b> {
         };
 
         let initial_state = loc_state(perm.ty_is_freeze);
-        let mut inside_perms = RangeMap::new_in(
-            Size::from_bytes(retag_info.size),
-            initial_state,
-            alloc::alloc::Global,
-        );
+        let mut inside_perms = DedupRangeMap::new(Size::from_bytes(retag_info.size), initial_state);
 
         if let Some(im_layout) = retag_info.im_layout {
             for [start, size] in im_layout {
@@ -201,7 +182,7 @@ impl<'b> BorrowTracker<'b> {
 
         let base_offset = self.range.start;
         for (perm_range, perm) in inside_perms.iter_all() {
-            if perm.is_accessed() {
+            if perm.accessed() {
                 // Some reborrows incur a read access to the parent.
                 // Adjust range to be relative to allocation start
                 let range_in_alloc = AllocRange {
@@ -212,40 +193,37 @@ impl<'b> BorrowTracker<'b> {
                 // Perform the access (update the Tree Borrows FSM)
                 self.tree_mut().perform_access(
                     parent_tag,
-                    Some((range_in_alloc, AccessKind::Read, AccessCause::Reborrow)),
+                    range_in_alloc,
+                    AccessKind::Read,
+                    AccessCause::Reborrow,
                     &global_ctx.protected_tags(),
                     alloc_id,
                     span,
-                    alloc::alloc::Global,
                 )?;
             }
         }
 
         // base offset should be the offset, from zero, where the retag is taking place within the allocation.
-        let child_params = ChildParams {
+        self.tree_mut().new_child(
             base_offset,
             parent_tag,
             new_tag,
             inside_perms,
-            default_perm: perm.default_perm(),
+            perm.default_perm(),
             protected,
             span,
-        };
-
-        self.tree_mut().new_child(child_params);
+        )?;
 
         Ok(new_tag)
     }
 
     pub fn protector_end(&mut self, global_ctx: &GlobalCtx, span: Span) -> UBResult<()> {
         let (bor_tag, alloc_id) = (self.prov.bor_tag, self.alloc_id);
-        self.tree_mut().perform_access(
+        self.tree_mut().perform_protector_end_access(
             bor_tag,
-            None,
             &global_ctx.protected_tags(),
             alloc_id,
             span,
-            alloc::alloc::Global,
         )
     }
 
@@ -258,28 +236,33 @@ impl<'b> BorrowTracker<'b> {
         let (range, bor_tag, alloc_id) = (self.range, self.prov.bor_tag, self.alloc_id);
         self.tree_mut().perform_access(
             bor_tag,
-            Some((range, access_kind, AccessCause::Explicit(access_kind))),
+            range,
+            access_kind,
+            AccessCause::Explicit(access_kind),
             &global_ctx.protected_tags(),
             alloc_id,
             span,
-            alloc::alloc::Global,
         )
     }
 
     pub fn dealloc(&mut self, global_ctx: &GlobalCtx, span: Span) -> UBResult<()> {
         let (range, bor_tag, alloc_id) = (self.range, self.prov.bor_tag, self.alloc_id);
         let tree = self.tree_mut();
-        tree.dealloc(
-            bor_tag,
-            range,
-            &global_ctx.protected_tags(),
-            alloc_id,
-            span,
-            alloc::alloc::Global,
-        )?;
+        tree.dealloc(bor_tag, range, &global_ctx.protected_tags(), alloc_id, span)?;
         let info = unsafe { &mut *self.prov.alloc_info };
         drop(info.tree_lock.take());
         Ok(())
+    }
+
+    pub fn expose_tag(&mut self, global_ctx: &GlobalCtx) -> UBResult<()> {
+        let tag = self.prov.bor_tag;
+        let protected = global_ctx.protected_tags().get_protector_kind(tag).is_some();
+        self.tree_mut().expose_tag(tag, protected);
+        Ok(())
+    }
+
+    pub fn expose(ctx: &GlobalCtx, prov: Provenance) -> UBResult<()> {
+        Self::for_alloc(prov, |mut bt| bt.expose_tag(ctx)).map(|_| ())
     }
 
     pub fn debug_take_snapshot(&self, ctx: &GlobalCtx) {
@@ -289,7 +272,7 @@ impl<'b> BorrowTracker<'b> {
 
     pub fn debug_print_diff(&self, ctx: &GlobalCtx) {
         ctx.with_snapshot(self.alloc_id, |old_tree| {
-            print_tree_diff(self.tree(), old_tree, &ctx.protected_tags());
+            self.tree().print_tree_diff(old_tree, &ctx.protected_tags());
         });
     }
 

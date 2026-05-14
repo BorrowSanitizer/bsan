@@ -1,15 +1,15 @@
-error: Undefined Behavior: read through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+error: Undefined Behavior: read access through <TAG>(unprotected) at ALLOC[0x0] is forbidden
   --> bsan/tests/miri-tests/fail/aliasing/observed_local_mut.rs:LL:CC
    |
 LL | assert_eq!(unsafe { *y }, 1);
    |
-   = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this read
+   = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child read access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
   --> bsan/tests/miri-tests/fail/aliasing/observed_local_mut.rs:LL:CC
    |
 LL | let y: *const i32 = &x;
    |
-help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
+help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x0..0x4]
   --> bsan/tests/miri-tests/fail/aliasing/observed_local_mut.rs:LL:CC
    |
 LL | x = 1;

@@ -1,15 +1,15 @@
-error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x0] is forbidden
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/mut_exclusive_violation2.rs:LL:CC
    |
 LL | *raw1 = 3; //miri: ~[tree] ERROR: /write access through .* is forbidden/
    |
-   = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this write
+   = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/mut_exclusive_violation2.rs:LL:CC
    |
 LL | let raw1 = ptr1.as_mut();
    |
-help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
+help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x0..0x4]
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/mut_exclusive_violation2.rs:LL:CC
    |
 LL | *raw2 = 2;

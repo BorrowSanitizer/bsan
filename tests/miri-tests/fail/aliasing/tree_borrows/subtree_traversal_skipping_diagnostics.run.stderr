@@ -1,10 +1,10 @@
-error: Undefined Behavior: write through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
+error: Undefined Behavior: write access through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/subtree_traversal_skipping_diagnostics.rs:LL:CC
    |
 LL | *m = 42; //miri: ~ERROR: /write access through .* is forbidden/
    |
    = help: the accessed tag <TAG>(StrongProtector) is a child of the conflicting tag <TAG>(unprotected)
-   = help: the conflicting tag <TAG>(unprotected) has state Frozen which forbids this write
+   = help: the conflicting tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(StrongProtector) was created here
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/subtree_traversal_skipping_diagnostics.rs:LL:CC
    |
