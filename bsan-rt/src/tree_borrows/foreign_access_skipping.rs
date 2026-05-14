@@ -1,5 +1,7 @@
-// This file was ported from Miri
-use super::helpers::{AccessKind, AccessRelatedness};
+// Ported from Miri (commit:072a9fa)
+use super::tree::AccessRelatedness;
+use super::AccessKind;
+
 /// To speed up tree traversals, we want to skip traversing subtrees when we know the traversal will have no effect.
 /// This is often the case for foreign accesses, since usually foreign accesses happen several times in a row, but also
 /// foreign accesses are idempotent. In particular, see tests `foreign_read_is_noop_after_foreign_write` and `all_transitions_idempotent`.
@@ -23,7 +25,7 @@ use super::helpers::{AccessKind, AccessRelatedness};
 /// "manually" reset the parent's SIFA to be at least as strong as the new child's. This is accomplished with the `ensure_no_stronger_than` method.
 ///
 /// Note that we derive Ord and PartialOrd, so the order in which variants are listed below matters:
-/// None < Read < Write. Do not change that order. See the `test_order` test.
+/// None < Read < Write (weaker to stronger). Do not change that order. See the `test_order` test.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
 pub enum IdempotentForeignAccess {
     #[default]

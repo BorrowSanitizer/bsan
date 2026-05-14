@@ -4,7 +4,7 @@ error: Undefined Behavior: deallocation through <TAG>(WeakProtector) at ALLOC[0x
 LL | unsafe { libc::free(ptr as *mut libc::c_void) }
    |
      = help: the accessed tag <TAG>(WeakProtector) is a child of the conflicting tag <TAG>(unprotected)
-     = help: the conflicting tag <TAG>(unprotected) has state Frozen which forbids this deallocation
+     = help: the conflicting tag <TAG>(unprotected) has state Frozen which forbids this deallocation (acting as a child write access)
 help: the accessed tag <TAG>(WeakProtector) was created here
     --> RUSTLIB/core/src/mem/mod.rs:LL:CC
    |

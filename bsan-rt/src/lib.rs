@@ -3,6 +3,7 @@
 #![cfg_attr(test, feature(test))]
 #![feature(thread_local)]
 #![feature(allocator_api)]
+#![feature(never_type)]
 #![allow(internal_features)]
 
 #[macro_use]
@@ -14,28 +15,31 @@ use core::panic::PanicInfo;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{fmt, ptr, slice};
-
-use borrow_tracker::{AccessKind, Size};
+mod borrow_tracker;
 use libc_print::std_name::*;
 use spin::Mutex;
+mod tree_borrows;
 
 mod global;
 use global::*;
 mod helpers;
 mod sanitizer_common;
-
-mod borrow_tracker;
 use borrow_tracker::*;
 
-mod diagnostics;
 mod local;
 
 mod errors;
 mod memory;
 
-use crate::borrow_tracker::tree::Tree;
-use crate::local::*;
+use crate::helpers::Size;
+use crate::local::{deinit_local_ctx, init_local_ctx};
 use crate::sanitizer_common::Span;
+use crate::tree_borrows::perms::AccessKind;
+use crate::tree_borrows::tree::Tree;
+
+#[thread_local]
+#[unsafe(no_mangle)]
+pub static mut __BSAN_HAD_ERROR: usize = 0;
 
 /// A struct for summarizing debug information about memory operations
 #[cfg(feature = "debug")]
@@ -129,6 +133,12 @@ impl fmt::Debug for AllocId {
     }
 }
 
+impl fmt::Display for AllocId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_fmt(format_args!("{:?}", self))
+    }
+}
+
 #[unsafe(no_mangle)]
 pub static __BSAN_THREAD_ID_CTR: AtomicUsize = AtomicUsize::new(3);
 
@@ -170,14 +180,22 @@ unsafe extern "C" {
 pub struct BorTag(usize);
 
 impl BorTag {
+    #[inline]
+    pub fn is_wildcard(&self) -> bool {
+        *self == Self::wildcard()
+    }
+
+    #[inline]
     pub const fn wildcard() -> Self {
         BorTag(0)
     }
 
+    #[inline]
     pub const fn invalid() -> Self {
         BorTag(1)
     }
 
+    #[inline]
     pub fn get(&self) -> usize {
         self.0
     }
@@ -258,7 +276,7 @@ pub(crate) struct AllocInfo {
     pub alloc_id: AllocId,
     pub base_addr: FreeListAddrUnion,
     pub size: usize,
-    pub tree_lock: Option<Mutex<tree::Tree>>,
+    pub tree_lock: Option<Mutex<Tree>>,
 }
 
 impl AllocInfo {
@@ -276,12 +294,7 @@ impl AllocInfo {
             alloc_id: AllocId::default(),
             base_addr: FreeListAddrUnion { addr: base_addr.addr() },
             size,
-            tree_lock: Some(Mutex::new(Tree::new_in(
-                bor_tag,
-                Size::from_bytes(size),
-                span,
-                alloc::alloc::Global,
-            ))),
+            tree_lock: Some(Mutex::new(Tree::new(bor_tag, Size::from_bytes(size), span))),
         }
     }
 
@@ -395,10 +408,19 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
         pin_layout: opt_slice(pin_data, pin_len),
     };
 
-    BorrowTracker::retag(ctx, prov, object_addr, size, retag_info, pc).unwrap_or_else(|err| {
+    BorrowTracker::retag(ctx, prov, object_addr, retag_info, pc).unwrap_or_else(|err| {
         ctx.handle_error(err, pc);
         bor_tag
     })
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_expose_tag(bor_tag: BorTag, alloc_info: *mut AllocInfo, pc: Span) {
+    let ctx = unsafe { global_ctx() };
+    let prov = Provenance { bor_tag, alloc_info };
+    if let Err(ub) = BorrowTracker::expose(ctx, prov) {
+        ctx.handle_error(ub, pc);
+    }
 }
 
 #[unsafe(no_mangle)]

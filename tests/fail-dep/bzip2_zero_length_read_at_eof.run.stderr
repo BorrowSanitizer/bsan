@@ -1,15 +1,15 @@
-error: Undefined Behavior: read through <TAG>(unprotected) at ALLOC[0x8] is forbidden
+error: Undefined Behavior: read access through <TAG>(unprotected) at ALLOC[0x8] is forbidden
    --> CARGO_REGISTRY/.../bzlib.rs:LL:CC
    |
 LL | if (s->avail_in_expect != s->strm->avail_in)
    |
-    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this read
+    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child read access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
    --> CARGO_REGISTRY/.../mem.rs:LL:CC
    |
 LL | ffi::BZ2_bzCompressInit(&mut *raw, lvl.level() as c_int, 0, work_factor as c_int),
    |
-help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
+help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x8..0xc]
    --> CARGO_REGISTRY/.../mem.rs:LL:CC
    |
 LL | self.inner.raw.avail_in = input.len().min(c_uint::MAX as usize) as c_uint;

@@ -37,6 +37,23 @@ jobs:
         - name: Fetch multi-platform package version SHAs
           id: multi-arch-digests
           run: |
+            docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+              $(printf '${{ env.REGISTRY_IMAGE }}@sha256:%s ' *)
+
+    # we remove all images that are more than one month old
+    cleanup:
+      runs-on: ubuntu-latest
+      needs: merge
+      steps:
+        - name: Login
+          uses: docker/login-action@v3.0.0
+          with:
+            registry: ghcr.io
+            username: ${{ github.actor }}
+            password: ${{ secrets.GITHUB_TOKEN }}
+        - name: Fetch multi-platform package version SHAs
+          id: multi-arch-digests
+          run: |
             package=$(docker manifest inspect ghcr.io/borrowsanitizer/bsan | jq -r '.manifests.[] | .digest' | paste -s -d ' ' -)
             echo "multi-arch-digests=$package" >> $GITHUB_OUTPUT
         - uses: snok/container-retention-policy@v3.0.1
@@ -44,6 +61,6 @@ jobs:
             account: borrowsanitizer
             token: ${{ secrets.GITHUB_TOKEN }}
             image-names: bsan
-            cut-off: 3mo
+            cut-off: 1months
             skip-shas: ${{ steps.multi-arch-digests.outputs.multi-arch-digests }}
             tag-selection: both

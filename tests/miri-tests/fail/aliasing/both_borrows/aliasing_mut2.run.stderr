@@ -1,15 +1,15 @@
-error: Undefined Behavior: write through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
+error: Undefined Behavior: write access through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/aliasing_mut2.rs:LL:CC
    |
 LL | *y = 2; //miri: ~[tree] ERROR: /write access through .* is forbidden/
    |
-  = help: the accessed tag <TAG>(StrongProtector) has state Reserved (conflicted) which forbids this write
+  = help: the accessed tag <TAG>(StrongProtector) has state Reserved (conflicted) which forbids this child write access
 help: the accessed tag <TAG>(StrongProtector) was created here, in the initial state Reserved
  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/aliasing_mut2.rs:LL:CC
    |
 LL | fn safe(x: &i32, y: &mut i32) {
    |
-help: the accessed tag <TAG>(StrongProtector) later transitioned due to a foreign read
+help: the accessed tag <TAG>(StrongProtector) later transitioned to Reserved (conflicted) due to a foreign read access at offsets [0x0..0x4]
  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/aliasing_mut2.rs:LL:CC
    |
 LL | let _v = *x;
