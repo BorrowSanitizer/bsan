@@ -1,15 +1,15 @@
-error: Undefined Behavior: read through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+error: Undefined Behavior: read access through <TAG>(unprotected) at ALLOC[0x0] is forbidden
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_write5.rs:LL:CC
    |
 LL | let _val = *xref;
    |
-   = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this read
+   = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child read access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_write5.rs:LL:CC
    |
 LL | let xref = unsafe { &mut *xraw };
    |
-help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
+help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x0..0x4]
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_write5.rs:LL:CC
    |
 LL | unsafe { *xraw = 15 };

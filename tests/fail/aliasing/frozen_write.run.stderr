@@ -1,9 +1,9 @@
-error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x0] is forbidden
  --> bsan/tests/fail/aliasing/frozen_write.rs:LL:CC
    |
 LL | unsafe { *(ptr as *mut i32) = 1 };
    |
-  = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this write
+  = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
  --> bsan/tests/fail/aliasing/frozen_write.rs:LL:CC
    |

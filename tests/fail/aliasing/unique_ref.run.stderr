@@ -1,15 +1,15 @@
-error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x0] is forbidden
  --> bsan/tests/fail/aliasing/unique_ref.rs:LL:CC
    |
 LL | *ptr_x = 1;
    |
-  = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this write
+  = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
  --> bsan/tests/fail/aliasing/unique_ref.rs:LL:CC
    |
 LL | let rx = &mut x;
    |
-help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
+help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x0..0x4]
  --> bsan/tests/fail/aliasing/unique_ref.rs:LL:CC
    |
 LL | *vx = 2;

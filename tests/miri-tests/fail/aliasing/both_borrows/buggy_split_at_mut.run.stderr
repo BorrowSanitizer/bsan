@@ -1,15 +1,15 @@
-error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x4] is forbidden
+error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x4] is forbidden
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/buggy_split_at_mut.rs:LL:CC
    |
 LL | b[1] = 6;
    |
-   = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this write
+   = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/buggy_split_at_mut.rs:LL:CC
    |
 LL | let (a, b) = safe::split_at_mut(&mut array, 0);
    |
-help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
+help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x4..0x8]
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/buggy_split_at_mut.rs:LL:CC
    |
 LL | a[1] = 5;

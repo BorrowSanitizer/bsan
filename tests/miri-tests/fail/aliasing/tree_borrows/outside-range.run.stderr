@@ -1,10 +1,10 @@
-error: Undefined Behavior: write through <TAG>(unprotected) at ALLOC[0x3] is forbidden
+error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x3] is forbidden
    --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/outside-range.rs:LL:CC
    |
 LL | *y.add(3) = 42; //miri: ~ ERROR: /write access through .* is forbidden/
    |
     = help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
-    = help: this write would cause the protected tag <TAG>(StrongProtector) (currently Reserved) to become Disabled
+    = help: this foreign write access would cause the protected tag <TAG>(StrongProtector) (currently Reserved) to become Disabled
     = help: protected tags must never be Disabled
 help: the accessed tag <TAG>(unprotected) was created here
    --> RUSTLIB/core/src/slice/mod.rs:LL:CC
