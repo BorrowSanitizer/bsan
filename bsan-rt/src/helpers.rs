@@ -115,6 +115,7 @@ pub fn alloc_range(start: Size, size: Size) -> AllocRange {
     AllocRange { start, size }
 }
 
+#[allow(unused)]
 impl AllocRange {
     #[inline]
     pub fn end(self) -> Size {

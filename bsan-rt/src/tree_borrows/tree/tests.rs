@@ -559,13 +559,13 @@ mod spurious_read {
             // most of the work lies in remembering the path up to the current state.
             while let Some((state, path)) = handle.pop() {
                 for evt in <TestEvent<RetX, RetY>>::exhaustive() {
-                    if let Ok(next) = state.clone().perform_test_event(&evt) {
-                        if seen.insert(next.clone()) {
-                            let mut evts = path.clone();
-                            evts.events.push(evt);
-                            paths.push((next.clone(), evts.clone()));
-                            handle.push((next, evts));
-                        }
+                    if let Ok(next) = state.clone().perform_test_event(&evt)
+                        && seen.insert(next.clone())
+                    {
+                        let mut evts = path.clone();
+                        evts.events.push(evt);
+                        paths.push((next.clone(), evts.clone()));
+                        handle.push((next, evts));
                     }
                 }
             }
@@ -743,7 +743,7 @@ mod spurious_read {
                             .distinguishable::</*X*/ AllowRet, /*Y*/ AllowRet>(&final_target)
                             .then_some(format!("{final_target}"))
                     } else {
-                        Some(format!("UB"))
+                        Some("UB".to_string())
                     }
                 };
                 if let Some(final_target) = distinguishable {

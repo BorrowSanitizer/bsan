@@ -157,7 +157,7 @@ impl HistoryData {
             let access = access_cause.print_as_access(is_foreign);
             let access_range_text = match access_range {
                 Some(r) => format!("at offsets {r}"),
-                None => format!("on every location previously accessed by this tag"),
+                None => "on every location previously accessed by this tag".to_string(),
             };
             self.events.push((
                 Some(span),
@@ -223,6 +223,7 @@ impl fmt::Display for NodeDebugInfo {
     }
 }
 
+#[allow(unused)]
 impl Tree {
     /// Climb the tree to get the tag of a distant ancestor.
     /// Allows operations on tags that are unreachable by the program

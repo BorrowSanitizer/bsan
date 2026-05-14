@@ -5,6 +5,7 @@
 //! but the contents of this file are extremely generic)
 use alloc::boxed::Box;
 
+#[allow(unused)]
 pub trait Exhaustive: Sized {
     fn exhaustive() -> Box<dyn Iterator<Item = Self>>;
 }

@@ -302,7 +302,7 @@ pub struct Tree {
 /// A node in the borrow tree. Each node is uniquely identified by a tag via
 /// the `nodes` map of `Tree`.
 #[derive(Clone, Debug)]
-pub(super) struct Node {
+pub struct Node {
     /// The tag of this node.
     pub tag: BorTag,
     /// All tags except the root have a parent tag.
@@ -714,7 +714,8 @@ impl Tree {
     }
 }
 
-/// Integration with the BorTag garbage collector
+#[allow(unused)]
+/// Integration with Miri's garbage collector
 impl Tree {
     pub fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
         for i in 0..(self.roots.len()) {
