@@ -204,7 +204,7 @@ impl<'b> BorrowTracker<'b> {
         }
 
         // base offset should be the offset, from zero, where the retag is taking place within the allocation.
-        let _ = self.tree_mut().new_child(
+        self.tree_mut().new_child(
             base_offset,
             parent_tag,
             new_tag,
@@ -212,7 +212,7 @@ impl<'b> BorrowTracker<'b> {
             perm.default_perm(),
             protected,
             span,
-        );
+        )?;
 
         Ok(new_tag)
     }

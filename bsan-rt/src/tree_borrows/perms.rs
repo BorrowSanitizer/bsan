@@ -42,15 +42,6 @@ pub enum ProtectorKind {
     StrongProtector,
 }
 
-#[repr(u8)]
-#[allow(unused)]
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum RetagPtrKind {
-    Box = 0,
-    Ref = 1,
-    RefMut = 2,
-}
-
 /// The activation states of a pointer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum PermissionPriv {
