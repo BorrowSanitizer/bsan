@@ -8,9 +8,9 @@ use crate::helpers::{AllocRange, Size};
 use crate::sanitizer_common::Span;
 use crate::tree_borrows::data_structures::DedupRangeMap;
 use crate::tree_borrows::diagnostics::AccessCause;
-use crate::tree_borrows::perms::AccessKind;
+use crate::tree_borrows::perms::{AccessKind, Permission};
 use crate::tree_borrows::tree::LocationState;
-use crate::tree_borrows::NewPermission;
+use crate::tree_borrows::{IdempotentForeignAccess, NewPermission};
 use crate::{AllocId, BorTag, GlobalCtx, Provenance, RetagInfo, Tree};
 
 #[derive(Debug)]
@@ -142,14 +142,13 @@ impl<'b> BorrowTracker<'b> {
         let alloc_id = self.alloc_id;
         let parent_tag = self.prov.bor_tag;
         let new_tag = BorTag::default();
-
         if !self.tree().tag_mapping.contains_key(&self.prov.bor_tag) {
             return Err(UBInfo::UseAfterFree);
         }
-        let perm: NewPermission = NewPermission::new(retag_info);
+        let new_perm: NewPermission = NewPermission::new(retag_info);
 
-        let protected = perm.protector.is_some();
-        if let Some(protector) = perm.protector {
+        let protected = new_perm.protector.is_some();
+        if let Some(protector) = new_perm.protector {
             // We register the protection in two different places.
             // This makes creating a protector slower, but checking whether a tag
             // is protected faster.
@@ -158,31 +157,45 @@ impl<'b> BorrowTracker<'b> {
 
         // Compute initial "inside" permissions.
         let loc_state = |frozen: bool| -> LocationState {
-            let (perm, access) = if frozen {
-                (perm.freeze_perm, perm.freeze_access)
-            } else {
-                (perm.nonfreeze_perm, perm.nonfreeze_access.is_some())
-            };
+            let perm = if frozen { new_perm.freeze_perm } else { new_perm.nonfreeze_perm };
             let sifa = perm.strongest_idempotent_foreign_access(protected);
-            if access {
+            if perm.associated_access().is_some() {
+                assert!(perm.associated_access().unwrap() == AccessKind::Read);
                 LocationState::new_accessed(perm, sifa)
             } else {
                 LocationState::new_non_accessed(perm, sifa)
             }
         };
 
-        let initial_state = loc_state(perm.ty_is_freeze);
-        let mut inside_perms = DedupRangeMap::new(Size::from_bytes(retag_info.size), initial_state);
+        let mut inside_perms = DedupRangeMap::new(
+            Size::from_bytes(retag_info.size),
+            LocationState::new_accessed(Permission::new_disabled(), IdempotentForeignAccess::None),
+        );
 
+        let mut cursor = Size::ZERO;
         if let Some(im_layout) = retag_info.im_layout {
-            for [start, size] in im_layout {
-                inside_perms.iter_mut(*start, *size).for_each(|(_, loc)| *loc = loc_state(false));
+            for &[offset, size] in im_layout {
+                if cursor != offset {
+                    for (_loc_range, loc) in inside_perms.iter_mut(cursor, offset - cursor) {
+                        *loc = loc_state(true);
+                    }
+                }
+                for (_loc_range, loc) in inside_perms.iter_mut(offset, size) {
+                    *loc = loc_state(false);
+                }
+                cursor = offset + size
+            }
+        }
+        if cursor < Size::from_bytes(retag_info.size) {
+            let width = Size::from_bytes(retag_info.size - cursor.bytes() as usize);
+            for (_loc_range, loc) in inside_perms.iter_mut(cursor, width) {
+                *loc = loc_state(true);
             }
         }
 
         let base_offset = self.range.start;
-        for (perm_range, perm) in inside_perms.iter_all() {
-            if perm.accessed() {
+        for (perm_range, loc_state) in inside_perms.iter_all() {
+            if let Some(access_kind) = loc_state.permission().associated_access() {
                 // Some reborrows incur a read access to the parent.
                 // Adjust range to be relative to allocation start
                 let range_in_alloc = AllocRange {
@@ -194,7 +207,7 @@ impl<'b> BorrowTracker<'b> {
                 self.tree_mut().perform_access(
                     parent_tag,
                     range_in_alloc,
-                    AccessKind::Read,
+                    access_kind,
                     AccessCause::Reborrow,
                     &global_ctx.protected_tags(),
                     alloc_id,
@@ -209,7 +222,7 @@ impl<'b> BorrowTracker<'b> {
             parent_tag,
             new_tag,
             inside_perms,
-            perm.default_perm(),
+            new_perm.outside_perm,
             protected,
             span,
         )?;

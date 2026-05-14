@@ -14,6 +14,7 @@ pub mod tree;
 mod tree_visitor;
 mod wildcard;
 
+pub use foreign_access_skipping::IdempotentForeignAccess;
 pub use perms::*;
 
 use self::perms::Permission;
@@ -26,14 +27,10 @@ type GlobalState = ProtectedTags;
 pub struct NewPermission {
     /// Permission for the frozen part of the range.
     pub freeze_perm: Permission,
-    /// Whether a read access should be performed on the frozen part on a retag.
-    pub freeze_access: bool,
     /// Permission for the non-frozen part of the range.
     pub nonfreeze_perm: Permission,
-    /// What kind of access should be performed on the non-frozen part on a retag.
-    pub nonfreeze_access: Option<AccessKind>,
-    // Whether the type is frozen.
-    pub ty_is_freeze: bool,
+    /// Permission for memory outside the range.
+    pub outside_perm: Permission,
     /// Whether this pointer is part of the arguments of a function call.
     /// `protector` is `Some(_)` for all pointers marked `noalias`.
     pub protector: Option<ProtectorKind>,
@@ -45,28 +42,56 @@ impl NewPermission {
         let is_protected = info.flags.contains(RetagFlags::IS_PROTECTED);
         let ty_is_freeze = info.flags.contains(RetagFlags::IS_FREEZE);
         let is_box = info.flags.contains(RetagFlags::IS_BOX);
-        let freeze_perm =
-            if is_mutable { Permission::new_reserved_frz() } else { Permission::new_frozen() };
 
-        let nonfreeze_perm = if is_mutable {
-            if is_protected {
-                Permission::new_reserved_frz()
+        enum Part {
+            InsideFrozen,
+            InsideUnsafeCell,
+            Outside,
+        }
+        use Part::*;
+
+        let perm = |part: Part| {
+            // Whether we should consider this byte to be frozen.
+            // Outside bytes are frozen only if the entire type is frozen.
+            let frozen = match part {
+                InsideFrozen => true,
+                InsideUnsafeCell => false,
+                Outside => ty_is_freeze,
+            };
+            if is_mutable {
+                // Boxes
+                if is_box {
+                    if is_protected || frozen {
+                        // We also use this for protected `Box<UnsafeCell>` as otherwise adding
+                        // `noalias` would not be sound.
+                        Permission::new_reserved_frz()
+                    } else {
+                        Permission::new_reserved_im()
+                    }
+                // Mutable references
+                } else {
+                    if is_protected || frozen {
+                        // We also use this for protected `&mut UnsafeCell` as otherwise adding
+                        // `noalias` would not be sound.
+                        Permission::new_reserved_frz()
+                    } else {
+                        Permission::new_reserved_im()
+                    }
+                }
+            // Shared references
             } else {
-                Permission::new_reserved_im()
+                if frozen {
+                    Permission::new_frozen()
+                } else {
+                    Permission::new_cell()
+                }
             }
-        } else {
-            Permission::new_cell()
         };
 
-        // Everything except for `Cell` gets an initial access.
-        let initial_access = |perm: &Permission| !perm.is_cell();
-
         NewPermission {
-            freeze_perm,
-            freeze_access: initial_access(&freeze_perm),
-            nonfreeze_perm,
-            nonfreeze_access: initial_access(&nonfreeze_perm).then_some(AccessKind::Read),
-            ty_is_freeze,
+            freeze_perm: perm(InsideFrozen),
+            nonfreeze_perm: perm(InsideUnsafeCell),
+            outside_perm: perm(Outside),
             protector: is_protected.then_some(if is_box {
                 // Weak protector for boxes
                 ProtectorKind::WeakProtector
@@ -74,13 +99,6 @@ impl NewPermission {
                 // Strong protector for references
                 ProtectorKind::StrongProtector
             }),
-        }
-    }
-    pub fn default_perm(&self) -> Permission {
-        if self.ty_is_freeze {
-            self.freeze_perm
-        } else {
-            self.nonfreeze_perm
         }
     }
 }
