@@ -121,6 +121,8 @@ pub enum Command {
         #[arg(allow_hyphen_values(true), last(true))]
         args: Vec<String>,
     },
+    /// Show repository test metrics (counts of passing/failing/false positives/negatives)
+    Metrics,
 }
 
 #[derive(Parser)]
