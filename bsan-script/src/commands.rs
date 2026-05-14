@@ -1,6 +1,6 @@
 use std::fs;
 use std::ops::Deref;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::ValueEnum;
@@ -9,6 +9,7 @@ use path_macro::path;
 use xshell::cmd;
 
 use crate::env::{BsanEnv, Mode};
+use crate::stats::*;
 use crate::utils::install_git_hooks;
 use crate::Command;
 
@@ -56,7 +57,7 @@ impl Command {
                 Ok(())
             }),
             Command::Inst { file, debug, args } => Self::inst(env, file, debug, &args),
-            Command::Metrics => Self::metrics(env),
+            Command::Stats => Self::stats(env),
         }
     }
 
@@ -185,24 +186,7 @@ impl Command {
         })
     }
 
-    fn metrics(env: &mut BsanEnv) -> Result<()> {
-        fn count_rs(path: &Path) -> Result<usize> {
-            if !path.exists() {
-                return Ok(0);
-            }
-            let mut cnt = 0usize;
-            for entry in fs::read_dir(path)? {
-                let entry = entry?;
-                let p = entry.path();
-                if p.is_dir() {
-                    cnt += count_rs(&p)?;
-                } else if p.extension().and_then(|s| s.to_str()) == Some("rs") {
-                    cnt += 1;
-                }
-            }
-            Ok(cnt)
-        }
-
+    fn stats(env: &mut BsanEnv) -> Result<()> {
         let root = &env.root_dir;
         let pass = count_rs(&path!(root / "tests" / "pass"))?;
         let pass_dep = count_rs(&path!(root / "tests" / "pass-dep"))?;
@@ -212,25 +196,25 @@ impl Command {
         let miri_should_pass = count_rs(&path!(root / "tests" / "miri-tests" / "should-pass"))?;
         let miri_should_fail = count_rs(&path!(root / "tests" / "miri-tests" / "should-fail"))?;
 
-        let tn_regular = pass + pass_dep;
-        let tn_miri = miri_pass;
-        let tn_total = tn_regular + tn_miri;
-
-        let tp_regular = fail;
-        let tp_miri = miri_fail;
-        let tp_total = tp_regular + tp_miri;
-
         println!();
-        println!("True negative (passing) tests: {}", tn_total);
-        println!("  - bsan tests: {}", tn_regular);
-        println!("  - miri tests: {}", tn_miri);
-
-        println!("True positive (failing) tests: {}", tp_total);
-        println!("  - bsan tests: {}", tp_regular);
-        println!("  - miri tests: {}", tp_miri);
+        println!("True negative (pass) tests: {}", pass + pass_dep + miri_pass);
+        println!("  ├─ bsan tests: {}", pass + pass_dep);
+        println!("  └─ miri tests: {}", miri_pass);
+        println!("True positive (fail) tests: {}", fail + miri_fail);
+        println!("  ├─ bsan tests: {}", fail);
+        println!("  └─ miri tests: {}", miri_fail);
 
         println!("False positive (should pass) tests: {}", miri_should_pass);
+        let should_pass_root = path!(root / "tests" / "miri-tests" / "should-pass");
+        if should_pass_root.exists() {
+            print_tree(&should_pass_root, "  ")?;
+        }
+
         println!("False negative (should fail) tests: {}", miri_should_fail);
+        let should_fail_root = path!(root / "tests" / "miri-tests" / "should-fail");
+        if should_fail_root.exists() {
+            print_tree(&should_fail_root, "  ")?;
+        }
 
         Ok(())
     }

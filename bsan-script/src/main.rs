@@ -9,6 +9,7 @@ use commands::Component;
 mod commands;
 mod env;
 mod setup;
+mod stats;
 mod utils;
 
 static TOOLCHAIN_NAME: &str = "bsan";
@@ -122,7 +123,7 @@ pub enum Command {
         args: Vec<String>,
     },
     /// Show repository test metrics (counts of passing/failing/false positives/negatives)
-    Metrics,
+    Stats,
 }
 
 #[derive(Parser)]
