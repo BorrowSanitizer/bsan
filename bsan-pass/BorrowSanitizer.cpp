@@ -539,7 +539,10 @@ private:
 
   // Populates the array of argument provenance pointers and initializes the
   // start and end of the function prologue.
-  void initStack(IRBuilder<> &EntryIRB) {
+  void initStack(IRBuilder<> &TopIRB) {
+    FnPrologueEnd = TopIRB.CreateIntrinsic(Intrinsic::donothing, {});
+    IRBuilder<> EntryIRB(FnPrologueEnd);
+
     FrameTop = EntryIRB.CreateLoad(BS.PtrTy, BS.ProvStack);
     Value *NumParamProv = BS.Zero;
 
@@ -605,8 +608,6 @@ private:
         Prov.store(EntryIRB, BS.PL, FrameHeaderBottom);
       }
     }
-
-    FnPrologueEnd = EntryIRB.CreateIntrinsic(Intrinsic::donothing, {});
   }
 
   void patchShadowPHINodes() {
@@ -918,10 +919,30 @@ private:
     }
   }
 
-  void visitIntrinsicInst(IntrinsicInst &I) {
+  void updateStackPointer(Instruction &I) {
     IRBuilder<> Before(&I);
     Value *StackOffset = getStackOffset(Before, false);
     Before.CreateStore(StackOffset, BS.ProvStack);
+  }
+
+  // Certain intrinsics and floating point conversions end up
+  // being codegened into calls to instrumented components of
+  // compiler-rt. We need to ensure that the stack pointer is
+  // not clobbered when this happens.
+  void visitFPToSIInst(CastInst &I) { updateStackPointer(I); }
+  void visitFPToUIInst(CastInst &I) { updateStackPointer(I); }
+  void visitSIToFPInst(CastInst &I) { updateStackPointer(I); }
+  void visitUIToFPInst(CastInst &I) { updateStackPointer(I); }
+  void visitFPExtInst(CastInst &I) { updateStackPointer(I); }
+  void visitFPTruncInst(CastInst &I) { updateStackPointer(I); }
+
+  // We can skip intrinsics that do not update the stack pointer.
+  bool canSkipIntrinsic(IntrinsicInst &I) {
+    return I.isDebugOrPseudoInst() || I.isLaunderOrStripInvariantGroup() ||
+           I.isAssumeLikeIntrinsic() || I.isLifetimeStartOrEnd();
+  }
+
+  void visitIntrinsicInst(IntrinsicInst &I) {
     switch (I.getIntrinsicID()) {
     case Intrinsic::lifetime_start: {
       return instrumentLifetimeStart(I);
@@ -930,6 +951,11 @@ private:
       return instrumentLifetimeEnd(I);
     } break;
     }
+
+    if (canSkipIntrinsic(I))
+      return;
+
+    updateStackPointer(I);
   }
 
   Provenance createAllocaMetadata(IRBuilder<> &IRB, AllocaInst *AI) {
