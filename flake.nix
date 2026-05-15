@@ -36,6 +36,9 @@
 
             rustup
             clang
+            gcc
+            stdenv.cc.cc
+            glibc.dev
             clang-tools
             python3
 
