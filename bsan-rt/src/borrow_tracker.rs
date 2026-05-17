@@ -11,7 +11,7 @@ use crate::tree_borrows::diagnostics::AccessCause;
 use crate::tree_borrows::perms::{AccessKind, Permission};
 use crate::tree_borrows::tree::LocationState;
 use crate::tree_borrows::{IdempotentForeignAccess, NewPermission};
-use crate::{AllocId, BorTag, GlobalCtx, Provenance, RetagInfo, Tree};
+use crate::{AllocId, BorTag, GlobalCtx, Provenance, RetagFlags, RetagInfo, Tree};
 
 #[derive(Debug)]
 pub struct BorrowTracker<'b> {
@@ -185,11 +185,18 @@ impl<'b> BorrowTracker<'b> {
                 }
                 cursor = offset + size
             }
-        }
-        if cursor < Size::from_bytes(retag_info.size) {
-            let width = Size::from_bytes(retag_info.size - cursor.bytes() as usize);
-            for (_loc_range, loc) in inside_perms.iter_mut(cursor, width) {
-                *loc = loc_state(true);
+            if cursor < Size::from_bytes(retag_info.size) {
+                let width = Size::from_bytes(retag_info.size - cursor.bytes() as usize);
+                for (_loc_range, loc) in inside_perms.iter_mut(cursor, width) {
+                    *loc = loc_state(true);
+                }
+            }
+        } else if retag_info.size > 0 {
+            let perm = loc_state(retag_info.flags.contains(RetagFlags::IS_FREEZE));
+            for (_loc_range, loc) in
+                inside_perms.iter_mut(Size::ZERO, Size::from_bytes(retag_info.size))
+            {
+                *loc = perm;
             }
         }
 
