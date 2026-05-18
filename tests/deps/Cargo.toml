@@ -15,6 +15,8 @@ flate2 = { version = "=1.0.28", features = ["zlib"], default-features = false }
 klu-rs = "=0.4.0"
 lcms2 = "=6.0.0"
 blitsort-sys = "=0.1.0"
+librsync = "=0.2.3"
+dec = { version = "=0.4.8", default-features = false }
 
 # Make sure we are not part of the rustc workspace.
 [workspace]

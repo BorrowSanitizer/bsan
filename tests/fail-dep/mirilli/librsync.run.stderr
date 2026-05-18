@@ -1,0 +1,25 @@
+error: Undefined Behavior: deallocation through <TAG>(WeakProtector) at ALLOC[0x0] is forbidden
+   --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
+   |
+LL | unsafe { libc::free(ptr as *mut libc::c_void) }
+   |
+    = help: the accessed tag <TAG>(WeakProtector) has state Reserved (conflicted) which forbids this deallocation (acting as a child write access)
+help: the accessed tag <TAG>(WeakProtector) was created here, in the initial state Reserved
+   --> bsan/tests/fail-dep/mirilli/librsync.rs:LL:CC
+   |
+LL | let t = thread::spawn(move || {
+   |
+help: the accessed tag <TAG>(WeakProtector) later transitioned to Reserved (conflicted) due to a reborrow (acting as a foreign read access) at offsets [0x0..0x10]
+   --> CARGO_REGISTRY/.../lib.rs:LL:CC
+   |
+LL | (*h).borrow_mut()
+   |
+help: this transition corresponds to a temporary loss of write permissions until function exit
+
+stack backtrace:
+0: <std::alloc::System as core::alloc::global::GlobalAlloc>::dealloc
+ at RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
+1: __rustc::__rdl_dealloc
+ at RUSTLIB/std/src/alloc.rs:LL:CC
+2: alloc::alloc::dealloc_nonnull
+ at RUSTLIB/alloc/src/alloc.rs:LL:CC
