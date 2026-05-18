@@ -81,16 +81,17 @@ def download_crate(crate: str, version: str, dest_dir: Path) -> Path:
         sys.exit(f"Error: expected extracted directory {extracted} not found.")
     return extracted
 
-def compile_test_binary(cargo_cmd: list[str], label: str, cwd: Path) -> Path:
+def compile_test_binary(cargo_cmd: list[str], label: str, cwd: Path, out: Path) -> Path:
     """Compiles the test binary for the given cargo invocation and return its
     path. Aborts on compile failure or if no test executable is produced."""
     print(f">>> compiling test binary ({label}): {' '.join(cargo_cmd)}",
           file=sys.stderr)
-    run(cargo_cmd + ["--no-run", "--quiet"], cwd=cwd)
+    # We need to parse the output JSON to find the name of the test binary.
     msg_json = run_capture(
         cargo_cmd + ["--no-run", "--message-format=json"],
         cwd=cwd,
     )
+
     for line in msg_json.splitlines():
         if not line.strip():
             continue
@@ -98,12 +99,15 @@ def compile_test_binary(cargo_cmd: list[str], label: str, cwd: Path) -> Path:
             msg = json.loads(line)
         except json.JSONDecodeError:
             continue
+
         exe = msg.get("executable")
         target = msg.get("target") or {}
         if exe and target.get("test"):
             print(">>> done.")
-            return Path(exe)
-
+            shutil.copy2(exe, out)
+            out.chmod(0o755)
+            return
+        
     sys.exit(f"Error: could not locate {label} test binary.")
 
 def list_tests(test_bin: Path) -> list[str]:
@@ -146,10 +150,12 @@ def process_config(
     crate = cfg.get("name")
     version = cfg.get("version")
     excluded_tests = set(cfg.get("exclude") or [])
+    
     if not crate or not version:
         sys.exit(f"Error: invalid per-crate config:\n{cfg}")
 
     bench_name = f"{crate}@{version} (nop) - {target}"
+
     print(f"Running: {bench_name}")
     if excluded_tests:
         print("Excluding:")
@@ -158,20 +164,16 @@ def process_config(
 
     src_dir = download_crate(crate, version, scratch)
 
-    native_built = compile_test_binary(NATIVE_CARGO, "native", cwd=src_dir)
     native_bin = scratch / "native_test_bin"
-    shutil.copy2(native_built, native_bin)
-    native_bin.chmod(0o755)
+    compile_test_binary(NATIVE_CARGO, "native", cwd=src_dir, out=native_bin)
 
     try:
         run(["cargo", "clean", "--quiet"], cwd=src_dir)
     except subprocess.CalledProcessError:
         pass
 
-    nop_built = compile_test_binary(NOP_CARGO, "nop", cwd=src_dir)
     nop_bin = scratch / "nop_test_bin"
-    shutil.copy2(nop_built, nop_bin)
-    nop_bin.chmod(0o755)
+    compile_test_binary(NOP_CARGO, "nop", cwd=src_dir, out=nop_bin)
 
     all_tests = list_tests(native_bin)
     if not all_tests:
@@ -191,14 +193,14 @@ def process_config(
         print(f" - native={n_mean}s  inst={i_mean}s  ratio={ratio}")
         ratios.append(ratio)
         
-    median=statistics.median(ratios)
-    print(
-        f"Median relative execution time for {bench_name}: {median}"
-    )
     result = {
         "name": bench_name,
         "unit": "Median Relative Execution Time",
-        "value": median
+        "value": statistics.median(ratios),
+        "mode": "nop",
+        "target": target,
+        "version": version,
+        "crate": crate
     }
     return result
 
@@ -206,12 +208,12 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description="Benchmark relative execution time",
         usage=(
-            "%(prog)s <crates> <output>"
+            "%(prog)s <crates> <target> <output>"
         ),
     )
     parser.add_argument("crates_json", type=Path)
+    parser.add_argument("target", type=str)
     parser.add_argument("output_json", type=Path)
-    parser.add_argument("target", type=Path)
 
     args = parser.parse_args(argv)
     for tool in ["cargo", "hyperfine"]:
@@ -226,6 +228,9 @@ def main(argv: list[str]) -> int:
         scratch = Path(scratch_str)
         for cfg in json.loads(crates_json.read_text()):
             result = process_config(cfg, args.target, scratch)
+            print(
+                f"Median relative execution time for {result["name"]}: {result["value"]}"
+            )
             results.append(result)
 
     args.output_json.write_text(json.dumps(results, indent=4))
