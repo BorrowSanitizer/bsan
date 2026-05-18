@@ -1,6 +1,8 @@
 //@run:1
 // This is a direct copy of the test `deflate::tests::zero_length_read_with_data`
-// from `flate2` at 1.0.28. It was fixed in a subsequent version.
+// from `flate2` at 1.0.28. It was fixed in a subsequent version. This is the same
+// error, but a different test case than the one used in the MiriLLI study. That used
+// `deflate::tests::drop_writes`, which is slow in our current version.
 use flate2::{read, Compression};
 use std::io::Read;
 
