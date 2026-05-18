@@ -1,6 +1,5 @@
 //@run:1
-//This is a direct copy of the test `mlu::mlu` from `lcms2` at 6.0.0.
-
+// This is a direct copy of the test `mlu::mlu` from `lcms2` at 6.0.0.
 use lcms2::{Locale, MLU};
 
 fn main() {
