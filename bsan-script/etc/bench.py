@@ -197,10 +197,12 @@ def process_config(
         "name": bench_name,
         "unit": "Median Relative Execution Time",
         "value": statistics.median(ratios),
-        "mode": "nop",
-        "target": target,
-        "version": version,
-        "crate": crate
+        "extra": {
+            "mode": "nop",
+            "target": target,
+            "version": version,
+            "crate": crate
+        },
     }
     return result
 
