@@ -19,7 +19,7 @@ help: this transition corresponds to a loss of read and write permissions
 stack backtrace:
 0: BZ2_bzCompress
  at CARGO_REGISTRY/.../bzlib.rs:LL:CC
-1: <bzip2::mem::Compress>::compress_inner
+1: <bzip2::mem::Compress>::compress
  at CARGO_REGISTRY/.../mem.rs:LL:CC
-2: <bzip2::mem::Compress>::compress
- at CARGO_REGISTRY/.../mem.rs:LL:CC
+2: <bzip2::bufread::BzEncoder<std::io::buffered::bufreader::BufReader<&[u8]>> as std::io::Read>::read
+ at CARGO_REGISTRY/.../bufread.rs:LL:CC

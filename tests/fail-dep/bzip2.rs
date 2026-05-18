@@ -1,4 +1,6 @@
 //@run:1
+// This is a direct copy of the test `zero_length_read_at_eof`
+// from `bzip2` at 0.6.0.
 use bzip2::read::{BzDecoder, BzEncoder};
 use bzip2::Compression;
 use std::io::Read;
