@@ -124,6 +124,7 @@ name = "bsan"
 version = "0.1.0"
 dependencies = [
  "colored",
+ "libc",
  "regex",
  "rustc_version",
  "tempfile",

@@ -4,6 +4,7 @@ use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use colored::*;
 use regex::bytes::Regex;
@@ -100,7 +101,7 @@ fn run_tests(
     target: &VersionMeta,
     with_dependencies: bool,
     tmpdir: &Path,
-    timeout: Option<u32>,
+    timeout: Option<Duration>,
 ) -> Result<()> {
     // Handle command-line arguments.
     let mut args = ui_test::Args::test()?;
@@ -135,16 +136,20 @@ fn run_tests(
     config.program.args.push("-Zui-testing".into());
 
     if let Some(timeout) = timeout {
-        let original_program = config.program.program.clone();
-        let wrapper = tmpdir.join("compile-timeout-wrapper.sh");
-        std::fs::write(
-            &wrapper,
-            format!("#!/bin/sh\nexec timeout {timeout} {} \"$@\"\n", original_program.display()),
-        )
-        .unwrap();
-        std::fs::set_permissions(&wrapper, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
-        config.program.program = wrapper.into();
+        // Capture our current pgid *before* spawning anything
+        let original_pgid = unsafe { libc::getpgrp() };
+
+        std::thread::spawn(move || {
+            std::thread::sleep(timeout);
+
+            // Still alive = something is stuck. Detach from the process
+            // group so we survive the kill, then kill the stuck children.
+            eprintln!("Killing stuck tests after timeout of {} seconds", timeout.as_secs());
+            unsafe {
+                libc::setpgid(0, 0);
+                libc::kill(-original_pgid, libc::SIGKILL);
+            }
+        });
     }
 
     eprintln!("   Compiler: {}", config.program.display());
@@ -240,7 +245,7 @@ fn ui(
     target: &VersionMeta,
     with_dependencies: Dependencies,
     tmpdir: &Path,
-    timeout: Option<u32>,
+    timeout: Option<Duration>,
 ) -> Result<()> {
     let msg = format!("## Running ui tests in {path} for {}", target.host);
     eprintln!("{}", msg.green().bold());
@@ -274,7 +279,7 @@ fn main() -> Result<()> {
     let tmpdir = tempfile::Builder::new().prefix("bsan-uitest-").tempdir()?;
 
     if env::var("BSAN_FIX").is_ok() {
-        let timeout = Some(1);
+        let timeout = Some(Duration::from_secs(10));
         let should_pass = ui(
             Mode::Pass,
             "tests/miri-tests/should-pass",
