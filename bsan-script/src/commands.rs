@@ -188,29 +188,47 @@ impl Command {
 
     fn stats(env: &mut BsanEnv) -> Result<()> {
         let root = &env.root_dir;
-        let pass = count_rs(&path!(root / "tests" / "pass"))?;
-        let pass_dep = count_rs(&path!(root / "tests" / "pass-dep"))?;
+        let pass = count_rs(&path!(root / "tests" / "pass"))?
+            + count_rs(&path!(root / "tests" / "pass-dep"))?;
         let miri_pass = count_rs(&path!(root / "tests" / "miri-tests" / "pass"))?;
         let fail = count_rs(&path!(root / "tests" / "fail"))?;
         let miri_fail = count_rs(&path!(root / "tests" / "miri-tests" / "fail"))?;
         let miri_should_pass = count_rs(&path!(root / "tests" / "miri-tests" / "should-pass"))?;
         let miri_should_fail = count_rs(&path!(root / "tests" / "miri-tests" / "should-fail"))?;
+        let total_pass = pass + miri_pass + miri_should_pass;
+        let total_fail = fail + miri_fail + miri_should_fail;
 
         println!();
-        println!("True negative (pass) tests: {}", pass + pass_dep + miri_pass);
-        println!("  ├─ bsan tests: {}", pass + pass_dep);
+        println!(
+            "True negative (pass) tests: {} ({})",
+            pass + miri_pass,
+            fmt_percent(pass + miri_pass, total_pass)
+        );
+        println!("  ├─ original tests: {}", pass);
         println!("  └─ miri tests: {}", miri_pass);
-        println!("True positive (fail) tests: {}", fail + miri_fail);
-        println!("  ├─ bsan tests: {}", fail);
+        println!(
+            "True positive (fail) tests: {} ({})",
+            fail + miri_fail,
+            fmt_percent(fail + miri_fail, total_fail)
+        );
+        println!("  ├─ original tests: {}", fail);
         println!("  └─ miri tests: {}", miri_fail);
 
-        println!("False positive (should pass) tests: {}", miri_should_pass);
+        println!(
+            "False positive (should pass) tests: {} ({})",
+            miri_should_pass,
+            fmt_percent(miri_should_pass, total_pass)
+        );
         let should_pass_root = path!(root / "tests" / "miri-tests" / "should-pass");
         if should_pass_root.exists() {
             print_tree(&should_pass_root, "  ")?;
         }
 
-        println!("False negative (should fail) tests: {}", miri_should_fail);
+        println!(
+            "False negative (should fail) tests: {} ({})",
+            miri_should_fail,
+            fmt_percent(miri_should_fail, total_fail)
+        );
         let should_fail_root = path!(root / "tests" / "miri-tests" / "should-fail");
         if should_fail_root.exists() {
             print_tree(&should_fail_root, "  ")?;

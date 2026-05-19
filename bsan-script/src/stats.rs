@@ -41,3 +41,11 @@ pub(crate) fn print_tree(dir: &Path, prefix: &str) -> Result<()> {
     }
     Ok(())
 }
+
+pub(crate) fn fmt_percent(value: usize, total: usize) -> String {
+    if total == 0 {
+        "N/A".to_string()
+    } else {
+        format!("{:.2}%", value as f64 / total as f64 * 100.0)
+    }
+}
