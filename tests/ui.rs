@@ -100,6 +100,7 @@ fn run_tests(
     target: &VersionMeta,
     with_dependencies: bool,
     tmpdir: &Path,
+    timeout: Option<u32>,
 ) -> Result<()> {
     // Handle command-line arguments.
     let mut args = ui_test::Args::test()?;
@@ -132,6 +133,19 @@ fn run_tests(
     config.program.args.push("-Ainternal_features".into());
 
     config.program.args.push("-Zui-testing".into());
+
+    if let Some(timeout) = timeout {
+        let original_program = config.program.program.clone();
+        let wrapper = tmpdir.join("compile-timeout-wrapper.sh");
+        std::fs::write(
+            &wrapper,
+            format!("#!/bin/sh\nexec timeout {timeout} {} \"$@\"\n", original_program.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&wrapper, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        config.program.program = wrapper.into();
+    }
 
     eprintln!("   Compiler: {}", config.program.display());
     ui_test::run_tests_generic(
@@ -226,6 +240,7 @@ fn ui(
     target: &VersionMeta,
     with_dependencies: Dependencies,
     tmpdir: &Path,
+    timeout: Option<u32>,
 ) -> Result<()> {
     let msg = format!("## Running ui tests in {path} for {}", target.host);
     eprintln!("{}", msg.green().bold());
@@ -234,10 +249,9 @@ fn ui(
         WithDependencies => true,
         WithoutDependencies => false,
     };
-    run_tests(mode, path, target, with_dependencies, tmpdir)
+    run_tests(mode, path, target, with_dependencies, tmpdir, timeout)
         .with_context(|| format!("ui tests in {path} for {} failed", target.host))
 }
-
 fn expect_env(var: &str) -> String {
     env::var(var).expect(&format!("`{}` must be set to run BorrowSanitizer's ui tests.", var))
 }
@@ -258,11 +272,35 @@ fn main() -> Result<()> {
     ui_test::color_eyre::install()?;
     let target = get_version_info();
     let tmpdir = tempfile::Builder::new().prefix("bsan-uitest-").tempdir()?;
-    ui(Mode::Pass, "tests/pass", &target, WithoutDependencies, tmpdir.path())?;
-    ui(Mode::Pass, "tests/pass-dep", &target, WithDependencies, tmpdir.path())?;
-    ui(Mode::Pass, "tests/miri-tests/pass", &target, WithoutDependencies, tmpdir.path())?;
-    ui(Mode::Fail, "tests/fail", &target, WithoutDependencies, tmpdir.path())?;
-    ui(Mode::Fail, "tests/fail-dep", &target, WithDependencies, tmpdir.path())?;
-    ui(Mode::Fail, "tests/miri-tests/fail", &target, WithoutDependencies, tmpdir.path())?;
+
+    if env::var("BSAN_FIX").is_ok() {
+        let timeout = Some(1);
+        let should_pass = ui(
+            Mode::Pass,
+            "tests/miri-tests/should-pass",
+            &target,
+            WithoutDependencies,
+            tmpdir.path(),
+            timeout,
+        );
+        let should_fail = ui(
+            Mode::Fail,
+            "tests/miri-tests/should-fail",
+            &target,
+            WithoutDependencies,
+            tmpdir.path(),
+            timeout,
+        );
+        should_pass?;
+        should_fail?;
+        return Ok(());
+    }
+
+    ui(Mode::Pass, "tests/pass", &target, WithoutDependencies, tmpdir.path(), None)?;
+    ui(Mode::Pass, "tests/pass-dep", &target, WithDependencies, tmpdir.path(), None)?;
+    ui(Mode::Pass, "tests/miri-tests/pass", &target, WithoutDependencies, tmpdir.path(), None)?;
+    ui(Mode::Fail, "tests/fail", &target, WithoutDependencies, tmpdir.path(), None)?;
+    ui(Mode::Fail, "tests/fail-dep", &target, WithDependencies, tmpdir.path(), None)?;
+    ui(Mode::Fail, "tests/miri-tests/fail", &target, WithoutDependencies, tmpdir.path(), None)?;
     Ok(())
 }

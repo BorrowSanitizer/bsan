@@ -57,6 +57,7 @@ impl Command {
                 Ok(())
             }),
             Command::Inst { file, debug, args } => Self::inst(env, file, debug, &args),
+            Command::Fix => Self::fix(env),
             Command::Stats => Self::stats(env),
         }
     }
@@ -78,42 +79,14 @@ impl Command {
     }
 
     fn ui(env: &mut BsanEnv, bless: bool) -> Result<()> {
-        let sysroot_dir = path!(&env.build_dir / "sysroot");
-        env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
-
-        env.in_mode(Mode::Release, |env| {
-            let args = &[];
-            let mut env_guards = vec![];
-            let cargo_bsan = env.build_artifact(CargoBsan, args)?;
-            let rust_runtime = env.build_artifact(BsanRt, args)?;
-            let llvm_runtime = env.build_artifact(CompilerRt, args)?;
-
-            let pass = env.build_artifact(BsanPass, args)?;
-            let symbolizer = env.sysroot_binary("llvm-symbolizer");
-
-            env_guards.push(env.sh.push_env("BSAN_RT_RUST", &rust_runtime));
-            env_guards.push(env.sh.push_env("BSAN_RT_LLVM", &llvm_runtime));
-
-            env_guards.push(env.sh.push_env("BSAN_PLUGIN", &pass));
-            env_guards.push(env.sh.push_env("BSAN_SYMBOLIZER", &symbolizer));
-            env_guards.push(env.sh.push_env("CARGO_BSAN", &cargo_bsan));
-
-            cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
-            let rustflags = cmd!(env.sh, "{cargo_bsan} bsan setup --print-rustflags").output()?;
-            let rustflags = String::from_utf8(rustflags.stdout)?;
-
-            env_guards.push(env.sh.push_env("BSAN_RUSTFLAGS", rustflags.trim()));
-
-            let add_bless = if bless { "--bless" } else { "" };
-            cmd!(env.sh, "cargo test -p bsan --test ui -- {add_bless}").run()?;
-            Ok(())
-        })?;
+        run_tests(env, bless, false)?;
 
         crate::all_components!().iter().try_for_each(|c| c.install(env, &[]))?;
 
         let cargo_test_path = path!(env.build_dir / "bsan");
         cmd!(env.sh, "rm -rf {cargo_test_path}").run()?;
         cmd!(env.sh, "python3 tests/test-cargo-bsan/run_test.py").run()?;
+        Self::stats(env)?;
         Ok(())
     }
 
@@ -236,6 +209,48 @@ impl Command {
 
         Ok(())
     }
+
+    fn fix(env: &mut BsanEnv) -> Result<()> {
+        run_tests(env, false, true)?;
+        Ok(())
+    }
+}
+
+fn run_tests(env: &mut BsanEnv, bless: bool, fix: bool) -> Result<(), anyhow::Error> {
+    let sysroot_dir = path!(&env.build_dir / "sysroot");
+    env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
+    env.in_mode(Mode::Release, |env| {
+        let args = &[];
+        let mut env_guards = vec![];
+        let cargo_bsan = env.build_artifact(CargoBsan, args)?;
+        let rust_runtime = env.build_artifact(BsanRt, args)?;
+        let llvm_runtime = env.build_artifact(CompilerRt, args)?;
+
+        let pass = env.build_artifact(BsanPass, args)?;
+        let symbolizer = env.sysroot_binary("llvm-symbolizer");
+
+        env_guards.push(env.sh.push_env("BSAN_RT_RUST", &rust_runtime));
+        env_guards.push(env.sh.push_env("BSAN_RT_LLVM", &llvm_runtime));
+
+        env_guards.push(env.sh.push_env("BSAN_PLUGIN", &pass));
+        env_guards.push(env.sh.push_env("BSAN_SYMBOLIZER", &symbolizer));
+        env_guards.push(env.sh.push_env("CARGO_BSAN", &cargo_bsan));
+
+        if fix {
+            env_guards.push(env.sh.push_env("BSAN_FIX", "true"));
+        }
+
+        cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
+        let rustflags = cmd!(env.sh, "{cargo_bsan} bsan setup --print-rustflags").output()?;
+        let rustflags = String::from_utf8(rustflags.stdout)?;
+
+        env_guards.push(env.sh.push_env("BSAN_RUSTFLAGS", rustflags.trim()));
+
+        let add_bless = if bless { "--bless" } else { "" };
+        cmd!(env.sh, "cargo test -p bsan --test ui -- {add_bless}").run()?;
+        Ok(())
+    })?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

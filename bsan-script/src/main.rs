@@ -122,6 +122,8 @@ pub enum Command {
         #[arg(allow_hyphen_values(true), last(true))]
         args: Vec<String>,
     },
+    /// Try all `should-*` tests
+    Fix,
     /// Show repository test metrics (counts of passing/failing/false positives/negatives)
     Stats,
 }
