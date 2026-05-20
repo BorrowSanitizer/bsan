@@ -237,15 +237,7 @@ fn run_tests(env: &mut BsanEnv, bless: bool, fix: bool) -> Result<(), anyhow::Er
         env_guards.push(env.sh.push_env("CARGO_BSAN", &cargo_bsan));
 
         if fix {
-            let root = &env.root_dir;
-            let miri_sp = count_rs(&path!(root / "tests" / "miri-tests" / "should-pass"))?;
-            let miri_sf = count_rs(&path!(root / "tests" / "miri-tests" / "should-fail"))?;
-            if miri_sp > 0 {
-                env_guards.push(env.sh.push_env("BSAN_SP", miri_sp.to_string()));
-            }
-            if miri_sf > 0 {
-                env_guards.push(env.sh.push_env("BSAN_SF", miri_sf.to_string()));
-            }
+            env_guards.push(env.sh.push_env("BSAN_FIX", "true"));
         }
 
         cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;

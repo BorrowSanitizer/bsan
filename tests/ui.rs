@@ -3,8 +3,7 @@ use std::ffi::OsString;
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use colored::*;
@@ -14,7 +13,7 @@ use ui_test::color_eyre::eyre::{Context, Result};
 use ui_test::custom_flags::edition::Edition;
 use ui_test::dependencies::DependencyBuilder;
 use ui_test::spanned::Spanned;
-use ui_test::status_emitter::{StatusEmitter, Summary, TestStatus};
+use ui_test::status_emitter::StatusEmitter;
 use ui_test::{CommandBuilder, Config, Match};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -33,39 +32,6 @@ pub fn flagsplit(flags: &str) -> Vec<String> {
 
 struct WithDependencies {
     bless: bool,
-}
-
-#[derive(Default)]
-pub struct TestResult {
-    pub failed: usize,
-    pub passed: usize,
-}
-
-struct FixEmitter {
-    inner: Box<dyn StatusEmitter>,
-    failed: Arc<AtomicUsize>,
-    passed: Arc<AtomicUsize>,
-    registered: Arc<AtomicUsize>,
-}
-
-impl StatusEmitter for FixEmitter {
-    fn register_test(&self, name: PathBuf) -> Box<dyn TestStatus> {
-        self.registered.fetch_add(1, Ordering::SeqCst);
-        self.inner.register_test(name)
-    }
-
-    fn finalize(
-        &self,
-        failed: usize,
-        succeeded: usize,
-        ignored: usize,
-        filtered: usize,
-        aborted: bool,
-    ) -> Box<dyn Summary> {
-        self.failed.store(failed, Ordering::SeqCst);
-        self.passed.store(succeeded, Ordering::SeqCst);
-        self.inner.finalize(failed, succeeded, ignored, filtered, aborted)
-    }
 }
 
 fn bsan_config(
@@ -138,7 +104,7 @@ fn run_tests(
     with_dependencies: bool,
     tmpdir: &Path,
     fix_mode: bool,
-) -> Result<TestResult> {
+) -> Result<()> {
     // Handle/ command-line arguments.
     let mut args = ui_test::Args::test()?;
     args.bless |= env::var_os("RUSTC_BLESS").is_some_and(|v| v != "0");
@@ -173,50 +139,22 @@ fn run_tests(
 
     // Timeout enabled for fix mode
     if fix_mode {
+        // Capture our current pgid *before* spawning anything
         let original_pgid = unsafe { libc::getpgrp() };
-        let failed = Arc::new(AtomicUsize::new(0));
-        let passed = Arc::new(AtomicUsize::new(0));
-        let registered = Arc::new(AtomicUsize::new(0));
-        let emitter = FixEmitter {
-            inner: Box::<dyn StatusEmitter>::from(args.format),
-            failed: Arc::clone(&failed),
-            passed: Arc::clone(&passed),
-            registered: Arc::clone(&registered),
-        };
 
-        let (tx, rx) = std::sync::mpsc::channel::<()>();
-
-        eprintln!("   Compiler: {}", config.program.display());
         std::thread::spawn(move || {
-            let _ = ui_test::run_tests_generic(
-                vec![config],
-                ui_test::default_file_filter,
-                |_, _| {},
-                Box::new(emitter),
-            );
-            let _ = tx.send(());
-        });
+            std::thread::sleep(TIMEOUT);
 
-        match rx.recv_timeout(TIMEOUT) {
-            Ok(_) => {}
-            Err(_) => {
-                eprintln!(
-                    "warning: tests did not finish within {TIMEOUT:?}, killing stuck processes..."
-                );
-                unsafe {
-                    libc::setpgid(0, 0);
-                    libc::kill(-original_pgid, libc::SIGKILL);
-                }
-                failed.store(registered.load(Ordering::SeqCst), Ordering::SeqCst);
+            // Still alive = something is stuck. Detach from the process
+            // group so we survive the kill, then kill the stuck children.
+            eprintln!("Killing stuck tests after timeout of {} seconds", TIMEOUT.as_secs());
+            unsafe {
+                libc::setpgid(0, 0);
+                libc::kill(-original_pgid, libc::SIGKILL);
             }
-        }
-
-        let failed = failed.load(Ordering::SeqCst);
-        let passed = passed.load(Ordering::SeqCst);
-        return Ok(TestResult { failed, passed });
+        });
     }
 
-    // Regular UI tests without timeout
     eprintln!("   Compiler: {}", config.program.display());
     ui_test::run_tests_generic(
         // Only run one test suite. In the future we can add all test suites to one `Vec` and run
@@ -229,7 +167,7 @@ fn run_tests(
         // No GHA output as that would also show in the main rustc repo.
         Box::<dyn StatusEmitter>::from(args.format),
     )?;
-    Ok(TestResult::default())
+    Ok(())
 }
 
 macro_rules! regexes {
@@ -312,7 +250,7 @@ fn ui(
     with_dependencies: Dependencies,
     tmpdir: &Path,
     fix_mode: bool,
-) -> Result<TestResult> {
+) -> Result<()> {
     let msg = format!("## Running ui tests in {path} for {}", target.host);
     eprintln!("{}", msg.green().bold());
 
@@ -334,20 +272,12 @@ fn path_from_env(var: &str) -> PathBuf {
     path
 }
 
-fn parse_env_count(var: &str) -> Option<usize> {
-    env::var(var)
-        .ok()
-        .map(|val| val.trim().to_string())
-        .filter(|val| !val.is_empty())
-        .and_then(|val| val.parse::<usize>().ok())
-}
-
 fn get_version_info() -> VersionMeta {
     let cmd = Command::new("rustc");
     VersionMeta::for_command(cmd).expect("Failed to parse rustc version info")
 }
 
-fn check_for_fix(mode: Mode) -> Result<TestResult> {
+fn check_for_fix(mode: Mode) -> Result<()> {
     let target = get_version_info();
     let tmpdir = tempfile::Builder::new().prefix("bsan-uitest-").tempdir()?;
 
@@ -362,50 +292,11 @@ fn check_for_fix(mode: Mode) -> Result<TestResult> {
 fn main() -> Result<()> {
     ui_test::color_eyre::install()?;
 
-    if env::var("BSAN_SP").is_ok() || env::var("BSAN_SF").is_ok() {
-        let sp_count = parse_env_count("BSAN_SP");
-        let sf_count = parse_env_count("BSAN_SF");
-        let sp_run = sp_count.map(|count| (count, check_for_fix(Mode::Pass)));
-        let sf_run = sf_count.map(|count| (count, check_for_fix(Mode::Fail)));
-
-        if let Some((count, result)) = sp_run {
-            match result {
-                Ok(result) => {
-                    if result.passed > 0 {
-                        println!(
-                            "should-pass: {}/{} tests were fixed and now pass without errors!",
-                            result.passed, count
-                        )
-                    }
-                    if result.failed > 0 {
-                        println!(
-                            "should-pass: {}/{} tests did not pass without errors.",
-                            result.failed, count
-                        )
-                    }
-                }
-                Err(err) => eprintln!("should-pass: error running tests: {err}"),
-            }
-        }
-        if let Some((count, result)) = sf_run {
-            match result {
-                Ok(result) => {
-                    if result.passed > 0 {
-                        println!(
-                            "should-faild: {}/{} tests found an error with the correct output!",
-                            result.passed, count
-                        )
-                    }
-                    if result.failed > 0 {
-                        println!(
-                            "should-fail: {}/{} tests did not catch errors.",
-                            result.failed, count
-                        )
-                    }
-                }
-                Err(err) => eprintln!("should-fail: error running tests: {err}"),
-            }
-        }
+    if env::var("BSAN_FIX").is_ok() {
+        let should_pass = check_for_fix(Mode::Pass);
+        let should_fail = check_for_fix(Mode::Fail);
+        should_pass?;
+        should_fail?;
         return Ok(());
     }
 
