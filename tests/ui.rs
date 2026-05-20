@@ -38,11 +38,13 @@ struct WithDependencies {
 #[derive(Default)]
 pub struct TestResult {
     pub failed: usize,
+    pub passed: usize,
 }
 
 struct FixEmitter {
     inner: Box<dyn StatusEmitter>,
     failed: Arc<AtomicUsize>,
+    passed: Arc<AtomicUsize>,
     registered: Arc<AtomicUsize>,
 }
 
@@ -61,6 +63,7 @@ impl StatusEmitter for FixEmitter {
         aborted: bool,
     ) -> Box<dyn Summary> {
         self.failed.store(failed, Ordering::SeqCst);
+        self.passed.store(succeeded, Ordering::SeqCst);
         self.inner.finalize(failed, succeeded, ignored, filtered, aborted)
     }
 }
@@ -172,10 +175,12 @@ fn run_tests(
     if fix_mode {
         let original_pgid = unsafe { libc::getpgrp() };
         let failed = Arc::new(AtomicUsize::new(0));
+        let passed = Arc::new(AtomicUsize::new(0));
         let registered = Arc::new(AtomicUsize::new(0));
         let emitter = FixEmitter {
             inner: Box::<dyn StatusEmitter>::from(args.format),
             failed: Arc::clone(&failed),
+            passed: Arc::clone(&passed),
             registered: Arc::clone(&registered),
         };
 
@@ -207,7 +212,8 @@ fn run_tests(
         }
 
         let failed = failed.load(Ordering::SeqCst);
-        return Ok(TestResult { failed });
+        let passed = passed.load(Ordering::SeqCst);
+        return Ok(TestResult { failed, passed });
     }
 
     // Regular UI tests without timeout
@@ -364,17 +370,38 @@ fn main() -> Result<()> {
 
         if let Some((count, result)) = sp_run {
             match result {
-                Ok(result) => println!(
-                    "should-pass: {}/{} tests did not pass without errors.",
-                    result.failed, count
-                ),
+                Ok(result) => {
+                    if result.passed > 0 {
+                        println!(
+                            "should-pass: {}/{} tests were fixed and now pass without errors!",
+                            result.passed, count
+                        )
+                    }
+                    if result.failed > 0 {
+                        println!(
+                            "should-pass: {}/{} tests did not pass without errors.",
+                            result.failed, count
+                        )
+                    }
+                }
                 Err(err) => eprintln!("should-pass: error running tests: {err}"),
             }
         }
         if let Some((count, result)) = sf_run {
             match result {
                 Ok(result) => {
-                    println!("should-fail: {}/{} tests did not catch errors.", result.failed, count)
+                    if result.passed > 0 {
+                        println!(
+                            "should-faild: {}/{} tests found an error with the correct output!",
+                            result.passed, count
+                        )
+                    }
+                    if result.failed > 0 {
+                        println!(
+                            "should-fail: {}/{} tests did not catch errors.",
+                            result.failed, count
+                        )
+                    }
                 }
                 Err(err) => eprintln!("should-fail: error running tests: {err}"),
             }
