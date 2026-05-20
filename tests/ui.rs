@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -16,6 +16,8 @@ use ui_test::dependencies::DependencyBuilder;
 use ui_test::spanned::Spanned;
 use ui_test::status_emitter::{StatusEmitter, Summary, TestStatus};
 use ui_test::{CommandBuilder, Config, Match};
+
+const TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Copy, Clone, Debug)]
 enum Mode {
@@ -33,9 +35,9 @@ struct WithDependencies {
     bless: bool,
 }
 
+#[derive(Default)]
 pub struct TestResult {
     pub failed: usize,
-    pub aborted: bool,
 }
 
 struct FixEmitter {
@@ -130,7 +132,7 @@ fn run_tests(
     target: &VersionMeta,
     with_dependencies: bool,
     tmpdir: &Path,
-    timeout: Option<Duration>,
+    fix_mode: bool,
 ) -> Result<TestResult> {
     // Handle/ command-line arguments.
     let mut args = ui_test::Args::test()?;
@@ -164,31 +166,38 @@ fn run_tests(
 
     config.program.args.push("-Zui-testing".into());
 
-    let aborted = Arc::new(AtomicBool::new(false));
-
-    if let Some(timeout) = timeout {
-        // Capture our current pgid *before* spawning anything
+    // Timeout enabled for fix mode
+    if fix_mode {
         let original_pgid = unsafe { libc::getpgrp() };
-        let aborted = Arc::clone(&aborted);
         std::thread::spawn(move || {
-            std::thread::sleep(timeout);
+            std::thread::sleep(TIMEOUT);
             // Still alive = something is stuck. Detach from the process
             // group so we survive the kill, then kill the stuck children.
-            eprintln!("Killing stuck tests after timeout of {} seconds", timeout.as_secs());
-            aborted.store(true, Ordering::SeqCst);
             unsafe {
                 libc::setpgid(0, 0);
                 libc::kill(-original_pgid, libc::SIGKILL);
             }
         });
+
+        let failed = Arc::new(AtomicUsize::new(0));
+        let emitter = FixEmitter {
+            inner: Box::<dyn StatusEmitter>::from(args.format),
+            failed: Arc::clone(&failed),
+        };
+
+        eprintln!("   Compiler: {}", config.program.display());
+        // We don't care about this report, since we're generating our own with `TestResult`
+        let _ = ui_test::run_tests_generic(
+            vec![config],
+            ui_test::default_file_filter,
+            |_, _| {},
+            Box::new(emitter),
+        );
+        let failed = failed.load(Ordering::SeqCst);
+        return Ok(TestResult { failed });
     }
 
-    let failed = Arc::new(AtomicUsize::new(0));
-    let emitter = FixEmitter {
-        inner: Box::<dyn StatusEmitter>::from(args.format),
-        failed: Arc::clone(&failed),
-    };
-
+    // Regular UI tests without timeout
     eprintln!("   Compiler: {}", config.program.display());
     ui_test::run_tests_generic(
         // Only run one test suite. In the future we can add all test suites to one `Vec` and run
@@ -199,11 +208,9 @@ fn run_tests(
         // This could be used to overwrite the `Config` on a per-test basis.
         |_, _| {},
         // No GHA output as that would also show in the main rustc repo.
-        Box::new(emitter),
+        Box::<dyn StatusEmitter>::from(args.format),
     )?;
-    let failed = failed.load(Ordering::SeqCst);
-    let aborted = aborted.load(Ordering::SeqCst);
-    Ok(TestResult { failed, aborted })
+    Ok(TestResult::default())
 }
 
 macro_rules! regexes {
@@ -285,7 +292,7 @@ fn ui(
     target: &VersionMeta,
     with_dependencies: Dependencies,
     tmpdir: &Path,
-    timeout: Option<Duration>,
+    fix_mode: bool,
 ) -> Result<TestResult> {
     let msg = format!("## Running ui tests in {path} for {}", target.host);
     eprintln!("{}", msg.green().bold());
@@ -294,7 +301,7 @@ fn ui(
         WithDependencies => true,
         WithoutDependencies => false,
     };
-    run_tests(mode, path, target, with_dependencies, tmpdir, timeout)
+    run_tests(mode, path, target, with_dependencies, tmpdir, fix_mode)
         .with_context(|| format!("ui tests in {path} for {} failed", target.host))
 }
 fn expect_env(var: &str) -> String {
@@ -308,58 +315,67 @@ fn path_from_env(var: &str) -> PathBuf {
     path
 }
 
+fn parse_env_count(var: &str) -> Option<usize> {
+    env::var(var)
+        .ok()
+        .map(|val| val.trim().to_string())
+        .filter(|val| !val.is_empty())
+        .and_then(|val| val.parse::<usize>().ok())
+}
+
 fn get_version_info() -> VersionMeta {
     let cmd = Command::new("rustc");
     VersionMeta::for_command(cmd).expect("Failed to parse rustc version info")
 }
 
-fn main() -> Result<()> {
-    ui_test::color_eyre::install()?;
+fn check_for_fix(mode: Mode) -> Result<TestResult> {
     let target = get_version_info();
     let tmpdir = tempfile::Builder::new().prefix("bsan-uitest-").tempdir()?;
 
-    if env::var("BSAN_FIX").is_ok() {
-        let to = Some(Duration::from_secs(10));
-        let should_pass = ui(
-            Mode::Pass,
-            "tests/miri-tests/should-pass",
-            &target,
-            WithoutDependencies,
-            tmpdir.path(),
-            to,
-        );
-        let should_fail = ui(
-            Mode::Fail,
-            "tests/miri-tests/should-fail",
-            &target,
-            WithoutDependencies,
-            tmpdir.path(),
-            to,
-        );
-        for (name, result) in [("should-pass", should_pass), ("should-fail", should_fail)] {
+    let path = match mode {
+        Mode::Pass => "tests/miri-tests/should-pass",
+        Mode::Fail => "tests/miri-tests/should-fail",
+    };
+
+    ui(mode, path, &target, WithoutDependencies, tmpdir.path(), true)
+}
+
+fn main() -> Result<()> {
+    ui_test::color_eyre::install()?;
+
+    if env::var("BSAN_SP").is_ok() || env::var("BSAN_SF").is_ok() {
+        let sp_count = parse_env_count("BSAN_SP");
+        let sf_count = parse_env_count("BSAN_SF");
+        let sp_run = sp_count.map(|count| (count, check_for_fix(Mode::Pass)));
+        let sf_run = sf_count.map(|count| (count, check_for_fix(Mode::Fail)));
+
+        if let Some((count, result)) = sp_run {
             match result {
-                Err(e) => {
-                    eprintln!("{name}: error running tests: {e}");
+                Ok(result) => println!(
+                    "should-pass: {}/{} tests did not pass without errors.",
+                    result.failed, count
+                ),
+                Err(err) => eprintln!("should-pass: error running tests: {err}"),
+            }
+        }
+        if let Some((count, result)) = sf_run {
+            match result {
+                Ok(result) => {
+                    println!("should-fail: {}/{} tests did not catch errors.", result.failed, count)
                 }
-                Ok(TestResult { failed, aborted }) => {
-                    if failed > 0 || aborted {}
-                    if failed > 0 {
-                        eprintln!("{name}: {failed} test(s) failed");
-                    }
-                    if aborted {
-                        eprintln!("{name}: test run was aborted (timeout)");
-                    }
-                }
+                Err(err) => eprintln!("should-fail: error running tests: {err}"),
             }
         }
         return Ok(());
     }
 
-    ui(Mode::Pass, "tests/pass", &target, WithoutDependencies, tmpdir.path(), None)?;
-    ui(Mode::Pass, "tests/pass-dep", &target, WithDependencies, tmpdir.path(), None)?;
-    ui(Mode::Pass, "tests/miri-tests/pass", &target, WithoutDependencies, tmpdir.path(), None)?;
-    ui(Mode::Fail, "tests/fail", &target, WithoutDependencies, tmpdir.path(), None)?;
-    ui(Mode::Fail, "tests/fail-dep", &target, WithDependencies, tmpdir.path(), None)?;
-    ui(Mode::Fail, "tests/miri-tests/fail", &target, WithoutDependencies, tmpdir.path(), None)?;
+    let target = get_version_info();
+    let tmpdir = tempfile::Builder::new().prefix("bsan-uitest-").tempdir()?;
+    ui(Mode::Pass, "tests/pass", &target, WithoutDependencies, tmpdir.path(), false)?;
+    ui(Mode::Pass, "tests/pass-dep", &target, WithDependencies, tmpdir.path(), false)?;
+    ui(Mode::Pass, "tests/miri-tests/pass", &target, WithoutDependencies, tmpdir.path(), false)?;
+    ui(Mode::Fail, "tests/fail", &target, WithoutDependencies, tmpdir.path(), false)?;
+    ui(Mode::Fail, "tests/fail-dep", &target, WithDependencies, tmpdir.path(), false)?;
+    ui(Mode::Fail, "tests/miri-tests/fail", &target, WithoutDependencies, tmpdir.path(), false)?;
     Ok(())
 }
