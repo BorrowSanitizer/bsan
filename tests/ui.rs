@@ -43,10 +43,12 @@ pub struct TestResult {
 struct FixEmitter {
     inner: Box<dyn StatusEmitter>,
     failed: Arc<AtomicUsize>,
+    registered: Arc<AtomicUsize>,
 }
 
 impl StatusEmitter for FixEmitter {
     fn register_test(&self, name: PathBuf) -> Box<dyn TestStatus> {
+        self.registered.fetch_add(1, Ordering::SeqCst);
         self.inner.register_test(name)
     }
 
@@ -169,30 +171,41 @@ fn run_tests(
     // Timeout enabled for fix mode
     if fix_mode {
         let original_pgid = unsafe { libc::getpgrp() };
-        std::thread::spawn(move || {
-            std::thread::sleep(TIMEOUT);
-            // Still alive = something is stuck. Detach from the process
-            // group so we survive the kill, then kill the stuck children.
-            unsafe {
-                libc::setpgid(0, 0);
-                libc::kill(-original_pgid, libc::SIGKILL);
-            }
-        });
-
         let failed = Arc::new(AtomicUsize::new(0));
+        let registered = Arc::new(AtomicUsize::new(0));
         let emitter = FixEmitter {
             inner: Box::<dyn StatusEmitter>::from(args.format),
             failed: Arc::clone(&failed),
+            registered: Arc::clone(&registered),
         };
 
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+
         eprintln!("   Compiler: {}", config.program.display());
-        // We don't care about this report, since we're generating our own with `TestResult`
-        let _ = ui_test::run_tests_generic(
-            vec![config],
-            ui_test::default_file_filter,
-            |_, _| {},
-            Box::new(emitter),
-        );
+        std::thread::spawn(move || {
+            let _ = ui_test::run_tests_generic(
+                vec![config],
+                ui_test::default_file_filter,
+                |_, _| {},
+                Box::new(emitter),
+            );
+            let _ = tx.send(());
+        });
+
+        match rx.recv_timeout(TIMEOUT) {
+            Ok(_) => {}
+            Err(_) => {
+                eprintln!(
+                    "warning: tests did not finish within {TIMEOUT:?}, killing stuck processes..."
+                );
+                unsafe {
+                    libc::setpgid(0, 0);
+                    libc::kill(-original_pgid, libc::SIGKILL);
+                }
+                failed.store(registered.load(Ordering::SeqCst), Ordering::SeqCst);
+            }
+        }
+
         let failed = failed.load(Ordering::SeqCst);
         return Ok(TestResult { failed });
     }
