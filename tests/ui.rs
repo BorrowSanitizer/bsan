@@ -3,7 +3,8 @@ use std::ffi::OsString;
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use colored::*;
@@ -13,7 +14,7 @@ use ui_test::color_eyre::eyre::{Context, Result};
 use ui_test::custom_flags::edition::Edition;
 use ui_test::dependencies::DependencyBuilder;
 use ui_test::spanned::Spanned;
-use ui_test::status_emitter::StatusEmitter;
+use ui_test::status_emitter::{StatusEmitter, Summary, TestStatus};
 use ui_test::{CommandBuilder, Config, Match};
 
 #[derive(Copy, Clone, Debug)]
@@ -30,6 +31,34 @@ pub fn flagsplit(flags: &str) -> Vec<String> {
 
 struct WithDependencies {
     bless: bool,
+}
+
+pub struct TestResult {
+    pub failed: usize,
+    pub aborted: bool,
+}
+
+struct FixEmitter {
+    inner: Box<dyn StatusEmitter>,
+    failed: Arc<AtomicUsize>,
+}
+
+impl StatusEmitter for FixEmitter {
+    fn register_test(&self, name: PathBuf) -> Box<dyn TestStatus> {
+        self.inner.register_test(name)
+    }
+
+    fn finalize(
+        &self,
+        failed: usize,
+        succeeded: usize,
+        ignored: usize,
+        filtered: usize,
+        aborted: bool,
+    ) -> Box<dyn Summary> {
+        self.failed.store(failed, Ordering::SeqCst);
+        self.inner.finalize(failed, succeeded, ignored, filtered, aborted)
+    }
 }
 
 fn bsan_config(
@@ -102,8 +131,8 @@ fn run_tests(
     with_dependencies: bool,
     tmpdir: &Path,
     timeout: Option<Duration>,
-) -> Result<()> {
-    // Handle command-line arguments.
+) -> Result<TestResult> {
+    // Handle/ command-line arguments.
     let mut args = ui_test::Args::test()?;
     args.bless |= env::var_os("RUSTC_BLESS").is_some_and(|v| v != "0");
 
@@ -135,22 +164,30 @@ fn run_tests(
 
     config.program.args.push("-Zui-testing".into());
 
+    let aborted = Arc::new(AtomicBool::new(false));
+
     if let Some(timeout) = timeout {
         // Capture our current pgid *before* spawning anything
         let original_pgid = unsafe { libc::getpgrp() };
-
+        let aborted = Arc::clone(&aborted);
         std::thread::spawn(move || {
             std::thread::sleep(timeout);
-
             // Still alive = something is stuck. Detach from the process
             // group so we survive the kill, then kill the stuck children.
             eprintln!("Killing stuck tests after timeout of {} seconds", timeout.as_secs());
+            aborted.store(true, Ordering::SeqCst);
             unsafe {
                 libc::setpgid(0, 0);
                 libc::kill(-original_pgid, libc::SIGKILL);
             }
         });
     }
+
+    let failed = Arc::new(AtomicUsize::new(0));
+    let emitter = FixEmitter {
+        inner: Box::<dyn StatusEmitter>::from(args.format),
+        failed: Arc::clone(&failed),
+    };
 
     eprintln!("   Compiler: {}", config.program.display());
     ui_test::run_tests_generic(
@@ -162,8 +199,11 @@ fn run_tests(
         // This could be used to overwrite the `Config` on a per-test basis.
         |_, _| {},
         // No GHA output as that would also show in the main rustc repo.
-        Box::<dyn StatusEmitter>::from(args.format),
-    )
+        Box::new(emitter),
+    )?;
+    let failed = failed.load(Ordering::SeqCst);
+    let aborted = aborted.load(Ordering::SeqCst);
+    Ok(TestResult { failed, aborted })
 }
 
 macro_rules! regexes {
@@ -246,7 +286,7 @@ fn ui(
     with_dependencies: Dependencies,
     tmpdir: &Path,
     timeout: Option<Duration>,
-) -> Result<()> {
+) -> Result<TestResult> {
     let msg = format!("## Running ui tests in {path} for {}", target.host);
     eprintln!("{}", msg.green().bold());
 
@@ -279,14 +319,14 @@ fn main() -> Result<()> {
     let tmpdir = tempfile::Builder::new().prefix("bsan-uitest-").tempdir()?;
 
     if env::var("BSAN_FIX").is_ok() {
-        let timeout = Some(Duration::from_secs(10));
+        let to = Some(Duration::from_secs(10));
         let should_pass = ui(
             Mode::Pass,
             "tests/miri-tests/should-pass",
             &target,
             WithoutDependencies,
             tmpdir.path(),
-            timeout,
+            to,
         );
         let should_fail = ui(
             Mode::Fail,
@@ -294,10 +334,24 @@ fn main() -> Result<()> {
             &target,
             WithoutDependencies,
             tmpdir.path(),
-            timeout,
+            to,
         );
-        should_pass?;
-        should_fail?;
+        for (name, result) in [("should-pass", should_pass), ("should-fail", should_fail)] {
+            match result {
+                Err(e) => {
+                    eprintln!("{name}: error running tests: {e}");
+                }
+                Ok(TestResult { failed, aborted }) => {
+                    if failed > 0 || aborted {}
+                    if failed > 0 {
+                        eprintln!("{name}: {failed} test(s) failed");
+                    }
+                    if aborted {
+                        eprintln!("{name}: test run was aborted (timeout)");
+                    }
+                }
+            }
+        }
         return Ok(());
     }
 
