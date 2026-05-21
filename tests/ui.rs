@@ -3,9 +3,9 @@ use std::ffi::OsString;
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use colored::*;
 use regex::bytes::Regex;
@@ -14,48 +14,20 @@ use ui_test::color_eyre::eyre::{Context, Result};
 use ui_test::custom_flags::edition::Edition;
 use ui_test::dependencies::DependencyBuilder;
 use ui_test::spanned::Spanned;
-use ui_test::status_emitter::{StatusEmitter, Summary, TestStatus};
+use ui_test::status_emitter::StatusEmitter;
 use ui_test::{CommandBuilder, Config, Match};
 
-const TIMEOUT: Duration = Duration::from_secs(10);
+mod fix_utils;
+
+use fix_utils::{kill_descendants, FixEmitter, FixResult};
+
+const TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Copy, Clone, Debug)]
 enum Mode {
     Pass,
     /// Requires annotations
     Fail,
-}
-
-type FailedOutput = (PathBuf, Vec<u8>);
-#[derive(Default)]
-pub struct FixResult {
-    pub failed: usize,
-    pub results: Vec<FailedOutput>,
-}
-
-struct FixEmitter {
-    inner: Box<dyn StatusEmitter>,
-    failed: Arc<AtomicUsize>,
-    // registered: Arc<AtomicUsize>,
-}
-
-impl StatusEmitter for FixEmitter {
-    fn register_test(&self, name: PathBuf) -> Box<dyn TestStatus> {
-        // self.registered.fetch_add(1, Ordering::SeqCst);
-        self.inner.register_test(name)
-    }
-
-    fn finalize(
-        &self,
-        failed: usize,
-        succeeded: usize,
-        ignored: usize,
-        filtered: usize,
-        aborted: bool,
-    ) -> Box<dyn Summary> {
-        self.failed.store(failed, Ordering::SeqCst);
-        self.inner.finalize(failed, succeeded, ignored, filtered, aborted)
-    }
 }
 
 pub fn flagsplit(flags: &str) -> Vec<String> {
@@ -173,30 +145,43 @@ fn run_tests(
     // Timeout and custom handler enabled for fix mode
     if fix_mode {
         static COLLECTED: OnceLock<Mutex<Vec<(PathBuf, Vec<u8>)>>> = OnceLock::new();
-        let original_pgid = unsafe { libc::getpgrp() };
-        std::thread::spawn(move || {
+        let finished = Arc::new(AtomicBool::new(false));
+        let last_progress = Arc::new(AtomicU64::new(0));
+        let start = Instant::now();
+        let abort_check = config.abort_check.clone();
+        let root_pid = unsafe { libc::getpid() };
+        let finished_guard = Arc::clone(&finished);
+        let last_progress_guard = Arc::clone(&last_progress);
+        std::thread::spawn(move || loop {
             std::thread::sleep(TIMEOUT);
-            // Still alive = something is stuck. Detach from the process
-            // group so we survive the kill, then kill the stuck children.
-            unsafe {
-                libc::setpgid(0, 0);
-                libc::kill(-original_pgid, libc::SIGKILL);
+            if finished_guard.load(Ordering::SeqCst) {
+                return;
+            }
+            let elapsed = start.elapsed().as_secs();
+            let last = last_progress_guard.load(Ordering::SeqCst);
+            if elapsed.saturating_sub(last) >= TIMEOUT.as_secs() {
+                abort_check.abort();
+                kill_descendants(root_pid);
+                return;
             }
         });
 
         COLLECTED.get_or_init(|| Mutex::new(Vec::new()));
         // Clear in case of re-use
         COLLECTED.get().unwrap().lock().unwrap().clear();
-
         config.output_conflict_handling = |path, actual, _errors, _config| {
             COLLECTED.get().unwrap().lock().unwrap().push((path.to_path_buf(), actual.to_vec()));
         };
 
         let failed = Arc::new(AtomicUsize::new(0));
-        let emitter = FixEmitter {
-            inner: Box::<dyn StatusEmitter>::from(args.format),
-            failed: Arc::clone(&failed),
-        };
+        let aborted = Arc::new(AtomicUsize::new(0));
+        let emitter = FixEmitter::new(
+            Box::<dyn StatusEmitter>::from(args.format),
+            Arc::clone(&failed),
+            Arc::clone(&aborted),
+            Arc::clone(&last_progress),
+            start,
+        );
 
         eprintln!("   Compiler: {}", config.program.display());
         // We don't care about this report, since we're generating our own with `FixResult`
@@ -206,9 +191,11 @@ fn run_tests(
             |_, _| {},
             Box::new(emitter),
         );
+        finished.store(true, Ordering::SeqCst);
         let failed = failed.load(Ordering::SeqCst);
+        let aborted = aborted.load(Ordering::SeqCst);
         let results = COLLECTED.get().unwrap().lock().unwrap().clone();
-        return Ok(FixResult { failed, results });
+        return Ok(FixResult { failed, aborted, results });
     }
 
     // Regular UI tests without timeout
@@ -377,18 +364,24 @@ fn main() -> Result<()> {
         let sp_run = sp_count.map(|count| (count, check_for_fix(Mode::Pass)));
         let sf_run = sf_count.map(|count| (count, check_for_fix(Mode::Fail)));
         if let Some((count, Ok(result))) = sp_run {
+            let ok = count.saturating_sub(result.failed + result.aborted);
             eprintln!(
-                "SHOULD-PASS: {}/{} tests correctly passed with no errors.\n",
-                count - result.failed,
-                count
+                "SHOULD-PASS: {}/{} tests correctly passed with no errors ({} aborted after {}s).\n",
+                ok,
+                count,
+                result.aborted,
+                TIMEOUT.as_secs()
             );
             print_errors(result);
         }
         if let Some((count, Ok(result))) = sf_run {
+            let ok = count.saturating_sub(result.failed + result.aborted);
             eprintln!(
-                "SHOULD-FAIL: {}/{} tests failed with bsan errors.\n",
-                count - result.failed,
-                count
+                "SHOULD-FAIL: {}/{} tests failed with bsan errors ({} aborted after {}s).\n",
+                ok,
+                count,
+                result.aborted,
+                TIMEOUT.as_secs()
             );
             print_errors(result);
         }
