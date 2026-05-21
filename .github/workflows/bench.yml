@@ -1,11 +1,11 @@
 name: Bench
 on:
-  schedule:
-    - cron: '0 0 * * *'
+  push:
+    branches: [ "main" ]
   workflow_dispatch: 
-env:
-  CARGO_TERM_COLOR: always
-  BENCHER_PROJECT: '244e3ab7-f904-4240-a4f1-53695a02b061'
+permissions:
+  actions: write
+  contents: write
 jobs:
   build:
     strategy:
@@ -15,26 +15,64 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-    runs-on: '${{ matrix.config.os }}'
+            os: ubuntu-24.04
+    runs-on: ${{ matrix.config.os }}
     container:
       image: ghcr.io/borrowsanitizer/bsan:latest
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.github_token }}
-    name: '${{ matrix.config.target }}'
+    name: ${{ matrix.config.target }}
     steps:
     - uses: actions/checkout@v4
     - name: Setup dependencies
       run: |
         ln -s /root/.rustup/ $HOME/.rustup
         sudo apt-get update && sudo apt-get install -y hyperfine jq
-    - uses: bencherdev/bencher@main
-    - name: Bencher
-      run: |
-          ./bsan-script/etc/bencher.sh $BENCHER_PROJECT '${{ secrets.BENCHER_API_TOKENS }}' /github/home/.cargo/bin/bencher --testbed 'Github-CI_${{ matrix.config.os }}'
-
-
-       
-        
-
+    - name: Build and Install Latest Version
+      run: ./xb install
+    - name: Set output filename
+      id: filename
+      run: echo "results=results_$(date +%Y-%m-%d_%H-%M-%S)_${{ matrix.config.target }}" >> $GITHUB_OUTPUT
+    - name: Benchmarks
+      run: python3 ./bsan-script/etc/bench.py ./tests/benches/crates.json ${{ matrix.config.target }} ${{ steps.filename.outputs.results }}.json
+    - name: Upload results
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.filename.outputs.results }}
+        path: ${{ steps.filename.outputs.results }}.json
+        retention-days: 30
+  merge:
+    name: Merge & Upload
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: results_*
+        merge-multiple: true
+        path: results/
+    - name: Set merged filename
+      id: merged_filename
+      run: echo "name=results_$(date +%Y-%m-%d_%H-%M-%S)" >> $GITHUB_OUTPUT
+    - name: Merge JSON files
+      run: jq -s 'add' results/*.json > ${{ steps.merged_filename.outputs.name }}.json
+    - name: Upload merged results
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.merged_filename.outputs.name }}
+        path: ${{ steps.merged_filename.outputs.name }}.json
+        retention-days: 30
+    - name: Store benchmark result
+      uses: benchmark-action/github-action-benchmark@v1
+      with:
+        name: Benchmarks
+        tool: 'customSmallerIsBetter'
+        output-file-path: ${{ steps.merged_filename.outputs.name }}.json
+        # Access token to deploy GitHub Pages branch
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        # Push and deploy GitHub pages branch automatically
+        auto-push: true
+        benchmark-data-dir-path: .
