@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779392871858,
+  "lastUpdate": 1779393255892,
   "repoUrl": "https://github.com/BorrowSanitizer/bsan",
   "entries": {
     "Benchmarks": [
@@ -414,6 +414,54 @@ window.BENCHMARK_DATA = {
           {
             "name": "indexmap@2.14.0 (nop) - x86_64-unknown-linux-gnu",
             "value": 5.52,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\"}"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mojeanmac@gmail.com",
+            "name": "Molly MacLaren",
+            "username": "mojeanmac"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6cbda830c7dc1fcd120c5cca432c98c9a989fc55",
+          "message": "Merge pull request #190 from BorrowSanitizer/icmccorm/avoid-array\n\nOnly use a global array for interior mutable ranges when absolutely necessary",
+          "timestamp": "2026-05-21T15:43:45-04:00",
+          "tree_id": "262fb9df2db8bca4ab2fde6d2f0ca199dcf2a26a",
+          "url": "https://github.com/BorrowSanitizer/bsan/commit/6cbda830c7dc1fcd120c5cca432c98c9a989fc55"
+        },
+        "date": 1779393255515,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "hashbrown@0.17.0 (nop) - aarch64-unknown-linux-gnu",
+            "value": 5.855,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\"}"
+          },
+          {
+            "name": "indexmap@2.14.0 (nop) - aarch64-unknown-linux-gnu",
+            "value": 6.045,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\"}"
+          },
+          {
+            "name": "hashbrown@0.17.0 (nop) - x86_64-unknown-linux-gnu",
+            "value": 5.6850000000000005,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\"}"
+          },
+          {
+            "name": "indexmap@2.14.0 (nop) - x86_64-unknown-linux-gnu",
+            "value": 5.735,
             "unit": "Median Relative Execution Time",
             "extra": "{\"mode\": \"nop\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\"}"
           }
