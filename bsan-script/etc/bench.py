@@ -138,7 +138,8 @@ def hyperfine_mean(command: str) -> float:
             stdout=subprocess.DEVNULL,
         )
         data = json.loads(out_path.read_text())
-        return float(data["results"][0]["mean"])
+        mean = float(data["results"][0]["mean"])
+        return mean
     finally:
         out_path.unlink(missing_ok=True)
 
@@ -188,9 +189,10 @@ def process_config(
         print(f"  -> {t}")
         n_mean = hyperfine_mean(f"{native_bin} --exact {t} --nocapture")
         i_mean = hyperfine_mean(f"{nop_bin} --exact {t} --nocapture")
-        assert(n_mean > 0 and i_mean > 0)
-        ratio = i_mean / n_mean
-        print(f" - native={n_mean}s  inst={i_mean}s  ratio={ratio}")
+        if n_mean <= 0:
+            sys.exit(f"Reported 0s mean native execution time for test {t} from {bench_name}")
+        ratio = round(i_mean / n_mean, 2)
+        print(f" - native={round(n_mean, 8)}s  inst={round(i_mean, 8)}s  ratio={round(ratio, 2)}")
         ratios.append(ratio)
         
     result = {

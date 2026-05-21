@@ -29,6 +29,8 @@ jobs:
       run: |
         ln -s /root/.rustup/ $HOME/.rustup
         sudo apt-get update && sudo apt-get install -y hyperfine jq
+    - name: Build and Install Latest Version
+      run: ./xb install
     - name: Set output filename
       id: filename
       run: echo "results=results_$(date +%Y-%m-%d_%H-%M-%S)_${{ matrix.config.target }}" >> $GITHUB_OUTPUT
