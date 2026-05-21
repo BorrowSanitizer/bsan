@@ -9,6 +9,7 @@ use path_macro::path;
 use xshell::cmd;
 
 use crate::env::{BsanEnv, Mode};
+use crate::stats::*;
 use crate::utils::install_git_hooks;
 use crate::Command;
 
@@ -56,6 +57,8 @@ impl Command {
                 Ok(())
             }),
             Command::Inst { file, debug, args } => Self::inst(env, file, debug, &args),
+            Command::Fix => Self::fix(env),
+            Command::Stats => Self::stats(env),
         }
     }
 
@@ -76,42 +79,14 @@ impl Command {
     }
 
     fn ui(env: &mut BsanEnv, bless: bool) -> Result<()> {
-        let sysroot_dir = path!(&env.build_dir / "sysroot");
-        env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
-
-        env.in_mode(Mode::Release, |env| {
-            let args = &[];
-            let mut env_guards = vec![];
-            let cargo_bsan = env.build_artifact(CargoBsan, args)?;
-            let rust_runtime = env.build_artifact(BsanRt, args)?;
-            let llvm_runtime = env.build_artifact(CompilerRt, args)?;
-
-            let pass = env.build_artifact(BsanPass, args)?;
-            let symbolizer = env.sysroot_binary("llvm-symbolizer");
-
-            env_guards.push(env.sh.push_env("BSAN_RT_RUST", &rust_runtime));
-            env_guards.push(env.sh.push_env("BSAN_RT_LLVM", &llvm_runtime));
-
-            env_guards.push(env.sh.push_env("BSAN_PLUGIN", &pass));
-            env_guards.push(env.sh.push_env("BSAN_SYMBOLIZER", &symbolizer));
-            env_guards.push(env.sh.push_env("CARGO_BSAN", &cargo_bsan));
-
-            cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
-            let rustflags = cmd!(env.sh, "{cargo_bsan} bsan setup --print-rustflags").output()?;
-            let rustflags = String::from_utf8(rustflags.stdout)?;
-
-            env_guards.push(env.sh.push_env("BSAN_RUSTFLAGS", rustflags.trim()));
-
-            let add_bless = if bless { "--bless" } else { "" };
-            cmd!(env.sh, "cargo test -p bsan --test ui -- {add_bless}").run()?;
-            Ok(())
-        })?;
+        run_tests(env, bless, false)?;
 
         crate::all_components!().iter().try_for_each(|c| c.install(env, &[]))?;
 
         let cargo_test_path = path!(env.build_dir / "bsan");
         cmd!(env.sh, "rm -rf {cargo_test_path}").run()?;
         cmd!(env.sh, "python3 tests/test-cargo-bsan/run_test.py").run()?;
+        Self::stats(env)?;
         Ok(())
     }
 
@@ -183,6 +158,110 @@ impl Command {
             Ok(())
         })
     }
+
+    fn stats(env: &mut BsanEnv) -> Result<()> {
+        let root = &env.root_dir;
+        let pass = count_rs(&path!(root / "tests" / "pass"))?
+            + count_rs(&path!(root / "tests" / "pass-dep"))?;
+        let miri_pass = count_rs(&path!(root / "tests" / "miri-tests" / "pass"))?;
+        let fail = count_rs(&path!(root / "tests" / "fail"))?
+            + count_rs(&path!(root / "tests" / "fail-dep"))?;
+        let miri_fail = count_rs(&path!(root / "tests" / "miri-tests" / "fail"))?;
+        let mirilli_fail = count_rs(&path!(root / "tests" / "fail-dep" / "mirilli"))?;
+        let miri_should_pass = count_rs(&path!(root / "tests" / "miri-tests" / "should-pass"))?;
+        let miri_should_fail = count_rs(&path!(root / "tests" / "miri-tests" / "should-fail"))?;
+        let total_pass = pass + miri_pass + miri_should_pass;
+        let total_fail = fail + miri_fail + miri_should_fail;
+
+        println!();
+        println!(
+            "True negative (pass) tests: {} ({})",
+            pass + miri_pass,
+            fmt_percent(pass + miri_pass, total_pass)
+        );
+        println!("  ├─ original tests: {}", pass);
+        println!("  └─ miri tests: {}", miri_pass);
+        println!(
+            "True positive (fail) tests: {} ({})",
+            fail + miri_fail,
+            fmt_percent(fail + miri_fail, total_fail)
+        );
+        println!("  ├─ original tests: {}", fail);
+        println!("  ├─ mirilli tests: {}", mirilli_fail);
+        println!("  └─ miri tests: {}", miri_fail);
+
+        println!(
+            "False positive (should pass) tests: {} ({})",
+            miri_should_pass,
+            fmt_percent(miri_should_pass, total_pass)
+        );
+        let should_pass_root = path!(root / "tests" / "miri-tests" / "should-pass");
+        if should_pass_root.exists() {
+            print_tree(&should_pass_root, "  ")?;
+        }
+
+        println!(
+            "False negative (should fail) tests: {} ({})",
+            miri_should_fail,
+            fmt_percent(miri_should_fail, total_fail)
+        );
+        let should_fail_root = path!(root / "tests" / "miri-tests" / "should-fail");
+        if should_fail_root.exists() {
+            print_tree(&should_fail_root, "  ")?;
+        }
+
+        Ok(())
+    }
+
+    fn fix(env: &mut BsanEnv) -> Result<()> {
+        run_tests(env, false, true)?;
+        Ok(())
+    }
+}
+
+fn run_tests(env: &mut BsanEnv, bless: bool, fix: bool) -> Result<(), anyhow::Error> {
+    let sysroot_dir = path!(&env.build_dir / "sysroot");
+    env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
+    env.in_mode(Mode::Release, |env| {
+        let args = &[];
+        let mut env_guards = vec![];
+        let cargo_bsan = env.build_artifact(CargoBsan, args)?;
+        let rust_runtime = env.build_artifact(BsanRt, args)?;
+        let llvm_runtime = env.build_artifact(CompilerRt, args)?;
+
+        let pass = env.build_artifact(BsanPass, args)?;
+        let symbolizer = env.sysroot_binary("llvm-symbolizer");
+
+        env_guards.push(env.sh.push_env("BSAN_RT_RUST", &rust_runtime));
+        env_guards.push(env.sh.push_env("BSAN_RT_LLVM", &llvm_runtime));
+
+        env_guards.push(env.sh.push_env("BSAN_PLUGIN", &pass));
+        env_guards.push(env.sh.push_env("BSAN_SYMBOLIZER", &symbolizer));
+        env_guards.push(env.sh.push_env("CARGO_BSAN", &cargo_bsan));
+
+        if fix {
+            let root = &env.root_dir;
+            let miri_sp = count_rs(&path!(root / "tests" / "miri-tests" / "should-pass"))?;
+            let miri_sf = count_rs(&path!(root / "tests" / "miri-tests" / "should-fail"))?;
+            if miri_sp > 0 {
+                env_guards.push(env.sh.push_env("BSAN_SP", miri_sp.to_string()));
+            }
+            if miri_sf > 0 {
+                env_guards.push(env.sh.push_env("BSAN_SF", miri_sf.to_string()));
+            }
+        }
+
+        cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
+        let rustflags = cmd!(env.sh, "{cargo_bsan} bsan setup --print-rustflags").output()?;
+        let rustflags = String::from_utf8(rustflags.stdout)?;
+
+        env_guards.push(env.sh.push_env("BSAN_RUSTFLAGS", rustflags.trim()));
+
+        let add_bless = if bless { "--bless" } else { "" };
+        cmd!(env.sh, "cargo test -p bsan --test ui -- {add_bless}").run()?;
+        Ok(())
+    })?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
