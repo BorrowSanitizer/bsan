@@ -652,27 +652,27 @@ private:
 
   void instrumentRetagReg(CallBase &CB) {
     IRBuilder<> IRB(&CB);
-    Provenance Prov = assertProvenanceScalar(CB.getParent(), CB.getOperand(0));
-    Provenance Retagged = instrumentRetag(IRB, CB, CB.getOperand(0), Prov);
-    setProvenance(&CB, Retagged);
+    if (auto Prov = getProvenance(CB.getParent(), CB.getOperand(0))) {
+      Provenance Retagged = instrumentRetag(IRB, CB, CB.getOperand(0), *Prov);
+      setProvenance(&CB, Retagged);
+    }
   }
 
   Provenance instrumentRetag(IRBuilder<> &IRB, CallBase &CB, Value *Target,
                              Provenance TargetProv) {
-    if (!TargetProv.isWildcard()) {
-      RetagInfo RI(&CB);
+    RetagInfo RI(&CB);
 
-      Value *ImArrayLen = getLayoutArrayLength(RI.ImArray);
-      Value *PinArrayLen = getLayoutArrayLength(RI.PinArray);
+    Value *ImArrayLen = getLayoutArrayLength(RI.ImArray);
+    Value *PinArrayLen = getLayoutArrayLength(RI.PinArray);
 
-      TargetProv.Tag = IRB.CreateCall(BS.BsanFuncRetag,
-                                      {Target, RI.Size, RI.Perms, RI.ImArray,
-                                       ImArrayLen, RI.PinArray, PinArrayLen,
-                                       TargetProv.Tag, TargetProv.Info});
+    TargetProv.Tag =
+        IRB.CreateCall(BS.BsanFuncRetag, {Target, RI.Size, RI.Perms, RI.ImArray,
+                                          ImArrayLen, RI.PinArray, PinArrayLen,
+                                          TargetProv.Tag, TargetProv.Info});
 
-      Value *SlotPtr = allocStackSlot(IRB, RI.isProtected());
-      TargetProv.store(IRB, BS.PL, SlotPtr);
-    }
+    Value *SlotPtr = allocStackSlot(IRB, RI.isProtected());
+    TargetProv.store(IRB, BS.PL, SlotPtr);
+
     return TargetProv;
   }
 
@@ -982,10 +982,8 @@ private:
     AllocaInst *AI = findAllocaForValue(II.getArgOperand(0), true);
     IRBuilder<> IRB(&II);
     Provenance CurrentProv = assertProvenanceScalar(II.getParent(), AI);
-    if (!CurrentProv.isWildcard()) {
-      IRB.CreateCall(BS.BsanFuncDeallocStack,
-                     {AI, CurrentProv.Tag, CurrentProv.Info});
-    }
+    IRB.CreateCall(BS.BsanFuncDeallocStack,
+                   {AI, CurrentProv.Tag, CurrentProv.Info});
     initAllocaMetadata(IRB, AI, CurrentProv);
   }
 
@@ -993,9 +991,7 @@ private:
     AllocaInst *AI = findAllocaForValue(II.getArgOperand(0), true);
     IRBuilder<> IRB(&II);
     Provenance Root = assertProvenanceScalar(II.getParent(), AI);
-    if (!Root.isWildcard()) {
-      IRB.CreateCall(BS.BsanFuncDeallocStack, {AI, Root.Tag, Root.Info});
-    }
+    IRB.CreateCall(BS.BsanFuncDeallocStack, {AI, Root.Tag, Root.Info});
   }
 
   void visitMemSetInst(MemSetInst &I) {
@@ -1026,16 +1022,14 @@ private:
   }
 
   void insertReadCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size) {
-    Provenance Prov = assertProvenanceScalar(IRB.GetInsertBlock(), Ptr);
-    if (!Prov.isWildcard()) {
-      IRB.CreateCall(BS.BsanFuncRead, {Ptr, Size, Prov.Tag, Prov.Info});
+    if (auto Prov = getProvenance(IRB.GetInsertBlock(), Ptr)) {
+      IRB.CreateCall(BS.BsanFuncRead, {Ptr, Size, (*Prov).Tag, (*Prov).Info});
     }
   }
 
   void insertWriteCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size) {
-    Provenance Prov = assertProvenanceScalar(IRB.GetInsertBlock(), Ptr);
-    if (!Prov.isWildcard()) {
-      IRB.CreateCall(BS.BsanFuncWrite, {Ptr, Size, Prov.Tag, Prov.Info});
+    if (auto Prov = getProvenance(IRB.GetInsertBlock(), Ptr)) {
+      IRB.CreateCall(BS.BsanFuncWrite, {Ptr, Size, (*Prov).Tag, (*Prov).Info});
     }
   }
 
@@ -1126,11 +1120,31 @@ private:
   }
 
   void visitGetElementPtrInst(GetElementPtrInst &I) {
-    // Pointer arithmetic does not affect provenance, so we can propagage the
-    // provenance of the input to the output value.
-    Provenance Prov =
-        assertProvenanceScalar(I.getParent(), I.getPointerOperand());
-    setProvenance(&I, Prov);
+    // Pointer arithmetic does not affect provenance.
+    // We can propagage the provenance of the input to the output value.
+    if (auto Prov = getProvenance(I.getParent(), I.getPointerOperand())) {
+      setProvenance(&I, *Prov);
+    }
+  }
+
+  void visitAddrSpaceCastInst(AddrSpaceCastInst &I) {
+    // Address space casts do not affect provenance.
+    // We can propagage the provenance of the input to the output value.
+    if (auto Prov = getProvenance(I.getParent(), I.getPointerOperand())) {
+      setProvenance(&I, *Prov);
+    }
+  }
+
+  void visitBitCastInst(BitCastInst &I) {
+    // Bitcasts propagate provenance.
+    // TODO: The arguments to a bitcast are never aggregates, but they can
+    // be vectors, which we do not support yet.
+    Value *Src = I.getOperand(0);
+    if (Src->getType()->isPointerTy() && I.getType()->isPointerTy()) {
+      if (auto Prov = getProvenance(I.getParent(), Src)) {
+        setProvenance(&I, *Prov);
+      }
+    }
   }
 
   // Computes the offset in terms of provenance components for an index into an
@@ -1174,9 +1188,10 @@ private:
     }
 
     for (auto [Offset, Desc] : llvm::enumerate(DestProvDesc)) {
-      Provenance Prov =
-          assertProvenance(IRB, Desc.Elems, {AggregateSrc, StartIdx + Offset});
-      setProvenance({&EI, Offset}, Prov);
+      if (auto Prov = getProvenance(IRB.GetInsertBlock(),
+                                    {AggregateSrc, StartIdx + Offset})) {
+        setProvenance({&EI, Offset}, *Prov);
+      }
     }
   }
 
@@ -1196,8 +1211,9 @@ private:
     }
 
     for (auto [Offset, Desc] : llvm::enumerate(SrcProvDesc)) {
-      Provenance Prov = assertProvenance(IRB, Desc.Elems, {ToInsert, Offset});
-      setProvenance({&II, StartIdx + Offset}, Prov);
+      if (auto Prov = getProvenance(IRB.GetInsertBlock(), {ToInsert, Offset})) {
+        setProvenance({&II, StartIdx + Offset}, *Prov);
+      }
     }
   }
 
@@ -1215,9 +1231,14 @@ private:
         Provenance ProvR =
             assertProvenanceScalar(BB, {SI.getFalseValue(), Idx});
 
-        Value *Tag = IRB.CreateSelect(SI.getCondition(), ProvL.Tag, ProvR.Tag);
-        Value *Info =
-            IRB.CreateSelect(SI.getCondition(), ProvL.Info, ProvR.Info);
+        Value *Tag, *Info;
+        if (ProvL != ProvR) {
+          Tag = IRB.CreateSelect(SI.getCondition(), ProvL.Tag, ProvR.Tag);
+          Info = IRB.CreateSelect(SI.getCondition(), ProvL.Info, ProvR.Info);
+        } else {
+          Tag = ProvL.Tag;
+          Info = ProvL.Info;
+        }
         setProvenance({&SI, Idx}, Provenance(Tag, Info));
       }
     }
