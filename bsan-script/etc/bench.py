@@ -197,12 +197,12 @@ def process_config(
         "name": bench_name,
         "unit": "Median Relative Execution Time",
         "value": statistics.median(ratios),
-        "extra": {
+        "extra": json.dumps({
             "mode": "nop",
             "target": target,
             "version": version,
             "crate": crate
-        },
+        }),
     }
     return result
 
