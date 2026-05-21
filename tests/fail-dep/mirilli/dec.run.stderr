@@ -1,0 +1,25 @@
+error: Undefined Behavior: read access through <TAG>(unprotected) at ALLOC[0xc] is forbidden
+   --> CARGO_REGISTRY/.../decBasic.rs:LL:CC
+   |
+LL | if (DFISCCZERO(df)) return result;  // coefficient continuation is 0
+   |
+    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child read access
+help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
+   --> CARGO_REGISTRY/.../decimal128.rs:LL:CC
+   |
+LL | decnumber_sys::decQuadReduce(&mut n.inner, &n.inner, &mut self.inner);
+   |
+help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0xc..0x10]
+   --> CARGO_REGISTRY/.../decBasic.rs:LL:CC
+   |
+LL | DFWORD(result, 0)&=~ECONNANMASK;    // clear ECON except selector
+   |
+help: this transition corresponds to a loss of read permissions
+
+stack backtrace:
+0: decCanonical
+ at CARGO_REGISTRY/.../decBasic.rs:LL:CC
+1: decNaNs
+ at CARGO_REGISTRY/.../decBasic.rs:LL:CC
+2: decQuadReduce
+ at CARGO_REGISTRY/.../decBasic.rs:LL:CC
