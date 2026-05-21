@@ -164,8 +164,10 @@ impl Command {
         let pass = count_rs(&path!(root / "tests" / "pass"))?
             + count_rs(&path!(root / "tests" / "pass-dep"))?;
         let miri_pass = count_rs(&path!(root / "tests" / "miri-tests" / "pass"))?;
-        let fail = count_rs(&path!(root / "tests" / "fail"))?;
+        let fail = count_rs(&path!(root / "tests" / "fail"))?
+            + count_rs(&path!(root / "tests" / "fail-dep"))?;
         let miri_fail = count_rs(&path!(root / "tests" / "miri-tests" / "fail"))?;
+        let mirilli_fail = count_rs(&path!(root / "tests" / "fail-dep" / "mirilli"))?;
         let miri_should_pass = count_rs(&path!(root / "tests" / "miri-tests" / "should-pass"))?;
         let miri_should_fail = count_rs(&path!(root / "tests" / "miri-tests" / "should-fail"))?;
         let total_pass = pass + miri_pass + miri_should_pass;
@@ -185,6 +187,7 @@ impl Command {
             fmt_percent(fail + miri_fail, total_fail)
         );
         println!("  ├─ original tests: {}", fail);
+        println!("  ├─ mirilli tests: {}", mirilli_fail);
         println!("  └─ miri tests: {}", miri_fail);
 
         println!(
