@@ -4,7 +4,7 @@ use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use colored::*;
@@ -25,9 +25,12 @@ enum Mode {
     /// Requires annotations
     Fail,
 }
+
+type FailedOutput = (PathBuf, Vec<u8>);
 #[derive(Default)]
 pub struct FixResult {
     pub failed: usize,
+    pub results: Vec<FailedOutput>,
 }
 
 struct FixEmitter {
@@ -167,9 +170,9 @@ fn run_tests(
 
     config.program.args.push("-Zui-testing".into());
 
-    // Timeout enabled for fix mode
+    // Timeout and custom handler enabled for fix mode
     if fix_mode {
-        config.output_conflict_handling = |_path, _actual, _errors, _config| {};
+        static COLLECTED: OnceLock<Mutex<Vec<(PathBuf, Vec<u8>)>>> = OnceLock::new();
         let original_pgid = unsafe { libc::getpgrp() };
         std::thread::spawn(move || {
             std::thread::sleep(TIMEOUT);
@@ -181,6 +184,14 @@ fn run_tests(
             }
         });
 
+        COLLECTED.get_or_init(|| Mutex::new(Vec::new()));
+        // Clear in case of re-use
+        COLLECTED.get().unwrap().lock().unwrap().clear();
+
+        config.output_conflict_handling = |path, actual, _errors, _config| {
+            COLLECTED.get().unwrap().lock().unwrap().push((path.to_path_buf(), actual.to_vec()));
+        };
+
         let failed = Arc::new(AtomicUsize::new(0));
         let emitter = FixEmitter {
             inner: Box::<dyn StatusEmitter>::from(args.format),
@@ -188,7 +199,7 @@ fn run_tests(
         };
 
         eprintln!("   Compiler: {}", config.program.display());
-        // We don't care about this report, since we're generating our own with `TestResult`
+        // We don't care about this report, since we're generating our own with `FixResult`
         let _ = ui_test::run_tests_generic(
             vec![config],
             ui_test::default_file_filter,
@@ -196,7 +207,8 @@ fn run_tests(
             Box::new(emitter),
         );
         let failed = failed.load(Ordering::SeqCst);
-        return Ok(FixResult { failed });
+        let results = COLLECTED.get().unwrap().lock().unwrap().clone();
+        return Ok(FixResult { failed, results });
     }
 
     // Regular UI tests without timeout
@@ -341,6 +353,21 @@ fn check_for_fix(mode: Mode) -> Result<FixResult> {
     ui(mode, path, &target, WithoutDependencies, tmpdir.path(), true)
 }
 
+fn print_errors(result: FixResult) {
+    for (path, output) in result.results {
+        if output.is_empty() || !output.starts_with(b"error: Undefined Behavior:") {
+            continue;
+        }
+        let src = path.with_extension("").with_extension("").with_extension("rs");
+        eprintln!("  ✗ Test failed with output: {}", src.display());
+        let output = String::from_utf8_lossy(&output);
+        for line in output.lines() {
+            eprintln!("    {}", line);
+        }
+        eprintln!();
+    }
+}
+
 fn main() -> Result<()> {
     ui_test::color_eyre::install()?;
 
@@ -350,18 +377,20 @@ fn main() -> Result<()> {
         let sp_run = sp_count.map(|count| (count, check_for_fix(Mode::Pass)));
         let sf_run = sf_count.map(|count| (count, check_for_fix(Mode::Fail)));
         if let Some((count, Ok(result))) = sp_run {
-            println!(
-                "should-pass: {}/{} tests correctly passed with no errors",
+            eprintln!(
+                "SHOULD-PASS: {}/{} tests correctly passed with no errors.\n",
                 count - result.failed,
                 count
             );
+            print_errors(result);
         }
         if let Some((count, Ok(result))) = sf_run {
-            println!(
-                "should-fail: {}/{} tests failed with some bsan errors",
+            eprintln!(
+                "SHOULD-FAIL: {}/{} tests failed with bsan errors.\n",
                 count - result.failed,
                 count
             );
+            print_errors(result);
         }
         return Ok(());
     }
