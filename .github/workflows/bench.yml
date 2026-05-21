@@ -1,4 +1,4 @@
-name: Bench
+name: Benchmarks
 on:
   push:
     branches: [ "main" ]
