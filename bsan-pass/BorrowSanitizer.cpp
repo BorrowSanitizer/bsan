@@ -75,6 +75,10 @@ static Value *ptradd(IRBuilder<> &IRB, Value *Pointer, Value *Offset) {
   return IRB.CreateGEP(IRB.getInt8Ty(), Pointer, Offset);
 }
 
+static Value *ptrsub(IRBuilder<> &IRB, Value *Pointer, Value *Offset) {
+  return ptradd(IRB, Pointer, IRB.CreateNeg(Offset));
+}
+
 // We only instrument allocations that have a non-zero size.
 bool BorrowSanitizer::shouldInstrumentAlloca(const DataLayout &DL,
                                              const AllocaInst &AI) {
@@ -284,8 +288,7 @@ public:
     IRBuilder<> EntryIRB(EntryBlock, EntryBlock->getFirstNonPHIIt());
     FrameHeaderTop = EntryIRB.CreateLoad(EntryIRB.getPtrTy(), FramePtrSrc);
     Value *ByteOffset = EntryIRB.CreateMul(NumParamProv, SlotSize);
-    FrameHeaderBottom =
-        ptradd(EntryIRB, FrameHeaderTop, EntryIRB.CreateNeg(ByteOffset));
+    FrameHeaderBottom = ptrsub(EntryIRB, FrameHeaderTop, ByteOffset);
   }
 
   std::optional<Value *> getFrameHeaderTop() {
@@ -314,8 +317,7 @@ public:
   // static alloca. However, once the header has been initialized, it should
   // never be expanded again.
   Value *pushFrameHeaderSlot(IRBuilder<> &IRB) {
-    FrameHeaderBottom =
-        ptradd(IRB, getOrInitFrameHeaderBottom(IRB), IRB.CreateNeg(SlotSize));
+    FrameHeaderBottom = ptrsub(IRB, getOrInitFrameHeaderBottom(IRB), SlotSize);
     return FrameHeaderBottom;
   }
 
@@ -326,8 +328,7 @@ public:
     Value *SlotOffset =
         alloc(DT, LI, IRB, Elems, SlotSize->getType(), IsFnEntry);
     Value *ProvOffset = IRB.CreateMul(SlotOffset, SlotSize);
-    return ptradd(IRB, getOrInitFrameHeaderBottom(IRB),
-                  IRB.CreateNeg(ProvOffset));
+    return ptrsub(IRB, getOrInitFrameHeaderBottom(IRB), ProvOffset);
   }
 
   // Returns a pointer to the bottom of the specified section of the
@@ -337,8 +338,7 @@ public:
     Value *CurrOffset =
         getOutgoingOffset(DT, LI, IRB, SlotSize->getType(), IsFnEntry);
     Value *ProvOffset = IRB.CreateMul(CurrOffset, SlotSize);
-    return ptradd(IRB, getOrInitFrameHeaderBottom(IRB),
-                  IRB.CreateNeg(ProvOffset));
+    return ptrsub(IRB, getOrInitFrameHeaderBottom(IRB), ProvOffset);
   }
 
   // Returns the current offset from the top of the frame. This is used
@@ -561,8 +561,7 @@ private:
         Value *HeaderTop = ShadowStack.getOrInitFrameHeaderTop(EntryIRB);
         Value *ByteOffset =
             EntryIRB.CreateMul(BS.PL.ProvenanceSize, ArgProvOffset);
-        Value *ArgProvenancePtr =
-            ptradd(EntryIRB, HeaderTop, EntryIRB.CreateNeg(ByteOffset));
+        Value *ArgProvenancePtr = ptrsub(EntryIRB, HeaderTop, ByteOffset);
         Provenance ArgProvenance =
             Provenance::load(EntryIRB, BS.PL, ArgProvenancePtr, Elems);
         setProvenance(Key, ArgProvenance);
@@ -823,7 +822,7 @@ private:
       }
 
       for (auto [ByteOffset, Prov] : ParamOffsets) {
-        Value *Slot = ptradd(Before, StackOffset, Before.CreateNeg(ByteOffset));
+        Value *Slot = ptrsub(Before, StackOffset, ByteOffset);
         Prov.store(Before, BS.PL, Slot);
       }
 
@@ -908,12 +907,10 @@ private:
       After.CreateStore(Marker, BS.Marker);
 
       if (auto *II = dyn_cast<InvokeInst>(&CB)) {
-        // If this is an invoke, then it might unwind
-        // to an additional block. This block is not
-        // guaranteed to be dominated by the invoke.
-        // In that case, we need to store our return value
-        // marker to a location that we can guarantee will
-        // be accessible in any block.
+        // An invoke may unwind to an additional block, which might
+        // not be dominated by the invoke. In that case, we need to
+        // store our return value marker at a location that we can
+        // guarantee will be accessible in any block.
         if (!MarkerAlloca) {
           // We initialize an alloca for this purpose.
           // It's shared between every invoke that needs
@@ -1339,8 +1336,7 @@ private:
           ShadowStack.getOutgoingOffset(DT, LI, IRB, BS.IntptrTy, true);
       Value *FrameHeaderBottom = ShadowStack.getOrInitFrameHeaderBottom(IRB);
       Value *Offset = IRB.CreateMul(NumProtectors, BS.PL.ProvenanceSize);
-      Value *FrameBottom =
-          ptradd(IRB, FrameHeaderBottom, IRB.CreateNeg(Offset));
+      Value *FrameBottom = ptrsub(IRB, FrameHeaderBottom, Offset);
       IRB.CreateCall(BS.BsanFuncPopFrame,
                      {FrameBottom, NumProtectors, NumStackAllocs});
     }
@@ -1361,7 +1357,7 @@ private:
           NumReturnProv = IRB.CreateAdd(NumReturnProv, NumProv);
 
           Value *ByteWidth = IRB.CreateMul(NumReturnProv, BS.PL.ProvenanceSize);
-          Value *Slot = ptradd(IRB, FrameTop, IRB.CreateNeg(ByteWidth));
+          Value *Slot = ptrsub(IRB, FrameTop, ByteWidth);
 
           Provenance Prov = assertProvenance(IRB, Desc.Elems, {RetVal, Idx});
           Prov.store(IRB, BS.PL, Slot);
@@ -1371,7 +1367,7 @@ private:
   }
 
   void visitReturnInst(ReturnInst &I) {
-    // musttail calls already pop the frame before the callsite.
+    // musttail calls pop the frame prior to the ret
     if (auto *CB = dyn_cast_or_null<CallBase>(I.getPrevNode()))
       if (CB->isMustTailCall())
         return;
