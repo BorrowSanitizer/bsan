@@ -1041,8 +1041,6 @@ private:
   }
 
   Provenance createAllocaMetadata(IRBuilder<> &IRB, AllocaInst *AI) {
-    TypeSize TS = AI->getAllocationSize(*BS.DL).value();
-    Value *Size = IRB.CreateTypeSize(BS.IntptrTy, TS);
     Value *Tag = newBorrowTag(IRB);
     Value *Info = IRB.CreateCall(BS.BsanFuncReserveStackSlot, {});
     return Provenance(Tag, Info);
