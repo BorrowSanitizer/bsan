@@ -78,5 +78,5 @@ jobs:
         benchmark-data-dir-path: .
         fail-on-alert: true
         comment-on-alert: true
-        alert-threshold: 30%
+        alert-threshold: 130%
         alert-comment-cc-users: '@icmccorm,@mojeanmac'
