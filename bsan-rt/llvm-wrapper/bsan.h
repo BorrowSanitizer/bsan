@@ -28,7 +28,8 @@ extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance
 
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __bsan_had_error;
 
-// represents the number of provenance values that correspond to the variadic arguments being passed to the current function
+// represents the number of provenance values that correspond to the variadic
+// arguments being passed to the current function
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __bsan_var_arg_ctr;
 
 extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uintptr_t __bsan_bor_tag_ctr;
