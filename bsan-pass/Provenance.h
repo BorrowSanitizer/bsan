@@ -48,9 +48,8 @@ struct ProvenanceLayout {
   SmallVector<ProvenanceDesc> getProvenanceDesc(IRBuilder<> &IRB, Type *Ty);
 
 private:
-  std::tuple<Value *, Value *>
-  getProvenanceDesc(IRBuilder<> &IRB, SmallVector<ProvenanceDesc> &Dest,
-                    Type *CurrentTy, Value *ByteOffset, Value *ProvOffset);
+  Value *getProvenanceDesc(IRBuilder<> &IRB, SmallVector<ProvenanceDesc> &Dest,
+                           Type *CurrentTy, Value *ByteOffset);
 };
 
 class ProvenanceScalar;
