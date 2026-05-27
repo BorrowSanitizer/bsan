@@ -82,6 +82,7 @@ public:
   // and return values.
   Value *ProvStack = nullptr;
   Value *Marker = nullptr;
+  Value *VarArgCounter = nullptr;
   Value *BorTagCounter = nullptr;
 
   Constant *Zero = nullptr;

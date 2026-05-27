@@ -360,6 +360,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // The start of the current frame of protected tags. This is the "top" of the
   // frame, since we decrement to allocate slots.
   Value *FrameTop = nullptr;
+  Value *FrameVariadicTop = nullptr;
   Value *FrameHeaderBottom = nullptr;
 
   // We use LLVM's lifetime analysis to determine which allocas are alive at
@@ -546,6 +547,11 @@ private:
     FrameTop = EntryIRB.CreateLoad(BS.PtrTy, BS.ProvStack);
     Value *NumParamProv = BS.Zero;
 
+    Value *VarArgProvCount = nullptr;
+    if (F.isVarArg()) {
+      VarArgProvCount = EntryIRB.CreateLoad(BS.IntptrTy, BS.VarArgCounter);
+    }
+
     for (auto &Arg : F.args()) {
       if (Arg.hasAttribute(Attribute::ByVal)) {
         Type *Ty = Arg.getParamByValType();
@@ -576,6 +582,15 @@ private:
     Value *ByteOffset = EntryIRB.CreateMul(NumParamProv, BS.PL.ProvenanceSize);
     FrameHeaderBottom =
         ptradd(EntryIRB, FrameTop, EntryIRB.CreateNeg(ByteOffset));
+
+    if (F.isVarArg()) {
+      Value *VarArgByteOffset =
+          EntryIRB.CreateMul(VarArgProvCount, BS.PL.ProvenanceSize);
+      FrameVariadicTop = FrameHeaderBottom;
+      FrameHeaderBottom = ptradd(EntryIRB, FrameVariadicTop,
+                                 EntryIRB.CreateNeg(VarArgByteOffset));
+      EntryIRB.CreateStore(BS.Zero, BS.VarArgCounter);
+    }
 
     if (BS.needsBoundaryValidation(&F)) {
       if (!BS.shouldTrustFunction(TLI, &F)) {
@@ -753,12 +768,21 @@ private:
     // with a situation where function bindings are incorrect, which is
     // undefined behavior.
     Value *NumParamProv = BS.Zero;
+    Value *VarArgProvCount = BS.Zero;
+    bool IsVarArg = CB.getFunctionType()->isVarArg();
+    unsigned NumFixedParams = CB.getFunctionType()->getNumParams();
+
     for (const auto &[i, Arg] : llvm::enumerate(CB.args())) {
       SmallVector<ProvenanceDesc> ProvDesc =
           BS.PL.getProvenanceDesc(Before, Arg->getType());
       for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
         Value *NumProv = Before.CreateElementCount(BS.IntptrTy, Desc.Elems);
         NumParamProv = Before.CreateAdd(NumParamProv, NumProv);
+
+        if (IsVarArg && i >= NumFixedParams) {
+          VarArgProvCount = Before.CreateAdd(VarArgProvCount, NumProv);
+        }
+
         Value *ByteOffset =
             Before.CreateMul(NumParamProv, BS.PL.ProvenanceSize);
 
@@ -767,6 +791,10 @@ private:
         Provenance ProvSrc = assertProvenance(Before, Desc.Elems, {Arg, Idx});
         ProvSrc.store(Before, BS.PL, Slot);
       }
+    }
+
+    if (IsVarArg) {
+      Before.CreateStore(VarArgProvCount, BS.VarArgCounter);
     }
 
     // Skip the epilogue for musttail calls, which need to be adjacent to `ret`.
@@ -1477,6 +1505,7 @@ void BorrowSanitizer::createUserspaceApi(Module &M,
                                          const TargetLibraryInfo &TLI) {
   IRBuilder<> IRB(*C);
   Marker = getOrInsertTLSGlobal(M, BSAN("marker"), PtrTy);
+  VarArgCounter = getOrInsertTLSGlobal(M, BSAN("var_arg_ctr"), IntptrTy);
   ProvStack = getOrInsertTLSGlobal(M, BSAN("shadow_stack"), PtrTy);
   BorTagCounter = getOrInsertGlobal(M, BSAN("bor_tag_ctr"), IntptrTy);
 }
