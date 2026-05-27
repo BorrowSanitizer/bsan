@@ -75,6 +75,10 @@ static Value *ptradd(IRBuilder<> &IRB, Value *Pointer, Value *Offset) {
   return IRB.CreateGEP(IRB.getInt8Ty(), Pointer, Offset);
 }
 
+static Value *ptrsub(IRBuilder<> &IRB, Value *Pointer, Value *Offset) {
+  return ptradd(IRB, Pointer, IRB.CreateNeg(Offset));
+}
+
 // We only instrument allocations that have a non-zero size.
 bool BorrowSanitizer::shouldInstrumentAlloca(const DataLayout &DL,
                                              const AllocaInst &AI) {
@@ -157,25 +161,43 @@ static bool isFnEntryRetag(const CallBase *CB) {
 // simplifies the implementation but the same can be accomplished using only phi
 // nodes. The result is equivalent either way.
 class ShadowStackAllocator {
+  // The size of a slot within the shadow stack.
+  Value *SlotSize;
+  // A pointer to where the frame pointer is stored.
+  Value *FramePtrSrc;
+  // The top of the frame header.
+  Value *FrameHeaderTop = nullptr;
+  // The bottom of the frame header (after params, byval args,
+  // and static allocas, but before function-entry retags.)
+  Value *FrameHeaderBottom = nullptr;
+
+public:
+  ShadowStackAllocator(Value *SlotSize, Value *FramePtrSrc)
+      : SlotSize(SlotSize), FramePtrSrc(FramePtrSrc) {}
+
 private:
   // We track the total number of stack slots used by this
   // function with a single alloca that gets promoted to a register.
   AllocaInst *GlobalOffsetAlloc = nullptr;
+
   // All shadow stack operations are dominated
   // by function-entry retags. We need to know
   // how many of these happened to be able to
   // remove their protectors when the function
   // returns.
   AllocaInst *FnEntryOffset = nullptr;
+
   // If we need to allocate a slot for an instruction,
   // then we load the incoming offset at the beginning of
   // its basic block. We increment it for subsequent
   // allocations in the same block, and then store it
   // back at the end of the block.
   DenseMap<BasicBlock *, Value *> BlockOffsets;
+
   // All of the allocas that we insert can be promoted
   // to registers.
   SmallVector<AllocaInst *> PromoteableAllocas;
+
   // Creates a counter alloca in the entry block of the
   // function and initializes it to 0. Zero-initialization
   // is crucial, since not all paths through a function will
@@ -247,10 +269,7 @@ private:
     BlockOffsets[InsertBB] = Offset;
     return BlockOffsets[InsertBB];
   }
-
-public:
-  // Allocates the requested number of slots and returns the offset from
-  // the top of the frame.
+  // Allocates the requested number of slots and returns the slot count offset.
   Value *alloc(DominatorTree &DT, LoopInfo &LI, IRBuilder<> &IRB,
                ElementCount EC, Type *Ty, bool IsFnEntry) {
     Value *&Offset = getCurrentOffset(DT, LI, IRB, Ty);
@@ -261,6 +280,67 @@ public:
     }
     return Offset;
   }
+
+public:
+  void initFrameHeader(IRBuilder<> &IRB, Value *NumParamProv) {
+    BasicBlock *EntryBlock =
+        &IRB.GetInsertBlock()->getParent()->getEntryBlock();
+    IRBuilder<> EntryIRB(EntryBlock, EntryBlock->getFirstNonPHIIt());
+    FrameHeaderTop = EntryIRB.CreateLoad(EntryIRB.getPtrTy(), FramePtrSrc);
+    Value *ByteOffset = EntryIRB.CreateMul(NumParamProv, SlotSize);
+    FrameHeaderBottom = ptrsub(EntryIRB, FrameHeaderTop, ByteOffset);
+  }
+
+  std::optional<Value *> getFrameHeaderTop() {
+    if (FrameHeaderTop) {
+      return FrameHeaderTop;
+    }
+    return std::nullopt;
+  }
+
+  Value *getOrInitFrameHeaderTop(IRBuilder<> &IRB) {
+    if (!FrameHeaderTop) {
+      initFrameHeader(IRB, ConstantInt::get(SlotSize->getType(), 0));
+    }
+    return FrameHeaderTop;
+  }
+
+  Value *getOrInitFrameHeaderBottom(IRBuilder<> &IRB) {
+    if (!FrameHeaderBottom) {
+      initFrameHeader(IRB, ConstantInt::get(SlotSize->getType(), 0));
+    }
+    return FrameHeaderBottom;
+  }
+
+  // Extends the frame header down by one provenance slot. This will be called
+  // to allocate space in the header for the metadata of every byval arg and
+  // static alloca. However, once the header has been initialized, it should
+  // never be expanded again.
+  Value *pushFrameHeaderSlot(IRBuilder<> &IRB) {
+    FrameHeaderBottom = ptrsub(IRB, getOrInitFrameHeaderBottom(IRB), SlotSize);
+    return FrameHeaderBottom;
+  }
+
+  // Allocates one or more shadow stack slots.
+  Value *allocStackSlot(DominatorTree &DT, LoopInfo &LI, IRBuilder<> &IRB,
+                        bool IsFnEntry,
+                        ElementCount Elems = ElementCount::getFixed(1)) {
+    Value *SlotOffset =
+        alloc(DT, LI, IRB, Elems, SlotSize->getType(), IsFnEntry);
+    Value *ProvOffset = IRB.CreateMul(SlotOffset, SlotSize);
+    return ptrsub(IRB, getOrInitFrameHeaderBottom(IRB), ProvOffset);
+  }
+
+  // Returns a pointer to the bottom of the specified section of the
+  // shadow frame.
+  Value *getStackPtr(DominatorTree &DT, LoopInfo &LI, IRBuilder<> &IRB,
+                     bool IsFnEntry) {
+    Value *CurrOffset =
+        getOutgoingOffset(DT, LI, IRB, SlotSize->getType(), IsFnEntry);
+    Value *ProvOffset = IRB.CreateMul(CurrOffset, SlotSize);
+    return ptrsub(IRB, getOrInitFrameHeaderBottom(IRB), ProvOffset);
+  }
+
   // Returns the current offset from the top of the frame. This is used
   // to update the stack pointer before calling functions and to get the
   // total number of function-entry retags before popping a stack frame.
@@ -311,6 +391,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // The end of the prologue of the function, where we initialize our
   // instrumentation. This is a call to llvm.donothing.
   Instruction *FnPrologueEnd;
+
   // If a stack allocation does not have a dedicated lifetime.start, then we
   // allocate metadata for it within the entry block. We use a liveness pass to
   // determine which allocations need to be freed, so no additional handling is
@@ -318,61 +399,43 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // have a lifetime.end, either.
   SmallDenseSet<AllocaInst *> HasLifetimeStart;
 
+  // A vector containing every static alloca that we support instrumenting.
   SmallVector<AllocaInst *, 8> StaticAllocaVec;
 
-  // Pointers to the sections of the thread-local array where the
-  // provenance values for each argument are stored. Whenever we need to get the
-  // provenance for an argument, we take its pointer from this array and then
-  // insert the necessary instructions to load it from thread-local storage
-  // within the prologue of the function.
+  // A map from Arguments to (byte offset, provenance count) pairs, indicating
+  // the offset from the top of the header where the argument's provenane is
+  // stored, and how many provenance values are stored there.
   SmallDenseMap<Argument *, SmallVector<std::pair<Value *, ElementCount>>>
       ArgumentProvenance;
 
-  // With the exception of allocas, each value is associated with a unique
-  // provenance value.
+  // A map from values to their provenance.
   ProvenanceMap BaseProvMap;
 
-  // Pointer-type arguments with the byval attribute point to a different
-  // allocation than was originally allocated for the argument in the calling
-  // context. This means that provenance passed by the caller will not be valid.
-  // Instead, we treat this similar to an alloca and ignore our caller's
-  // provenance. However, we still need to account for it when assigning slots
-  // in our thread-local storage.
+  // A vector containing every byval argument. When we exit the function,
+  // we need to deallocate the metadata associated with every byval argument.
   SmallVector<Value *, 2> ByValArgs;
 
-  // If a PHI node is a pointer or a vector of pointers, then we need to emit
-  // corresponding "shadow" PHI nodes for its provenance. To emit these PHI
-  // nodes, we need to know the provenance for each argument at each incoming
-  // block. We only have this information once we have finished instrumenting
-  // each block. So, we temporarily store our shadow PHI nodes and wait until
-  // the end of the pass to "patch in" the missing provenance values. While
-  // these values are pending, the PHI node will contain "wildcard" provenance
-  // values. This is necessary since multiple LLVM APIs are implemented under
-  // the assumption that any arbitrary PHI node will have at least one incoming
-  // block, and that all incoming values will be initialized. Leaving a PHI node
-  // in an  invalid state in the middle of the instrumentation pass inevitably
-  // leads to memory corruption.
-  SmallVector<std::tuple<PHINode *, Provenance, unsigned int>> ProvPHINodes;
+  // A vector containing yet-to-be resolved provenance values for PHI nodes.
+  // The first element in the pair, the provenance "key", consists of a
+  // pointer to the PHINode and the index into its provenance.
+  SmallVector<std::pair<ProvenanceKey, Provenance>> ProvPHINodes;
 
+  // A vector containing every retag intrinsic invocation. Since these are
+  // "dummy" function calls, they need to be erased before the pass has
+  // finished.
   SmallVector<CallBase *> Retags;
+  // The number of function-entry retags that occurred.
   unsigned NumFnEntryRetags = 0;
 
-  // The start of the current frame of protected tags. This is the "top" of the
-  // frame, since we decrement to allocate slots.
-  Value *FrameTop = nullptr;
   Value *FrameVariadicTop = nullptr;
-  Value *FrameHeaderBottom = nullptr;
-
-  // We use LLVM's lifetime analysis to determine which allocas are alive at
-  // every exit point.
-  std::unique_ptr<StackLifetime> LifetimeInfo;
   ShadowStackAllocator ShadowStack;
   AllocaInst *MarkerAlloca = nullptr;
 
 public:
   BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
                          const TargetLibraryInfo &TLI, DominatorTree &DT)
-      : F(F), BS(BS), C(BS.C), TLI(&TLI), DT(DT) {}
+      : F(F), BS(BS), C(BS.C), TLI(&TLI), DT(DT),
+        ShadowStack(BS.PL.ProvenanceSize, BS.ProvStack) {}
   bool run() {
     DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Lazy);
     EscapeEnumerator EE(F, "bsan_cleanup", true, &DTU);
@@ -494,8 +557,12 @@ private:
         if (Key.Offset >= ArgumentProvenance[Arg].size()) {
           report_fatal_error("Invalid argument provenance!");
         }
-        Value *ArgProvenancePtr = ProvVec[Key.Offset].first;
+        Value *ArgProvOffset = ProvVec[Key.Offset].first;
         ElementCount Elems = ProvVec[Key.Offset].second;
+        Value *HeaderTop = ShadowStack.getOrInitFrameHeaderTop(EntryIRB);
+        Value *ByteOffset =
+            EntryIRB.CreateMul(BS.PL.ProvenanceSize, ArgProvOffset);
+        Value *ArgProvenancePtr = ptrsub(EntryIRB, HeaderTop, ByteOffset);
         Provenance ArgProvenance =
             Provenance::load(EntryIRB, BS.PL, ArgProvenancePtr, Elems);
         setProvenance(Key, ArgProvenance);
@@ -544,7 +611,6 @@ private:
     FnPrologueEnd = TopIRB.CreateIntrinsic(Intrinsic::donothing, {});
     IRBuilder<> EntryIRB(FnPrologueEnd);
 
-    FrameTop = EntryIRB.CreateLoad(BS.PtrTy, BS.ProvStack);
     Value *NumParamProv = BS.Zero;
 
     Value *VarArgProvCount = nullptr;
@@ -569,69 +635,64 @@ private:
         for (auto &Desc : ProvDesc) {
           Value *NumProv = EntryIRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
           NumParamProv = EntryIRB.CreateAdd(NumParamProv, NumProv);
-          Value *ByteOffset =
-              EntryIRB.CreateMul(NumParamProv, BS.PL.ProvenanceSize);
-          Value *CurrentArraySlot =
-              ptradd(EntryIRB, FrameTop, EntryIRB.CreateNeg(ByteOffset));
           ArgumentProvenance[&Arg].push_back(
-              std::make_pair(CurrentArraySlot, Desc.Elems));
+              std::make_pair(NumParamProv, Desc.Elems));
         }
       }
     }
 
-    Value *ByteOffset = EntryIRB.CreateMul(NumParamProv, BS.PL.ProvenanceSize);
-    FrameHeaderBottom =
-        ptradd(EntryIRB, FrameTop, EntryIRB.CreateNeg(ByteOffset));
+    if (!match(NumParamProv, m_Zero()))
+      ShadowStack.initFrameHeader(EntryIRB, NumParamProv);
+
+    // We can safely pass a null pointer if there are no arguments to
+    // validate; the runtime resets the boundary marker either way.
+    Value *ValidateHeaderBottom = ConstantPointerNull::get(BS.PtrTy);
 
     if (F.isVarArg()) {
       Value *VarArgByteOffset =
           EntryIRB.CreateMul(VarArgProvCount, BS.PL.ProvenanceSize);
-      FrameVariadicTop = FrameHeaderBottom;
-      FrameHeaderBottom = ptradd(EntryIRB, FrameVariadicTop,
-                                 EntryIRB.CreateNeg(VarArgByteOffset));
+      FrameVariadicTop = ShadowStack.getOrInitFrameHeaderBottom(EntryIRB);
+      ValidateHeaderBottom = ptradd(EntryIRB, FrameVariadicTop,
+                                    EntryIRB.CreateNeg(VarArgByteOffset));
       EntryIRB.CreateStore(BS.Zero, BS.VarArgCounter);
+    } else if (!match(NumParamProv, m_Zero())) {
+      ValidateHeaderBottom = ShadowStack.getOrInitFrameHeaderBottom(EntryIRB);
     }
 
     if (BS.needsBoundaryValidation(&F)) {
       if (!BS.shouldTrustFunction(TLI, &F)) {
         EntryIRB.CreateCall(BS.BsanFuncValidateParams,
-                            {&F, FrameHeaderBottom, NumParamProv});
+                            {&F, ValidateHeaderBottom, NumParamProv});
       }
     }
 
-    if (StaticAllocaVec.size() > 0 || ByValArgs.size() > 0) {
-      for (auto &Arg : ByValArgs) {
-        BasicBlock *BB = EntryIRB.GetInsertBlock();
-        Provenance Prov = assertProvenanceScalar(BB, Arg);
-        Value *SlotOffset = EntryIRB.CreateMul(ConstantInt::get(BS.IntptrTy, 1),
-                                               BS.PL.ProvenanceSize);
-        FrameHeaderBottom =
-            ptradd(EntryIRB, FrameHeaderBottom, EntryIRB.CreateNeg(SlotOffset));
-        Prov.store(EntryIRB, BS.PL, FrameHeaderBottom);
+    for (auto &Arg : ByValArgs) {
+      BasicBlock *BB = EntryIRB.GetInsertBlock();
+      Provenance Prov = assertProvenanceScalar(BB, Arg);
+      Value *Slot = ShadowStack.pushFrameHeaderSlot(EntryIRB);
+      Prov.store(EntryIRB, BS.PL, Slot);
+    }
+
+    for (auto [Idx, AI] : llvm::enumerate(StaticAllocaVec)) {
+      Provenance Prov = createAllocaMetadata(EntryIRB, AI);
+      if (!HasLifetimeStart.contains(AI)) {
+        NextNodeIRBuilder IRB(AI);
+        initAllocaMetadata(IRB, AI, Prov);
       }
-      for (auto [Idx, AI] : llvm::enumerate(StaticAllocaVec)) {
-        Provenance Prov = createAllocaMetadata(EntryIRB, AI);
-        if (!HasLifetimeStart.contains(AI)) {
-          NextNodeIRBuilder IRB(AI);
-          initAllocaMetadata(IRB, AI, Prov);
-        }
-        setProvenance(AI, Prov);
-        Value *SlotOffset = EntryIRB.CreateMul(ConstantInt::get(BS.IntptrTy, 1),
-                                               BS.PL.ProvenanceSize);
-        FrameHeaderBottom =
-            ptradd(EntryIRB, FrameHeaderBottom, EntryIRB.CreateNeg(SlotOffset));
-        Prov.store(EntryIRB, BS.PL, FrameHeaderBottom);
-      }
+      setProvenance(AI, Prov);
+      Value *Slot = ShadowStack.pushFrameHeaderSlot(EntryIRB);
+      Prov.store(EntryIRB, BS.PL, Slot);
     }
   }
 
   void patchShadowPHINodes() {
     IRBuilder<> EntryIRB(FnPrologueEnd);
-    for (auto &[PN, Prov, Idx] : ProvPHINodes) {
+    for (auto &[Key, Prov] : ProvPHINodes) {
+      auto *PN = static_cast<PHINode *>(Key.V);
       for (auto [V, IncomingBlock] :
            llvm::zip(PN->incoming_values(), PN->blocks())) {
-        Provenance IncomingProv =
-            assertProvenance(EntryIRB, IncomingBlock, Prov.Elems, {V, Idx});
+        Provenance IncomingProv = assertProvenance(EntryIRB, IncomingBlock,
+                                                   Prov.Elems, {V, Key.Offset});
         Prov.addIncoming(IncomingBlock, IncomingProv);
       }
     }
@@ -693,17 +754,11 @@ private:
 
   Value *allocStackSlot(IRBuilder<> &IRB, bool IsFnEntry,
                         ElementCount Elems = ElementCount::getFixed(1)) {
-    Value *SlotOffset =
-        ShadowStack.alloc(DT, LI, IRB, Elems, BS.IntptrTy, IsFnEntry);
-    Value *ProvOffset = IRB.CreateMul(SlotOffset, BS.PL.ProvenanceSize);
-    return ptradd(IRB, FrameHeaderBottom, IRB.CreateNeg(ProvOffset));
+    return ShadowStack.allocStackSlot(DT, LI, IRB, IsFnEntry, Elems);
   }
 
   Value *getStackOffset(IRBuilder<> &IRB, bool IsFnEntry) {
-    Value *CurrOffset =
-        ShadowStack.getOutgoingOffset(DT, LI, IRB, BS.IntptrTy, IsFnEntry);
-    Value *ProvOffset = IRB.CreateMul(CurrOffset, BS.PL.ProvenanceSize);
-    return ptradd(IRB, FrameHeaderBottom, IRB.CreateNeg(ProvOffset));
+    return ShadowStack.getStackPtr(DT, LI, IRB, IsFnEntry);
   }
 
   using InstVisitor<BorrowSanitizerVisitor>::visit;
@@ -747,31 +802,14 @@ private:
     // then read the provenance for the return value.
     IRBuilder<> Before(&CB);
 
-    Value *StackOffset;
-    // if this is `mustail`, then we want to pop the frame,
-    // and store the arguments within the frame header, as if the
-    // call instruction that we are instrumenting was the next instruction
-    // after this function returned.
-    if (CB.isMustTailCall()) {
-      popFrame(Before, CB, nullptr);
-      StackOffset = FrameTop;
-    } else {
-      // Otherwise, we compute the current offset into the shadow stack.
-      StackOffset = getStackOffset(Before, false);
-      Before.CreateStore(StackOffset, BS.ProvStack);
-    }
-
-    // Store the provenance for each argument into the thread-local storage for
-    // parameters. The process for computing provenance components is
-    // deterministic, so we can guarantee that the callee will expect a
-    // provenance value everywhere it's been stored here, unless we're dealing
-    // with a situation where function bindings are incorrect, which is
-    // undefined behavior.
+    // We need to store the provenance for each argument onto the shadow stack.
+    // First, we calculate the offset for each parameter's provenance.
     Value *NumParamProv = BS.Zero;
     Value *VarArgProvCount = BS.Zero;
     bool IsVarArg = CB.getFunctionType()->isVarArg();
     unsigned NumFixedParams = CB.getFunctionType()->getNumParams();
 
+    SmallVector<std::pair<Value *, Provenance>> ParamOffsets;
     for (const auto &[i, Arg] : llvm::enumerate(CB.args())) {
       SmallVector<ProvenanceDesc> ProvDesc =
           BS.PL.getProvenanceDesc(Before, Arg->getType());
@@ -785,25 +823,51 @@ private:
 
         Value *ByteOffset =
             Before.CreateMul(NumParamProv, BS.PL.ProvenanceSize);
-
-        Value *Slot = ptradd(Before, StackOffset, Before.CreateNeg(ByteOffset));
-
         Provenance ProvSrc = assertProvenance(Before, Desc.Elems, {Arg, Idx});
-        ProvSrc.store(Before, BS.PL, Slot);
+        ParamOffsets.push_back(std::make_pair(ByteOffset, ProvSrc));
       }
+    }
+
+    if (CB.isMustTailCall()) {
+      // We need to pop the current frame, since
+      // the semantics of a tail call are equivalent
+      // to a return and then another call.
+      popFrame(Before, CB, nullptr);
+    }
+
+    if (!ParamOffsets.empty() || ShadowStack.getFrameHeaderTop().has_value()) {
+      Value *StackOffset;
+      if (CB.isMustTailCall()) {
+        // Now that we've popped the frame, we
+        // can clobber the current frame header.
+        StackOffset = ShadowStack.getOrInitFrameHeaderTop(Before);
+      } else {
+        // Always update ProvStack before any non-musttail call so the callee
+        // loads a valid frame top, even when there are no pointer args.
+        StackOffset = getStackOffset(Before, false);
+      }
+
+      for (auto [ByteOffset, Prov] : ParamOffsets) {
+        Value *Slot = ptrsub(Before, StackOffset, ByteOffset);
+        Prov.store(Before, BS.PL, Slot);
+      }
+
+      Before.CreateStore(StackOffset, BS.ProvStack);
     }
 
     if (IsVarArg) {
       Before.CreateStore(VarArgProvCount, BS.VarArgCounter);
     }
 
-    // Skip the epilogue for musttail calls, which need to be adjacent to `ret`.
+    // Skip the epilogue for musttail calls, since
+    // they need to be adjacent to a ret.
     if (CB.isMustTailCall()) {
       return;
     }
 
-    // We need to do some extra work here to compute where to insert our
-    // instructions, since some function calls occur within terminators.
+    // We need to do some extra work here to compute where
+    // to insert the epilogue, since some function calls are
+    // terminators, and have multiple outgoing edges.
     Instruction *NextInst;
     if (auto *II = dyn_cast<InvokeInst>(&CB)) {
       if (II->getNormalDest()->getSinglePredecessor()) {
@@ -820,14 +884,14 @@ private:
     After.SetCurrentDebugLocation(CB.getDebugLoc());
 
     Value *NumReturnProv = BS.Zero;
-    SmallVector<Value *> ProvenancePointers;
+    SmallVector<Value *> ReturnProvPtrs;
 
     SmallVector<ProvenanceDesc> ReturnDesc =
         BS.PL.getProvenanceDesc(Before, CB.getType());
 
     if (CB.getType()->isSized()) {
-      // Unsized return types do not have provenance, so we can skip handling
-      // the return array.
+      // Unsized return types do not have provenance, so we can
+      // skip handling the return array.
 
       // Load each provenance component for the return type from the
       // thread-local return value array. Also, compute the byte-width of the
@@ -836,34 +900,54 @@ private:
       // array is populated with default values.
       for (const auto &[Idx, Desc] : llvm::enumerate(ReturnDesc)) {
         Value *Slot = allocStackSlot(Before, false, Desc.Elems);
-        ProvenancePointers.push_back(Slot);
+        ReturnProvPtrs.push_back(Slot);
         Value *NumProv = Before.CreateElementCount(BS.IntptrTy, Desc.Elems);
         NumReturnProv = Before.CreateAdd(NumReturnProv, NumProv);
       }
     }
-    // We need to validate thread-local storage before we load provenance
-    // values from it, but we also need to know the number of provenance
-    // values associated with the return value to perform initialization.
-    Value *Slot = getStackOffset(Before, false);
+
+    // If we are returning from a possibly-uninstrumented function, then we may
+    // need to validate the space on the shadow stack where the return value's
+    // provenance is stored.
     if (BS.needsBoundaryValidation(Callee)) {
       Value *Marker;
-
+      Value *NullPtr = ConstantPointerNull::get(BS.PtrTy);
+      // If this is a function that we can trust (e.g. an allocator)
+      // then we write null into the boundary marker and trust the content
+      // of the shadow stack.
       if (BS.shouldTrustFunction(TLI, &CB)) {
-        Marker = Before.CreateCall(BS.BsanFuncMark,
-                                   {ConstantPointerNull::get(BS.PtrTy)});
+        Marker = Before.CreateCall(BS.BsanFuncMark, {NullPtr});
         After.CreateStore(Marker, BS.Marker);
       } else {
+        // Otherwise, we need to initialize the marker with the function
+        // pointer that we're calling with, so that the callee can check
+        // against it.
         Marker = Before.CreateCall(BS.BsanFuncMark, {CB.getCalledOperand()});
-        After.CreateCall(BS.BsanFuncValidateRetval,
-                         {Marker, Slot, NumReturnProv});
+        // If we do not have any return provenance, then
+        // we do not need to validate any part of the shadow stack
+        // on return.
+        if (!match(NumReturnProv, m_Zero())) {
+          Value *Slot = getStackOffset(Before, false);
+          After.CreateCall(BS.BsanFuncValidateRetval,
+                           {Marker, Slot, NumReturnProv});
+        }
       }
+      // We always need to restore our boundary
+      // marker to the value that it had before.
+      After.CreateStore(Marker, BS.Marker);
 
       if (auto *II = dyn_cast<InvokeInst>(&CB)) {
+        // An invoke may unwind to an additional block, which might
+        // not be dominated by the invoke. In that case, we need to
+        // store our return value marker at a location that we can
+        // guarantee will be accessible in any block.
         if (!MarkerAlloca) {
+          // We initialize an alloca for this purpose.
+          // It's shared between every invoke that needs
+          // boundary validation.
           IRBuilder<> EntryIRB(FnPrologueEnd);
           MarkerAlloca = EntryIRB.CreateAlloca(BS.PtrTy);
-          EntryIRB.CreateStore(ConstantPointerNull::get(BS.PtrTy),
-                               MarkerAlloca);
+          EntryIRB.CreateStore(NullPtr, MarkerAlloca);
         }
         Before.CreateStore(Marker, MarkerAlloca);
         BasicBlock *UnwindDest = II->getUnwindDest();
@@ -872,7 +956,9 @@ private:
         UnwindIRB.CreateStore(ToRestore, BS.Marker);
       }
     }
-    for (const auto &[Idx, Ptr] : llvm::enumerate(ProvenancePointers)) {
+
+    // Finally, store the return value's provenance to the shadow stack.
+    for (const auto &[Idx, Ptr] : llvm::enumerate(ReturnProvPtrs)) {
       ElementCount Elems = ReturnDesc[Idx].Elems;
       Provenance Prov = Provenance::load(After, BS.PL, Ptr, Elems);
       setProvenance({&CB, Idx}, Prov);
@@ -943,7 +1029,7 @@ private:
       Provenance Prov =
           createProvenancePHI(IRB, Comp, predecessors(PN.getParent()));
       setProvenance({&PN, Idx}, Prov);
-      ProvPHINodes.push_back(std::make_tuple(&PN, Prov, Idx));
+      ProvPHINodes.push_back({{&PN, Idx}, Prov});
     }
   }
 
@@ -979,16 +1065,12 @@ private:
       return instrumentLifetimeEnd(I);
     } break;
     }
-
     if (canSkipIntrinsic(I))
       return;
-
     updateStackPointer(I);
   }
 
   Provenance createAllocaMetadata(IRBuilder<> &IRB, AllocaInst *AI) {
-    TypeSize TS = AI->getAllocationSize(*BS.DL).value();
-    Value *Size = IRB.CreateTypeSize(BS.IntptrTy, TS);
     Value *Tag = newBorrowTag(IRB);
     Value *Info = IRB.CreateCall(BS.BsanFuncReserveStackSlot, {});
     return Provenance(Tag, Info);
@@ -1274,42 +1356,46 @@ private:
 
   void popFrame(IRBuilder<> &IRB, Instruction &I, Value *RetVal) {
     BasicBlock *BB = IRB.GetInsertBlock();
-
     if (StaticAllocaVec.size() > 0 || ByValArgs.size() > 0 ||
         NumFnEntryRetags) {
-      Value *AllocaSize = ConstantInt::get(BS.IntptrTy, StaticAllocaVec.size() +
-                                                            ByValArgs.size());
+      Value *NumStackAllocs = ConstantInt::get(
+          BS.IntptrTy, StaticAllocaVec.size() + ByValArgs.size());
       Value *NumProtectors =
           ShadowStack.getOutgoingOffset(DT, LI, IRB, BS.IntptrTy, true);
+      Value *FrameHeaderBottom = ShadowStack.getOrInitFrameHeaderBottom(IRB);
       Value *Offset = IRB.CreateMul(NumProtectors, BS.PL.ProvenanceSize);
-      Value *FrameBottom =
-          ptradd(IRB, FrameHeaderBottom, IRB.CreateNeg(Offset));
+      Value *FrameBottom = ptrsub(IRB, FrameHeaderBottom, Offset);
       IRB.CreateCall(BS.BsanFuncPopFrame,
-                     {FrameBottom, NumProtectors, AllocaSize});
+                     {FrameBottom, NumProtectors, NumStackAllocs});
     }
 
-    IRB.CreateStore(FrameTop, BS.ProvStack);
+    if (auto FrameTop = ShadowStack.getFrameHeaderTop()) {
+      IRB.CreateStore(FrameTop.value(), BS.ProvStack);
+    }
 
     if (RetVal) {
       SmallVector<ProvenanceDesc> ProvDesc =
           BS.PL.getProvenanceDesc(IRB, RetVal->getType());
 
-      Value *NumReturnProv = BS.Zero;
-      for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
-        Value *NumProv = IRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
-        NumReturnProv = IRB.CreateAdd(NumReturnProv, NumProv);
+      if (!ProvDesc.empty()) {
+        Value *NumReturnProv = BS.Zero;
+        Value *FrameTop = ShadowStack.getOrInitFrameHeaderTop(IRB);
+        for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
+          Value *NumProv = IRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
+          NumReturnProv = IRB.CreateAdd(NumReturnProv, NumProv);
 
-        Value *ByteWidth = IRB.CreateMul(NumReturnProv, BS.PL.ProvenanceSize);
-        Value *Slot = ptradd(IRB, FrameTop, IRB.CreateNeg(ByteWidth));
+          Value *ByteWidth = IRB.CreateMul(NumReturnProv, BS.PL.ProvenanceSize);
+          Value *Slot = ptrsub(IRB, FrameTop, ByteWidth);
 
-        Provenance Prov = assertProvenance(IRB, Desc.Elems, {RetVal, Idx});
-        Prov.store(IRB, BS.PL, Slot);
+          Provenance Prov = assertProvenance(IRB, Desc.Elems, {RetVal, Idx});
+          Prov.store(IRB, BS.PL, Slot);
+        }
       }
     }
   }
 
   void visitReturnInst(ReturnInst &I) {
-    // musttail calls already pop the frame before the callsite.
+    // musttail calls pop the frame prior to the ret
     if (auto *CB = dyn_cast_or_null<CallBase>(I.getPrevNode()))
       if (CB->isMustTailCall())
         return;
