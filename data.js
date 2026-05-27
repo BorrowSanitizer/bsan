@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779559345090,
+  "lastUpdate": 1779896072676,
   "repoUrl": "https://github.com/BorrowSanitizer/bsan",
   "entries": {
     "Benchmarks": [
@@ -648,6 +648,54 @@ window.BENCHMARK_DATA = {
           {
             "name": "indexmap@2.14.0 (nop) - x86_64-unknown-linux-gnu",
             "value": 5.58,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\"}"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "67717700+Gitter499@users.noreply.github.com",
+            "name": "Rafayel Amirkhanyan",
+            "username": "Gitter499"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b46e290cf2eaf79bbb3c9a2c9e4602387db1d5c8",
+          "message": "Instrument variadic arguments (#176)\n\n* feat: track variadic provenance with __bsan_var_arg_ctr\n\n- Add __bsan_var_arg_ctr to bsan-rt and reset on uninstrumented boundary\n- Expose TLS counter in BorrowSanitizer pass\n- Calculate and store vararg count before calls in visitCallBase\n- Allocate shadow stack space for variadics in initStack\n\n* ran xb fmt\n\n* fix(#154): Readded `validate_params` reset and moved `c-variadic.rs` to pass.\n\n* fix(#154): Move test back to should-pass, variadics will be handled in subsequent-pr",
+          "timestamp": "2026-05-27T11:25:42-04:00",
+          "tree_id": "b809ab7e04a8471be59368ea2acba9942c98211e",
+          "url": "https://github.com/BorrowSanitizer/bsan/commit/b46e290cf2eaf79bbb3c9a2c9e4602387db1d5c8"
+        },
+        "date": 1779896072252,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "hashbrown@0.17.0 (nop) - aarch64-unknown-linux-gnu",
+            "value": 5.93,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\"}"
+          },
+          {
+            "name": "indexmap@2.14.0 (nop) - aarch64-unknown-linux-gnu",
+            "value": 5.95,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\"}"
+          },
+          {
+            "name": "hashbrown@0.17.0 (nop) - x86_64-unknown-linux-gnu",
+            "value": 5.48,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\"}"
+          },
+          {
+            "name": "indexmap@2.14.0 (nop) - x86_64-unknown-linux-gnu",
+            "value": 5.59,
             "unit": "Median Relative Execution Time",
             "extra": "{\"mode\": \"nop\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\"}"
           }
