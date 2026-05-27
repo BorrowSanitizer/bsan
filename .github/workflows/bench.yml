@@ -76,3 +76,7 @@ jobs:
         # Push and deploy GitHub pages branch automatically
         auto-push: true
         benchmark-data-dir-path: .
+        fail-on-alert: true
+        comment-on-alert: true
+        alert-threshold: 130%
+        alert-comment-cc-users: '@icmccorm,@mojeanmac'
