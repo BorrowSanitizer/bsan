@@ -1,5 +1,6 @@
 #include "BorrowSanitizer.h"
 #include "Provenance.h"
+#include "Retag.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/GlobalsModRef.h"
@@ -116,42 +117,7 @@ public:
   }
 };
 
-class RetagInfo {
-public:
-  Value *Ptr;
-  Value *ImArray;
-  Value *PinArray;
-  ConstantInt *Size;
-  ConstantInt *Perms;
-
-  RetagInfo(const CallBase *CB) {
-    assert(CB->arg_size() == 5);
-    Ptr = CB->getOperand(0);
-    Size = cast<ConstantInt>(CB->getOperand(1));
-    Perms = cast<ConstantInt>(CB->getOperand(2));
-    ImArray = CB->getOperand(3);
-    PinArray = CB->getOperand(4);
-  }
-  bool isProtected() {
-    // The least significant bit of the permission indicates
-    // if this is a function-entry retag.
-    return (Perms->getZExtValue() & 0x1) != 0;
-  }
-};
 } // namespace
-
-static bool isRetag(const CallBase *CB) {
-  Function *Callee = CB->getCalledFunction();
-  return CB->arg_size() == 5 && Callee &&
-         Callee->getName().starts_with(RUST_FN("retag"));
-}
-
-static bool isFnEntryRetag(const CallBase *CB) {
-  if (isRetag(CB)) {
-    return RetagInfo(CB).isProtected();
-  }
-  return false;
-}
 
 // BorrowSanitizer uses a shadow stack to track the provenance values
 // that are accessible in memory and to pass provenance between functions.
@@ -459,9 +425,9 @@ public:
           continue;
         }
         if (auto *CB = dyn_cast<CallBase>(&I)) {
-          if (isRetag(CB)) {
+          if (IsRetag(CB)) {
             Retags.push_back(CB);
-            if (isFnEntryRetag(CB))
+            if (IsFnEntryRetag(CB))
               NumFnEntryRetags += 1;
           }
           if (auto *LI = dyn_cast<LifetimeIntrinsic>(CB)) {
@@ -469,8 +435,6 @@ public:
               AllocaInst *AI = findAllocaForValue(LI->getArgOperand(1), true);
               if (AI && BS.shouldInstrumentAlloca(*BS.DL, *AI)) {
                 HasLifetimeStart.insert(AI);
-              } else {
-                continue;
               }
             }
           }
@@ -771,7 +735,7 @@ private:
 
     Function *Callee = CB.getCalledFunction();
     if (Callee) {
-      if (isRetag(&CB)) {
+      if (IsRetag(&CB)) {
         if (CB.getType() == BS.PtrTy) {
           return instrumentRetagReg(CB);
         }
