@@ -40,7 +40,7 @@ SANITIZER_INTERFACE_ATTRIBUTE
 THREADLOCAL uptr __bsan_had_error = 0;
 
 SANITIZER_INTERFACE_ATTRIBUTE
-atomic_uintptr_t __bsan_bor_tag_ctr{2};
+atomic_uintptr_t __bsan_bor_tag_ctr{3};
 
 namespace __bsan {
 
@@ -81,7 +81,7 @@ u32 GetStackTraceLen() {
 Provenance *GetSlot(uptr Idx) { return __bsan_shadow_stack - (Idx + 1); }
 
 // Clears the provenance from the given stack slot.
-void ClearSlot(uptr Idx) { *GetSlot(Idx) = WILDCARD; }
+void ClearSlot(uptr Idx) { *GetSlot(Idx) = OMNIVALID; }
 
 // Prints a stack trace, using Rust's formatting.
 void PrintStackTrace(StackTrace &stack) {
@@ -216,7 +216,7 @@ void __bsan_validate_params(void *current_fn, Provenance *frame_start,
                             uptr len) {
   if (__bsan_marker && current_fn != __bsan_marker) {
     for (uptr i = 0; i < len; ++i) {
-      frame_start[i] = WILDCARD;
+      frame_start[i] = OMNIVALID;
     }
 
     __bsan_var_arg_ctr = 0;
@@ -227,14 +227,14 @@ void __bsan_validate_params(void *current_fn, Provenance *frame_start,
 /// Ensures that the provenance array for the return value is valid.
 /// If the boundary marker is null, then we called an instrumented function, so
 /// we can trust that the contents of the array is valid. Otherwise, we need to
-/// fill it with wildcard provenance values for each pointer being returned. We
+/// fill it with omnivalid provenance values for each pointer being returned. We
 /// also need to restore the boundary marker to the value it had before the
 /// function that was called.
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_validate_retval(void *prev_marker, Provenance *frame, uptr len) {
   if (__bsan_marker) {
     for (uptr i = 0; i < len; ++i) {
-      frame[i] = WILDCARD;
+      frame[i] = OMNIVALID;
     }
   }
   __bsan_marker = prev_marker;

@@ -469,6 +469,8 @@ public:
               AllocaInst *AI = findAllocaForValue(LI->getArgOperand(1), true);
               if (AI && BS.shouldInstrumentAlloca(*BS.DL, *AI)) {
                 HasLifetimeStart.insert(AI);
+              } else {
+                continue;
               }
             }
           }
@@ -509,7 +511,7 @@ private:
       }
       return Prov;
     }
-    return Provenance::wildcard(BS.PL, ElementCount::getFixed(1));
+    return Provenance::omnivalid(BS.PL, ElementCount::getFixed(1));
   }
 
   Provenance assertProvenance(IRBuilder<> &IRB, ElementCount Elems,
@@ -533,7 +535,7 @@ private:
       }
       return Prov;
     }
-    return Provenance::wildcard(BS.PL, Elems);
+    return Provenance::omnivalid(BS.PL, Elems);
   }
 
   // Asserts that there is either a provenance value at the given index, or that
@@ -991,7 +993,7 @@ private:
       SmallVector<ProvenanceDesc> Components =
           BS.PL.getProvenanceDesc(IRB, Operand->getType());
       for (const auto &[Idx, Comp] : llvm::enumerate(Components)) {
-        setProvenance({Operand, Idx}, Provenance::wildcard(BS.PL));
+        setProvenance({Operand, Idx}, Provenance::omnivalid(BS.PL));
       }
     }
   }
@@ -1004,10 +1006,10 @@ private:
     PHINode *InfoNode = IRB.CreatePHI(BS.PtrTy, NumIncoming, "_bsphi_info");
     InfoNode->dropDbgRecords();
 
-    Provenance Wildcard = Provenance::wildcard(BS.PL);
+    Provenance Omni = Provenance::omnivalid(BS.PL);
     for (BasicBlock *BB : Blocks) {
-      TagNode->addIncoming(Wildcard.Tag, BB);
-      InfoNode->addIncoming(Wildcard.Info, BB);
+      TagNode->addIncoming(Omni.Tag, BB);
+      InfoNode->addIncoming(Omni.Info, BB);
     }
     return Provenance(TagNode, InfoNode);
   }

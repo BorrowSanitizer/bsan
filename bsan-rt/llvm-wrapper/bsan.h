@@ -21,7 +21,7 @@ struct Provenance {
   AllocInfo *Info;
 };
 
-const Provenance WILDCARD = {0, nullptr};
+const Provenance OMNIVALID = {0, nullptr};
 
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance
     *__bsan_shadow_stack;

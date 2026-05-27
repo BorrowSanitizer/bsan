@@ -54,7 +54,10 @@ struct DebugSummary {
 impl fmt::Display for DebugSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.info {
-            AllocInfoSummary::WildCard => {
+            AllocInfoSummary::Omnivalid => {
+                write!(f, "[{}] 0x{:x} @{:?} -> (omnivalid)", self.op, self.ptr, self.bor_tag)
+            }
+            AllocInfoSummary::Wildcard => {
                 write!(f, "[{}] 0x{:x} @{:?} -> (wildcard)", self.op, self.ptr, self.bor_tag)
             }
             AllocInfoSummary::Null => {
@@ -75,8 +78,9 @@ macro_rules! debug_bsan {
         {
             #[allow(unused_unsafe)]
             let info = match $bor_tag.0 {
-                0 => AllocInfoSummary::WildCard,
+                0 => AllocInfoSummary::Omnivalid,
                 1 => AllocInfoSummary::Null,
+                2 => AllocInfoSummary::Wildcard,
                 _ => unsafe { &*$alloc_info }.summarize(),
             };
             let summary = DebugSummary { op: $op, ptr: 0, bor_tag: $bor_tag, info };
@@ -186,7 +190,7 @@ impl BorTag {
     }
 
     #[inline]
-    pub const fn wildcard() -> Self {
+    pub const fn omnivalid() -> Self {
         BorTag(0)
     }
 
@@ -194,6 +198,12 @@ impl BorTag {
     pub const fn invalid() -> Self {
         BorTag(1)
     }
+
+        #[inline]
+    pub const fn wildcard() -> Self {
+        BorTag(2)
+    }
+
 
     #[inline]
     pub fn get(&self) -> usize {
@@ -228,31 +238,21 @@ pub struct Provenance {
 unsafe impl Sync for Provenance {}
 unsafe impl Send for Provenance {}
 
-impl Default for Provenance {
-    fn default() -> Self {
-        Provenance::wildcard()
-    }
-}
-
 impl Provenance {
     /// The default provenance value, which is assigned to dangling or invalid
     /// pointers.
+    #[allow(unused)]
     const fn null() -> Self {
         Provenance { bor_tag: BorTag::invalid(), alloc_info: core::ptr::null_mut() }
     }
 
     /// Pointers cast from integers receive a "wildcard" provenance value,
     /// which permits any access.
+    #[allow(unused)]
     const fn wildcard() -> Self {
-        Provenance { bor_tag: BorTag::wildcard(), alloc_info: core::ptr::null_mut() }
+        Provenance { bor_tag: BorTag::omnivalid(), alloc_info: core::ptr::null_mut() }
     }
 }
-
-#[unsafe(no_mangle)]
-static __BSAN_WILDCARD_PROVENANCE: Provenance = Provenance::wildcard();
-
-#[unsafe(no_mangle)]
-static __BSAN_NULL_PROVENANCE: Provenance = Provenance::null();
 
 #[derive(Clone, Copy)]
 pub(crate) union FreeListAddrUnion {
@@ -312,8 +312,9 @@ impl AllocInfo {
 #[cfg(feature = "debug")]
 #[derive(Debug)]
 pub(crate) enum AllocInfoSummary {
+    Omnivalid,
     /// When Prov is wildcard, AllocInfo is invalid
-    WildCard,
+    Wildcard,
     /// When Prov is null, AllocInfo is invalid
     Null,
     /// When Prov is valid, only drop the tree_lock field
