@@ -22,6 +22,10 @@ using namespace __sanitizer;
 SANITIZER_INTERFACE_ATTRIBUTE
 THREADLOCAL void *__bsan_marker = nullptr;
 
+// represents the number of provenance values that correspond to the variadic
+// arguments being passed to the current function
+SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __bsan_var_arg_ctr = 0;
+
 // Pointer to the start of the current frame within the shadow
 // stack, which stores the provenance of pointers that are on
 // the stack or in registers. The shadow stack is always a fully
@@ -214,6 +218,8 @@ void __bsan_validate_params(void *current_fn, Provenance *frame_start,
     for (uptr i = 0; i < len; ++i) {
       frame_start[i] = WILDCARD;
     }
+
+    __bsan_var_arg_ctr = 0;
   }
   __bsan_marker = 0;
 }

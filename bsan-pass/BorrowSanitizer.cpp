@@ -427,6 +427,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // The number of function-entry retags that occurred.
   unsigned NumFnEntryRetags = 0;
 
+  Value *FrameVariadicTop = nullptr;
   ShadowStackAllocator ShadowStack;
   AllocaInst *MarkerAlloca = nullptr;
 
@@ -611,6 +612,12 @@ private:
     IRBuilder<> EntryIRB(FnPrologueEnd);
 
     Value *NumParamProv = BS.Zero;
+
+    Value *VarArgProvCount = nullptr;
+    if (F.isVarArg()) {
+      VarArgProvCount = EntryIRB.CreateLoad(BS.IntptrTy, BS.VarArgCounter);
+    }
+
     for (auto &Arg : F.args()) {
       if (Arg.hasAttribute(Attribute::ByVal)) {
         Type *Ty = Arg.getParamByValType();
@@ -637,15 +644,25 @@ private:
     if (!match(NumParamProv, m_Zero()))
       ShadowStack.initFrameHeader(EntryIRB, NumParamProv);
 
+    // We can safely pass a null pointer if there are no arguments to
+    // validate; the runtime resets the boundary marker either way.
+    Value *ValidateHeaderBottom = ConstantPointerNull::get(BS.PtrTy);
+
+    if (F.isVarArg()) {
+      Value *VarArgByteOffset =
+          EntryIRB.CreateMul(VarArgProvCount, BS.PL.ProvenanceSize);
+      FrameVariadicTop = ShadowStack.getOrInitFrameHeaderBottom(EntryIRB);
+      ValidateHeaderBottom = ptradd(EntryIRB, FrameVariadicTop,
+                                    EntryIRB.CreateNeg(VarArgByteOffset));
+      EntryIRB.CreateStore(BS.Zero, BS.VarArgCounter);
+    } else if (!match(NumParamProv, m_Zero())) {
+      ValidateHeaderBottom = ShadowStack.getOrInitFrameHeaderBottom(EntryIRB);
+    }
+
     if (BS.needsBoundaryValidation(&F)) {
       if (!BS.shouldTrustFunction(TLI, &F)) {
-        // We can safely pass a null pointer if there are no arguments to
-        // validate; the runtime resets the boundary marker either way.
-        Value *HeaderBottom = ConstantPointerNull::get(BS.PtrTy);
-        if (!match(NumParamProv, m_Zero()))
-          HeaderBottom = ShadowStack.getOrInitFrameHeaderBottom(EntryIRB);
         EntryIRB.CreateCall(BS.BsanFuncValidateParams,
-                            {&F, HeaderBottom, NumParamProv});
+                            {&F, ValidateHeaderBottom, NumParamProv});
       }
     }
 
@@ -788,6 +805,10 @@ private:
     // We need to store the provenance for each argument onto the shadow stack.
     // First, we calculate the offset for each parameter's provenance.
     Value *NumParamProv = BS.Zero;
+    Value *VarArgProvCount = BS.Zero;
+    bool IsVarArg = CB.getFunctionType()->isVarArg();
+    unsigned NumFixedParams = CB.getFunctionType()->getNumParams();
+
     SmallVector<std::pair<Value *, Provenance>> ParamOffsets;
     for (const auto &[i, Arg] : llvm::enumerate(CB.args())) {
       SmallVector<ProvenanceDesc> ProvDesc =
@@ -795,6 +816,11 @@ private:
       for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
         Value *NumProv = Before.CreateElementCount(BS.IntptrTy, Desc.Elems);
         NumParamProv = Before.CreateAdd(NumParamProv, NumProv);
+
+        if (IsVarArg && i >= NumFixedParams) {
+          VarArgProvCount = Before.CreateAdd(VarArgProvCount, NumProv);
+        }
+
         Value *ByteOffset =
             Before.CreateMul(NumParamProv, BS.PL.ProvenanceSize);
         Provenance ProvSrc = assertProvenance(Before, Desc.Elems, {Arg, Idx});
@@ -827,6 +853,10 @@ private:
       }
 
       Before.CreateStore(StackOffset, BS.ProvStack);
+    }
+
+    if (IsVarArg) {
+      Before.CreateStore(VarArgProvCount, BS.VarArgCounter);
     }
 
     // Skip the epilogue for musttail calls, since
@@ -1563,6 +1593,7 @@ void BorrowSanitizer::createUserspaceApi(Module &M,
                                          const TargetLibraryInfo &TLI) {
   IRBuilder<> IRB(*C);
   Marker = getOrInsertTLSGlobal(M, BSAN("marker"), PtrTy);
+  VarArgCounter = getOrInsertTLSGlobal(M, BSAN("var_arg_ctr"), IntptrTy);
   ProvStack = getOrInsertTLSGlobal(M, BSAN("shadow_stack"), PtrTy);
   BorTagCounter = getOrInsertGlobal(M, BSAN("bor_tag_ctr"), IntptrTy);
 }

@@ -11,9 +11,9 @@ edition = "2021"
 
 [dev-dependencies]
 colored = "3"
-ui_test = "0.30.2"
+ui_test = "0.30.5"
 rustc_version = "0.4"
-regex = "1.12.2"
+regex = "1.12.3"
 tempfile = "3"
 libc = "0.2.186"
 
