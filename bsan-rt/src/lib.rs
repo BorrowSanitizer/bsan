@@ -317,7 +317,11 @@ pub(crate) enum AllocInfoSummary {
     /// When Prov is null, AllocInfo is invalid
     Null,
     /// When Prov is valid, only drop the tree_lock field
-    Valid { alloc_id: AllocId, base_addr: FreeListAddrUnion, size: usize },
+    Valid {
+        alloc_id: AllocId,
+        base_addr: FreeListAddrUnion,
+        size: usize,
+    },
 }
 
 /// Initializes the global state of the runtime library.

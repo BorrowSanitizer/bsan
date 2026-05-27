@@ -25,7 +25,7 @@ public:
     PinArray = CB->getOperand(4);
   }
   bool isProtected() {
-    // The least significant bit of the permission 
+    // The least significant bit of the permission
     // indicates whether this is a function-entry retag.
     return (Perms->getZExtValue() & 0x1) != 0;
   }

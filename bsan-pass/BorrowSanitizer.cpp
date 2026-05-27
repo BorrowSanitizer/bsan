@@ -392,6 +392,8 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   unsigned NumFnEntryRetags = 0;
 
   Value *FrameVariadicTop = nullptr;
+  Value *FrameHeaderBottom = nullptr;
+
   ShadowStackAllocator ShadowStack;
   AllocaInst *MarkerAlloca = nullptr;
 
@@ -417,7 +419,7 @@ public:
         if (I.getMetadata(LLVMContext::MD_nosanitize))
           continue;
         if (I.getOpcode() == Instruction::Alloca) {
-          AllocaInst &AI = static_cast<AllocaInst &>(I);
+          auto &AI = static_cast<AllocaInst &>(I);
           if (BS.shouldInstrumentAlloca(*BS.DL, AI) && AI.isStaticAlloca())
             StaticAllocaVec.push_back(&AI);
           continue;
@@ -429,11 +431,13 @@ public:
               NumFnEntryRetags += 1;
           }
           if (auto *LI = dyn_cast<LifetimeIntrinsic>(CB)) {
-            if (CB->getIntrinsicID() == Intrinsic::lifetime_start) {
-              AllocaInst *AI = findAllocaForValue(LI->getArgOperand(1), true);
-              if (AI && BS.shouldInstrumentAlloca(*BS.DL, *AI)) {
+            AllocaInst *AI = findAllocaForValue(LI->getArgOperand(1), true);
+            if (AI && BS.shouldInstrumentAlloca(*BS.DL, *AI)) {
+              if (CB->getIntrinsicID() == Intrinsic::lifetime_start) {
                 HasLifetimeStart.insert(AI);
               }
+            } else {
+              continue;
             }
           }
         }
@@ -1053,19 +1057,24 @@ private:
   }
 
   void instrumentLifetimeStart(IntrinsicInst &II) {
-    AllocaInst *AI = findAllocaForValue(II.getArgOperand(0), true);
-    IRBuilder<> IRB(&II);
-    Provenance CurrentProv = assertProvenanceScalar(II.getParent(), AI);
-    IRB.CreateCall(BS.BsanFuncDeallocStack,
-                   {AI, CurrentProv.Tag, CurrentProv.Info});
-    initAllocaMetadata(IRB, AI, CurrentProv);
+    if (auto *AI = findAllocaForValue(II.getArgOperand(0), true)) {
+      if (auto Prov = getProvenance(II.getParent(), AI)) {
+        IRBuilder<> IRB(&II);
+        IRB.CreateCall(BS.BsanFuncDeallocStack,
+                       {AI, (*Prov).Tag, (*Prov).Info});
+        initAllocaMetadata(IRB, AI, *Prov);
+      }
+    }
   }
 
   void instrumentLifetimeEnd(IntrinsicInst &II) {
-    AllocaInst *AI = findAllocaForValue(II.getArgOperand(0), true);
-    IRBuilder<> IRB(&II);
-    Provenance Root = assertProvenanceScalar(II.getParent(), AI);
-    IRB.CreateCall(BS.BsanFuncDeallocStack, {AI, Root.Tag, Root.Info});
+    if (auto *AI = findAllocaForValue(II.getArgOperand(0), true)) {
+      if (auto Prov = getProvenance(II.getParent(), AI)) {
+        IRBuilder<> IRB(&II);
+        IRB.CreateCall(BS.BsanFuncDeallocStack,
+                       {AI, (*Prov).Tag, (*Prov).Info});
+      }
+    }
   }
 
   void visitMemSetInst(MemSetInst &I) {
