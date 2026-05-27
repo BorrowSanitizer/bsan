@@ -218,6 +218,8 @@ void __bsan_validate_params(void *current_fn, Provenance *frame_start,
     for (uptr i = 0; i < len; ++i) {
       frame_start[i] = WILDCARD;
     }
+
+    __bsan_var_arg_ctr = 0;
   }
   __bsan_marker = 0;
 }
