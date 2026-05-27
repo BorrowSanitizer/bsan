@@ -199,11 +199,10 @@ impl BorTag {
         BorTag(1)
     }
 
-        #[inline]
+    #[inline]
     pub const fn wildcard() -> Self {
         BorTag(2)
     }
-
 
     #[inline]
     pub fn get(&self) -> usize {
@@ -250,7 +249,7 @@ impl Provenance {
     /// which permits any access.
     #[allow(unused)]
     const fn wildcard() -> Self {
-        Provenance { bor_tag: BorTag::omnivalid(), alloc_info: core::ptr::null_mut() }
+        Provenance { bor_tag: BorTag::wildcard(), alloc_info: core::ptr::null_mut() }
     }
 }
 

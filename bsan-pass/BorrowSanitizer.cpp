@@ -30,11 +30,9 @@
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
 #define BSAN_PREFIX "__bsan_"
-#define RUST_PREFIX "__rust_"
 
 #define BSAN(name) BSAN_PREFIX name
 #define BSAN_STATIC(name) BSAN_STATIC_PREFIX name
-#define RUST_FN(name) RUST_PREFIX name
 
 using namespace llvm;
 using namespace llvm::PatternMatch;
