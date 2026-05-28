@@ -61,7 +61,7 @@ bool CallerIsInstrumented(void *sym);
 
 #define GET_SPAN_PC_BP                                                         \
   GET_SPAN;                                                                    \
-  GET_CURRENT_PC_BP;                                                           \
+  GET_CURRENT_PC_BP;
 
 #define HANDLE_ERROR                                                           \
   if (UNLIKELY(__bsan_had_error)) {                                            \
@@ -71,7 +71,7 @@ bool CallerIsInstrumented(void *sym);
     stack.Unwind(pc, bp, nullptr, true, __bsan::GetStackTraceLen());           \
     PrintStackTrace(stack);                                                    \
     Die();                                                                     \
-  }                                                                            \
+  }
 
 #define HANDLE_ERROR_PC_BP(pc, bp)                                             \
   if (UNLIKELY(__bsan_had_error)) {                                            \
@@ -79,7 +79,7 @@ bool CallerIsInstrumented(void *sym);
     stack.Unwind(pc, bp, nullptr, true, __bsan::GetStackTraceLen());           \
     PrintStackTrace(stack);                                                    \
     Die();                                                                     \
-  }                                                                            \
+  }
 
 } // namespace __bsan
 #endif // BSAN_H
