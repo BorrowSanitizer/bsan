@@ -316,11 +316,11 @@ SANITIZER_INTERFACE_ATTRIBUTE
 BorTag __bsan_retag(void *object_addr, uptr access_size, u8 flags,
                     const uptr im_data[2], uptr im_len, const uptr pin_data[2],
                     uptr pin_len, BorTag bor_tag, AllocInfo *alloc_info) {
-  GET_SPAN_PC_BP;
+  GET_SPAN;
   BorTag tag =
       __bsan_retag_impl(object_addr, access_size, flags, im_data, im_len,
                         pin_data, pin_len, bor_tag, alloc_info, span);
-  HANDLE_ERROR(pc, bp);
+  HANDLE_ERROR;
   return tag;
 }
 
@@ -331,9 +331,9 @@ void __bsan_read_impl(void *ptr, uptr access_size, BorTag bor_tag,
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_read(void *ptr, uptr access_size, BorTag bor_tag,
                  AllocInfo *alloc_info) {
-  GET_SPAN_PC_BP;
+  GET_SPAN;
   __bsan_read_impl(ptr, access_size, bor_tag, alloc_info, span);
-  HANDLE_ERROR(pc, bp);
+  HANDLE_ERROR;
 }
 
 SANITIZER_WEAK_ATTRIBUTE
@@ -343,9 +343,9 @@ void __bsan_write_impl(void *ptr, uptr access_size, BorTag bor_tag,
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_write(void *ptr, uptr access_size, BorTag bor_tag,
                   AllocInfo *alloc_info) {
-  GET_SPAN_PC_BP;
+  GET_SPAN;
   __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, span);
-  HANDLE_ERROR(pc, bp);
+  HANDLE_ERROR;
 }
 
 SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE Provenance *
@@ -384,9 +384,9 @@ void __bsan_alloc_stack_impl(void *base_addr, uptr size, BorTag bor_tag,
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_alloc_stack(void *base_addr, uptr size, BorTag bor_tag,
                         AllocInfo *alloc_info) {
-  GET_SPAN_PC_BP;
+  GET_SPAN;
   __bsan_alloc_stack_impl(base_addr, size, bor_tag, alloc_info, span);
-  HANDLE_ERROR(pc, bp);
+  HANDLE_ERROR;
 }
 
 SANITIZER_WEAK_ATTRIBUTE
@@ -395,9 +395,9 @@ void __bsan_dealloc_stack_impl(BorTag bor_tag, AllocInfo *alloc_info, Span pc) {
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_dealloc_stack(void *ptr, BorTag bor_tag, AllocInfo *alloc_info) {
-  GET_SPAN_PC_BP;
+  GET_SPAN;
   __bsan_dealloc_stack_impl(bor_tag, alloc_info, span);
-  HANDLE_ERROR(pc, bp);
+  HANDLE_ERROR;
 }
 
 SANITIZER_WEAK_ATTRIBUTE

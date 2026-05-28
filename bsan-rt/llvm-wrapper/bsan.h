@@ -61,16 +61,25 @@ bool CallerIsInstrumented(void *sym);
 
 #define GET_SPAN_PC_BP                                                         \
   GET_SPAN;                                                                    \
-  uptr pc = StackTrace::GetCurrentPc();                                        \
-  uptr bp = GET_CURRENT_FRAME();
+  GET_CURRENT_PC_BP;                                                           \
 
-#define HANDLE_ERROR(pc, bp)                                                   \
-  if (__bsan_had_error) {                                                      \
+#define HANDLE_ERROR                                                           \
+  if (UNLIKELY(__bsan_had_error)) {                                            \
+    uptr pc = StackTrace::GetCurrentPc();                                      \
+    uptr bp = GET_CURRENT_FRAME();                                             \
     UNINITIALIZED BufferedStackTrace stack;                                    \
     stack.Unwind(pc, bp, nullptr, true, __bsan::GetStackTraceLen());           \
     PrintStackTrace(stack);                                                    \
     Die();                                                                     \
-  }
+  }                                                                            \
+
+#define HANDLE_ERROR_PC_BP(pc, bp)                                             \
+  if (UNLIKELY(__bsan_had_error)) {                                            \
+    UNINITIALIZED BufferedStackTrace stack;                                    \
+    stack.Unwind(pc, bp, nullptr, true, __bsan::GetStackTraceLen());           \
+    PrintStackTrace(stack);                                                    \
+    Die();                                                                     \
+  }                                                                            \
 
 } // namespace __bsan
 #endif // BSAN_H
