@@ -1,0 +1,19 @@
+error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+    --> CARGO_REGISTRY/.../decCommon.rs:LL:CC
+   |
+LL | GETCOEFF(df, bcdar);           // use macro
+   |
+     = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
+help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
+    --> RUSTLIB/core/src/slice/mod.rs:LL:CC
+   |
+LL | pub const fn as_ptr(&self) -> *const T {
+   |
+
+stack backtrace:
+0: decQuadGetCoefficient
+ at CARGO_REGISTRY/.../decCommon.rs:LL:CC
+1: dec_number_sys::dec_quad::dec_quad_get_coefficient
+ at CARGO_REGISTRY/.../dec_quad.rs:LL:CC
+2: dec_number_sys::main
+ at bsan/tests/fail-dep/mirilli/dec_number_sys.rs:LL:CC
