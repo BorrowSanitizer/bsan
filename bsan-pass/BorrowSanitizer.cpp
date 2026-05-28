@@ -429,7 +429,7 @@ public:
               NumFnEntryRetags += 1;
           }
           if (auto *LI = dyn_cast<LifetimeIntrinsic>(CB)) {
-            AllocaInst *AI = findAllocaForValue(LI->getArgOperand(1), true);
+            AllocaInst *AI = findAllocaForValue(LI->getArgOperand(0), true);
             if (AI && BS.shouldInstrumentAlloca(*BS.DL, *AI)) {
               if (CB->getIntrinsicID() == Intrinsic::lifetime_start) {
                 HasLifetimeStart.insert(AI);
