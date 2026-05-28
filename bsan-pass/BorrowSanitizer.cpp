@@ -356,15 +356,11 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // instrumentation. This is a call to llvm.donothing.
   Instruction *FnPrologueEnd;
 
-  // If a stack allocation does not have a dedicated lifetime.start, then we
-  // allocate metadata for it within the entry block. We use a liveness pass to
-  // determine which allocations need to be freed, so no additional handling is
-  // necessary to determine where to free these allocations, even if they do not
-  // have a lifetime.end, either.
-  SmallDenseSet<AllocaInst *> HasLifetimeStart;
-
-  // A vector containing every static alloca that we support instrumenting.
+  // The static allocations that we will instrument.
   SmallVector<AllocaInst *, 8> StaticAllocaVec;
+
+  // The static allocations that have a `lifetime.start` intrinsic.
+  SmallDenseSet<AllocaInst *> HasLifetimeStart;
 
   // A map from Arguments to (byte offset, provenance count) pairs, indicating
   // the offset from the top of the header where the argument's provenane is
@@ -388,13 +384,15 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // "dummy" function calls, they need to be erased before the pass has
   // finished.
   SmallVector<CallBase *> Retags;
+
   // The number of function-entry retags that occurred.
   unsigned NumFnEntryRetags = 0;
 
-  Value *FrameVariadicTop = nullptr;
-  Value *FrameHeaderBottom = nullptr;
-
   ShadowStackAllocator ShadowStack;
+  Value *FrameVariadicTop = nullptr;
+
+  // An allocation used to store the boundary marker for
+  // invoke instructions involving uninstrumented functions.
   AllocaInst *MarkerAlloca = nullptr;
 
 public:
@@ -537,7 +535,6 @@ private:
         return ArgProvenance;
       }
     }
-
     return std::nullopt;
   }
 
@@ -580,7 +577,6 @@ private:
     IRBuilder<> EntryIRB(FnPrologueEnd);
 
     Value *NumParamProv = BS.Zero;
-
     Value *VarArgProvCount = nullptr;
     if (F.isVarArg()) {
       VarArgProvCount = EntryIRB.CreateLoad(BS.IntptrTy, BS.VarArgCounter);
