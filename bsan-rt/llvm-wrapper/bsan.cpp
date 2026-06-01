@@ -406,7 +406,8 @@ void __bsan_protector_end_impl(BorTag bor_tag, AllocInfo *alloc_info, Span pc);
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_pop_frame(const Provenance *frame_start, uptr prot,
                       uptr alloca_vec_size) {
-  if (__bsan_protector_end_impl && __bsan_destroy_stack_slot && __bsan_dealloc_stack_impl) {
+  if (__bsan_protector_end_impl && __bsan_destroy_stack_slot &&
+      __bsan_dealloc_stack_impl) {
     GET_SPAN;
     InterceptorBarrier Barrier;
     for (uptr i = 0; i < prot + alloca_vec_size; i++) {

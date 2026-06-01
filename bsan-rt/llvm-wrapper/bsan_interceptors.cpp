@@ -4,27 +4,27 @@
 #include "bsan_interface_internal.h"
 #include "bsan_thread.h"
 #include "interception/interception.h"
-#include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_allocator.h"
 #include "sanitizer_common/sanitizer_allocator_dlsym.h"
 #include "sanitizer_common/sanitizer_allocator_interface.h"
-#include "sanitizer_common/sanitizer_platform_interceptors.h"
-#include "sanitizer_common/sanitizer_linux.h"
-#include "sanitizer_common/sanitizer_stacktrace.h"
 #include "sanitizer_common/sanitizer_atomic.h"
+#include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_errno.h"
 #include "sanitizer_common/sanitizer_errno_codes.h"
 #include "sanitizer_common/sanitizer_libc.h"
+#include "sanitizer_common/sanitizer_linux.h"
 #include "sanitizer_common/sanitizer_placement_new.h"
+#include "sanitizer_common/sanitizer_platform_interceptors.h"
+#include "sanitizer_common/sanitizer_stacktrace.h"
 #include "sanitizer_common/sanitizer_vector.h"
 
 using namespace __sanitizer;
 using namespace __bsan;
 
 namespace __bsan {
-  THREADLOCAL int block_interception;
-  bool BlockInterception() { return block_interception; }
-}
+THREADLOCAL int block_interception;
+bool BlockInterception() { return block_interception; }
+} // namespace __bsan
 
 DECLARE_REAL(void *, malloc, SIZE_T)
 DECLARE_REAL(void, free, void *)
@@ -45,7 +45,6 @@ struct DlsymAlloc : public DlSymAllocator<DlsymAlloc> {
       __bsan_init();                                                           \
     }                                                                          \
   } while (0)
-
 
 struct LocalInterceptorContext {
   bool block_interception;
@@ -93,7 +92,6 @@ extern "C" void *__bsan_crt_malloc(SIZE_T size) {
     return DlsymAlloc::Allocate(size);
   return REAL(malloc)(size);
 }
-
 
 INTERCEPTOR(void *, malloc, SIZE_T size) {
   GET_SPAN;
@@ -281,97 +279,109 @@ static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso) {
   return res;
 }
 
-#define BSAN_INTERCEPT_FUNC(name)                                       \
-  do {                                                                  \
-    if (!INTERCEPT_FUNCTION(name))                                      \
-      VReport(1, "BorrowSanitizer: failed to intercept '%s'\n", #name); \
+#define BSAN_INTERCEPT_FUNC(name)                                              \
+  do {                                                                         \
+    if (!INTERCEPT_FUNCTION(name))                                             \
+      VReport(1, "BorrowSanitizer: failed to intercept '%s'\n", #name);        \
   } while (0)
 
-#define BSAN_INTERCEPT_FUNC_VER(name, ver)                                 \
-  do {                                                                     \
-    if (!INTERCEPT_FUNCTION_VER(name, ver))                                \
-      VReport(1, "BorrowSanitizer: failed to intercept '%s@@%s'\n", #name, \
-              ver);                                                        \
+#define BSAN_INTERCEPT_FUNC_VER(name, ver)                                     \
+  do {                                                                         \
+    if (!INTERCEPT_FUNCTION_VER(name, ver))                                    \
+      VReport(1, "BorrowSanitizer: failed to intercept '%s@@%s'\n", #name,     \
+              ver);                                                            \
   } while (0)
 
-#define BSAN_INTERCEPT_FUNC_VER_UNVERSIONED_FALLBACK(name, ver)             \
-  do {                                                                      \
-    if (!INTERCEPT_FUNCTION_VER(name, ver) && !INTERCEPT_FUNCTION(name))    \
-      VReport(1, "BorrowSanitizer: failed to intercept '%s@@%s' or '%s'\n", \
-              #name, ver, #name);                                           \
+#define BSAN_INTERCEPT_FUNC_VER_UNVERSIONED_FALLBACK(name, ver)                \
+  do {                                                                         \
+    if (!INTERCEPT_FUNCTION_VER(name, ver) && !INTERCEPT_FUNCTION(name))       \
+      VReport(1, "BorrowSanitizer: failed to intercept '%s@@%s' or '%s'\n",    \
+              #name, ver, #name);                                              \
   } while (0)
 
 #define COMMON_INTERCEPT_FUNCTION(name) BSAN_INTERCEPT_FUNC(name)
 
-#define COMMON_INTERCEPT_FUNCTION_VER(name, ver) \
+#define COMMON_INTERCEPT_FUNCTION_VER(name, ver)                               \
   BSAN_INTERCEPT_FUNC_VER(name, ver)
 
-#define COMMON_INTERCEPT_FUNCTION_VER_UNVERSIONED_FALLBACK(name, ver) \
-  BSAN_INTERCEPT_FUNC_VER_UNVERSIONED_FALLBACK(name, ver) 
-  
-#define COMMON_INTERCEPTOR_UNPOISON_PARAM(count)  \
-  do {} while (false) \
+#define COMMON_INTERCEPT_FUNCTION_VER_UNVERSIONED_FALLBACK(name, ver)          \
+  BSAN_INTERCEPT_FUNC_VER_UNVERSIONED_FALLBACK(name, ver)
 
-#define COMMON_INTERCEPTOR_WRITE_RANGE(ctx, ptr, size) \
-  do {} while (false) \
+#define COMMON_INTERCEPTOR_UNPOISON_PARAM(count)                               \
+  do {                                                                         \
+  } while (false)
 
-#define COMMON_INTERCEPTOR_READ_RANGE(ctx, ptr, size) \
-  do {} while (false) \
+#define COMMON_INTERCEPTOR_WRITE_RANGE(ctx, ptr, size)                         \
+  do {                                                                         \
+  } while (false)
 
-#define COMMON_INTERCEPTOR_INITIALIZE_RANGE(ptr, size) \
-  do {} while (false)
+#define COMMON_INTERCEPTOR_READ_RANGE(ctx, ptr, size)                          \
+  do {                                                                         \
+  } while (false)
 
-#define COMMON_INTERCEPTOR_ENTER(ctx, func, ...)               \
-  if (bsan_init_running)                                       \
-    return REAL(func)(__VA_ARGS__);                            \
-  ENSURE_BSAN_INITED();                                        \
-  LocalInterceptorContext bsan_ctx = {BlockInterception()};    \
-  ctx = (void *)&bsan_ctx;                                     \
-  (void)ctx;                                                   \
-  InterceptorBarrier barrier;                                  \
+#define COMMON_INTERCEPTOR_INITIALIZE_RANGE(ptr, size)                         \
+  do {                                                                         \
+  } while (false)
 
-#define COMMON_INTERCEPTOR_DIR_ACQUIRE(ctx, path) \
-  do {} while (false)
-#define COMMON_INTERCEPTOR_FD_ACQUIRE(ctx, fd) \
-  do {} while (false)
-#define COMMON_INTERCEPTOR_FD_RELEASE(ctx, fd) \
-  do {} while (false)
-#define COMMON_INTERCEPTOR_FD_SOCKET_ACCEPT(ctx, fd, newfd) \
-  do {} while (false)
-#define COMMON_INTERCEPTOR_SET_THREAD_NAME(ctx, name) \
-  do {} while (false)
-#define COMMON_INTERCEPTOR_SET_PTHREAD_NAME(ctx, thread, name) \
-  do {} while (false)
+#define COMMON_INTERCEPTOR_ENTER(ctx, func, ...)                               \
+  if (bsan_init_running)                                                       \
+    return REAL(func)(__VA_ARGS__);                                            \
+  ENSURE_BSAN_INITED();                                                        \
+  LocalInterceptorContext bsan_ctx = {BlockInterception()};                    \
+  ctx = (void *)&bsan_ctx;                                                     \
+  (void)ctx;                                                                   \
+  InterceptorBarrier barrier;
+
+#define COMMON_INTERCEPTOR_DIR_ACQUIRE(ctx, path)                              \
+  do {                                                                         \
+  } while (false)
+#define COMMON_INTERCEPTOR_FD_ACQUIRE(ctx, fd)                                 \
+  do {                                                                         \
+  } while (false)
+#define COMMON_INTERCEPTOR_FD_RELEASE(ctx, fd)                                 \
+  do {                                                                         \
+  } while (false)
+#define COMMON_INTERCEPTOR_FD_SOCKET_ACCEPT(ctx, fd, newfd)                    \
+  do {                                                                         \
+  } while (false)
+#define COMMON_INTERCEPTOR_SET_THREAD_NAME(ctx, name)                          \
+  do {                                                                         \
+  } while (false)
+#define COMMON_INTERCEPTOR_SET_PTHREAD_NAME(ctx, thread, name)                 \
+  do {                                                                         \
+  } while (false)
 #define COMMON_INTERCEPTOR_BLOCK_REAL(name) REAL(name)
 #define COMMON_INTERCEPTOR_ON_EXIT(ctx) OnExit()
 
-#define COMMON_INTERCEPTOR_LIBRARY_LOADED(filename, handle) \
-  do {} while (false)
+#define COMMON_INTERCEPTOR_LIBRARY_LOADED(filename, handle)                    \
+  do {                                                                         \
+  } while (false)
 #define COMMON_INTERCEPTOR_NOTHING_IS_INITIALIZED (!bsan_inited)
 
-#define COMMON_INTERCEPTOR_GET_TLS_RANGE(begin, end) *begin = *end = 0; 
+#define COMMON_INTERCEPTOR_GET_TLS_RANGE(begin, end) *begin = *end = 0;
 
-#define COMMON_INTERCEPTOR_MEMSET_IMPL(ctx, block, c, size) \
-  {                                                         \
-    (void)ctx;                                              \
-    __bsan_memset(block, c, size);                          \
-    return block;                                           \
+#define COMMON_INTERCEPTOR_MEMSET_IMPL(ctx, block, c, size)                    \
+  {                                                                            \
+    (void)ctx;                                                                 \
+    __bsan_memset(block, c, size);                                             \
+    return block;                                                              \
   }
-#define COMMON_INTERCEPTOR_MEMMOVE_IMPL(ctx, to, from, size) \
-  {                                                          \
-    (void)ctx;                                               \
-    __bsan_memmove(to, from, size);                          \
-    return to;                                               \
+#define COMMON_INTERCEPTOR_MEMMOVE_IMPL(ctx, to, from, size)                   \
+  {                                                                            \
+    (void)ctx;                                                                 \
+    __bsan_memmove(to, from, size);                                            \
+    return to;                                                                 \
   }
-#define COMMON_INTERCEPTOR_MEMCPY_IMPL(ctx, to, from, size) \
-  {                                                         \
-    (void)ctx;                                              \
-    __bsan_memcpy(to, from, size);                          \
-    return to;                                              \
+#define COMMON_INTERCEPTOR_MEMCPY_IMPL(ctx, to, from, size)                    \
+  {                                                                            \
+    (void)ctx;                                                                 \
+    __bsan_memcpy(to, from, size);                                             \
+    return to;                                                                 \
   }
 
-#define COMMON_INTERCEPTOR_COPY_STRING(ctx, to, from, size) \
-  do {} while (false) \
+#define COMMON_INTERCEPTOR_COPY_STRING(ctx, to, from, size)                    \
+  do {                                                                         \
+  } while (false)
 
 #define COMMON_INTERCEPTOR_MMAP_IMPL(ctx, mmap, addr, length, prot, flags, fd, \
                                      offset)                                   \
@@ -383,18 +393,25 @@ namespace __bsan {
 int OnExit() { return 0; }
 } // namespace __bsan
 
-
-#include "sanitizer_common/sanitizer_common_interceptors_memintrinsics.inc"
 #include "sanitizer_common/sanitizer_common_interceptors.inc"
+#include "sanitizer_common/sanitizer_common_interceptors_memintrinsics.inc"
 
 #define SIGNAL_INTERCEPTOR_ENTER() ENSURE_BSAN_INITED()
 
 #include "sanitizer_common/sanitizer_signal_interceptors.inc"
 
-#define COMMON_SYSCALL_PRE_READ_RANGE(p, s) do {} while (false)
-#define COMMON_SYSCALL_PRE_WRITE_RANGE(p, s) do {} while (false)
-#define COMMON_SYSCALL_POST_READ_RANGE(p, s) do {} while (false)
-#define COMMON_SYSCALL_POST_WRITE_RANGE(p, s) do {} while (false)
+#define COMMON_SYSCALL_PRE_READ_RANGE(p, s)                                    \
+  do {                                                                         \
+  } while (false)
+#define COMMON_SYSCALL_PRE_WRITE_RANGE(p, s)                                   \
+  do {                                                                         \
+  } while (false)
+#define COMMON_SYSCALL_POST_READ_RANGE(p, s)                                   \
+  do {                                                                         \
+  } while (false)
+#define COMMON_SYSCALL_POST_WRITE_RANGE(p, s)                                  \
+  do {                                                                         \
+  } while (false)
 #include "sanitizer_common/sanitizer_common_syscalls.inc"
 #include "sanitizer_common/sanitizer_syscalls_netbsd.inc"
 
@@ -405,7 +422,7 @@ void InitializeInterceptors() {
   CHECK_EQ(inited, 0);
   __interception::DoesNotSupportStaticLinking();
 
-  new(global_interceptor_ctx()) GlobalInterceptorContext();
+  new (global_interceptor_ctx()) GlobalInterceptorContext();
 
   InitializeCommonInterceptors();
   InitializeSignalInterceptors();
@@ -422,4 +439,3 @@ void InitializeInterceptors() {
 }
 
 } // namespace __bsan
-
