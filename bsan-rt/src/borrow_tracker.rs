@@ -34,15 +34,16 @@ impl<'b> BorrowTracker<'b> {
     where
         F: FnOnce(Self) -> UBResult<T>,
     {
-        if prov.bor_tag == BorTag::wildcard() {
+        if prov.bor_tag == BorTag::omnivalid() {
             Ok(None)
         } else if prov.bor_tag == BorTag::invalid() {
             Err(UBInfo::UseAfterFree)
         } else {
             // Safety:
             // Our instrumentation pass guarantees that if a pointer's
-            // provenance is non-null and not wildcard, then it will contain
+            // provenance is non-null and not omnivalid, then it will contain
             // valid allocation info pointer.
+            // TODO: support wildcard provenance
             debug_assert!(!prov.alloc_info.is_null());
             let alloc_id = unsafe { (*prov.alloc_info).alloc_id };
 
@@ -70,7 +71,7 @@ impl<'b> BorrowTracker<'b> {
     where
         F: FnOnce(Self) -> UBResult<T>,
     {
-        if prov.bor_tag == BorTag::wildcard() {
+        if prov.bor_tag == BorTag::omnivalid() {
             Ok(None)
         } else if prov.bor_tag == BorTag::invalid() {
             if access_size == Some(0) {
@@ -81,8 +82,9 @@ impl<'b> BorrowTracker<'b> {
         } else {
             // Safety:
             // Our instrumentation pass guarantees that if a pointer's
-            // provenance is non-null and not wildcard, then it will contain
+            // provenance is non-null and not omnivalid, then it will contain
             // valid allocation info pointer.
+            // TODO: support wildcard provenance
             debug_assert!(!prov.alloc_info.is_null());
 
             let alloc_id = unsafe { (*prov.alloc_info).alloc_id };

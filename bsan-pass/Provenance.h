@@ -52,9 +52,6 @@ private:
                            Type *CurrentTy, Value *ByteOffset);
 };
 
-class ProvenanceScalar;
-class ProvenanceVector;
-
 class Provenance {
 public:
   Value *Tag = nullptr;
@@ -76,9 +73,8 @@ public:
   static Provenance load(IRBuilder<> &IRB, const ProvenanceLayout &PL,
                          Value *Src,
                          ElementCount Elems = ElementCount::getFixed(1));
-  static Provenance wildcard(const ProvenanceLayout &PL,
-                             ElementCount Elems = ElementCount::getFixed(1));
-  bool isWildcard() const;
+  static Provenance omnivalid(const ProvenanceLayout &PL,
+                              ElementCount Elems = ElementCount::getFixed(1));
 };
 
 struct ProvenanceKey {

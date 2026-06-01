@@ -1,5 +1,6 @@
 #include "BorrowSanitizer.h"
 #include "Provenance.h"
+#include "Retag.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/GlobalsModRef.h"
@@ -29,11 +30,9 @@
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
 #define BSAN_PREFIX "__bsan_"
-#define RUST_PREFIX "__rust_"
 
 #define BSAN(name) BSAN_PREFIX name
 #define BSAN_STATIC(name) BSAN_STATIC_PREFIX name
-#define RUST_FN(name) RUST_PREFIX name
 
 using namespace llvm;
 using namespace llvm::PatternMatch;
@@ -116,42 +115,7 @@ public:
   }
 };
 
-class RetagInfo {
-public:
-  Value *Ptr;
-  Value *ImArray;
-  Value *PinArray;
-  ConstantInt *Size;
-  ConstantInt *Perms;
-
-  RetagInfo(const CallBase *CB) {
-    assert(CB->arg_size() == 5);
-    Ptr = CB->getOperand(0);
-    Size = cast<ConstantInt>(CB->getOperand(1));
-    Perms = cast<ConstantInt>(CB->getOperand(2));
-    ImArray = CB->getOperand(3);
-    PinArray = CB->getOperand(4);
-  }
-  bool isProtected() {
-    // The least significant bit of the permission indicates
-    // if this is a function-entry retag.
-    return (Perms->getZExtValue() & 0x1) != 0;
-  }
-};
 } // namespace
-
-static bool isRetag(const CallBase *CB) {
-  Function *Callee = CB->getCalledFunction();
-  return CB->arg_size() == 5 && Callee &&
-         Callee->getName().starts_with(RUST_FN("retag"));
-}
-
-static bool isFnEntryRetag(const CallBase *CB) {
-  if (isRetag(CB)) {
-    return RetagInfo(CB).isProtected();
-  }
-  return false;
-}
 
 // BorrowSanitizer uses a shadow stack to track the provenance values
 // that are accessible in memory and to pass provenance between functions.
@@ -392,15 +356,11 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // instrumentation. This is a call to llvm.donothing.
   Instruction *FnPrologueEnd;
 
-  // If a stack allocation does not have a dedicated lifetime.start, then we
-  // allocate metadata for it within the entry block. We use a liveness pass to
-  // determine which allocations need to be freed, so no additional handling is
-  // necessary to determine where to free these allocations, even if they do not
-  // have a lifetime.end, either.
-  SmallDenseSet<AllocaInst *> HasLifetimeStart;
-
-  // A vector containing every static alloca that we support instrumenting.
+  // The static allocations that we will instrument.
   SmallVector<AllocaInst *, 8> StaticAllocaVec;
+
+  // The static allocations that have a `lifetime.start` intrinsic.
+  SmallDenseSet<AllocaInst *> HasLifetimeStart;
 
   // A map from Arguments to (byte offset, provenance count) pairs, indicating
   // the offset from the top of the header where the argument's provenane is
@@ -424,11 +384,15 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // "dummy" function calls, they need to be erased before the pass has
   // finished.
   SmallVector<CallBase *> Retags;
+
   // The number of function-entry retags that occurred.
   unsigned NumFnEntryRetags = 0;
 
-  Value *FrameVariadicTop = nullptr;
   ShadowStackAllocator ShadowStack;
+  Value *FrameVariadicTop = nullptr;
+
+  // An allocation used to store the boundary marker for
+  // invoke instructions involving uninstrumented functions.
   AllocaInst *MarkerAlloca = nullptr;
 
 public:
@@ -453,23 +417,25 @@ public:
         if (I.getMetadata(LLVMContext::MD_nosanitize))
           continue;
         if (I.getOpcode() == Instruction::Alloca) {
-          AllocaInst &AI = static_cast<AllocaInst &>(I);
+          auto &AI = static_cast<AllocaInst &>(I);
           if (BS.shouldInstrumentAlloca(*BS.DL, AI) && AI.isStaticAlloca())
             StaticAllocaVec.push_back(&AI);
           continue;
         }
         if (auto *CB = dyn_cast<CallBase>(&I)) {
-          if (isRetag(CB)) {
+          if (IsRetag(CB)) {
             Retags.push_back(CB);
-            if (isFnEntryRetag(CB))
+            if (IsFnEntryRetag(CB))
               NumFnEntryRetags += 1;
           }
           if (auto *LI = dyn_cast<LifetimeIntrinsic>(CB)) {
-            if (CB->getIntrinsicID() == Intrinsic::lifetime_start) {
-              AllocaInst *AI = findAllocaForValue(LI->getArgOperand(1), true);
-              if (AI && BS.shouldInstrumentAlloca(*BS.DL, *AI)) {
+            AllocaInst *AI = findAllocaForValue(LI->getArgOperand(0), true);
+            if (AI && BS.shouldInstrumentAlloca(*BS.DL, *AI)) {
+              if (CB->getIntrinsicID() == Intrinsic::lifetime_start) {
                 HasLifetimeStart.insert(AI);
               }
+            } else {
+              continue;
             }
           }
         }
@@ -509,7 +475,7 @@ private:
       }
       return Prov;
     }
-    return Provenance::wildcard(BS.PL, ElementCount::getFixed(1));
+    return Provenance::omnivalid(BS.PL, ElementCount::getFixed(1));
   }
 
   Provenance assertProvenance(IRBuilder<> &IRB, ElementCount Elems,
@@ -533,7 +499,7 @@ private:
       }
       return Prov;
     }
-    return Provenance::wildcard(BS.PL, Elems);
+    return Provenance::omnivalid(BS.PL, Elems);
   }
 
   // Asserts that there is either a provenance value at the given index, or that
@@ -569,7 +535,6 @@ private:
         return ArgProvenance;
       }
     }
-
     return std::nullopt;
   }
 
@@ -612,7 +577,6 @@ private:
     IRBuilder<> EntryIRB(FnPrologueEnd);
 
     Value *NumParamProv = BS.Zero;
-
     Value *VarArgProvCount = nullptr;
     if (F.isVarArg()) {
       VarArgProvCount = EntryIRB.CreateLoad(BS.IntptrTy, BS.VarArgCounter);
@@ -769,7 +733,7 @@ private:
 
     Function *Callee = CB.getCalledFunction();
     if (Callee) {
-      if (isRetag(&CB)) {
+      if (IsRetag(&CB)) {
         if (CB.getType() == BS.PtrTy) {
           return instrumentRetagReg(CB);
         }
@@ -991,7 +955,7 @@ private:
       SmallVector<ProvenanceDesc> Components =
           BS.PL.getProvenanceDesc(IRB, Operand->getType());
       for (const auto &[Idx, Comp] : llvm::enumerate(Components)) {
-        setProvenance({Operand, Idx}, Provenance::wildcard(BS.PL));
+        setProvenance({Operand, Idx}, Provenance::omnivalid(BS.PL));
       }
     }
   }
@@ -1004,10 +968,10 @@ private:
     PHINode *InfoNode = IRB.CreatePHI(BS.PtrTy, NumIncoming, "_bsphi_info");
     InfoNode->dropDbgRecords();
 
-    Provenance Wildcard = Provenance::wildcard(BS.PL);
+    Provenance Omni = Provenance::omnivalid(BS.PL);
     for (BasicBlock *BB : Blocks) {
-      TagNode->addIncoming(Wildcard.Tag, BB);
-      InfoNode->addIncoming(Wildcard.Info, BB);
+      TagNode->addIncoming(Omni.Tag, BB);
+      InfoNode->addIncoming(Omni.Info, BB);
     }
     return Provenance(TagNode, InfoNode);
   }
@@ -1089,19 +1053,24 @@ private:
   }
 
   void instrumentLifetimeStart(IntrinsicInst &II) {
-    AllocaInst *AI = findAllocaForValue(II.getArgOperand(0), true);
-    IRBuilder<> IRB(&II);
-    Provenance CurrentProv = assertProvenanceScalar(II.getParent(), AI);
-    IRB.CreateCall(BS.BsanFuncDeallocStack,
-                   {AI, CurrentProv.Tag, CurrentProv.Info});
-    initAllocaMetadata(IRB, AI, CurrentProv);
+    if (auto *AI = findAllocaForValue(II.getArgOperand(0), true)) {
+      if (auto Prov = getProvenance(II.getParent(), AI)) {
+        IRBuilder<> IRB(&II);
+        IRB.CreateCall(BS.BsanFuncDeallocStack,
+                       {AI, (*Prov).Tag, (*Prov).Info});
+        initAllocaMetadata(IRB, AI, *Prov);
+      }
+    }
   }
 
   void instrumentLifetimeEnd(IntrinsicInst &II) {
-    AllocaInst *AI = findAllocaForValue(II.getArgOperand(0), true);
-    IRBuilder<> IRB(&II);
-    Provenance Root = assertProvenanceScalar(II.getParent(), AI);
-    IRB.CreateCall(BS.BsanFuncDeallocStack, {AI, Root.Tag, Root.Info});
+    if (auto *AI = findAllocaForValue(II.getArgOperand(0), true)) {
+      if (auto Prov = getProvenance(II.getParent(), AI)) {
+        IRBuilder<> IRB(&II);
+        IRB.CreateCall(BS.BsanFuncDeallocStack,
+                       {AI, (*Prov).Tag, (*Prov).Info});
+      }
+    }
   }
 
   void visitMemSetInst(MemSetInst &I) {

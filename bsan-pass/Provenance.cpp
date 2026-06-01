@@ -80,16 +80,6 @@ void Provenance::addIncoming(BasicBlock *IncomingBlock,
   InfoNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Info);
 }
 
-bool Provenance::isWildcard() const {
-  if (this->Elems.isScalar()) {
-    if (auto *CI = dyn_cast<ConstantInt>(this->Tag)) {
-      return CI->isZero();
-    }
-    return false;
-  }
-  report_fatal_error("Vector provenance is not supported yet");
-}
-
 Provenance Provenance::load(IRBuilder<> &IRB, const ProvenanceLayout &PL,
                             Value *Src, ElementCount Elems) {
   if (Elems.isScalar()) {
@@ -124,8 +114,8 @@ void Provenance::store(IRBuilder<> &IRB, const ProvenanceLayout &PL,
   }
 }
 
-Provenance Provenance::wildcard(const ProvenanceLayout &PL,
-                                ElementCount Elems) {
+Provenance Provenance::omnivalid(const ProvenanceLayout &PL,
+                                 ElementCount Elems) {
   if (Elems.isScalar()) {
     Value *Zero = ConstantInt::get(PL.IntptrTy, 0);
     Value *InvalidPtr = ConstantPointerNull::get(PL.PtrTy);
