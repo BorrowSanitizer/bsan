@@ -42,6 +42,15 @@ extern bool bsan_init_running;
 extern bool bsan_deinit_running;
 extern atomic_uintptr_t thread_id;
 
+extern THREADLOCAL int block_interception;
+
+struct InterceptorBarrier {
+  InterceptorBarrier() { ++block_interception; }
+  ~InterceptorBarrier() { --block_interception; }
+};
+
+bool BlockInterception();
+
 BorTag NewBorTag();
 
 void InitializeGC();
