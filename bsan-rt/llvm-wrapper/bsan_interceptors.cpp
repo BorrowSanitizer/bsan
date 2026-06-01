@@ -24,6 +24,7 @@ using namespace __bsan;
 namespace __bsan {
 THREADLOCAL int block_interception;
 bool BlockInterception() { return block_interception; }
+int OnExit() { return 0; }
 } // namespace __bsan
 
 DECLARE_REAL(void *, malloc, SIZE_T)
@@ -389,12 +390,10 @@ static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso) {
     return REAL(mmap)(addr, length, prot, flags, fd, offset);                  \
   } while (false)
 
-namespace __bsan {
-int OnExit() { return 0; }
-} // namespace __bsan
-
-#include "sanitizer_common/sanitizer_common_interceptors.inc"
+// clang-format off
 #include "sanitizer_common/sanitizer_common_interceptors_memintrinsics.inc"
+#include "sanitizer_common/sanitizer_common_interceptors.inc"
+// clang-format on
 
 #define SIGNAL_INTERCEPTOR_ENTER() ENSURE_BSAN_INITED()
 
@@ -412,8 +411,11 @@ int OnExit() { return 0; }
 #define COMMON_SYSCALL_POST_WRITE_RANGE(p, s)                                  \
   do {                                                                         \
   } while (false)
+
+// clang-format off
 #include "sanitizer_common/sanitizer_common_syscalls.inc"
 #include "sanitizer_common/sanitizer_syscalls_netbsd.inc"
+// clang-format on
 
 namespace __bsan {
 
