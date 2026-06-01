@@ -105,7 +105,7 @@ INTERCEPTOR(void, free, void *ptr) {
   if (INST_CALLER(free)) {
     Provenance *Slot = GetSlot(0);
     __bsan_dealloc(ptr, Slot->Tag, Slot->Info, span);
-    HANDLE_ERROR(pc, bp);
+    HANDLE_ERROR_PC_BP(pc, bp);
   }
   return REAL(free)(ptr);
 }
@@ -131,7 +131,7 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
   if (is_inst) {
     Provenance *Slot = GetSlot(0);
     __bsan_dealloc(ptr, Slot->Tag, Slot->Info, span);
-    HANDLE_ERROR(pc, bp);
+    HANDLE_ERROR_PC_BP(pc, bp);
   }
   void *nptr = REAL(realloc)(ptr, size);
   if (is_inst) {
