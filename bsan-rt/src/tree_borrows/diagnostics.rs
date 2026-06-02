@@ -8,7 +8,7 @@ use super::data_structures::UniIndex;
 use super::perms::{AccessKind, PermTransition, Permission, ProtectorKind};
 use super::tree::LocationState;
 use crate::helpers::AllocRange;
-use crate::tree_borrows::Tree;
+use crate::tree_borrows::{LazyTree, Tree};
 use crate::{eprintln, *};
 
 /// Cause of an access: either a real access or one
@@ -963,5 +963,28 @@ impl Tree {
                 }
             }
         }
+    }
+}
+
+impl LazyTree {
+    pub fn print_tree(&self, protected_tags: &ProtectedTagsRef<'_>, show_unnamed: bool) {
+        match self {
+            LazyTree::Init(tree) => tree.print_tree(protected_tags, show_unnamed),
+            LazyTree::Uninit { root_tag, size, span } => {
+                Tree::new(*root_tag, *size, *span).print_tree(protected_tags, show_unnamed)
+            }
+        }
+    }
+
+    pub fn print_tree_diff(&self, old_tree: &LazyTree, protected_tags: &ProtectedTagsRef<'_>) {
+        let self_tree = match self {
+            LazyTree::Init(t) => t.clone(),
+            LazyTree::Uninit { root_tag, size, span } => Tree::new(*root_tag, *size, *span),
+        };
+        let old_tree = match old_tree {
+            LazyTree::Init(t) => t.clone(),
+            LazyTree::Uninit { root_tag, size, span } => Tree::new(*root_tag, *size, *span),
+        };
+        self_tree.print_tree_diff(&old_tree, protected_tags);
     }
 }

@@ -1,7 +1,7 @@
 [workspace]
 members = ["bsan-rt", "bsan-script", "cargo-bsan"]
 default-members = ["bsan-script", "cargo-bsan"]
-exclude = ["tests/test-cargo-bsan", "testbed"]
+exclude = ["tests/test-cargo-bsan", "testcrate"]
 resolver = "3"
 
 [package]

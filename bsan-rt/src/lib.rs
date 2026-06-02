@@ -35,7 +35,7 @@ use crate::helpers::Size;
 use crate::local::{deinit_local_ctx, init_local_ctx};
 use crate::sanitizer_common::Span;
 use crate::tree_borrows::perms::AccessKind;
-use crate::tree_borrows::tree::Tree;
+use crate::tree_borrows::tree::LazyTree;
 
 #[thread_local]
 #[unsafe(no_mangle)]
@@ -276,7 +276,7 @@ pub(crate) struct AllocInfo {
     pub alloc_id: AllocId,
     pub base_addr: FreeListAddrUnion,
     pub size: usize,
-    pub tree_lock: Option<Mutex<Tree>>,
+    pub tree_lock: Option<Mutex<LazyTree>>,
 }
 
 impl AllocInfo {
@@ -294,7 +294,7 @@ impl AllocInfo {
             alloc_id: AllocId::default(),
             base_addr: FreeListAddrUnion { addr: base_addr.addr() },
             size,
-            tree_lock: Some(Mutex::new(Tree::new(bor_tag, Size::from_bytes(size), span))),
+            tree_lock: Some(Mutex::new(LazyTree::new(bor_tag, Size::from_bytes(size), span))),
         }
     }
 

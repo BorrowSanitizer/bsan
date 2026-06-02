@@ -10,7 +10,7 @@ use crate::errors::{ErrorFormatContext, UBInfo};
 use crate::helpers::FxHashMap;
 use crate::local::LocalCtx;
 use crate::memory::{Heap, ShadowHeap};
-use crate::tree_borrows::{ProtectorKind, Tree};
+use crate::tree_borrows::{LazyTree, ProtectorKind};
 use crate::*;
 
 pub static DISABLE_NODE_DEBUG_INFO: AtomicBool = AtomicBool::new(false);
@@ -76,7 +76,7 @@ pub struct GlobalCtx {
     protected_tags: RwLock<ProtectedTags>,
     shadow_heap: ShadowHeap<Provenance>,
     alloc_metadata_map: Heap<AllocInfo>,
-    snapshots: RwLock<FxHashMap<AllocId, Tree>>,
+    snapshots: RwLock<FxHashMap<AllocId, LazyTree>>,
     threads: RwLock<FxHashMap<ThreadId, NonNull<LocalCtx>>>,
 }
 
@@ -127,13 +127,13 @@ impl GlobalCtx {
         }
     }
 
-    pub fn take_snapshot(&self, alloc_id: AllocId, tree: Tree) {
+    pub fn take_snapshot(&self, alloc_id: AllocId, tree: LazyTree) {
         self.snapshots.write().insert(alloc_id, tree);
     }
 
     pub fn with_snapshot<F>(&self, alloc_id: AllocId, f: F)
     where
-        F: FnOnce(&Tree),
+        F: FnOnce(&LazyTree),
     {
         self.snapshots.read().get(&alloc_id).map(f);
     }
