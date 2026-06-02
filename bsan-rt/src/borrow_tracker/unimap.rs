@@ -19,6 +19,12 @@ use alloc::vec::Vec;
 use core::alloc::Allocator;
 use core::hash::Hash;
 
+#[cfg(feature = "smallvec-valmap")]
+use smallvec::SmallVec;
+
+#[cfg(feature = "smallvec-valmap")]
+const INLINE_CAP: usize = 16;
+
 use rustc_hash::FxBuildHasher;
 
 use crate::helpers::FxHashMap;
@@ -49,12 +55,23 @@ impl<K: Clone, A: Allocator + Clone> Clone for UniKeyMap<K, A> {
 }
 
 /// From UniIndex to V
-#[derive(Debug, Clone, Eq)]
+#[cfg(feature = "smallvec-valmap")]
+#[derive(Debug, Clone)]
+pub struct UniValMap<V, A: Allocator> {
+    data: SmallVec<[Option<V>; INLINE_CAP]>,
+    _phantom: core::marker::PhantomData<A>,
+}
+
+/// From UniIndex to V
+#[cfg(not(feature = "smallvec-valmap"))]
+#[derive(Debug, Clone)]
 pub struct UniValMap<V, A: Allocator> {
     /// The mapping data. Thanks to Vec we get both fast accesses, and
     /// a memory-optimal representation if there are few deletions.
     data: Vec<Option<V>, A>,
 }
+
+impl<V: Eq, A: Allocator> Eq for UniValMap<V, A> {}
 
 impl<V, A> UniValMap<V, A>
 where
@@ -62,7 +79,15 @@ where
 {
     /// Create a UniValMap with custom allocator
     pub fn new_in(allocator: A) -> UniValMap<V, A> {
-        Self { data: Vec::new_in(allocator) }
+        #[cfg(feature = "smallvec-valmap")]
+        {
+            let _ = allocator;
+            Self { data: SmallVec::new(), _phantom: core::marker::PhantomData }
+        }
+        #[cfg(not(feature = "smallvec-valmap"))]
+        {
+            Self { data: Vec::new_in(allocator) }
+        }
     }
 
     /// Get the last value
@@ -113,7 +138,14 @@ where
 
 impl<V> Default for UniValMap<V, Global> {
     fn default() -> Self {
-        Self { data: Vec::new_in(Global) }
+        #[cfg(feature = "smallvec-valmap")]
+        {
+            Self { data: SmallVec::new(), _phantom: core::marker::PhantomData }
+        }
+        #[cfg(not(feature = "smallvec-valmap"))]
+        {
+            Self { data: Vec::new_in(Global) }
+        }
     }
 }
 
@@ -402,4 +434,15 @@ mod tests {
     //         }
     //     }
     // }
+
+    #[test]
+    fn test_sizes() {
+        use crate::borrow_tracker::tree::Node;
+        use crate::borrow_tracker::LocationState;
+        libc_print::std_name::println!("SIZEOF_NODE: {}", core::mem::size_of::<Node>());
+        libc_print::std_name::println!("SIZEOF_LOCATIONSTATE: {}", core::mem::size_of::<LocationState>());
+        libc_print::std_name::println!("SIZEOF_UNIVALMAP_NODE: {}", core::mem::size_of::<UniValMap<Node, Global>>());
+        libc_print::std_name::println!("SIZEOF_UNIVALMAP_LOCATIONSTATE: {}", core::mem::size_of::<UniValMap<LocationState, Global>>());
+    }
 }
+

@@ -18,6 +18,7 @@ name = "bsan_rt_core"
 crate-type = ["staticlib"]
 
 [features]
-default = ["pic"]
+default = ["pic", "smallvec-valmap"]
 pic = []
 debug = []
+smallvec-valmap = []
