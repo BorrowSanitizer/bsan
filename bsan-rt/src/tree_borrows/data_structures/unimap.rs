@@ -21,7 +21,7 @@ use core::mem;
 use smallvec::SmallVec;
 
 #[cfg(feature = "smallvec-valmap")]
-const INLINE_CAP: usize = 16;
+const INLINE_CAP: usize = 4;
 
 use crate::helpers::{FxHashMap, ToUsize};
 
@@ -379,8 +379,7 @@ mod tests {
 
     #[test]
     fn test_sizes() {
-        use crate::tree_borrows::tree::Node;
-        use crate::tree_borrows::tree::LocationState;
+        use crate::tree_borrows::tree::{LocationState, Node};
         libc_print::std_name::println!("SIZEOF_NODE: {}", core::mem::size_of::<Node>());
         libc_print::std_name::println!(
             "SIZEOF_LOCATIONSTATE: {}",
