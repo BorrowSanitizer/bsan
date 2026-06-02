@@ -1186,6 +1186,141 @@ impl Node {
     }
 }
 
+/// A tree that is lazily initialized: starts as `Uninit` (storing only the root tag, size, and
+/// span needed to construct the real `Tree` on demand), and transitions to `Init` the first
+/// time a child is added via `new_child`. All operations on a single-node tree short-circuit
+/// without ever allocating the underlying `Tree`.
+#[derive(Clone, Debug)]
+pub enum LazyTree {
+    Uninit { root_tag: BorTag, size: Size, span: Span },
+    Init(Tree),
+}
+
+impl LazyTree {
+    pub fn new(root_tag: BorTag, size: Size, span: Span) -> Self {
+        LazyTree::Uninit { root_tag, size, span }
+    }
+
+    /// Forces the tree into the `Init` state, constructing the underlying `Tree` if needed.
+    fn ensure_init(&mut self) -> &mut Tree {
+        if matches!(self, LazyTree::Uninit { .. }) {
+            let LazyTree::Uninit { root_tag, size, span } = *self else { unreachable!() };
+            *self = LazyTree::Init(Tree::new(root_tag, size, span));
+        }
+        let LazyTree::Init(tree) = self else { unreachable!() };
+        tree
+    }
+
+    /// Returns true if `tag` is present in this tree.
+    /// In the `Uninit` state only the root tag exists.
+    pub fn contains_tag(&self, tag: BorTag) -> bool {
+        match self {
+            LazyTree::Uninit { root_tag, .. } => *root_tag == tag,
+            LazyTree::Init(tree) => tree.tag_mapping.contains_key(&tag),
+        }
+    }
+
+    /// Returns the number of nodes in the tree (1 when `Uninit`).
+    pub fn node_count(&self) -> usize {
+        match self {
+            LazyTree::Uninit { .. } => 1,
+            LazyTree::Init(tree) => tree.tag_mapping.len(),
+        }
+    }
+
+    /// Adds a child tag. Forces initialization of the underlying `Tree` first.
+    pub(crate) fn new_child(
+        &mut self,
+        base_offset: Size,
+        parent_tag: BorTag,
+        new_tag: BorTag,
+        inside_perms: DedupRangeMap<LocationState>,
+        outside_perm: Permission,
+        protected: bool,
+        span: Span,
+    ) -> UBResult<()> {
+        self.ensure_init().new_child(
+            base_offset,
+            parent_tag,
+            new_tag,
+            inside_perms,
+            outside_perm,
+            protected,
+            span,
+        )
+    }
+
+    /// Performs an access. In the `Uninit` state (single root node with `Unique` permission,
+    /// no protectors), any access by the root tag is trivially valid.
+    pub fn perform_access(
+        &mut self,
+        tag: BorTag,
+        access_range: AllocRange,
+        access_kind: AccessKind,
+        access_cause: AccessCause,
+        global: &GlobalState,
+        alloc_id: AllocId,
+        span: Span,
+    ) -> UBResult<()> {
+        match self {
+            LazyTree::Uninit { .. } => Ok(()),
+            LazyTree::Init(tree) => tree.perform_access(
+                tag,
+                access_range,
+                access_kind,
+                access_cause,
+                global,
+                alloc_id,
+                span,
+            ),
+        }
+    }
+
+    /// Performs a deallocation. In the `Uninit` state the root always has write permission and
+    /// no protectors exist, so this is a no-op.
+    pub fn dealloc(
+        &mut self,
+        tag: BorTag,
+        access_range: AllocRange,
+        global: &GlobalState,
+        alloc_id: AllocId,
+        span: Span,
+    ) -> UBResult<()> {
+        match self {
+            LazyTree::Uninit { .. } => Ok(()),
+            LazyTree::Init(tree) => tree.dealloc(tag, access_range, global, alloc_id, span),
+        }
+    }
+
+    /// Performs the implicit access on protector release. In the `Uninit` state no protectors
+    /// can exist (they are only registered when children are added), so this is a no-op.
+    pub fn perform_protector_end_access(
+        &mut self,
+        tag: BorTag,
+        global: &GlobalState,
+        alloc_id: AllocId,
+        span: Span,
+    ) -> UBResult<()> {
+        match self {
+            LazyTree::Uninit { .. } => Ok(()),
+            LazyTree::Init(tree) => tree.perform_protector_end_access(tag, global, alloc_id, span),
+        }
+    }
+
+    /// Marks `tag` as exposed. Forces initialization because the wildcard tracking lives
+    /// inside `Tree`. Pointer-to-integer casts are rare so the cost is acceptable.
+    pub fn expose_tag(&mut self, tag: BorTag, protected: bool) {
+        self.ensure_init().expose_tag(tag, protected);
+    }
+
+    ///// GC pass: no-op on `Uninit` trees since there are no unreachable children.
+    // pub fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
+    //     if let LazyTree::Init(tree) = self {
+    //         tree.remove_unreachable_tags(live_tags);
+    //     }
+    // }
+}
+
 /// Relative position of the access
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AccessRelatedness {
