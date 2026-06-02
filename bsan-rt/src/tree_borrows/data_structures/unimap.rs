@@ -21,7 +21,7 @@ use core::mem;
 use smallvec::SmallVec;
 
 #[cfg(feature = "smallvec-valmap")]
-const INLINE_CAP: usize = 4;
+const INLINE_CAP: usize = 16;
 
 use crate::helpers::{FxHashMap, ToUsize};
 
