@@ -13,12 +13,14 @@ set(BSAN_SOURCES
   BorrowSanitizer.cpp
   BorrowSanitizerPass.cpp
   Provenance.cpp
+  Retag.cpp
 )
 
 set(BSAN_HEADERS
   BorrowSanitizer.h
   BorrowSanitizerPass.h
   Provenance.h
+  Retag.h
 )
 
 set(CMAKE_CXX_CLANG_TIDY clang-tidy;-warnings-as-errors=*)

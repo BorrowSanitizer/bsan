@@ -9,6 +9,7 @@ use commands::Component;
 mod commands;
 mod env;
 mod setup;
+mod stats;
 mod utils;
 
 static TOOLCHAIN_NAME: &str = "bsan";
@@ -121,6 +122,10 @@ pub enum Command {
         #[arg(allow_hyphen_values(true), last(true))]
         args: Vec<String>,
     },
+    /// Try all `should-*` tests
+    Fix,
+    /// Show repository test metrics (counts of passing/failing/false positives/negatives)
+    Stats,
 }
 
 #[derive(Parser)]

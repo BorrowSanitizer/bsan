@@ -156,7 +156,9 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     for arg in
         ArgSplitFlagValue::from_string_iter(&mut args, "--target-dir").filter_map(Result::err)
     {
-        cmd.arg(arg);
+        if arg != "--nop" {
+            cmd.arg(arg);
+        }
     }
     cmd.args(args);
 
@@ -277,13 +279,22 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
 }
 
 fn bsan_rustflags(env: &EnvConfig, deps: &Dependencies, llvm_tools: &LlvmTools) -> Vec<String> {
-    let rt_dir = deps.runtime.parent().unwrap();
     let mut additional_args =
         BSAN_DEFAULT_RUSTFLAGS.iter().map(ToString::to_string).collect::<Vec<_>>();
-    additional_args.push(format!("-L{}", rt_dir.display()));
-    additional_args.push(String::from("-lstatic=bsan_rt"));
+
+    if !env.nop {
+        let (rust_include, rust_lib) = deps.rust_runtime();
+        additional_args.push(format!("-L{}", rust_include.display()));
+        additional_args.push(format!("-lstatic={rust_lib}"));
+    }
+
+    let (llvm_include, llvm_lib) = deps.llvm_runtime();
+    additional_args.push(format!("-L{}", llvm_include.display()));
+    additional_args.push(format!("-lstatic={llvm_lib}"));
+
     additional_args.push(format!("-Clinker={}", llvm_tools.clang.display()));
     additional_args.push(format!("-Clink-arg=-fuse-ld={}", llvm_tools.lld.display()));
+
     if env.lto {
         additional_args.push(String::from("-Clinker-plugin-lto"));
         additional_args

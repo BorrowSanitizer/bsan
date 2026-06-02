@@ -3,7 +3,9 @@ use std::ffi::OsString;
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use colored::*;
 use regex::bytes::Regex;
@@ -14,6 +16,12 @@ use ui_test::dependencies::DependencyBuilder;
 use ui_test::spanned::Spanned;
 use ui_test::status_emitter::StatusEmitter;
 use ui_test::{CommandBuilder, Config, Match};
+
+mod fix_utils;
+
+use fix_utils::{kill_descendants, FixEmitter, FixResult};
+
+const TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Copy, Clone, Debug)]
 enum Mode {
@@ -100,8 +108,9 @@ fn run_tests(
     target: &VersionMeta,
     with_dependencies: bool,
     tmpdir: &Path,
-) -> Result<()> {
-    // Handle command-line arguments.
+    fix_mode: bool,
+) -> Result<FixResult> {
+    // Handle/ command-line arguments.
     let mut args = ui_test::Args::test()?;
     args.bless |= env::var_os("RUSTC_BLESS").is_some_and(|v| v != "0");
 
@@ -133,6 +142,63 @@ fn run_tests(
 
     config.program.args.push("-Zui-testing".into());
 
+    // Timeout and custom handler enabled for fix mode
+    if fix_mode {
+        static COLLECTED: OnceLock<Mutex<Vec<(PathBuf, Vec<u8>)>>> = OnceLock::new();
+        let finished = Arc::new(AtomicBool::new(false));
+        let last_progress = Arc::new(AtomicU64::new(0));
+        let start = Instant::now();
+        let abort_check = config.abort_check.clone();
+        let root_pid = unsafe { libc::getpid() };
+        let finished_guard = Arc::clone(&finished);
+        let last_progress_guard = Arc::clone(&last_progress);
+        std::thread::spawn(move || loop {
+            std::thread::sleep(TIMEOUT);
+            if finished_guard.load(Ordering::SeqCst) {
+                return;
+            }
+            let elapsed = start.elapsed().as_secs();
+            let last = last_progress_guard.load(Ordering::SeqCst);
+            if elapsed.saturating_sub(last) >= TIMEOUT.as_secs() {
+                abort_check.abort();
+                kill_descendants(root_pid);
+                return;
+            }
+        });
+
+        COLLECTED.get_or_init(|| Mutex::new(Vec::new()));
+        // Clear in case of re-use
+        COLLECTED.get().unwrap().lock().unwrap().clear();
+        config.output_conflict_handling = |path, actual, _errors, _config| {
+            COLLECTED.get().unwrap().lock().unwrap().push((path.to_path_buf(), actual.to_vec()));
+        };
+
+        let failed = Arc::new(AtomicUsize::new(0));
+        let aborted = Arc::new(AtomicUsize::new(0));
+        let emitter = FixEmitter::new(
+            Box::<dyn StatusEmitter>::from(args.format),
+            Arc::clone(&failed),
+            Arc::clone(&aborted),
+            Arc::clone(&last_progress),
+            start,
+        );
+
+        eprintln!("   Compiler: {}", config.program.display());
+        // We don't care about this report, since we're generating our own with `FixResult`
+        let _ = ui_test::run_tests_generic(
+            vec![config],
+            ui_test::default_file_filter,
+            |_, _| {},
+            Box::new(emitter),
+        );
+        finished.store(true, Ordering::SeqCst);
+        let failed = failed.load(Ordering::SeqCst);
+        let aborted = aborted.load(Ordering::SeqCst);
+        let results = COLLECTED.get().unwrap().lock().unwrap().clone();
+        return Ok(FixResult { failed, aborted, results });
+    }
+
+    // Regular UI tests without timeout
     eprintln!("   Compiler: {}", config.program.display());
     ui_test::run_tests_generic(
         // Only run one test suite. In the future we can add all test suites to one `Vec` and run
@@ -144,7 +210,8 @@ fn run_tests(
         |_, _| {},
         // No GHA output as that would also show in the main rustc repo.
         Box::<dyn StatusEmitter>::from(args.format),
-    )
+    )?;
+    Ok(FixResult::default())
 }
 
 macro_rules! regexes {
@@ -226,7 +293,8 @@ fn ui(
     target: &VersionMeta,
     with_dependencies: Dependencies,
     tmpdir: &Path,
-) -> Result<()> {
+    fix_mode: bool,
+) -> Result<FixResult> {
     let msg = format!("## Running ui tests in {path} for {}", target.host);
     eprintln!("{}", msg.green().bold());
 
@@ -234,10 +302,9 @@ fn ui(
         WithDependencies => true,
         WithoutDependencies => false,
     };
-    run_tests(mode, path, target, with_dependencies, tmpdir)
+    run_tests(mode, path, target, with_dependencies, tmpdir, fix_mode)
         .with_context(|| format!("ui tests in {path} for {} failed", target.host))
 }
-
 fn expect_env(var: &str) -> String {
     env::var(var).expect(&format!("`{}` must be set to run BorrowSanitizer's ui tests.", var))
 }
@@ -249,20 +316,85 @@ fn path_from_env(var: &str) -> PathBuf {
     path
 }
 
+fn parse_env_count(var: &str) -> Option<usize> {
+    env::var(var)
+        .ok()
+        .map(|val| val.trim().to_string())
+        .filter(|val| !val.is_empty())
+        .and_then(|val| val.parse::<usize>().ok())
+}
+
 fn get_version_info() -> VersionMeta {
     let cmd = Command::new("rustc");
     VersionMeta::for_command(cmd).expect("Failed to parse rustc version info")
 }
 
-fn main() -> Result<()> {
-    ui_test::color_eyre::install()?;
+fn check_for_fix(mode: Mode) -> Result<FixResult> {
     let target = get_version_info();
     let tmpdir = tempfile::Builder::new().prefix("bsan-uitest-").tempdir()?;
-    ui(Mode::Pass, "tests/pass", &target, WithoutDependencies, tmpdir.path())?;
-    ui(Mode::Pass, "tests/pass-dep", &target, WithDependencies, tmpdir.path())?;
-    ui(Mode::Pass, "tests/miri-tests/pass", &target, WithoutDependencies, tmpdir.path())?;
-    ui(Mode::Fail, "tests/fail", &target, WithoutDependencies, tmpdir.path())?;
-    ui(Mode::Fail, "tests/fail-dep", &target, WithDependencies, tmpdir.path())?;
-    ui(Mode::Fail, "tests/miri-tests/fail", &target, WithoutDependencies, tmpdir.path())?;
+    let path = match mode {
+        Mode::Pass => "tests/miri-tests/should-pass",
+        Mode::Fail => "tests/miri-tests/should-fail",
+    };
+
+    ui(mode, path, &target, WithoutDependencies, tmpdir.path(), true)
+}
+
+fn print_errors(result: FixResult) {
+    for (path, output) in result.results {
+        if output.is_empty() || !output.starts_with(b"error: Undefined Behavior:") {
+            continue;
+        }
+        let src = path.with_extension("").with_extension("").with_extension("rs");
+        eprintln!("  ✗ Test failed with output: {}", src.display());
+        let output = String::from_utf8_lossy(&output);
+        for line in output.lines() {
+            eprintln!("    {}", line);
+        }
+        eprintln!();
+    }
+}
+
+fn main() -> Result<()> {
+    ui_test::color_eyre::install()?;
+
+    if env::var("BSAN_SP").is_ok() || env::var("BSAN_SF").is_ok() {
+        let sp_count = parse_env_count("BSAN_SP");
+        let sf_count = parse_env_count("BSAN_SF");
+        let sp_run = sp_count.map(|count| (count, check_for_fix(Mode::Pass)));
+        let sf_run = sf_count.map(|count| (count, check_for_fix(Mode::Fail)));
+        if let Some((count, Ok(result))) = sp_run {
+            let ok = count.saturating_sub(result.failed + result.aborted);
+            eprintln!(
+                "SHOULD-PASS: {}/{} tests correctly passed with no errors ({} aborted after {}s).\n",
+                ok,
+                count,
+                result.aborted,
+                TIMEOUT.as_secs()
+            );
+            print_errors(result);
+        }
+        if let Some((count, Ok(result))) = sf_run {
+            let ok = count.saturating_sub(result.failed + result.aborted);
+            eprintln!(
+                "SHOULD-FAIL: {}/{} tests failed with bsan errors ({} aborted after {}s).\n",
+                ok,
+                count,
+                result.aborted,
+                TIMEOUT.as_secs()
+            );
+            print_errors(result);
+        }
+        return Ok(());
+    }
+
+    let target = get_version_info();
+    let tmpdir = tempfile::Builder::new().prefix("bsan-uitest-").tempdir()?;
+    ui(Mode::Pass, "tests/pass", &target, WithoutDependencies, tmpdir.path(), false)?;
+    ui(Mode::Pass, "tests/pass-dep", &target, WithDependencies, tmpdir.path(), false)?;
+    ui(Mode::Pass, "tests/miri-tests/pass", &target, WithoutDependencies, tmpdir.path(), false)?;
+    ui(Mode::Fail, "tests/fail", &target, WithoutDependencies, tmpdir.path(), false)?;
+    ui(Mode::Fail, "tests/fail-dep", &target, WithDependencies, tmpdir.path(), false)?;
+    ui(Mode::Fail, "tests/miri-tests/fail", &target, WithoutDependencies, tmpdir.path(), false)?;
     Ok(())
 }

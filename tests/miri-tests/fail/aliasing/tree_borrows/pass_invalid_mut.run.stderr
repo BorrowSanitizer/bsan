@@ -1,10 +1,10 @@
-error: Undefined Behavior: write through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
+error: Undefined Behavior: write access through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/pass_invalid_mut.rs:LL:CC
    |
 LL | *nope = 31; //miri: ~ ERROR: /write access through .* is forbidden/
    |
    = help: the accessed tag <TAG>(StrongProtector) is a child of the conflicting tag <TAG>(unprotected)
-   = help: the conflicting tag <TAG>(unprotected) has state Frozen which forbids this write
+   = help: the conflicting tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(StrongProtector) was created here
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/pass_invalid_mut.rs:LL:CC
    |
@@ -15,13 +15,13 @@ help: the conflicting tag <TAG>(unprotected) was created here, in the initial st
    |
 LL | let xref = unsafe { &mut *xraw };
    |
-help: the conflicting tag <TAG>(unprotected) later transitioned due to a child write
+help: the conflicting tag <TAG>(unprotected) later transitioned to Unique due to a child write access at offsets [0x0..0x4]
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/pass_invalid_mut.rs:LL:CC
    |
 LL | *xref = 18; // activate xref
    |
 help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
-help: the conflicting tag <TAG>(unprotected) later transitioned due to a foreign read
+help: the conflicting tag <TAG>(unprotected) later transitioned to Frozen due to a foreign read access at offsets [0x0..0x4]
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/pass_invalid_mut.rs:LL:CC
    |
 LL | let _val = unsafe { *xraw }; // invalidate xref for writing

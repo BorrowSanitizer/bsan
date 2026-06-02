@@ -4,13 +4,13 @@ use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use borrow_tracker::ProtectorKind;
 use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::errors::{ErrorFormatContext, UBInfo};
 use crate::helpers::FxHashMap;
 use crate::local::LocalCtx;
 use crate::memory::{Heap, ShadowHeap};
+use crate::tree_borrows::{LazyTree, ProtectorKind};
 use crate::*;
 
 pub static DISABLE_NODE_DEBUG_INFO: AtomicBool = AtomicBool::new(false);
@@ -76,7 +76,7 @@ pub struct GlobalCtx {
     protected_tags: RwLock<ProtectedTags>,
     shadow_heap: ShadowHeap<Provenance>,
     alloc_metadata_map: Heap<AllocInfo>,
-    snapshots: RwLock<FxHashMap<AllocId, Tree>>,
+    snapshots: RwLock<FxHashMap<AllocId, LazyTree>>,
     threads: RwLock<FxHashMap<ThreadId, NonNull<LocalCtx>>>,
 }
 
@@ -123,17 +123,17 @@ impl GlobalCtx {
         let mut ctx = ErrorFormatContext::default();
         crate::eprint!("error: {}", ctx.display_ub(ub_info, pc));
         unsafe {
-            __BSAN_HAD_ERROR = 1;
+            crate::sanitizer_common::__bsan_had_error = 1;
         }
     }
 
-    pub fn take_snapshot(&self, alloc_id: AllocId, tree: Tree) {
+    pub fn take_snapshot(&self, alloc_id: AllocId, tree: LazyTree) {
         self.snapshots.write().insert(alloc_id, tree);
     }
 
     pub fn with_snapshot<F>(&self, alloc_id: AllocId, f: F)
     where
-        F: FnOnce(&Tree),
+        F: FnOnce(&LazyTree),
     {
         self.snapshots.read().get(&alloc_id).map(f);
     }
@@ -148,8 +148,8 @@ mod global_alloc {
 
     #[cfg(not(test))]
     unsafe extern "C" {
-        fn __crt_malloc(size: usize) -> *mut core::ffi::c_void;
-        fn __crt_free(ptr: *mut core::ffi::c_void);
+        fn __bsan_crt_malloc(size: usize) -> *mut core::ffi::c_void;
+        fn __bsan_crt_free(ptr: *mut core::ffi::c_void);
     }
 
     use core::alloc::{GlobalAlloc, Layout};
@@ -165,7 +165,7 @@ mod global_alloc {
             }
             #[cfg(not(test))]
             unsafe {
-                __crt_malloc(layout.size()).cast::<u8>()
+                __bsan_crt_malloc(layout.size()).cast::<u8>()
             }
         }
         unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
@@ -175,7 +175,7 @@ mod global_alloc {
             }
             #[cfg(not(test))]
             unsafe {
-                __crt_free(ptr.cast::<c_void>());
+                __bsan_crt_free(ptr.cast::<c_void>());
             }
         }
     }

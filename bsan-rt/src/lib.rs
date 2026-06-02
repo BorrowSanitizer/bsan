@@ -3,6 +3,7 @@
 #![cfg_attr(test, feature(test))]
 #![feature(thread_local)]
 #![feature(allocator_api)]
+#![feature(never_type)]
 #![allow(internal_features)]
 
 #[macro_use]
@@ -14,28 +15,27 @@ use core::panic::PanicInfo;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{fmt, ptr, slice};
-
-use borrow_tracker::{AccessKind, Size};
+mod borrow_tracker;
 use libc_print::std_name::*;
 use spin::Mutex;
+mod tree_borrows;
 
 mod global;
 use global::*;
 mod helpers;
 mod sanitizer_common;
-
-mod borrow_tracker;
 use borrow_tracker::*;
 
-mod diagnostics;
 mod local;
 
 mod errors;
 mod memory;
 
-use crate::borrow_tracker::tree::Tree;
-use crate::local::*;
+use crate::helpers::Size;
+use crate::local::{deinit_local_ctx, init_local_ctx};
 use crate::sanitizer_common::Span;
+use crate::tree_borrows::perms::AccessKind;
+use crate::tree_borrows::tree::LazyTree;
 
 #[thread_local]
 #[unsafe(no_mangle)]
@@ -54,7 +54,10 @@ struct DebugSummary {
 impl fmt::Display for DebugSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.info {
-            AllocInfoSummary::WildCard => {
+            AllocInfoSummary::Omnivalid => {
+                write!(f, "[{}] 0x{:x} @{:?} -> (omnivalid)", self.op, self.ptr, self.bor_tag)
+            }
+            AllocInfoSummary::Wildcard => {
                 write!(f, "[{}] 0x{:x} @{:?} -> (wildcard)", self.op, self.ptr, self.bor_tag)
             }
             AllocInfoSummary::Null => {
@@ -70,16 +73,17 @@ impl fmt::Display for DebugSummary {
 }
 
 macro_rules! debug_bsan {
-    ($op:literal, $ptr:ident, $bor_tag:ident, $alloc_info:expr) => {
+    ($op:literal, $p:ident, $bor_tag:ident, $alloc_info:expr) => {
         #[cfg(feature = "debug")]
         {
             #[allow(unused_unsafe)]
             let info = match $bor_tag.0 {
-                0 => AllocInfoSummary::WildCard,
+                0 => AllocInfoSummary::Omnivalid,
                 1 => AllocInfoSummary::Null,
+                2 => AllocInfoSummary::Wildcard,
                 _ => unsafe { &*$alloc_info }.summarize(),
             };
-            let summary = DebugSummary { op: $op, ptr: $ptr.addr(), bor_tag: $bor_tag, info };
+            let summary = DebugSummary { op: $op, ptr: 0, bor_tag: $bor_tag, info };
             libc_print::std_name::println!("{}", summary);
         }
     };
@@ -133,6 +137,12 @@ impl fmt::Debug for AllocId {
     }
 }
 
+impl fmt::Display for AllocId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_fmt(format_args!("{:?}", self))
+    }
+}
+
 #[unsafe(no_mangle)]
 pub static __BSAN_THREAD_ID_CTR: AtomicUsize = AtomicUsize::new(3);
 
@@ -163,8 +173,10 @@ impl fmt::Debug for ThreadId {
     }
 }
 
-#[unsafe(no_mangle)]
-pub static __BSAN_BOR_TAG_CTR: AtomicUsize = AtomicUsize::new(2);
+unsafe extern "C" {
+    #[link_name = "__bsan_bor_tag_ctr"]
+    unsafe static __BSAN_BOR_TAG_CTR: AtomicUsize;
+}
 
 /// Unique identifier for a node within the tree
 #[repr(transparent)]
@@ -172,14 +184,27 @@ pub static __BSAN_BOR_TAG_CTR: AtomicUsize = AtomicUsize::new(2);
 pub struct BorTag(usize);
 
 impl BorTag {
-    pub const fn wildcard() -> Self {
+    #[inline]
+    pub fn is_wildcard(&self) -> bool {
+        *self == Self::wildcard()
+    }
+
+    #[inline]
+    pub const fn omnivalid() -> Self {
         BorTag(0)
     }
 
+    #[inline]
     pub const fn invalid() -> Self {
         BorTag(1)
     }
 
+    #[inline]
+    pub const fn wildcard() -> Self {
+        BorTag(2)
+    }
+
+    #[inline]
     pub fn get(&self) -> usize {
         self.0
     }
@@ -187,7 +212,7 @@ impl BorTag {
 
 impl Default for BorTag {
     fn default() -> Self {
-        BorTag(__BSAN_BOR_TAG_CTR.fetch_add(1, Ordering::Relaxed))
+        BorTag(unsafe { __BSAN_BOR_TAG_CTR.fetch_add(1, Ordering::Relaxed) })
     }
 }
 
@@ -212,31 +237,21 @@ pub struct Provenance {
 unsafe impl Sync for Provenance {}
 unsafe impl Send for Provenance {}
 
-impl Default for Provenance {
-    fn default() -> Self {
-        Provenance::wildcard()
-    }
-}
-
 impl Provenance {
     /// The default provenance value, which is assigned to dangling or invalid
     /// pointers.
+    #[allow(unused)]
     const fn null() -> Self {
         Provenance { bor_tag: BorTag::invalid(), alloc_info: core::ptr::null_mut() }
     }
 
     /// Pointers cast from integers receive a "wildcard" provenance value,
     /// which permits any access.
+    #[allow(unused)]
     const fn wildcard() -> Self {
         Provenance { bor_tag: BorTag::wildcard(), alloc_info: core::ptr::null_mut() }
     }
 }
-
-#[unsafe(no_mangle)]
-static __BSAN_WILDCARD_PROVENANCE: Provenance = Provenance::wildcard();
-
-#[unsafe(no_mangle)]
-static __BSAN_NULL_PROVENANCE: Provenance = Provenance::null();
 
 #[derive(Clone, Copy)]
 pub(crate) union FreeListAddrUnion {
@@ -260,7 +275,7 @@ pub(crate) struct AllocInfo {
     pub alloc_id: AllocId,
     pub base_addr: FreeListAddrUnion,
     pub size: usize,
-    pub tree_lock: Option<Mutex<tree::Tree>>,
+    pub tree_lock: Option<Mutex<LazyTree>>,
 }
 
 impl AllocInfo {
@@ -278,12 +293,7 @@ impl AllocInfo {
             alloc_id: AllocId::default(),
             base_addr: FreeListAddrUnion { addr: base_addr.addr() },
             size,
-            tree_lock: Some(Mutex::new(Tree::new_in(
-                bor_tag,
-                Size::from_bytes(size),
-                span,
-                alloc::alloc::Global,
-            ))),
+            tree_lock: Some(Mutex::new(LazyTree::new(bor_tag, Size::from_bytes(size), span))),
         }
     }
 
@@ -301,12 +311,17 @@ impl AllocInfo {
 #[cfg(feature = "debug")]
 #[derive(Debug)]
 pub(crate) enum AllocInfoSummary {
+    Omnivalid,
     /// When Prov is wildcard, AllocInfo is invalid
-    WildCard,
+    Wildcard,
     /// When Prov is null, AllocInfo is invalid
     Null,
     /// When Prov is valid, only drop the tree_lock field
-    Valid { alloc_id: AllocId, base_addr: FreeListAddrUnion, size: usize },
+    Valid {
+        alloc_id: AllocId,
+        base_addr: FreeListAddrUnion,
+        size: usize,
+    },
 }
 
 /// Initializes the global state of the runtime library.
@@ -344,11 +359,6 @@ unsafe extern "C-unwind" fn __bsan_local_deinit() {
         let ctx = global_ctx();
         deinit_local_ctx(ctx);
     }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_new_bor_tag() -> BorTag {
-    BorTag::default()
 }
 
 bitflags::bitflags! {
@@ -391,7 +401,6 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
     debug_bsan!("retag", object_addr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-
     let opt_slice = |ptr, len| -> Option<_> {
         (!im_data.is_null()).then(|| unsafe { slice::from_raw_parts(ptr, len) })
     };
@@ -403,10 +412,19 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
         pin_layout: opt_slice(pin_data, pin_len),
     };
 
-    BorrowTracker::retag(ctx, prov, object_addr, size, retag_info, pc).unwrap_or_else(|err| {
+    BorrowTracker::retag(ctx, prov, object_addr, retag_info, pc).unwrap_or_else(|err| {
         ctx.handle_error(err, pc);
         bor_tag
     })
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_expose_tag(bor_tag: BorTag, alloc_info: *mut AllocInfo, pc: Span) {
+    let ctx = unsafe { global_ctx() };
+    let prov = Provenance { bor_tag, alloc_info };
+    if let Err(ub) = BorrowTracker::expose(ctx, prov) {
+        ctx.handle_error(ub, pc);
+    }
 }
 
 #[unsafe(no_mangle)]

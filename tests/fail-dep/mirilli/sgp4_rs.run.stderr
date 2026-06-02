@@ -1,0 +1,19 @@
+error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0xf] is forbidden
+   --> CARGO_REGISTRY/.../sgp4io.rs:LL:CC
+   |
+LL | longstr1[j] = '_';
+   |
+    = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
+help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
+   --> RUSTLIB/core/src/slice/mod.rs:LL:CC
+   |
+LL | pub const fn as_ptr(&self) -> *const T {
+   |
+
+stack backtrace:
+0: twoline2rv
+ at CARGO_REGISTRY/.../sgp4io.rs:LL:CC
+1: sgp4_rs::sgp4_sys::to_orbital_elements
+ at CARGO_REGISTRY/.../sgp4_sys.rs:LL:CC
+2: <sgp4_rs::TwoLineElement>::new
+ at CARGO_REGISTRY/.../lib.rs:LL:CC

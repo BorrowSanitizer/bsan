@@ -10,52 +10,62 @@ ProvenanceLayout::getProvenanceDesc(IRBuilder<> &IRB, Type *Ty) {
   SmallVector<ProvenanceDesc> Desc;
   if (Ty->isSized()) {
     Value *Zero = ConstantInt::get(IRB.getIntPtrTy(*DL), 0);
-    getProvenanceDesc(IRB, Desc, Ty, Zero, Zero);
+    getProvenanceDesc(IRB, Desc, Ty, Zero);
   }
   return Desc;
 }
 
 // Populates a vector with the list of locations of provenance
 // values within a type.
-std::tuple<Value *, Value *> ProvenanceLayout::getProvenanceDesc(
-    IRBuilder<> &IRB, SmallVector<ProvenanceDesc> &ProvDesc, Type *CurrentTy,
-    Value *ByteOffset, Value *ProvOffset) {
+Value *
+ProvenanceLayout::getProvenanceDesc(IRBuilder<> &IRB,
+                                    SmallVector<ProvenanceDesc> &ProvDesc,
+                                    Type *CurrentTy, Value *ByteOffset) {
   assert(CurrentTy->isSized() && "expected a sized type");
-  TypeSize AllocSize = DL->getTypeAllocSize(CurrentTy);
-  Value *TypeSize = IRB.CreateTypeSize(IRB.getIntPtrTy(*DL), AllocSize);
-  Value *NextProvOffset = ProvOffset;
+  Type *IntptrTy = IRB.getIntPtrTy(*DL);
+
   switch (CurrentTy->getTypeID()) {
   case Type::PointerTyID: {
-    ProvenanceDesc Desc(ByteOffset, TypeSize, ElementCount::get(1, false));
+    TypeSize AllocTySize = DL->getTypeAllocSize(CurrentTy);
+    Value *AllocSize = IRB.CreateTypeSize(IntptrTy, AllocTySize);
+    ProvenanceDesc Desc(ByteOffset, AllocSize, ElementCount::get(1, false));
     ProvDesc.push_back(Desc);
-    Value *Elems = IRB.CreateElementCount(IRB.getIntPtrTy(*DL), Desc.Elems);
-    NextProvOffset = IRB.CreateAdd(ProvOffset, Elems);
+    Value *Elems = IRB.CreateElementCount(IntptrTy, Desc.Elems);
+    return ConstantInt::get(IntptrTy, 1);
   } break;
   case Type::StructTyID: {
     StructType *ST = cast<StructType>(CurrentTy);
-    Value *CurrByteOffset = ByteOffset;
-    for (Type *ElemType : ST->elements()) {
-      auto [BOffset, POffset] = getProvenanceDesc(
-          IRB, ProvDesc, ElemType, CurrByteOffset, NextProvOffset);
-      CurrByteOffset = BOffset;
-      NextProvOffset = POffset;
+    const StructLayout *SL = DL->getStructLayout(ST);
+    Value *CurrProvOffset = ConstantInt::get(IntptrTy, 0);
+    for (auto [Idx, ElemTy] : llvm::enumerate(ST->elements())) {
+      Value *ElemOffset =
+          IRB.CreateTypeSize(IntptrTy, SL->getElementOffset(Idx));
+      Value *CurrByteOffset = IRB.CreateAdd(ByteOffset, ElemOffset);
+      auto *ProvOffset =
+          getProvenanceDesc(IRB, ProvDesc, ElemTy, CurrByteOffset);
+      CurrProvOffset = IRB.CreateAdd(CurrProvOffset, ProvOffset);
     }
+    return CurrProvOffset;
   } break;
   case Type::ArrayTyID: {
     ArrayType *AT = cast<ArrayType>(CurrentTy);
-    Value *CurrByteOffset = ByteOffset;
+    Value *CurrProvOffset = ConstantInt::get(IntptrTy, 0);
+    TypeSize ElemTySize = DL->getTypeAllocSize(AT->getElementType());
+    Value *ElemSize = IRB.CreateTypeSize(IntptrTy, ElemTySize);
     for (unsigned Idx = 0; Idx < AT->getNumElements(); ++Idx) {
-      auto [BOffset, POffset] = getProvenanceDesc(
-          IRB, ProvDesc, AT->getElementType(), CurrByteOffset, NextProvOffset);
-      CurrByteOffset = BOffset;
-      NextProvOffset = POffset;
+      Value *CurrByteOffset =
+          IRB.CreateMul(ConstantInt::get(IntptrTy, Idx), ElemSize);
+      CurrByteOffset = IRB.CreateAdd(ByteOffset, CurrByteOffset);
+      auto *ProvOffset = getProvenanceDesc(IRB, ProvDesc, AT->getElementType(),
+                                           CurrByteOffset);
+      CurrProvOffset = IRB.CreateAdd(CurrProvOffset, ProvOffset);
     }
+    return CurrProvOffset;
   } break;
-  default:
-    break;
+  default: {
+    return ConstantInt::get(IntptrTy, 0);
+  } break;
   }
-  Value *NextByteOffset = IRB.CreateAdd(ByteOffset, TypeSize);
-  return std::make_tuple(NextByteOffset, NextProvOffset);
 }
 
 void Provenance::addIncoming(BasicBlock *IncomingBlock,
@@ -68,16 +78,6 @@ void Provenance::addIncoming(BasicBlock *IncomingBlock,
 
   TagNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Tag);
   InfoNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Info);
-}
-
-bool Provenance::isWildcard() const {
-  if (this->Elems.isScalar()) {
-    if (auto *CI = dyn_cast<ConstantInt>(this->Tag)) {
-      return CI->isZero();
-    }
-    return false;
-  }
-  report_fatal_error("Vector provenance is not supported yet");
 }
 
 Provenance Provenance::load(IRBuilder<> &IRB, const ProvenanceLayout &PL,
@@ -114,8 +114,8 @@ void Provenance::store(IRBuilder<> &IRB, const ProvenanceLayout &PL,
   }
 }
 
-Provenance Provenance::wildcard(const ProvenanceLayout &PL,
-                                ElementCount Elems) {
+Provenance Provenance::omnivalid(const ProvenanceLayout &PL,
+                                 ElementCount Elems) {
   if (Elems.isScalar()) {
     Value *Zero = ConstantInt::get(PL.IntptrTy, 0);
     Value *InvalidPtr = ConstantPointerNull::get(PL.PtrTy);

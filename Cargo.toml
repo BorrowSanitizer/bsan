@@ -1,7 +1,7 @@
 [workspace]
 members = ["bsan-rt", "bsan-script", "cargo-bsan"]
 default-members = ["bsan-script", "cargo-bsan"]
-exclude = ["tests/test-cargo-bsan"]
+exclude = ["tests/test-cargo-bsan", "testbed"]
 resolver = "3"
 
 [package]
@@ -11,10 +11,11 @@ edition = "2021"
 
 [dev-dependencies]
 colored = "3"
-ui_test = "0.30.2"
+ui_test = "0.30.5"
 rustc_version = "0.4"
-regex = "1.12.2"
+regex = "1.12.3"
 tempfile = "3"
+libc = "0.2.186"
 
 [[test]]
 name = "ui"

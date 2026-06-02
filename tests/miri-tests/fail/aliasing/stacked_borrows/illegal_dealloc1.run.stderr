@@ -3,13 +3,13 @@ error: Undefined Behavior: deallocation through <TAG>(unprotected) at ALLOC[0x0]
    |
 LL | unsafe { libc::free(ptr as *mut libc::c_void) }
    |
-     = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this deallocation
+     = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this deallocation (acting as a child write access)
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
     --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/illegal_deALLOC.rs:LL:CC
    |
 LL | let ptr2 = (&mut *ptr1) as *mut u8;
    |
-help: the accessed tag <TAG>(unprotected) later transitioned due to a foreign write
+help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x0..0x1]
     --> RUSTLIB/core/src/ptr/mod.rs:LL:CC
    |
 LL | intrinsics::write_via_move(dst, src)

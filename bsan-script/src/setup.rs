@@ -129,7 +129,6 @@ fn install_toolchain(
     };
 
     download_unpack_install("rust", true)?;
-    download_unpack_install("rustc-dev", true)?;
     download_unpack_install("rust-dev", true)?;
     download_unpack_install("rust-src", false)?;
 

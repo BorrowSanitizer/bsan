@@ -4,21 +4,22 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-libc = { version = "0.2.178", default-features = false }
+libc = { version = "0.2.186", default-features = false }
 hashbrown = { version = "0.16", default-features = false, features = ["default-hasher", "nightly", "inline-more"] }
-rustc-hash = { version = "2.1.1", default-features = false }
+rustc-hash = { version = "2.1.2", default-features = false }
 libc-print = { version = "0.1.23" }
 spin = "0.10.0"
-bytemuck = { version = "1.21", default-features = false }
+bytemuck = { version = "1.25", default-features = false }
 smallvec = "1.15.1"
 bitflags = "2.11.1"
 
 [lib]
-name = "bsan_rt_core"
+name = "bsan_rt"
 crate-type = ["staticlib"]
 
 [features]
 default = ["pic", "smallvec-valmap"]
 pic = []
 debug = []
+expensive-consistency-checks = []
 smallvec-valmap = []

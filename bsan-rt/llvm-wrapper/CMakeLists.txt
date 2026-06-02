@@ -3,6 +3,7 @@ set(BSAN_SUPPORTED_ARCH ${SANITIZER_COMMON_SUPPORTED_ARCH})
 # Runtime library sources and build flags.
 set(BSAN_SOURCES
   bsan.cpp
+  bsan_gc.cpp
   bsan_flags.cpp
   bsan_interceptors.cpp
   bsan_linux.cpp
@@ -13,6 +14,7 @@ SET(BSAN_HEADERS
   bsan.h
   bsan_flags.h
   bsan_thread.h
+  bsan_interface_internal.h
 )
 
 add_custom_target(clang-format
@@ -30,6 +32,9 @@ append_rtti_flag(OFF BSAN_COMMON_CFLAGS)
 # Prevent clang from generating libc calls.
 append_list_if(COMPILER_RT_HAS_FFREESTANDING_FLAG -ffreestanding BSAN_COMMON_CFLAGS)
 set(BSAN_DYNAMIC_CFLAGS ${BSAN_COMMON_CFLAGS})
+
+set_source_files_properties(bsan_interceptors.cpp PROPERTIES
+  COMPILE_FLAGS "-Wno-unused -Wno-unneeded-internal-declaration")
 
 set(BSAN_COMMON_DEFINITIONS "")
 set(BSAN_DYNAMIC_DEFINITIONS ${BSAN_COMMON_DEFINITIONS} BSAN_DYNAMIC=1)
