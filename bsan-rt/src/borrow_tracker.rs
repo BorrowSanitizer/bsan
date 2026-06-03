@@ -12,7 +12,7 @@ use crate::tree_borrows::diagnostics::AccessCause;
 use crate::tree_borrows::perms::{AccessKind, Permission};
 use crate::tree_borrows::tree::LocationState;
 use crate::tree_borrows::{IdempotentForeignAccess, NewPermission};
-use crate::{AllocId, AllocInfo, BorTag, GlobalCtx, Provenance, RetagFlags, RetagInfo, LazyTree};
+use crate::{AllocId, AllocInfo, BorTag, GlobalCtx, LazyTree, Provenance, RetagFlags, RetagInfo};
 
 #[derive(Debug)]
 pub struct BorrowTracker<'b> {
@@ -302,7 +302,7 @@ impl<'b> BorrowTracker<'b> {
     }
 
     /// Ensure that the allocation is invalidated without triggering UB for a use-after-free.
-    /// This is specific to stack deallocation. 
+    /// This is specific to stack deallocation.
     pub fn dealloc_weak(ctx: &GlobalCtx, prov: Provenance, span: Span) -> UBResult<()> {
         if !prov.bor_tag.is_concrete() {
             return Ok(());
@@ -312,9 +312,7 @@ impl<'b> BorrowTracker<'b> {
         debug_assert!(!prov.alloc_info.is_null());
         let info = unsafe { &*prov.alloc_info };
         let mut guard = info.tree_lock.lock();
-        let Some(tree) = guard.as_mut() else {
-            unreachable!("double-free on a stack allocation.")
-        };
+        let Some(tree) = guard.as_mut() else { unreachable!("double-free on a stack allocation.") };
         let range = AllocRange { start: Size::ZERO, size: info.size };
         tree.dealloc(prov.bor_tag, range, &ctx.protected_tags(), info.alloc_id, span)?;
         *guard = None;
@@ -334,8 +332,8 @@ impl<'b> BorrowTracker<'b> {
         }
         drop(exposed);
 
-        // Then, within the tree associated with this allocation, we need to indicate that 
-        // this particular tag has been exposed. 
+        // Then, within the tree associated with this allocation, we need to indicate that
+        // this particular tag has been exposed.
         let mut tree = self.tree();
         if tree.contains_tag(tag) {
             let protected = global_ctx.protected_tags().get_protector_kind(tag).is_some();
