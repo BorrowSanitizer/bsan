@@ -1206,6 +1206,13 @@ private:
     }
   }
 
+  void visitPtrToIntInst(PtrToIntInst &I) {
+    if (auto Prov = getProvenance(I.getParent(), I.getPointerOperand())) {
+      IRBuilder<> IRB(&I);
+      IRB.CreateCall(BS.BsanFuncExposeProv, {(*Prov).Tag, (*Prov).Info});
+    }
+  }
+
   void visitAddrSpaceCastInst(AddrSpaceCastInst &I) {
     // Address space casts do not affect provenance.
     // We can propagage the provenance of the input to the output value.
@@ -1546,6 +1553,9 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   BsanFuncDestroyStackSlot = M.getOrInsertFunction(BSAN("destroy_stack_slot"),
                                                    AL, IRB.getVoidTy(), PtrTy);
+
+  BsanFuncExposeProv = M.getOrInsertFunction(BSAN("expose_prov"), AL,
+                                             IRB.getVoidTy(), IntptrTy, PtrTy);
 
   EHPersonality Pers = getDefaultEHPersonality(TargetTriple);
   DefaultPersonalityFn =

@@ -10,7 +10,8 @@ use crate::errors::{ErrorFormatContext, UBInfo};
 use crate::helpers::FxHashMap;
 use crate::local::LocalCtx;
 use crate::memory::{Heap, ShadowHeap};
-use crate::tree_borrows::{LazyTree, ProtectorKind};
+use crate::tree_borrows::data_structures::RangeObjectMap;
+use crate::tree_borrows::{ProtectorKind, LazyTree};
 use crate::*;
 
 pub static DISABLE_NODE_DEBUG_INFO: AtomicBool = AtomicBool::new(false);
@@ -63,6 +64,32 @@ impl<'a> Deref for ProtectedTagsRef<'a> {
     }
 }
 
+pub struct ExposedProvenanceRef<'a>(RwLockReadGuard<'a, RangeObjectMap<NonNull<AllocInfo>>>);
+
+impl<'a> Deref for ExposedProvenanceRef<'a> {
+    type Target = RangeObjectMap<NonNull<AllocInfo>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+pub struct ExposedProvenanceRefMut<'a>(RwLockWriteGuard<'a, RangeObjectMap<NonNull<AllocInfo>>>);
+
+impl<'a> Deref for ExposedProvenanceRefMut<'a> {
+    type Target = RangeObjectMap<NonNull<AllocInfo>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'a> DerefMut for ExposedProvenanceRefMut<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 /// Every action that requires a heap allocation must be performed through a globally
 /// accessible, singleton instance of `GlobalCtx`. Initializing or obtaining
 /// a reference to this instance is unsafe, since it requires having been initialized
@@ -78,6 +105,7 @@ pub struct GlobalCtx {
     alloc_metadata_map: Heap<AllocInfo>,
     snapshots: RwLock<FxHashMap<AllocId, LazyTree>>,
     threads: RwLock<FxHashMap<ThreadId, NonNull<LocalCtx>>>,
+    exposed_provenance: RwLock<RangeObjectMap<NonNull<AllocInfo>>>,
 }
 
 impl GlobalCtx {
@@ -88,6 +116,7 @@ impl GlobalCtx {
             shadow_heap: ShadowHeap::new(),
             snapshots: RwLock::new(FxHashMap::default()),
             threads: RwLock::new(FxHashMap::default()),
+            exposed_provenance: RwLock::new(RangeObjectMap::new()),
         }
     }
 
@@ -117,6 +146,15 @@ impl GlobalCtx {
 
     pub fn protected_tags_mut<'a>(&'a self) -> ProtectedTagsRefMut<'a> {
         ProtectedTagsRefMut(self.protected_tags.write())
+    }
+
+    #[allow(unused)]
+    pub fn exposed_provenance<'a>(&'a self) -> ExposedProvenanceRef<'a> {
+        ExposedProvenanceRef(self.exposed_provenance.read())
+    }
+
+    pub fn exposed_provenance_mut<'a>(&'a self) -> ExposedProvenanceRefMut<'a> {
+        ExposedProvenanceRefMut(self.exposed_provenance.write())
     }
 
     pub fn handle_error(&self, ub_info: UBInfo, pc: Span) {

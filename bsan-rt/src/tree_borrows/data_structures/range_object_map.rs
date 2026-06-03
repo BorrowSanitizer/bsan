@@ -1,7 +1,7 @@
-// Ported from Miri (commit:072a9fa)
 //! Implements a map from allocation ranges to data. This is somewhat similar to RangeMap, but the
 //! ranges and data are discrete and non-splittable -- they represent distinct "objects". An
 //! allocation in the map will always have the same range until explicitly removed
+#![allow(unused)]
 use alloc::vec::Vec;
 use core::ops::{Index, IndexMut, Range};
 

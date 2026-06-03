@@ -78,6 +78,8 @@ public:
 
   FunctionCallee DefaultPersonalityFn;
 
+  FunctionCallee BsanFuncExposeProv;
+
   // Thread-local storage for paramters
   // and return values.
   Value *ProvStack = nullptr;
