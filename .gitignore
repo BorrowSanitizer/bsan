@@ -11,4 +11,3 @@ CMakeFiles
 .toolchain
 .vscode
 .nix-rust
-testcrate/

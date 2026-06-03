@@ -10,23 +10,23 @@ use crate::tree_borrows::data_structures::DedupRangeMap;
 use crate::tree_borrows::diagnostics::AccessCause;
 use crate::tree_borrows::perms::{AccessKind, Permission};
 use crate::tree_borrows::tree::LocationState;
-use crate::tree_borrows::{IdempotentForeignAccess, LazyTree, NewPermission};
-use crate::{AllocId, BorTag, GlobalCtx, Provenance, RetagFlags, RetagInfo};
+use crate::tree_borrows::{IdempotentForeignAccess, NewPermission};
+use crate::{AllocId, BorTag, GlobalCtx, Provenance, RetagFlags, RetagInfo, Tree};
 
 #[derive(Debug)]
 pub struct BorrowTracker<'b> {
     alloc_id: AllocId,
     prov: Provenance,
     range: AllocRange,
-    tree: MutexGuard<'b, LazyTree>,
+    tree: MutexGuard<'b, Tree>,
 }
 
 impl<'b> BorrowTracker<'b> {
-    fn tree_mut(&mut self) -> &mut LazyTree {
+    fn tree_mut(&mut self) -> &mut Tree {
         &mut self.tree
     }
 
-    fn tree(&self) -> &LazyTree {
+    fn tree(&self) -> &Tree {
         &self.tree
     }
 
@@ -100,7 +100,7 @@ impl<'b> BorrowTracker<'b> {
             };
 
             let tree = tree.lock();
-            if !tree.contains_tag(prov.bor_tag) {
+            if !tree.tag_mapping.contains_key(&prov.bor_tag) {
                 return if access_size != 0 { Err(UBInfo::UseAfterFree) } else { Ok(None) };
             }
 
@@ -144,7 +144,7 @@ impl<'b> BorrowTracker<'b> {
         let alloc_id = self.alloc_id;
         let parent_tag = self.prov.bor_tag;
         let new_tag = BorTag::default();
-        if !self.tree().contains_tag(self.prov.bor_tag) {
+        if !self.tree().tag_mapping.contains_key(&self.prov.bor_tag) {
             return Err(UBInfo::UseAfterFree);
         }
         let new_perm: NewPermission = NewPermission::new(retag_info);
@@ -293,7 +293,7 @@ impl<'b> BorrowTracker<'b> {
     }
 
     pub fn debug_print_diff(&self, ctx: &GlobalCtx) {
-        ctx.with_snapshot(self.alloc_id, |old_tree: &LazyTree| {
+        ctx.with_snapshot(self.alloc_id, |old_tree| {
             self.tree().print_tree_diff(old_tree, &ctx.protected_tags());
         });
     }
@@ -303,6 +303,6 @@ impl<'b> BorrowTracker<'b> {
     }
 
     pub fn debug_tree_size(&self) -> usize {
-        self.tree().node_count()
+        self.tree().tag_mapping.len()
     }
 }
