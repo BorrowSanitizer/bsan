@@ -312,7 +312,7 @@ impl<'b> BorrowTracker<'b> {
         debug_assert!(!prov.alloc_info.is_null());
         let info = unsafe { &*prov.alloc_info };
         let mut guard = info.tree_lock.lock();
-        let Some(tree) = guard.as_mut() else { unreachable!("double-free on a stack allocation.") };
+        let Some(tree) = guard.as_mut() else { return Ok(()) };
         let range = AllocRange { start: Size::ZERO, size: info.size };
         tree.dealloc(prov.bor_tag, range, &ctx.protected_tags(), info.alloc_id, span)?;
         *guard = None;
