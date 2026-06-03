@@ -380,18 +380,9 @@ mod tests {
     #[test]
     fn test_sizes() {
         use crate::tree_borrows::tree::{LocationState, Node};
-        libc_print::std_name::println!("SIZEOF_NODE: {}", core::mem::size_of::<Node>());
-        libc_print::std_name::println!(
-            "SIZEOF_LOCATIONSTATE: {}",
-            core::mem::size_of::<LocationState>()
-        );
-        libc_print::std_name::println!(
-            "SIZEOF_UNIVALMAP_NODE: {}",
-            core::mem::size_of::<UniValMap<Node>>()
-        );
-        libc_print::std_name::println!(
-            "SIZEOF_UNIVALMAP_LOCATIONSTATE: {}",
-            core::mem::size_of::<UniValMap<LocationState>>()
-        );
+        assert_eq!(core::mem::size_of::<Node>(), 136);
+        assert_eq!(core::mem::size_of::<LocationState>(), 3);
+        assert_eq!(core::mem::size_of::<UniValMap<Node>>(), 2192);
+        assert_eq!(core::mem::size_of::<UniValMap<LocationState>>(), 64);
     }
 }
