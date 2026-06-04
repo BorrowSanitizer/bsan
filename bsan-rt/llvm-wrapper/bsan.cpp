@@ -47,6 +47,7 @@ namespace __bsan {
 bool bsan_inited = false;
 bool bsan_init_running = false;
 bool bsan_deinit_running = false;
+bool bsan_deinited = false;
 
 // Every thread has a unique ID
 atomic_uintptr_t thread_id{0};
@@ -177,6 +178,7 @@ void __bsan_deinit() {
   DeinitializeGC();
   bsan_deinit_running = false;
   bsan_inited = false;
+  bsan_deinited = true;
 }
 
 /// When we call a possibly uninstrumented function, we store our frame

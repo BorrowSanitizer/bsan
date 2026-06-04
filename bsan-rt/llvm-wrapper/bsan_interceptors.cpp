@@ -42,7 +42,7 @@ struct DlsymAlloc : public DlSymAllocator<DlsymAlloc> {
 #define ENSURE_BSAN_INITED()                                                   \
   do {                                                                         \
     CHECK(!bsan_init_running);                                                 \
-    if (!bsan_inited) {                                                        \
+    if (!bsan_inited && !bsan_deinited) {                                      \
       __bsan_init();                                                           \
     }                                                                          \
   } while (0)
