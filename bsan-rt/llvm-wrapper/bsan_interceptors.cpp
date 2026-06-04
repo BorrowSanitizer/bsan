@@ -325,7 +325,7 @@ static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso) {
   } while (false)
 
 #define COMMON_INTERCEPTOR_ENTER(ctx, func, ...)                               \
-  if (bsan_init_running || bsan_deinited)                                      \
+  if (bsan_init_running)                                                       \
     return REAL(func)(__VA_ARGS__);                                            \
   ENSURE_BSAN_INITED();                                                        \
   LocalInterceptorContext bsan_ctx = {BlockInterception()};                    \
