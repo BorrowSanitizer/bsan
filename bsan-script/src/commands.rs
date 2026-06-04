@@ -51,13 +51,13 @@ impl Command {
             Command::Install { components, args } => {
                 components.iter().try_for_each(|c| c.install(env, &args))
             }
-            Command::UI { bless } => Self::ui(env, bless),
+            Command::UI { bless, keep_sysroot } => Self::ui(env, bless, keep_sysroot),
             Command::Miri { components, args } => components.iter().try_for_each(|c| {
                 c.miri(env, &args)?;
                 Ok(())
             }),
             Command::Inst { file, debug, args } => Self::inst(env, file, debug, &args),
-            Command::Fix => Self::fix(env),
+            Command::Fix { keep_sysroot } => Self::fix(env, keep_sysroot),
             Command::Stats => Self::stats(env),
         }
     }
@@ -78,8 +78,8 @@ impl Command {
         CompilerRt::fmt(env, check)
     }
 
-    fn ui(env: &mut BsanEnv, bless: bool) -> Result<()> {
-        run_tests(env, bless, false)?;
+    fn ui(env: &mut BsanEnv, bless: bool, keep_sysroot: bool) -> Result<()> {
+        run_tests(env, bless, false, keep_sysroot)?;
 
         crate::all_components!().iter().try_for_each(|c| c.install(env, &[]))?;
 
@@ -87,6 +87,7 @@ impl Command {
         cmd!(env.sh, "rm -rf {cargo_test_path}").run()?;
         cmd!(env.sh, "python3 tests/test-cargo-bsan/run_test.py").run()?;
         Self::stats(env)?;
+
         Ok(())
     }
 
@@ -98,7 +99,7 @@ impl Command {
         components.iter().try_for_each(|c| c.clippy(env, args))?;
         components.iter().try_for_each(|c| c.test(env, args))?;
         //components.iter().try_for_each(|c| c.miri(env, args))?;
-        Self::ui(env, false)
+        Self::ui(env, false, false)
     }
 
     fn clean(env: &mut BsanEnv) -> Result<()> {
@@ -172,7 +173,6 @@ impl Command {
         let miri_should_fail = count_rs(&path!(root / "tests" / "miri-tests" / "should-fail"))?;
         let total_pass = pass + miri_pass + miri_should_pass;
         let total_fail = fail + miri_fail + miri_should_fail;
-        let total = total_pass + total_fail;
 
         println!();
         println!(
@@ -211,24 +211,30 @@ impl Command {
             print_tree(&should_fail_root, "  ")?;
         }
 
-        println!(
-            "{}/{} ({}) tests are covered.",
-            total - miri_should_fail - miri_should_pass,
-            total,
-            fmt_percent(total - miri_should_fail - miri_should_pass, total)
-        );
-
         Ok(())
     }
 
-    fn fix(env: &mut BsanEnv) -> Result<()> {
-        run_tests(env, false, true)?;
+    fn fix(env: &mut BsanEnv, keep_sysroot: bool) -> Result<()> {
+        run_tests(env, false, true, keep_sysroot)?;
         Ok(())
     }
 }
 
-fn run_tests(env: &mut BsanEnv, bless: bool, fix: bool) -> Result<(), anyhow::Error> {
+fn run_tests(
+    env: &mut BsanEnv,
+    bless: bool,
+    fix: bool,
+    keep_sysroot: bool,
+) -> Result<(), anyhow::Error> {
     let sysroot_dir = path!(&env.build_dir / "sysroot");
+    if !keep_sysroot {
+        cmd!(env.sh, "rm -rf {sysroot_dir}").quiet().run()?;
+        // The cached build of the test suite's dependencies goes stale for the
+        // same reasons as the sysroot: Cargo does not know to rebuild it when
+        // the instrumentation pass changes.
+        let dep_cache = path!(&env.build_dir / "tmp" / "bsan_ui");
+        cmd!(env.sh, "rm -rf {dep_cache}").quiet().run()?;
+    }
     env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
     env.in_mode(Mode::Release, |env| {
         let args = &[];
