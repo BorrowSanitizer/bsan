@@ -1,3 +1,6 @@
+//@run:0
+//miri: @compile-flags: -Zmiri-tree-borrows -Zmiri-provenance-gc=0 -Zmiri-permissive-provenance
+
 // This program contains a false positive bug found in lazy allocation. Single-node
 // trees should still be able to be exposed, even if they are `Uninit`.
 

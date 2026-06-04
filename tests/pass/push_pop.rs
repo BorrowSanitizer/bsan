@@ -1,3 +1,4 @@
+//@run:0
 extern "C" {
     fn __bsan_init();
     fn __bsan_deinit();
@@ -7,7 +8,6 @@ extern "C" {
     fn __bsan_debug_print_borrow_state(ptr: *mut u8);
 }
 
-//@run
 fn main() {
     let mut v: Vec<i64> = Vec::new();
 
