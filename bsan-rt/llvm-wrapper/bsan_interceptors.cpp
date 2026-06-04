@@ -42,7 +42,7 @@ struct DlsymAlloc : public DlSymAllocator<DlsymAlloc> {
 #define ENSURE_BSAN_INITED()                                                   \
   do {                                                                         \
     CHECK(!bsan_init_running);                                                 \
-    if (!bsan_inited) {                                                        \
+    if (!bsan_inited && !bsan_deinited) {                                      \
       __bsan_init();                                                           \
     }                                                                          \
   } while (0)
@@ -325,7 +325,7 @@ static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso) {
   } while (false)
 
 #define COMMON_INTERCEPTOR_ENTER(ctx, func, ...)                               \
-  if (bsan_init_running)                                                       \
+  if (bsan_init_running || bsan_deinited)                                      \
     return REAL(func)(__VA_ARGS__);                                            \
   ENSURE_BSAN_INITED();                                                        \
   LocalInterceptorContext bsan_ctx = {BlockInterception()};                    \

@@ -40,6 +40,7 @@ extern THREADLOCAL void *bsan_thread;
 extern bool bsan_inited;
 extern bool bsan_init_running;
 extern bool bsan_deinit_running;
+extern bool bsan_deinited;
 extern atomic_uintptr_t thread_id;
 
 extern THREADLOCAL int block_interception;
