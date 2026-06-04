@@ -172,6 +172,7 @@ impl Command {
         let miri_should_fail = count_rs(&path!(root / "tests" / "miri-tests" / "should-fail"))?;
         let total_pass = pass + miri_pass + miri_should_pass;
         let total_fail = fail + miri_fail + miri_should_fail;
+        let total = total_pass + total_fail;
 
         println!();
         println!(
@@ -209,6 +210,13 @@ impl Command {
         if should_fail_root.exists() {
             print_tree(&should_fail_root, "  ")?;
         }
+
+        println!(
+            "{}/{} ({}) tests are covered.",
+            total - miri_should_fail - miri_should_pass,
+            total,
+            fmt_percent(total - miri_should_fail - miri_should_pass, total)
+        );
 
         Ok(())
     }
