@@ -558,6 +558,8 @@ public:
                          ElementCount Elems = ElementCount::getFixed(1));
   static Provenance omnivalid(BorrowSanitizer &BS,
                               ElementCount Elems = ElementCount::getFixed(1));
+  static Provenance wildcard(BorrowSanitizer &BS,
+                             ElementCount Elems = ElementCount::getFixed(1));
 };
 
 struct ProvenanceKey {
@@ -625,6 +627,15 @@ Provenance Provenance::omnivalid(BorrowSanitizer &BS, ElementCount Elems) {
     Value *Zero = ConstantInt::get(BS.IntptrTy, 0);
     Value *InvalidPtr = ConstantPointerNull::get(BS.PtrTy);
     return Provenance(Zero, InvalidPtr, Elems);
+  }
+  report_fatal_error("Vector provenance is not supported yet");
+}
+
+Provenance Provenance::wildcard(BorrowSanitizer &BS, ElementCount Elems) {
+  if (Elems.isScalar()) {
+    Value *Two = ConstantInt::get(BS.IntptrTy, 2);
+    Value *InvalidPtr = ConstantPointerNull::get(BS.PtrTy);
+    return Provenance(Two, InvalidPtr, Elems);
   }
   report_fatal_error("Vector provenance is not supported yet");
 }
@@ -1275,35 +1286,35 @@ private:
     Value *SrcAddr = IRB.CreateLoad(BS.PtrTy, Operand);
     Value *Shadow = IRB.CreateCall(BS.BsanFuncShadow, {Operand});
     Provenance SrcProv = Provenance::load(IRB, BS, Shadow);
-    Provenance RetaggedProv = instrumentRetag(IRB, CB, SrcAddr, SrcProv);
-    IRB.CreateCall(BS.BsanFuncRcStore,
-                   {RetaggedProv.Tag, RetaggedProv.Info, Shadow});
+
+    RetagInfo RI(&CB);
+    Value *ImArrayLen = getLayoutArrayLength(RI.ImArray);
+    Value *PinArrayLen = getLayoutArrayLength(RI.PinArray);
+
+    IRB.CreateCall(BS.BsanFuncRetag, {SrcAddr, RI.Size, RI.Perms, RI.ImArray,
+                                      ImArrayLen, RI.PinArray, PinArrayLen,
+                                      SrcProv.Tag, SrcProv.Info, Shadow});
+
+    if (RI.isProtected()) {
+      Provenance RetaggedProv = Provenance::load(IRB, BS, Shadow);
+      Value *Slot = allocStackSlot(IRB, RI.isProtected());
+      RetaggedProv.store(IRB, BS, Slot);
+    }
   }
 
   void instrumentRetagReg(CallBase &CB) {
     IRBuilder<> IRB(&CB);
-    if (auto Prov = getProvenance(CB.getParent(), CB.getOperand(0))) {
-      Provenance Retagged = instrumentRetag(IRB, CB, CB.getOperand(0), *Prov);
-      setProvenance(&CB, Retagged);
+    Value *Ptr = CB.getOperand(0);
+    if (auto Prov = getProvenance(CB.getParent(), Ptr)) {
+      RetagInfo RI(&CB);
+      Value *ImArrayLen = getLayoutArrayLength(RI.ImArray);
+      Value *PinArrayLen = getLayoutArrayLength(RI.PinArray);
+      Value *Dest = allocStackSlot(IRB, RI.isProtected());
+      IRB.CreateCall(BS.BsanFuncRetag,
+                     {Ptr, RI.Size, RI.Perms, RI.ImArray, ImArrayLen,
+                      RI.PinArray, PinArrayLen, Prov->Tag, Prov->Info, Dest});
+      setProvenance(&CB, Provenance::load(IRB, BS, Dest));
     }
-  }
-
-  Provenance instrumentRetag(IRBuilder<> &IRB, CallBase &CB, Value *Target,
-                             Provenance TargetProv) {
-    RetagInfo RI(&CB);
-
-    Value *ImArrayLen = getLayoutArrayLength(RI.ImArray);
-    Value *PinArrayLen = getLayoutArrayLength(RI.PinArray);
-
-    TargetProv.Tag =
-        IRB.CreateCall(BS.BsanFuncRetag, {Target, RI.Size, RI.Perms, RI.ImArray,
-                                          ImArrayLen, RI.PinArray, PinArrayLen,
-                                          TargetProv.Tag, TargetProv.Info});
-
-    Value *SlotPtr = allocStackSlot(IRB, RI.isProtected());
-    TargetProv.store(IRB, BS, SlotPtr);
-
-    return TargetProv;
   }
 
   Value *allocStackSlot(IRBuilder<> &IRB, bool IsFnEntry,
@@ -1800,6 +1811,10 @@ private:
       IRBuilder<> IRB(&I);
       IRB.CreateCall(BS.BsanFuncExposeProv, {(*Prov).Tag, (*Prov).Info});
     }
+  }
+
+  void visitIntToPtrInst(IntToPtrInst &I) {
+    setProvenance(&I, Provenance::wildcard(BS));
   }
 
   void visitAddrSpaceCastInst(AddrSpaceCastInst &I) {

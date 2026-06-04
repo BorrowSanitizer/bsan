@@ -109,7 +109,7 @@ unsafe impl Heapable for AllocInfo {
         // SAFETY: this is safe because both union fields are raw pointers
         #[allow(unused_unsafe)]
         unsafe {
-            &raw mut self.base_addr.free_list_next
+            &raw mut (*self.base_addr.as_ptr()).free_list_next
         }
     }
 }

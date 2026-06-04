@@ -710,6 +710,12 @@ impl Tree {
                 )?;
             }
         }
+
+        // If the tag is exposed, then the wildcard tracking state needs to
+        // reflect that it is no longer protected: accesses that were UB while
+        // the protector was active may be permitted again.
+        self.update_exposure_for_protector_release(tag);
+
         Ok(())
     }
 }
