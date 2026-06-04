@@ -1,6 +1,6 @@
+//@run:0
 use std::ptr::copy_nonoverlapping;
 
-//@run
 fn main() {
     let mut x = [0u8; 10];
     let src = [1u8; 10];

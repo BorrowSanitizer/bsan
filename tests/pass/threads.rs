@@ -1,3 +1,4 @@
+//@run:0
 use std::thread;
 const NTHREADS: u32 = 5;
 

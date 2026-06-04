@@ -1,3 +1,4 @@
+//@run:0
 extern "C" {
     fn __bsan_debug_tree_size(ptr: *mut u8);
     fn __bsan_debug_print_borrow_state(ptr: *mut u8);
@@ -18,7 +19,6 @@ fn print_diff(ptr: *mut i32, msg: &str) {
     }
 }
 
-//@run
 fn main() {
     let mut x = 0;
     let ptr = &mut x as *mut i32;
