@@ -1,59 +1,32 @@
 //@run:0
-extern "C" {
-    fn __bsan_init();
-    fn __bsan_deinit();
+#[path = "../utils/mod.rs"]
+#[macro_use]
+mod utils;
 
-    fn __bsan_debug_print(ptr: *mut u8);
-
-    fn __bsan_debug_print_borrow_state(ptr: *mut u8);
-    fn __bsan_debug_gc(ptr: *mut u8);
-    fn __bsan_debug_tree_size(ptr: *mut u8);
-}
+const N: usize = 5;
 
 fn main() {
-    let mut v: Vec<i64> = Vec::new();
+    let mut v = Vec::new();
 
-    let p: *mut i64 = v.as_mut_ptr();
-    let pv: *mut u8 = p as *mut u8;
+    nodes!(v.as_mut_ptr());
+    tree!(v.as_mut_ptr());
 
-    unsafe { __bsan_debug_tree_size(pv) };
-    unsafe { __bsan_debug_print_borrow_state(pv) };
-
-    for i in 0..5 {
+    for i in 0..N {
         v.push(i);
-        let p: *mut i64 = v.as_mut_ptr();
-        let pv: *mut u8 = p as *mut u8;
-        unsafe { __bsan_debug_tree_size(pv) };
-        unsafe { __bsan_debug_print_borrow_state(pv) };
+        nodes!(v.as_mut_ptr());
+        tree!(v.as_mut_ptr());
     }
-
-    // print out each element's tree ptr
-    for elem in v.iter_mut() {
-        let p: *mut i64 = &raw mut *elem;
-        let pv: *mut u8 = p as *mut u8;
-        // Should be same tree
-        unsafe { __bsan_debug_tree_size(pv) };
-        // We only print tree size here to avoid too much output, but let's print state for the first element
-        if *elem == 0 {
-             unsafe { __bsan_debug_print_borrow_state(pv) };
-        }
+    
+    for i in 0..v.len() {
+        nodes!(v.as_mut_ptr());
+        if v[i] == 0 {
+            tree!(v.as_ptr());
+        } 
     }
-
-    let p: *mut i64 = v.as_mut_ptr();
-    let pv: *mut u8 = p as *mut u8;
-    unsafe { __bsan_debug_tree_size(pv) };
-    unsafe { __bsan_debug_print_borrow_state(pv) };
 
     for _ in 0..v.len() {
         v.pop();
-        let p: *mut i64 = v.as_mut_ptr();
-        let pv: *mut u8 = p as *mut u8;
-        unsafe { __bsan_debug_tree_size(pv) };
-        unsafe { __bsan_debug_print_borrow_state(pv) };
+        nodes!(v.as_mut_ptr());
+        tree!(v.as_mut_ptr());
     }
-    
-    let p: *mut i64 = v.as_mut_ptr();
-    let pv: *mut u8 = p as *mut u8;
-    unsafe { __bsan_debug_tree_size(pv) };
-    unsafe { __bsan_debug_print_borrow_state(pv) };
 }
