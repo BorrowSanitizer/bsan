@@ -552,7 +552,10 @@ impl Buildable for BsanRtCore {
             Ok(env.assert_artifact(&self.artifact(env)))
         })?;
 
-        cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_* -G __BSAN_*").arg(&rust_runtime).quiet().run()?;
+        cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_* -G __BSAN_*")
+            .arg(&rust_runtime)
+            .quiet()
+            .run()?;
 
         Ok(Some(rust_runtime))
     }

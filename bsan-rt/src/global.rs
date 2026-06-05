@@ -4,14 +4,15 @@ use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard, mutex::SpinMutex};
+use spin::mutex::SpinMutex;
+use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::errors::{ErrorFormatContext, UBInfo};
 use crate::helpers::FxHashMap;
 use crate::local::LocalCtx;
-use crate::memory::ShadowHeap;
 #[cfg(feature = "alloc-bsan-metadata")]
 use crate::memory::Heap;
+use crate::memory::ShadowHeap;
 use crate::tree_borrows::data_structures::RangeObjectMap;
 use crate::tree_borrows::{LazyTree, ProtectorKind};
 use crate::*;
@@ -148,7 +149,8 @@ impl GlobalCtx {
             } else {
                 // Fallback: allocate from the global allocator
                 unsafe {
-                    let ptr = alloc::alloc::alloc(core::alloc::Layout::new::<AllocInfo>()).cast::<AllocInfo>();
+                    let ptr = alloc::alloc::alloc(core::alloc::Layout::new::<AllocInfo>())
+                        .cast::<AllocInfo>();
                     if ptr.is_null() {
                         alloc::alloc::handle_alloc_error(core::alloc::Layout::new::<AllocInfo>());
                     }
@@ -280,24 +282,35 @@ mod global_alloc {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
             #[cfg(feature = "alloc-mimalloc")]
             {
-                return unsafe { libmimalloc_sys::mi_malloc_aligned(layout.size(), layout.align()) as *mut u8 };
+                return unsafe {
+                    libmimalloc_sys::mi_malloc_aligned(layout.size(), layout.align()) as *mut u8
+                };
             }
             #[cfg(feature = "alloc-dlmalloc")]
             {
-                return unsafe { <dlmalloc::GlobalDlmalloc as core::alloc::GlobalAlloc>::alloc(&dlmalloc::GlobalDlmalloc, layout) };
+                return unsafe {
+                    <dlmalloc::GlobalDlmalloc as core::alloc::GlobalAlloc>::alloc(
+                        &dlmalloc::GlobalDlmalloc,
+                        layout,
+                    )
+                };
             }
             #[cfg(feature = "alloc-system")]
             {
-            #[cfg(test)]
-            unsafe {
+                #[cfg(test)]
+                unsafe {
                     return libc::malloc(layout.size()).cast::<u8>();
-            }
-            #[cfg(not(test))]
-            unsafe {
+                }
+                #[cfg(not(test))]
+                unsafe {
                     return __bsan_crt_malloc(layout.size()).cast::<u8>();
                 }
             }
-            #[cfg(not(any(feature = "alloc-mimalloc", feature = "alloc-dlmalloc", feature = "alloc-system")))]
+            #[cfg(not(any(
+                feature = "alloc-mimalloc",
+                feature = "alloc-dlmalloc",
+                feature = "alloc-system"
+            )))]
             {
                 panic!("No allocator backend enabled");
             }
@@ -310,18 +323,32 @@ mod global_alloc {
             }
             #[cfg(feature = "alloc-dlmalloc")]
             {
-                unsafe { <dlmalloc::GlobalDlmalloc as core::alloc::GlobalAlloc>::dealloc(&dlmalloc::GlobalDlmalloc, ptr, _layout) }
+                unsafe {
+                    <dlmalloc::GlobalDlmalloc as core::alloc::GlobalAlloc>::dealloc(
+                        &dlmalloc::GlobalDlmalloc,
+                        ptr,
+                        _layout,
+                    )
+                }
                 return;
             }
             #[cfg(feature = "alloc-system")]
             {
-            #[cfg(test)]
-                unsafe { libc::free(ptr as *mut core::ffi::c_void) }
-            #[cfg(not(test))]
-                unsafe { __bsan_crt_free(ptr as *mut core::ffi::c_void) }
+                #[cfg(test)]
+                unsafe {
+                    libc::free(ptr as *mut core::ffi::c_void)
+                }
+                #[cfg(not(test))]
+                unsafe {
+                    __bsan_crt_free(ptr as *mut core::ffi::c_void)
+                }
                 return;
             }
-            #[cfg(not(any(feature = "alloc-mimalloc", feature = "alloc-dlmalloc", feature = "alloc-system")))]
+            #[cfg(not(any(
+                feature = "alloc-mimalloc",
+                feature = "alloc-dlmalloc",
+                feature = "alloc-system"
+            )))]
             {
                 panic!("No allocator backend enabled");
             }

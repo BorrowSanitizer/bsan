@@ -396,7 +396,14 @@ fn main() -> Result<()> {
     if std::env::var("BSAN_ONLY_PASS").is_err() {
         ui(Mode::Fail, "tests/fail", &target, WithoutDependencies, tmpdir.path(), false)?;
         ui(Mode::Fail, "tests/fail-dep", &target, WithDependencies, tmpdir.path(), false)?;
-        ui(Mode::Fail, "tests/miri-tests/fail", &target, WithoutDependencies, tmpdir.path(), false)?;
+        ui(
+            Mode::Fail,
+            "tests/miri-tests/fail",
+            &target,
+            WithoutDependencies,
+            tmpdir.path(),
+            false,
+        )?;
     }
     Ok(())
 }
