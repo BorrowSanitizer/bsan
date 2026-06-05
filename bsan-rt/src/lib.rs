@@ -93,10 +93,11 @@ macro_rules! debug_bsan {
     };
 }
 
-#[unsafe(no_mangle)]
-pub static __BSAN_ALLOC_ID_CTR: AtomicUsize = AtomicUsize::new(3);
-
-/// Unique identifier for an allocation
+/// A unique identifier for an allocation
+///
+/// Every instrumented allocation receives a globally unique
+/// ID. This is exclusively for debugging. The ID '0' is reserved
+/// to indicate an invalid (freed) allocation.
 #[repr(transparent)]
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AllocId(usize);
@@ -105,28 +106,16 @@ impl AllocId {
     pub fn get(&self) -> usize {
         self.0
     }
-    /// Represents any valid allocation
-    pub const fn wildcard() -> Self {
-        AllocId(0)
-    }
 
-    /// An invalid allocation
-    pub const fn invalid() -> Self {
-        AllocId(1)
-    }
-
-    /// A global or stack allocation, which cannot be manually freed
-    pub const fn sticky() -> Self {
-        AllocId(2)
-    }
-
-    pub const fn min() -> Self {
-        AllocId(3)
+    fn invalid() -> Self {
+        Self(0)
     }
 }
 
 impl Default for AllocId {
     fn default() -> Self {
+        #[unsafe(no_mangle)]
+        static __BSAN_ALLOC_ID_CTR: AtomicUsize = AtomicUsize::new(1);
         AllocId(__BSAN_ALLOC_ID_CTR.fetch_add(1, Ordering::Relaxed))
     }
 }
@@ -147,10 +136,10 @@ impl fmt::Display for AllocId {
     }
 }
 
-#[unsafe(no_mangle)]
-pub static __BSAN_THREAD_ID_CTR: AtomicUsize = AtomicUsize::new(3);
-
-/// Unique identifier for a thread
+/// A unique identifier for a thread.
+///
+/// Each thread receives a globally unique ID. The ID 0 will
+/// always correspond to the main thread.
 #[repr(transparent)]
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ThreadId(usize);
@@ -163,6 +152,8 @@ impl ThreadId {
 
 impl Default for ThreadId {
     fn default() -> Self {
+        #[unsafe(no_mangle)]
+        pub static __BSAN_THREAD_ID_CTR: AtomicUsize = AtomicUsize::new(0);
         ThreadId(__BSAN_THREAD_ID_CTR.fetch_add(1, Ordering::Relaxed))
     }
 }
@@ -182,7 +173,10 @@ unsafe extern "C" {
     unsafe static __BSAN_BOR_TAG_CTR: AtomicUsize;
 }
 
-/// Unique identifier for a node within the tree
+/// A unique identifier for an access permission.
+///
+/// A borrow tag uniquely identifies a node within a tree. Tags
+/// are global, allowing users to identify an allocation by a tag.
 #[repr(transparent)]
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BorTag(usize);
@@ -256,29 +250,13 @@ pub struct Provenance {
 unsafe impl Sync for Provenance {}
 unsafe impl Send for Provenance {}
 
-impl Provenance {
-    /// The default provenance value, which is assigned to dangling or invalid
-    /// pointers.
-    #[allow(unused)]
-    const fn null() -> Self {
-        Provenance { bor_tag: BorTag::invalid(), alloc_info: core::ptr::null_mut() }
-    }
-
-    /// Pointers cast from integers receive a "wildcard" provenance value,
-    /// which permits any access.
-    #[allow(unused)]
-    const fn wildcard() -> Self {
-        Provenance { bor_tag: BorTag::wildcard(), alloc_info: core::ptr::null_mut() }
-    }
-}
-
 #[derive(Clone, Copy)]
-pub(crate) union FreeListAddrUnion {
+pub(crate) union FreeListOrAddr {
     pub base_addr: Size,
     pub free_list_next: Option<NonNull<AllocInfo>>,
 }
 
-impl Debug for FreeListAddrUnion {
+impl Debug for FreeListOrAddr {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{:x}", unsafe { self.base_addr.bytes() })
     }
@@ -292,7 +270,7 @@ impl Debug for FreeListAddrUnion {
 #[repr(C)]
 pub struct AllocInfo {
     alloc_id: Cell<AllocId>,
-    base_addr: Cell<FreeListAddrUnion>,
+    free_or_addr: Cell<FreeListOrAddr>,
     size: Cell<Size>,
     tree: Mutex<Option<LazyTree>>,
 }
@@ -301,7 +279,7 @@ impl AllocInfo {
     fn invalid() -> Self {
         AllocInfo {
             alloc_id: Cell::new(AllocId::invalid()),
-            base_addr: Cell::new(FreeListAddrUnion { base_addr: Size::ZERO }),
+            free_or_addr: Cell::new(FreeListOrAddr { base_addr: Size::ZERO }),
             size: Cell::new(Size::ZERO),
             tree: Mutex::default(),
         }
@@ -310,7 +288,7 @@ impl AllocInfo {
     fn new(base_addr: Size, size: Size, bor_tag: BorTag, span: Span) -> Self {
         Self {
             alloc_id: Cell::new(AllocId::default()),
-            base_addr: Cell::new(FreeListAddrUnion { base_addr }),
+            free_or_addr: Cell::new(FreeListOrAddr { base_addr }),
             size: Cell::new(size),
             tree: Mutex::new(Some(LazyTree::new(bor_tag, size, span))),
         }
@@ -331,25 +309,22 @@ impl AllocInfo {
 #[repr(transparent)]
 pub struct AllocInfoPtr(NonNull<AllocInfo>);
 
-// A valid pointer to an instance of `AllocInfo`.
+// A pointer to an instance of `AllocInfo`.
 impl AllocInfoPtr {
     /// # Safety
-    /// This pointer must be non-null, and the allocation
-    /// must be valid - its `base_addr` field must contain
-    /// the base address of the allocation, and not the
-    /// next node in the free list.
-    #[must_use]
-    pub unsafe fn from_raw(ptr: *mut AllocInfo) -> Self {
-        debug_assert!(!ptr.is_null());
-        Self(unsafe { NonNull::new_unchecked(ptr) })
+    /// This instance of `AllocInfo` must represent a valid, non-freed allocation.
+    /// Otherwise, the contents of its base address will be initialized with the next
+    /// pointer in a free list.
+    pub unsafe fn range(&self) -> AllocRange {
+        AllocRange { start: unsafe { self.base_addr() }, size: self.size.get() }
     }
 
-    pub fn range(&self) -> AllocRange {
-        AllocRange { start: self.base_addr(), size: self.size.get() }
-    }
-
-    pub fn base_addr(&self) -> Size {
-        unsafe { self.base_addr.get().base_addr }
+    /// # Safety
+    /// This instance of `AllocInfo` must represent a valid, non-freed allocation.
+    /// Otherwise, the contents of its base address will be initialized with the next
+    /// pointer in a free list.
+    pub unsafe fn base_addr(&self) -> Size {
+        unsafe { self.free_or_addr.get().base_addr }
     }
 }
 

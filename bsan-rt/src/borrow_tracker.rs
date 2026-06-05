@@ -1,5 +1,6 @@
 // Components in this library were ported from Miri and then modified by our team.
 use core::ops::{Deref, DerefMut};
+use core::ptr::NonNull;
 
 use spin::MutexGuard;
 
@@ -50,7 +51,8 @@ impl BorrowTracker {
         // Our instrumentation pass guarantees that if a pointer's
         // provenance is non-null and not omnivalid, then it will contain
         // valid allocation info pointer.
-        let alloc_info = unsafe { AllocInfoPtr::from_raw(prov.alloc_info) };
+        debug_assert!(prov.alloc_info.is_null());
+        let alloc_info: AllocInfoPtr = unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
         if alloc_info.tree.lock().is_none() {
             return Err(UBInfo::UseAfterFree);
         }
@@ -112,11 +114,12 @@ impl BorrowTracker {
                     return Ok(T::default());
                 }
             } else {
-                unsafe { AllocInfoPtr::from_raw(prov.alloc_info) }
+                debug_assert!(!prov.alloc_info.is_null());
+                unsafe { NonNull::new_unchecked(prov.alloc_info).into() }
             };
 
             let alloc_size = alloc_info.size.get();
-            let base_addr = alloc_info.base_addr();
+            let base_addr = unsafe { alloc_info.base_addr() };
             let access_size = access_size.unwrap_or(alloc_size);
 
             // The allocation has been freed (`None`), or the pointer's tag is no
@@ -296,7 +299,8 @@ impl BorrowTracker {
             self.alloc_info.alloc_id.get(),
             span,
         )?;
-        global_ctx.remove_exposed_provenance(self.alloc_info.range());
+        let range = unsafe { self.alloc_info.range() };
+        global_ctx.remove_exposed_provenance(range);
         Ok(())
     }
 
@@ -306,21 +310,21 @@ impl BorrowTracker {
         if !prov.bor_tag.is_concrete() {
             return Ok(());
         }
-        let alloc_info = unsafe { AllocInfoPtr::from_raw(prov.alloc_info) };
+        let alloc_info: AllocInfoPtr = unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
         let mut guard = alloc_info.tree.lock();
         let Some(tree) = guard.as_mut() else { return Ok(()) };
         let range = AllocRange { start: Size::ZERO, size: alloc_info.size.get() };
         tree.dealloc(prov.bor_tag, range, &ctx.protected_tags(), alloc_info.alloc_id.get(), span)?;
         *guard = None;
         drop(guard);
-
-        ctx.remove_exposed_provenance(alloc_info.range());
+        let range = unsafe { alloc_info.range() };
+        ctx.remove_exposed_provenance(range);
         Ok(())
     }
 
     pub fn expose_tag(&self, global_ctx: &GlobalCtx) -> UBResult<()> {
         let tag = self.bor_tag;
-        let range = self.alloc_info.range();
+        let range = unsafe { self.alloc_info.range() };
 
         // Ranges in the mapping must be non-empty, and a wildcard access can
         // never resolve to a zero-sized allocation anyway.
