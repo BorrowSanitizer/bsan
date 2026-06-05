@@ -11,3 +11,12 @@ CMakeFiles
 .toolchain
 .vscode
 .nix-rust
+
+
+*.out
+*.txt
+behemoth.md
+tests/benches/heavy_bench/target_*/
+tests/benches/heavy_bench/target_vec/
+tests/benches/heavy_bench/*.md
+!tests/benches/heavy_bench/README.md

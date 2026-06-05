@@ -223,6 +223,10 @@ impl BorTag {
     pub fn get(&self) -> usize {
         self.0
     }
+
+    pub fn is_valid(&self) -> bool {
+        self.0 > 1
+    }
 }
 
 impl Default for BorTag {
@@ -654,6 +658,18 @@ extern "C" fn __bsan_print_diff(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
         bt.debug_print_diff(ctx);
         Ok(())
     });
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_print_alloc_stats() {
+    crate::println!("BSAN STATS | Allocator stats disabled during static allocator refactor");
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __bsan_clear_nodes_rust(ptr: *mut c_void) {
+    unsafe {
+        global_ctx().clear_nodes(ptr);
+    }
 }
 
 #[cfg(not(test))]

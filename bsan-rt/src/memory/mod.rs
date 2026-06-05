@@ -5,8 +5,7 @@
 //! on a linked list of page-sized "blocks" of memory.
 
 mod heap;
-pub use heap::Heap;
-use heap::Heapable;
+pub(crate) use heap::{Heap, Heapable};
 use libc::{pthread_attr_destroy, pthread_attr_init, pthread_attr_t, rlimit, _SC_PAGESIZE};
 
 mod shadow;

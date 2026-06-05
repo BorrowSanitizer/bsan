@@ -4,12 +4,14 @@ use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard, mutex::SpinMutex};
 
 use crate::errors::{ErrorFormatContext, UBInfo};
 use crate::helpers::FxHashMap;
 use crate::local::LocalCtx;
-use crate::memory::{Heap, ShadowHeap};
+use crate::memory::ShadowHeap;
+#[cfg(feature = "alloc-bsan-metadata")]
+use crate::memory::Heap;
 use crate::tree_borrows::data_structures::RangeObjectMap;
 use crate::tree_borrows::{LazyTree, ProtectorKind};
 use crate::*;
@@ -102,7 +104,10 @@ impl<'a> DerefMut for ExposedProvenanceRefMut<'a> {
 pub struct GlobalCtx {
     protected_tags: RwLock<ProtectedTags>,
     shadow_heap: ShadowHeap<Provenance>,
-    alloc_metadata_map: Heap<AllocInfo>,
+    #[cfg(feature = "alloc-bsan-metadata")]
+    alloc_metadata_heap: crate::memory::Heap<AllocInfo>,
+    #[cfg(not(feature = "alloc-bsan-metadata"))]
+    alloc_info_free_list: SpinMutex<Option<NonNull<AllocInfo>>>,
     snapshots: RwLock<FxHashMap<AllocId, LazyTree>>,
     threads: RwLock<FxHashMap<ThreadId, NonNull<LocalCtx>>>,
     exposed_provenance: RwLock<RangeObjectMap<NonNull<AllocInfo>>>,
@@ -112,7 +117,10 @@ impl GlobalCtx {
     fn new() -> Self {
         Self {
             protected_tags: RwLock::new(ProtectedTags::default()),
-            alloc_metadata_map: Heap::new(),
+            #[cfg(feature = "alloc-bsan-metadata")]
+            alloc_metadata_heap: crate::memory::Heap::new(),
+            #[cfg(not(feature = "alloc-bsan-metadata"))]
+            alloc_info_free_list: SpinMutex::new(None),
             shadow_heap: ShadowHeap::new(),
             snapshots: RwLock::new(FxHashMap::default()),
             threads: RwLock::new(FxHashMap::default()),
@@ -121,11 +129,56 @@ impl GlobalCtx {
     }
 
     pub(crate) fn create_alloc_info(&self, info: AllocInfo) -> NonNull<AllocInfo> {
-        self.alloc_metadata_map.alloc(info)
+        #[cfg(feature = "alloc-bsan-metadata")]
+        let ptr = self.alloc_metadata_heap.alloc(info);
+
+        #[cfg(not(feature = "alloc-bsan-metadata"))]
+        let ptr = {
+            // Try the free list first to recycle previously freed AllocInfo slots.
+            // This avoids allocating new memory and ensures that freed slots
+            // (whose addresses may still be referenced by the shadow heap)
+            // are never returned to the OS.
+            if let Some(mut free_list) = self.alloc_info_free_list.try_lock()
+                && let Some(head) = *free_list
+            {
+                let next = unsafe { (*head.as_ptr()).base_addr.free_list_next };
+                *free_list = next;
+                unsafe { head.as_ptr().write(info) };
+                head
+            } else {
+                // Fallback: allocate from the global allocator
+                unsafe {
+                    let ptr = alloc::alloc::alloc(core::alloc::Layout::new::<AllocInfo>()).cast::<AllocInfo>();
+                    if ptr.is_null() {
+                        alloc::alloc::handle_alloc_error(core::alloc::Layout::new::<AllocInfo>());
+                    }
+                    ptr.write(info);
+                    NonNull::new_unchecked(ptr)
+                }
+            }
+        };
+
+        ptr
     }
 
     pub(crate) unsafe fn destroy_alloc_info(&self, ptr: NonNull<AllocInfo>) {
-        unsafe { self.alloc_metadata_map.dealloc(ptr) }
+        unsafe {
+            let _ = (*ptr.as_ptr()).tree_lock.lock().take();
+        }
+        #[cfg(feature = "alloc-bsan-metadata")]
+        {
+            unsafe { self.alloc_metadata_heap.dealloc(ptr) }
+        }
+        #[cfg(not(feature = "alloc-bsan-metadata"))]
+        {
+            // Do NOT return the AllocInfo slot itself to the OS.
+            // Instead, push it onto the free list for reuse.
+            let mut free_list = self.alloc_info_free_list.lock();
+            unsafe {
+                (*ptr.as_ptr()).base_addr.free_list_next = *free_list;
+            }
+            *free_list = Some(ptr);
+        }
     }
 
     pub(crate) fn register_thread(&self, thread_id: ThreadId, local_ctx_ptr: NonNull<LocalCtx>) {
@@ -175,6 +228,35 @@ impl GlobalCtx {
     {
         self.snapshots.read().get(&alloc_id).map(f);
     }
+
+    pub fn clear_nodes(&self, ptr: *mut core::ffi::c_void) {
+        let prov = unsafe { self.shadow_heap.get(ptr.addr()).as_ref() };
+        let alloc_info_ptr = prov.alloc_info;
+        if alloc_info_ptr.is_null() {
+            return;
+        }
+
+        let alloc_info_ref = unsafe { &mut *alloc_info_ptr };
+        let mut tree_guard = alloc_info_ref.tree_lock.lock();
+        if let Some(ref mut lazy_tree) = *tree_guard {
+            if let LazyTree::Init(tree) = lazy_tree {
+                let mut live_tags: crate::helpers::FxHashSet<BorTag> =
+                    tree.tag_mapping.keys().copied().collect();
+                live_tags.remove(&prov.bor_tag);
+
+                // Protected tags are always considered live.
+                let protected_guard = self.protected_tags.read();
+                for &tag in protected_guard.0.keys() {
+                    if tag.is_valid() {
+                        live_tags.insert(tag);
+                    }
+                }
+                drop(protected_guard);
+
+                tree.remove_unreachable_tags(&live_tags);
+            }
+        }
+    }
 }
 
 /// We need to declare a global allocator to be able to use `alloc` in a `#[no_std]`
@@ -182,9 +264,8 @@ impl GlobalCtx {
 /// For now, this allocator will defer to libc malloc and free, but in the future, we can
 /// set its endpoints to immediately panic with an error message to help with debugging.
 mod global_alloc {
-    use core::ffi::c_void;
 
-    #[cfg(not(test))]
+    #[cfg(all(not(test), feature = "alloc-system"))]
     unsafe extern "C" {
         fn __bsan_crt_malloc(size: usize) -> *mut core::ffi::c_void;
         fn __bsan_crt_free(ptr: *mut core::ffi::c_void);
@@ -197,23 +278,52 @@ mod global_alloc {
 
     unsafe impl GlobalAlloc for Alloc {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            #[cfg(feature = "alloc-mimalloc")]
+            {
+                return unsafe { libmimalloc_sys::mi_malloc_aligned(layout.size(), layout.align()) as *mut u8 };
+            }
+            #[cfg(feature = "alloc-dlmalloc")]
+            {
+                return unsafe { <dlmalloc::GlobalDlmalloc as core::alloc::GlobalAlloc>::alloc(&dlmalloc::GlobalDlmalloc, layout) };
+            }
+            #[cfg(feature = "alloc-system")]
+            {
             #[cfg(test)]
             unsafe {
-                libc::malloc(layout.size()).cast::<u8>()
+                    return libc::malloc(layout.size()).cast::<u8>();
             }
             #[cfg(not(test))]
             unsafe {
-                __bsan_crt_malloc(layout.size()).cast::<u8>()
+                    return __bsan_crt_malloc(layout.size()).cast::<u8>();
+                }
+            }
+            #[cfg(not(any(feature = "alloc-mimalloc", feature = "alloc-dlmalloc", feature = "alloc-system")))]
+            {
+                panic!("No allocator backend enabled");
             }
         }
         unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
-            #[cfg(test)]
-            unsafe {
-                libc::free(ptr.cast::<c_void>());
+            #[cfg(feature = "alloc-mimalloc")]
+            {
+                unsafe { libmimalloc_sys::mi_free(ptr as *mut core::ffi::c_void) }
+                return;
             }
+            #[cfg(feature = "alloc-dlmalloc")]
+            {
+                unsafe { <dlmalloc::GlobalDlmalloc as core::alloc::GlobalAlloc>::dealloc(&dlmalloc::GlobalDlmalloc, ptr, _layout) }
+                return;
+            }
+            #[cfg(feature = "alloc-system")]
+            {
+            #[cfg(test)]
+                unsafe { libc::free(ptr as *mut core::ffi::c_void) }
             #[cfg(not(test))]
-            unsafe {
-                __bsan_crt_free(ptr.cast::<c_void>());
+                unsafe { __bsan_crt_free(ptr as *mut core::ffi::c_void) }
+                return;
+            }
+            #[cfg(not(any(feature = "alloc-mimalloc", feature = "alloc-dlmalloc", feature = "alloc-system")))]
+            {
+                panic!("No allocator backend enabled");
             }
         }
     }

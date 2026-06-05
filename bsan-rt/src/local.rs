@@ -21,8 +21,8 @@ pub(crate) static LOCAL_CTX: LocalCtxWrapper =
 #[derive(Debug)]
 pub struct LocalCtx {
     thread_id: ThreadId,
-    stack_top: NonNull<Provenance>,
-    stack_ptr: *mut NonNull<Provenance>,
+    pub(crate) stack_top: NonNull<Provenance>,
+    pub(crate) stack_ptr: *mut NonNull<Provenance>,
 }
 
 impl LocalCtx {
