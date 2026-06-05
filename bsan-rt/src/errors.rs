@@ -4,12 +4,13 @@ use core::cmp::max;
 
 use hashbrown::HashMap;
 
+use crate::helpers::Size;
 use crate::sanitizer_common::{SanitizerCommon, Span, Symbol};
 use crate::tree_borrows::diagnostics::TreeBorrowsUb;
 use crate::AllocId;
 
 pub enum UBInfo {
-    AccessOutOfBounds { alloc_id: AllocId, access_size: usize, offset: usize, alloc_size: usize },
+    AccessOutOfBounds { alloc_id: AllocId, access_size: Size, offset: Size, alloc_size: Size },
     UseAfterFree,
     AliasingViolation(TreeBorrowsUb),
 }
@@ -40,7 +41,7 @@ impl ErrorFormatContext {
             }
             UBInfo::AccessOutOfBounds { alloc_id, access_size, alloc_size, offset } => {
                 result.push_str(&format!(
-                    "an access of size {access_size}b at offset 0x{offset:x} is out of bounds for {alloc_id:?} of size {alloc_size}b.\n"
+                    "an access of size {access_size:x}b at offset 0x{offset:x} is out of bounds for {alloc_id:?} of size {alloc_size:x}b.\n"
                 ));
                 result.push_str(&self.format_symbol_standalone(symbol));
                 result.push('\n');
