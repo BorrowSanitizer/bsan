@@ -104,6 +104,10 @@ pub enum Command {
         /// Update stdout/stderr reference files.
         #[arg(long)]
         bless: bool,
+        /// Retain the current sysroot, instead of rebuilding
+        /// it from scratch.
+        #[arg(long)]
+        keep_sysroot: bool,
     },
     /// Installs binaries into the custom toolchain.
     Install {
@@ -123,7 +127,12 @@ pub enum Command {
         args: Vec<String>,
     },
     /// Try all `should-*` tests
-    Fix,
+    Fix {
+        /// Retain the current sysroot, instead of rebuilding
+        /// it from scratch.
+        #[arg(long)]
+        keep_sysroot: bool,
+    },
     /// Show repository test metrics (counts of passing/failing/false positives/negatives)
     Stats,
 }
