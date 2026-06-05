@@ -283,7 +283,6 @@ fn run_tests(
 pub enum Component {
     CargoBsan,
     BsanRt,
-    BsanRtCore,
     CompilerRt,
     BsanPass,
 }
@@ -291,13 +290,7 @@ pub enum Component {
 #[macro_export]
 macro_rules! all_components {
     () => {
-        [
-            Component::CargoBsan,
-            Component::BsanRt,
-            Component::BsanRtCore,
-            Component::CompilerRt,
-            Component::BsanPass,
-        ]
+        [Component::CargoBsan, Component::BsanRt, Component::CompilerRt, Component::BsanPass]
     };
 }
 
@@ -308,7 +301,6 @@ impl Deref for Component {
         match self {
             Component::CargoBsan => &CargoBsan,
             Component::BsanRt => &BsanRt,
-            Component::BsanRtCore => &BsanRtCore,
             Component::CompilerRt => &CompilerRt,
             Component::BsanPass => &BsanPass,
         }
@@ -410,72 +402,6 @@ static RT_FLAGS: &[&str] = &[
     "-Crelocation-model=pic",
 ];
 
-struct BsanRt;
-
-impl Buildable for BsanRt {
-    fn artifact(&self, _env: &BsanEnv) -> String {
-        "libbsan_rt.a".into()
-    }
-
-    fn doc(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.doc("bsan-rt", args)
-    }
-
-    fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
-        let llvm_ar = env.target_binary("llvm-ar");
-        let llvm_wrapper = env.build_artifact(CompilerRt, &[])?;
-        let rust_runtime = env.build_artifact(BsanRtCore, args)?;
-
-        let dest_archive = path!(env.artifact_dir() / self.artifact(env));
-        cmd!(env.sh, "cp {llvm_wrapper} {dest_archive}").quiet().run()?;
-
-        let tmp_dir = env.sh.create_temp_dir()?;
-        env.cd(tmp_dir.path(), |env| {
-            cmd!(env.sh, "{llvm_ar} -x {rust_runtime}").quiet().run()?;
-
-            // Extract mimalloc objects as well
-            let build_dir = path!(env.artifact_dir() / "build");
-            if let Ok(mut entries) = fs::read_dir(build_dir) {
-                for entry in entries.flatten() {
-                    if entry.file_name().to_string_lossy().starts_with("libmimalloc-sys-") {
-                        let out_dir = entry.path().join("out");
-                        let lib_a = out_dir.join("libmimalloc.a");
-                        if lib_a.exists() {
-                            cmd!(env.sh, "{llvm_ar} -x {lib_a}").quiet().run()?;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            let file_names: Vec<String> = fs::read_dir(tmp_dir.path())
-                .unwrap()
-                .filter_map(|entry| {
-                    let path = entry.ok().unwrap().path();
-                    if path.is_file() {
-                        path.to_str().map(|s| s.to_owned())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            // Finally, add the objects into the static archive of C++ component.
-            cmd!(env.sh, "{llvm_ar} -r {dest_archive}").args(file_names).quiet().run()?;
-            Ok(())
-        })?;
-
-        Ok(Some(path!(env.artifact_dir() / dest_archive)))
-    }
-
-    fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.in_mode(Mode::Release, |env| {
-            self.build(env, args)?;
-            let runtime = env.assert_artifact(&self.artifact(env));
-            env.copy_to_sysroot_libdir(&runtime)
-        })
-    }
-}
 struct CompilerRt;
 impl CompilerRt {
     fn cmake(env: &mut BsanEnv) -> Result<Config> {
@@ -534,11 +460,11 @@ impl Buildable for CompilerRt {
     }
 }
 
-struct BsanRtCore;
+struct BsanRt;
 
-impl Buildable for BsanRtCore {
+impl Buildable for BsanRt {
     fn artifact(&self, _env: &BsanEnv) -> String {
-        "libbsan_rt_core.a".into()
+        "libbsan_rt.a".into()
     }
 
     fn doc(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
@@ -546,10 +472,48 @@ impl Buildable for BsanRtCore {
     }
 
     fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
+        let llvm_ar = env.target_binary("llvm-ar");
         let llvm_objcopy = env.target_binary("llvm-objcopy");
+
         let rust_runtime = env.with_flags("RUSTFLAGS", RT_FLAGS, |env| {
             env.build("bsan-rt", args)?;
             Ok(env.assert_artifact(&self.artifact(env)))
+        })?;
+
+        let tmp_dir = env.sh.create_temp_dir()?;
+        env.cd(tmp_dir.path(), |env| {
+            cmd!(env.sh, "{llvm_ar} -x {rust_runtime}").quiet().run()?;
+
+            // Extract mimalloc objects as well if they exist
+            let build_dir = path!(env.artifact_dir() / "build");
+            if let Ok(mut entries) = fs::read_dir(build_dir) {
+                for entry in entries.flatten() {
+                    if entry.file_name().to_string_lossy().starts_with("libmimalloc-sys-") {
+                        let out_dir = entry.path().join("out");
+                        let lib_a = out_dir.join("libmimalloc.a");
+                        if lib_a.exists() {
+                            cmd!(env.sh, "{llvm_ar} -x {lib_a}").quiet().run()?;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            let file_names: Vec<String> = fs::read_dir(tmp_dir.path())
+                .unwrap()
+                .filter_map(|entry| {
+                    let path = entry.ok().unwrap().path();
+                    if path.is_file() {
+                        path.to_str().map(|s| s.to_owned())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Finally, repack the objects back into the static archive
+            cmd!(env.sh, "{llvm_ar} -r {rust_runtime}").args(file_names).quiet().run()?;
+            Ok(())
         })?;
 
         cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_* -G __BSAN_*")
@@ -578,6 +542,14 @@ impl Buildable for BsanRtCore {
             &["-Zmiri-permissive-provenance", "-Zmiri-disable-alignment-check"],
             |env| env.miri("bsan-rt", args),
         )
+    }
+
+    fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+        env.in_mode(Mode::Release, |env| {
+            self.build(env, args)?;
+            let runtime = env.assert_artifact(&self.artifact(env));
+            env.copy_to_sysroot_libdir(&runtime)
+        })
     }
 }
 
