@@ -1,6 +1,8 @@
 //@run:1
 //miri: @compile-flags: -Zmiri-tree-borrows -Zmiri-permissive-provenance
-
+// We need to disable debug assertions because raw pointer dereferences trigger
+// nullness and alignment checks, which use ptrtoint, which exposes provenance.
+//@compile-flags: -Cdebug-assertions=no
 /// If we have only exposed read-only pointers, doing a write through a
 /// wildcard ptr should fail.
 fn main() {

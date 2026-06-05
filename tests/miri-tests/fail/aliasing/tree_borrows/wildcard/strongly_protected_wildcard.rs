@@ -1,7 +1,9 @@
 //@run:1
 //miri: @compile-flags: -Zmiri-tree-borrows -Zmiri-permissive-provenance
 //miri: @error-in-other-file: /deallocation through .* is forbidden/
-
+// We need to disable debug assertions because raw pointer dereferences trigger
+// nullness and alignment checks, which use ptrtoint, which exposes provenance.
+//@compile-flags: -Cdebug-assertions=no
 fn inner(x: &mut i32, f: fn(usize)) {
     // `f` may mutate, but it may not deallocate!
     // `f` takes a raw pointer so that the only protector

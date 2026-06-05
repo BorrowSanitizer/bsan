@@ -3,20 +3,7 @@ error: Undefined Behavior: write access through <wildcard> at ALLOC[0x0] is forb
    |
 LL | unsafe { *wild = 4 }; //miri: ~ ERROR: /write access through <wildcard> at .* is forbidden/
    |
-   = help: the accessed tag <wildcard> is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
-   = help: this foreign write access would cause the protected tag <TAG>(StrongProtector) (currently Reserved (conflicted)) to become Disabled
-   = help: protected tags must never be Disabled
-help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
-  --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/protector_conflicted.rs:LL:CC
-   |
-LL | let protect = |arg: &mut u32| {
-   |
-help: the protected tag <TAG>(StrongProtector) later transitioned to Reserved (conflicted) due to a foreign read access at offsets [0x0..0x4]
-  --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/protector_conflicted.rs:LL:CC
-   |
-LL | let _x = *ref2;
-   |
-help: this transition corresponds to a temporary loss of write permissions until function exit
+   = help: there are no exposed tags which may perform this access here
 
 stack backtrace:
 0: protector_conflicted::main::{closure#0}

@@ -1,6 +1,8 @@
 //@run:1
 //miri: @compile-flags: -Zmiri-tree-borrows -Zmiri-permissive-provenance
-
+// We need to disable debug assertions because raw pointer dereferences trigger
+// nullness and alignment checks, which use ptrtoint, which exposes provenance.
+//@compile-flags: -Cdebug-assertions=no
 /// Checks that with only one exposed reference, that if this reference gets
 /// disabled no wildcard accesses are possible.
 pub fn main() {
