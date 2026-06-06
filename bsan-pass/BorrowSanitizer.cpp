@@ -1,5 +1,4 @@
 #include "BorrowSanitizerPass.h"
-#include "Provenance.h"
 #include "Retag.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
@@ -37,14 +36,80 @@
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
+// Provenance is two words: a borrow tag and
+// a pointer to an allocation metadata object.
+static const unsigned kProvenanceSize = 16;
+
 static cl::opt<bool> ClHandleAsmConservative(
     "bsan-asm-conservative",
     cl::desc("Conservatively handle inline assembly by setting all pointer "
              "outputs to wildcard Provenance"),
     cl::Hidden, cl::init(true));
 
-namespace {
+static Value *ptradd(IRBuilder<> &IRB, Value *Pointer, Value *Offset) {
+  if (match(Offset, m_Zero()))
+    return Pointer;
+  return IRB.CreateGEP(IRB.getInt8Ty(), Pointer, Offset);
+}
 
+static Value *ptrsub(IRBuilder<> &IRB, Value *Pointer, Value *Offset) {
+  return ptradd(IRB, Pointer, IRB.CreateNeg(Offset));
+}
+
+static Constant *getOrInsertTLSGlobal(Module &M, StringRef Name, Type *Ty) {
+  return M.getOrInsertGlobal(Name, Ty, [&] {
+    return new GlobalVariable(
+        M, Ty, false, GlobalVariable::ExternalLinkage, nullptr, Name, nullptr,
+        GlobalVariable::InitialExecTLSModel, std::nullopt, true);
+  });
+}
+
+static Constant *getOrInsertGlobal(Module &M, StringRef Name, Type *Ty) {
+  return M.getOrInsertGlobal(Name, Ty, [&] {
+    return new GlobalVariable(
+        M, Ty, false, GlobalVariable::ExternalLinkage, nullptr, Name, nullptr,
+        GlobalVariable::NotThreadLocal, std::nullopt, true);
+  });
+}
+
+static bool inSCC(DominatorTree &DT, LoopInfo &LI, BasicBlock *BB) {
+  if (LI.getLoopFor(BB))
+    return true;
+  // It's still possible for us to have irreducible control flow, in which
+  // case LLVM would not recognize a loop, but it would still be possible for
+  // us to enter this basic block again. We would use LLVM's CycleInfo instead,
+  // which would catch this, but it does not support incremental updates yet.
+  for (BasicBlock *SuccBB : successors(BB)) {
+    if (isPotentiallyReachable(SuccBB, BB, nullptr, &DT, &LI)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+namespace {
+// A component of a type that carries provenance information.
+// This is either a pointer or a vector of pointers.
+struct ProvenanceDesc {
+  // The offset where this field is located.
+  Value *ByteOffset;
+  // The byte width of this field.
+  Value *ByteWidth;
+  // The number of provenance values in this field.
+  ElementCount Elems;
+
+public:
+  ProvenanceDesc(Value *ByteOffset, Value *ByteWidth, ElementCount Elems)
+      : ByteOffset(ByteOffset), ByteWidth(ByteWidth), Elems(Elems) {}
+};
+
+// Instrument functions of a module to detect violations of Rust's aliasing
+// model. .
+//
+// Instantiating BorrowSanitizer inserts the bsan runtime library API function
+// declarations into the module if they don't exist already. Instantiating
+// ensures the __bsan_init function is in the list of global constructors for
+// the module.
 struct BorrowSanitizer {
 public:
   BorrowSanitizer(Module &M, ModuleAnalysisManager &MAM) {
@@ -52,89 +117,206 @@ public:
     DL = &M.getDataLayout();
     TargetTriple = Triple(M.getTargetTriple());
 
-    PL = ProvenanceLayout(C, DL);
     PtrTy = PointerType::getUnqual(*C);
     unsigned PtrSize = M.getDataLayout().getPointerSize();
     IntptrTy = Type::getIntNTy(*C, PtrSize * 8);
-    Zero = ConstantInt::get(IntptrTy, 0);
-    One = ConstantInt::get(IntptrTy, 1);
-  }
 
+    ProvenanceTy = StructType::get(IntptrTy, PtrTy);
+    ProvenanceSize = ConstantInt::get(IntptrTy, 16);
+  }
   bool instrumentModule(Module &M);
   bool instrumentFunction(Function &F, FunctionAnalysisManager &FAM);
 
-  void initializeCallbacks(Module &M, const TargetLibraryInfo &TLI);
+private:
+  friend struct Provenance;
+  friend struct BorrowSanitizerVisitor;
 
+  void initializeCallbacks(Module &M, const TargetLibraryInfo &TLI);
   struct GlobalDescription {
     bool ShouldInstrument;
     std::optional<Function *> AssocFn;
   };
   GlobalDescription getGlobalDescription(GlobalVariable *G) const;
-
   void instrumentGlobals(IRBuilder<> &IRB, Module &M, bool CtorComdat);
-  Instruction *createBsanModuleDtor(Module &M);
-
-  // Adds thread-local global variables for passing the provenance for
-  // arguments and return values
+  Function *createBsanModuleDtor(Module &M);
   void createUserspaceApi(Module &M, const TargetLibraryInfo &TLI);
 
   LLVMContext *C;
   const DataLayout *DL;
-  ProvenanceLayout PL;
-
   Triple TargetTriple;
+
   PointerType *PtrTy;
   Type *IntptrTy;
   Align IntptrAlign;
 
-  bool CallbacksInitialized = false;
+  Type *ProvenanceTy = nullptr;
+  Value *ProvenanceSize = nullptr;
 
-  Function *BsanCtorFunction = nullptr;
-  Function *BsanDtorFunction = nullptr;
+  /// Thread-local variable containing the number of provenance values
+  /// for variable arguments.
+  Value *VarArgCounterTLS = nullptr;
 
-  FunctionCallee BsanFuncRetag;
-  FunctionCallee BsanFuncRead;
-  FunctionCallee BsanFuncWrite;
-  FunctionCallee BsanFuncAllocStack;
-  FunctionCallee BsanFuncDeallocStack;
+  /// Thread-local variable containing the shadow stack pointer.
+  Value *ProvStackTLS = nullptr;
 
-  FunctionCallee BsanFuncPopFrame;
+  /// Thread local variable containing the boundary marker.
+  Value *MarkerTLS = nullptr;
 
-  FunctionCallee BsanFuncMark;
-  FunctionCallee BsanFuncValidateRetval;
-  FunctionCallee BsanFuncValidateParams;
-
-  FunctionCallee BsanFuncShadow;
-  FunctionCallee BsanFuncRcStore;
-
-  FunctionCallee BsanFuncMemSet;
-  FunctionCallee BsanFuncMemMove;
-  FunctionCallee BsanFuncMemCpy;
-  FunctionCallee BsanFuncShadowClear;
-
-  FunctionCallee BsanFuncReserveStackSlot;
-  FunctionCallee BsanFuncDestroyStackSlot;
-
-  FunctionCallee DefaultPersonalityFn;
-
-  FunctionCallee BsanFuncExposeProv;
-
-  // Thread-local storage for paramters
-  // and return values.
-  Value *ProvStack = nullptr;
-  Value *Marker = nullptr;
-  Value *VarArgCounter = nullptr;
+  /// Thread local atomic counter used to generate borrow tags.
   Value *BorTagCounter = nullptr;
 
-  Constant *Zero = nullptr;
-  Constant *One = nullptr;
+  /// Are the instrumentation callbacks set up?
+  bool CallbacksInitialized = false;
 
+  /// Runtime function for performing a retag
+  FunctionCallee BsanFuncRetag;
+
+  /// Runtime function for exposing a pointer's provenance.
+  FunctionCallee BsanFuncExposeProv;
+
+  /// Runtime function for validating a read access
+  FunctionCallee BsanFuncRead;
+
+  /// Runtime function for validating a write access
+  FunctionCallee BsanFuncWrite;
+
+  /// Runtime function for creating stack-allocation metadata
+  FunctionCallee BsanFuncAllocStack;
+
+  /// Runtime function for destroying stack-allocation metadata
+  FunctionCallee BsanFuncDeallocStack;
+
+  /// Runtime function for deinitializing local metadata before function exit.
+  FunctionCallee BsanFuncPopFrame;
+
+  /// Runtime function for setting the boundary marker.
+  FunctionCallee BsanFuncMark;
+
+  /// Runtime function for validating the section of the shadow stack containing
+  /// the return value from a function call.
+  FunctionCallee BsanFuncValidateRetval;
+
+  /// Runtime function for validating the section of the shadow stack containing
+  /// a function's arguments.
+  FunctionCallee BsanFuncValidateParams;
+
+  /// Runtime replacement for `memset` that performs read and write checks
+  /// and also clears shadow memory.
+  FunctionCallee BsanFuncMemSet;
+
+  /// Runtime replacement for `memmove` that performs read and write checks
+  /// and also clears shadow memory.
+  FunctionCallee BsanFuncMemMove;
+
+  /// Runtime replacement for `memcpy` that performs read and write checks
+  /// and also clears shadow memory.
+  FunctionCallee BsanFuncMemCpy;
+
+  /// Runtime function for obtaining the shadow memory address for an
+  /// application address.
+  FunctionCallee BsanFuncShadow;
+
+  /// Runtime function storing a provenance value to shadow memory, updating
+  /// any associated reference counts.
+  FunctionCallee BsanFuncRcStore;
+
+  /// Runtime function for clearing the contents of shadow memory at a given
+  /// address.
+  FunctionCallee BsanFuncShadowClear;
+
+  /// Runtime function for reserving alloca metadata.
+  FunctionCallee BsanFuncReserveStackSlot;
+
+  /// Runtime function for deallocating alloca metadata.
+  FunctionCallee BsanFuncDestroyStackSlot;
+
+  /// A default personality function used for exception-handling.
+  FunctionCallee DefaultPersonalityFn;
+
+  /// Indicates that the given function is instrumented, or otherwise
+  /// handled such that we can trust its return value without boundary
+  /// validation.
   bool shouldTrustFunction(const TargetLibraryInfo *TLI, const Value *V);
-  bool shouldInstrumentAlloca(const DataLayout &DL, const AllocaInst &AI);
-  bool needsBoundaryValidation(const Function *Callee);
-};
 
-} // namespace
+  /// Indicates if this `alloca` needs to be instrumented.
+  bool shouldInstrumentAlloca(const AllocaInst &AI);
+
+  /// Indicates if the given function requires boundary validation.
+  bool needsBoundaryValidation(const Function *Callee);
+
+  /// Returns a list of ProvenanceDesc, indicating where provenance values
+  /// are located within the given type.
+  SmallVector<ProvenanceDesc> getProvenanceDesc(IRBuilder<> &IRB, Type *Ty);
+
+private:
+  Value *getProvenanceDesc(IRBuilder<> &IRB,
+                           SmallVector<ProvenanceDesc> &ProvDesc,
+                           Type *CurrentTy, Value *ByteOffset);
+};
+} // end anonymous namespace
+
+// Provides a list of the locations of provenance values inside a type.
+SmallVector<ProvenanceDesc> BorrowSanitizer::getProvenanceDesc(IRBuilder<> &IRB,
+                                                               Type *Ty) {
+  SmallVector<ProvenanceDesc> Desc;
+  if (Ty->isSized()) {
+    Value *Zero = ConstantInt::get(IRB.getIntPtrTy(*DL), 0);
+    getProvenanceDesc(IRB, Desc, Ty, Zero);
+  }
+  return Desc;
+}
+
+// Populates a vector with the list of locations of provenance
+// values within a type.
+Value *BorrowSanitizer::getProvenanceDesc(IRBuilder<> &IRB,
+                                          SmallVector<ProvenanceDesc> &ProvDesc,
+                                          Type *CurrentTy, Value *ByteOffset) {
+  assert(CurrentTy->isSized() && "expected a sized type");
+  Type *IntptrTy = IRB.getIntPtrTy(*DL);
+
+  switch (CurrentTy->getTypeID()) {
+  case Type::PointerTyID: {
+    TypeSize AllocTySize = DL->getTypeAllocSize(CurrentTy);
+    Value *AllocSize = IRB.CreateTypeSize(IntptrTy, AllocTySize);
+    ProvenanceDesc Desc(ByteOffset, AllocSize, ElementCount::get(1, false));
+    ProvDesc.push_back(Desc);
+    Value *Elems = IRB.CreateElementCount(IntptrTy, Desc.Elems);
+    return ConstantInt::get(IntptrTy, 1);
+  } break;
+  case Type::StructTyID: {
+    StructType *ST = cast<StructType>(CurrentTy);
+    const StructLayout *SL = DL->getStructLayout(ST);
+    Value *CurrProvOffset = ConstantInt::get(IntptrTy, 0);
+    for (auto [Idx, ElemTy] : llvm::enumerate(ST->elements())) {
+      Value *ElemOffset =
+          IRB.CreateTypeSize(IntptrTy, SL->getElementOffset(Idx));
+      Value *CurrByteOffset = IRB.CreateAdd(ByteOffset, ElemOffset);
+      auto *ProvOffset =
+          getProvenanceDesc(IRB, ProvDesc, ElemTy, CurrByteOffset);
+      CurrProvOffset = IRB.CreateAdd(CurrProvOffset, ProvOffset);
+    }
+    return CurrProvOffset;
+  } break;
+  case Type::ArrayTyID: {
+    ArrayType *AT = cast<ArrayType>(CurrentTy);
+    Value *CurrProvOffset = ConstantInt::get(IntptrTy, 0);
+    TypeSize ElemTySize = DL->getTypeAllocSize(AT->getElementType());
+    Value *ElemSize = IRB.CreateTypeSize(IntptrTy, ElemTySize);
+    for (unsigned Idx = 0; Idx < AT->getNumElements(); ++Idx) {
+      Value *CurrByteOffset =
+          IRB.CreateMul(ConstantInt::get(IntptrTy, Idx), ElemSize);
+      CurrByteOffset = IRB.CreateAdd(ByteOffset, CurrByteOffset);
+      auto *ProvOffset = getProvenanceDesc(IRB, ProvDesc, AT->getElementType(),
+                                           CurrByteOffset);
+      CurrProvOffset = IRB.CreateAdd(CurrProvOffset, ProvOffset);
+    }
+    return CurrProvOffset;
+  } break;
+  default: {
+    return ConstantInt::get(IntptrTy, 0);
+  } break;
+  }
+}
 
 bool BorrowSanitizer::needsBoundaryValidation(const Function *Callee) {
   return !Callee ||
@@ -161,41 +343,323 @@ bool BorrowSanitizer::shouldTrustFunction(const TargetLibraryInfo *TLI,
   return false;
 }
 
-static Value *ptradd(IRBuilder<> &IRB, Value *Pointer, Value *Offset) {
-  if (match(Offset, m_Zero()))
-    return Pointer;
-  return IRB.CreateGEP(IRB.getInt8Ty(), Pointer, Offset);
-}
-
-static Value *ptrsub(IRBuilder<> &IRB, Value *Pointer, Value *Offset) {
-  return ptradd(IRB, Pointer, IRB.CreateNeg(Offset));
-}
-
 // We only instrument allocations that have a non-zero size.
-bool BorrowSanitizer::shouldInstrumentAlloca(const DataLayout &DL,
-                                             const AllocaInst &AI) {
+bool BorrowSanitizer::shouldInstrumentAlloca(const AllocaInst &AI) {
   // Although Rust emits retags for ZSTs, tracking
   // allocations leads to false positive errors—probably
   // due to interactions with lowering.
   Type *AllocType = AI.getAllocatedType();
-  std::optional<TypeSize> AllocSize = AI.getAllocationSize(DL);
+  std::optional<TypeSize> AllocSize = AI.getAllocationSize(*DL);
   return (AllocType->isSized() && AllocSize.has_value() &&
           !AllocSize.value().isZero());
 }
 
-static bool inSCC(DominatorTree &DT, LoopInfo &LI, BasicBlock *BB) {
-  if (LI.getLoopFor(BB))
-    return true;
-  // It's still possible for us to have irreducible control flow, in which
-  // case LLVM would not recognize a loop, but it would still be possible for
-  // us to enter this basic block again. We would use LLVM's CycleInfo instead,
-  // which would catch this, but it does not support incremental updates yet.
-  for (BasicBlock *SuccBB : successors(BB)) {
-    if (isPotentiallyReachable(SuccBB, BB, nullptr, &DT, &LI)) {
-      return true;
+Function *BorrowSanitizer::createBsanModuleDtor(Module &M) {
+  Function *Dtor;
+  IRBuilder<> IRB(M.getContext());
+
+  Dtor = Function::createWithDefaultAttr(
+      FunctionType::get(IRB.getVoidTy(), false), GlobalValue::InternalLinkage,
+      0, "bsan.module_dtor", &M);
+  Dtor->addFnAttr(Attribute::NoUnwind);
+
+  BasicBlock *BsanDtorBB = BasicBlock::Create(*C, "", Dtor);
+  ReturnInst *BsanDtorRet = ReturnInst::Create(*C, BsanDtorBB);
+
+  auto *FnTy = FunctionType::get(IRB.getVoidTy(), false);
+  FunctionCallee DeinitFn = M.getOrInsertFunction(BSAN("deinit"), FnTy);
+
+  IRB.SetInsertPoint(BsanDtorRet);
+  CallInst *DeinitCall = IRB.CreateCall(DeinitFn, {});
+
+  appendToUsed(M, {Dtor});
+  return Dtor;
+}
+
+bool BorrowSanitizer::instrumentModule(Module &M) {
+  Function *BsanCtorFunction, *BsanDtorFunction;
+  // TODO: add version check.
+  std::tie(BsanCtorFunction, std::ignore) = createSanitizerCtorAndInitFunctions(
+      M, "bsan.module_ctor", BSAN("init"), /*InitArgTypes=*/{},
+      /*InitArgs=*/{}, "");
+
+  bool CtorComdat = false;
+  BsanDtorFunction = createBsanModuleDtor(M);
+
+  IRBuilder<> IRB(BsanCtorFunction->getEntryBlock().getTerminator());
+  instrumentGlobals(IRB, M, CtorComdat);
+
+  assert(BsanCtorFunction && BsanDtorFunction);
+  const int Priority = 1;
+
+  // Put the constructor and destructor in comdat if both
+  // (1) global instrumentation is not TU-specific
+  // (2) target is ELF.
+  if (CtorComdat && TargetTriple.isOSBinFormatELF()) {
+    BsanCtorFunction->setComdat(M.getOrInsertComdat("bsan.module_ctor"));
+    appendToGlobalCtors(M, BsanCtorFunction, Priority, BsanCtorFunction);
+
+    BsanDtorFunction->setComdat(M.getOrInsertComdat("bsan.module_dtor"));
+    appendToGlobalDtors(M, BsanDtorFunction, Priority, BsanDtorFunction);
+  } else {
+    appendToGlobalCtors(M, BsanCtorFunction, Priority);
+    appendToGlobalDtors(M, BsanDtorFunction, Priority);
+  }
+  return true;
+}
+
+BorrowSanitizer::GlobalDescription
+BorrowSanitizer::getGlobalDescription(GlobalVariable *G) const {
+  GlobalDescription Skip = {true, std::nullopt};
+  Type *Ty = G->getValueType();
+
+  if (G->hasSection()) {
+    StringRef Section = G->getSection();
+    if (Section.starts_with(".preinit_array") ||
+        Section.starts_with(".init_array") ||
+        Section.starts_with(".fini_array")) {
+      Constant *Init = G->getInitializer()->stripPointerCasts();
+      if (Function *F = dyn_cast<Function>(Init)) {
+        return {true, F};
+      }
     }
   }
-  return false;
+
+  if (!G->hasInitializer())
+    return Skip;
+
+  if (auto *Init = G->getInitializer()) {
+    Value *Func = Init->stripPointerCasts();
+    if (auto *F = dyn_cast<Function>(Func)) {
+      Skip.AssocFn = F;
+    }
+  }
+  if (!Ty->isSized())
+    return Skip;
+  if (G->isThreadLocal())
+    return Skip;
+  return {true, Skip.AssocFn};
+}
+
+void BorrowSanitizer::instrumentGlobals(IRBuilder<> &IRB, Module &M,
+                                        bool CtorComdat) {}
+
+void BorrowSanitizer::initializeCallbacks(Module &M,
+                                          const TargetLibraryInfo &TLI) {
+  if (CallbacksInitialized) {
+    return;
+  }
+
+  IRBuilder<> IRB(*C);
+
+  AttributeList AL;
+
+  Type *Int32Ty = Type::getInt32Ty(*C);
+  Type *Int8Ty = Type::getInt8Ty(*C);
+
+  AL = AL.addFnAttribute(*C, Attribute::NoUnwind);
+
+  BsanFuncRetag = M.getOrInsertFunction(BSAN("retag"), AL, IntptrTy, PtrTy,
+                                        IntptrTy, Int8Ty, PtrTy, IntptrTy,
+                                        PtrTy, IntptrTy, IntptrTy, PtrTy);
+
+  BsanFuncPopFrame = M.getOrInsertFunction(
+      BSAN("pop_frame"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, IntptrTy);
+
+  BsanFuncRead = M.getOrInsertFunction(BSAN("read"), AL, IRB.getVoidTy(), PtrTy,
+                                       IntptrTy, IntptrTy, PtrTy);
+
+  BsanFuncWrite = M.getOrInsertFunction(BSAN("write"), AL, IRB.getVoidTy(),
+                                        PtrTy, IntptrTy, IntptrTy, PtrTy);
+
+  BsanFuncAllocStack =
+      M.getOrInsertFunction(BSAN("alloc_stack"), AL, IRB.getVoidTy(), PtrTy,
+                            IntptrTy, IntptrTy, PtrTy);
+  BsanFuncDeallocStack = M.getOrInsertFunction(
+      BSAN("dealloc_stack"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, PtrTy);
+
+  BsanFuncMark = M.getOrInsertFunction(BSAN("mark"), AL, PtrTy, PtrTy);
+
+  BsanFuncValidateParams = M.getOrInsertFunction(
+      BSAN("validate_params"), AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
+
+  BsanFuncValidateRetval = M.getOrInsertFunction(
+      BSAN("validate_retval"), AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
+
+  BsanFuncShadow = M.getOrInsertFunction(BSAN("shadow"), AL, PtrTy, PtrTy);
+
+  BsanFuncRcStore = M.getOrInsertFunction(BSAN("rc_store"), AL, IRB.getVoidTy(),
+                                          IntptrTy, PtrTy, PtrTy);
+
+  BsanFuncShadowClear = M.getOrInsertFunction(BSAN("shadow_clear"), AL,
+                                              IRB.getVoidTy(), PtrTy, IntptrTy);
+
+  BsanFuncMemCpy = M.getOrInsertFunction(BSAN("memcpy"), AL, IRB.getVoidTy(),
+                                         PtrTy, PtrTy, IntptrTy);
+
+  BsanFuncMemMove = M.getOrInsertFunction(BSAN("memmove"), AL, IRB.getVoidTy(),
+                                          PtrTy, PtrTy, IntptrTy);
+
+  BsanFuncMemSet = M.getOrInsertFunction(BSAN("memset"), AL, IRB.getVoidTy(),
+                                         PtrTy, Int32Ty, IntptrTy);
+
+  BsanFuncReserveStackSlot =
+      M.getOrInsertFunction(BSAN("reserve_stack_slot"),
+                            FunctionType::get(PtrTy, /*isVarArg=*/false), AL);
+
+  BsanFuncDestroyStackSlot = M.getOrInsertFunction(BSAN("destroy_stack_slot"),
+                                                   AL, IRB.getVoidTy(), PtrTy);
+
+  BsanFuncExposeProv = M.getOrInsertFunction(BSAN("expose_prov"), AL,
+                                             IRB.getVoidTy(), IntptrTy, PtrTy);
+
+  EHPersonality Pers = getDefaultEHPersonality(TargetTriple);
+  DefaultPersonalityFn =
+      M.getOrInsertFunction(getEHPersonalityName(Pers),
+                            FunctionType::get(Type::getInt32Ty(*C), true));
+
+  createUserspaceApi(M, TLI);
+  CallbacksInitialized = true;
+}
+
+void BorrowSanitizer::createUserspaceApi(Module &M,
+                                         const TargetLibraryInfo &TLI) {
+  IRBuilder<> IRB(*C);
+  MarkerTLS = getOrInsertTLSGlobal(M, BSAN("marker"), PtrTy);
+  VarArgCounterTLS = getOrInsertTLSGlobal(M, BSAN("var_arg_ctr"), IntptrTy);
+  ProvStackTLS = getOrInsertTLSGlobal(M, BSAN("shadow_stack"), PtrTy);
+  BorTagCounter = getOrInsertGlobal(M, BSAN("bor_tag_ctr"), IntptrTy);
+}
+
+namespace {
+
+// A pointer's provenance value.
+//
+// Each pointer has provenance, indicating its permission to access
+// a memory location.
+class Provenance {
+public:
+  Value *Tag = nullptr;
+  Value *Info = nullptr;
+  ElementCount Elems = ElementCount::getFixed(1);
+  Provenance() {}
+  Provenance(Value *Tag, Value *Info) : Tag(Tag), Info(Info) {}
+  Provenance(Value *Tag, Value *Info, ElementCount Elems)
+      : Tag(Tag), Info(Info), Elems(Elems) {}
+  bool operator==(const Provenance &Other) const {
+    return this->Tag == Other.Tag && this->Info == Other.Info &&
+           this->Elems == Other.Elems;
+  }
+  bool operator!=(const Provenance &Other) const { return !(*this == Other); }
+
+  void addIncoming(BasicBlock *IncomingBlock, Provenance &IncomingProv);
+  void store(IRBuilder<> &IRB, BorrowSanitizer &BS, Value *Dest);
+  static Provenance load(IRBuilder<> &IRB, BorrowSanitizer &BS, Value *Src,
+                         ElementCount Elems = ElementCount::getFixed(1));
+  static Provenance omnivalid(BorrowSanitizer &BS,
+                              ElementCount Elems = ElementCount::getFixed(1));
+};
+
+struct ProvenanceKey {
+  Value *V;
+  unsigned long Offset;
+  ProvenanceKey(Value *V) : V(V), Offset(0) {}
+  ProvenanceKey(Value *V, unsigned long Offset) : V(V), Offset(Offset) {}
+};
+
+struct ProvenanceMap {
+  DenseMap<Value *, SmallDenseMap<unsigned, Provenance>> Inner;
+
+public:
+  Provenance *find(ProvenanceKey Key) {
+    auto InnerIt = Inner.find(Key.V);
+    if (InnerIt == Inner.end())
+      return nullptr;
+
+    auto &SubMap = InnerIt->second;
+    auto SubIt = SubMap.find(Key.Offset);
+    if (SubIt == SubMap.end())
+      return nullptr;
+
+    return &SubIt->second;
+  }
+
+  void transfer(Value *Src, Value *Dest) {
+    auto It = Inner.find(Src);
+    if (It != Inner.end()) {
+      SmallDenseMap<unsigned, Provenance> *DestMap = &Inner[Dest];
+      for (const auto &[Idx, Prov] : It->second) {
+        (*DestMap)[Idx] = Prov;
+      }
+    }
+  }
+
+  void set(ProvenanceKey Key, Provenance Prov) {
+    Inner[Key.V][Key.Offset] = Prov;
+  }
+
+  std::optional<Provenance> get(ProvenanceKey Key) {
+    if (Provenance *Prov = this->find(Key)) {
+      return *Prov;
+    }
+    return std::nullopt;
+  }
+};
+
+} // end anonymous namespace
+
+void Provenance::addIncoming(BasicBlock *IncomingBlock,
+                             Provenance &IncomingProv) {
+  assert(isa<PHINode>(this->Tag));
+  PHINode *TagNode = cast<PHINode>(this->Tag);
+
+  assert(isa<PHINode>(this->Info));
+  PHINode *InfoNode = cast<PHINode>(this->Info);
+
+  TagNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Tag);
+  InfoNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Info);
+}
+
+Provenance Provenance::omnivalid(BorrowSanitizer &BS, ElementCount Elems) {
+  if (Elems.isScalar()) {
+    Value *Zero = ConstantInt::get(BS.IntptrTy, 0);
+    Value *InvalidPtr = ConstantPointerNull::get(BS.PtrTy);
+    return Provenance(Zero, InvalidPtr, Elems);
+  }
+  report_fatal_error("Vector provenance is not supported yet");
+}
+
+Provenance Provenance::load(IRBuilder<> &IRB, BorrowSanitizer &BS, Value *Src,
+                            ElementCount Elems) {
+  if (Elems.isScalar()) {
+    Type *IntTy = BS.IntptrTy;
+    Type *PtrTy = BS.PtrTy;
+
+    Value *ZeroIdx = ConstantInt::get(IRB.getInt64Ty(), 0);
+    Value *TagPtr = Src;
+    Value *InfoPtr = IRB.CreateGEP(
+        BS.ProvenanceTy, Src, {ZeroIdx, ConstantInt::get(IRB.getInt32Ty(), 1)});
+
+    LoadInst *Tag = IRB.CreateLoad(IntTy, TagPtr);
+    LoadInst *Info = IRB.CreateLoad(PtrTy, InfoPtr);
+
+    return Provenance(Tag, Info, ElementCount::getFixed(1));
+  }
+  report_fatal_error("Vector provenance is not supported yet");
+}
+
+void Provenance::store(IRBuilder<> &IRB, BorrowSanitizer &BS, Value *Base) {
+  if (Elems.isScalar()) {
+    Value *ZeroIdx = ConstantInt::get(IRB.getInt64Ty(), 0);
+    Value *TagPtr = Base;
+    Value *InfoPtr =
+        IRB.CreateGEP(BS.ProvenanceTy, Base,
+                      {ZeroIdx, ConstantInt::get(IRB.getInt32Ty(), 1)});
+    IRB.CreateStore(this->Tag, TagPtr);
+    IRB.CreateStore(this->Info, InfoPtr);
+  } else {
+    report_fatal_error("Vector provenance is not supported yet");
+  }
 }
 
 PreservedAnalyses BorrowSanitizerPass::run(Module &M,
@@ -229,17 +693,6 @@ PreservedAnalyses BorrowSanitizerPass::run(Module &M,
 }
 
 namespace {
-/// Helper class to attach debug information of the given instruction onto new
-/// instructions inserted after.
-class NextNodeIRBuilder : public IRBuilder<> {
-public:
-  explicit NextNodeIRBuilder(Instruction *IP) : IRBuilder<>(IP->getNextNode()) {
-    SetCurrentDebugLocation(IP->getDebugLoc());
-  }
-};
-
-} // namespace
-
 // BorrowSanitizer uses a shadow stack to track the provenance values
 // that are accessible in memory and to pass provenance between functions.
 // We need the stack to be a contiguous array of provenance values to make it
@@ -463,6 +916,17 @@ public:
     PromoteMemToReg(PromoteableAllocas, DT);
   }
 };
+} // end anonymous namespace
+
+namespace {
+/// Helper class to attach debug information of the given instruction onto new
+/// instructions inserted after.
+class NextNodeIRBuilder : public IRBuilder<> {
+public:
+  explicit NextNodeIRBuilder(Instruction *IP) : IRBuilder<>(IP->getNextNode()) {
+    SetCurrentDebugLocation(IP->getDebugLoc());
+  }
+};
 
 class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   friend class InstVisitor<BorrowSanitizerVisitor>;
@@ -522,7 +986,7 @@ public:
   BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
                          const TargetLibraryInfo &TLI, DominatorTree &DT)
       : F(F), BS(BS), C(BS.C), TLI(&TLI), DT(DT),
-        ShadowStack(BS.PL.ProvenanceSize, BS.ProvStack) {}
+        ShadowStack(BS.ProvenanceSize, BS.ProvStackTLS) {}
   bool run() {
     DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Lazy);
     EscapeEnumerator EE(F, "bsan_cleanup", true, &DTU);
@@ -541,7 +1005,7 @@ public:
           continue;
         if (I.getOpcode() == Instruction::Alloca) {
           auto &AI = static_cast<AllocaInst &>(I);
-          if (BS.shouldInstrumentAlloca(*BS.DL, AI) && AI.isStaticAlloca())
+          if (BS.shouldInstrumentAlloca(AI) && AI.isStaticAlloca())
             StaticAllocaVec.push_back(&AI);
           continue;
         }
@@ -553,7 +1017,7 @@ public:
           }
           if (auto *LI = dyn_cast<LifetimeIntrinsic>(CB)) {
             AllocaInst *AI = findAllocaForValue(LI->getArgOperand(0), true);
-            if (AI && BS.shouldInstrumentAlloca(*BS.DL, *AI)) {
+            if (AI && BS.shouldInstrumentAlloca(*AI)) {
               if (CB->getIntrinsicID() == Intrinsic::lifetime_start) {
                 HasLifetimeStart.insert(AI);
               }
@@ -598,7 +1062,7 @@ private:
       }
       return Prov;
     }
-    return Provenance::omnivalid(BS.PL, ElementCount::getFixed(1));
+    return Provenance::omnivalid(BS, ElementCount::getFixed(1));
   }
 
   Provenance assertProvenance(IRBuilder<> &IRB, ElementCount Elems,
@@ -622,7 +1086,7 @@ private:
       }
       return Prov;
     }
-    return Provenance::omnivalid(BS.PL, Elems);
+    return Provenance::omnivalid(BS, Elems);
   }
 
   // Asserts that there is either a provenance value at the given index, or that
@@ -650,10 +1114,10 @@ private:
         ElementCount Elems = ProvVec[Key.Offset].second;
         Value *HeaderTop = ShadowStack.getOrInitFrameHeaderTop(EntryIRB);
         Value *ByteOffset =
-            EntryIRB.CreateMul(BS.PL.ProvenanceSize, ArgProvOffset);
+            EntryIRB.CreateMul(BS.ProvenanceSize, ArgProvOffset);
         Value *ArgProvenancePtr = ptrsub(EntryIRB, HeaderTop, ByteOffset);
         Provenance ArgProvenance =
-            Provenance::load(EntryIRB, BS.PL, ArgProvenancePtr, Elems);
+            Provenance::load(EntryIRB, BS, ArgProvenancePtr, Elems);
         setProvenance(Key, ArgProvenance);
         return ArgProvenance;
       }
@@ -687,8 +1151,8 @@ private:
     } else {
       Value *Slot = allocStackSlot(IRB, false);
       Value *Shadow = IRB.CreateCall(BS.BsanFuncShadow, {ObjAddr});
-      Provenance Prov = Provenance::load(IRB, BS.PL, Shadow);
-      Prov.store(IRB, BS.PL, Slot);
+      Provenance Prov = Provenance::load(IRB, BS, Shadow);
+      Prov.store(IRB, BS, Slot);
       return Prov;
     }
   }
@@ -699,10 +1163,10 @@ private:
     FnPrologueEnd = TopIRB.CreateIntrinsic(Intrinsic::donothing, {});
     IRBuilder<> EntryIRB(FnPrologueEnd);
 
-    Value *NumParamProv = BS.Zero;
+    Value *NumParamProv = ConstantInt::get(BS.IntptrTy, 0);
     Value *VarArgProvCount = nullptr;
     if (F.isVarArg()) {
-      VarArgProvCount = EntryIRB.CreateLoad(BS.IntptrTy, BS.VarArgCounter);
+      VarArgProvCount = EntryIRB.CreateLoad(BS.IntptrTy, BS.VarArgCounterTLS);
     }
 
     for (auto &Arg : F.args()) {
@@ -715,10 +1179,11 @@ private:
         EntryIRB.CreateCall(BS.BsanFuncAllocStack, {&Arg, Size, Tag, Info});
         setProvenance(&Arg, Provenance(Tag, Info));
         ByValArgs.push_back(&Arg);
-        NumParamProv = EntryIRB.CreateAdd(NumParamProv, BS.One);
+        NumParamProv =
+            EntryIRB.CreateAdd(NumParamProv, ConstantInt::get(BS.IntptrTy, 1));
       } else {
         SmallVector<ProvenanceDesc> ProvDesc =
-            BS.PL.getProvenanceDesc(EntryIRB, Arg.getType());
+            BS.getProvenanceDesc(EntryIRB, Arg.getType());
         for (auto &Desc : ProvDesc) {
           Value *NumProv = EntryIRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
           NumParamProv = EntryIRB.CreateAdd(NumParamProv, NumProv);
@@ -737,11 +1202,12 @@ private:
 
     if (F.isVarArg()) {
       Value *VarArgByteOffset =
-          EntryIRB.CreateMul(VarArgProvCount, BS.PL.ProvenanceSize);
+          EntryIRB.CreateMul(VarArgProvCount, BS.ProvenanceSize);
       FrameVariadicTop = ShadowStack.getOrInitFrameHeaderBottom(EntryIRB);
       ValidateHeaderBottom = ptradd(EntryIRB, FrameVariadicTop,
                                     EntryIRB.CreateNeg(VarArgByteOffset));
-      EntryIRB.CreateStore(BS.Zero, BS.VarArgCounter);
+      EntryIRB.CreateStore(ConstantInt::get(BS.IntptrTy, 0),
+                           BS.VarArgCounterTLS);
     } else if (!match(NumParamProv, m_Zero())) {
       ValidateHeaderBottom = ShadowStack.getOrInitFrameHeaderBottom(EntryIRB);
     }
@@ -757,7 +1223,7 @@ private:
       BasicBlock *BB = EntryIRB.GetInsertBlock();
       Provenance Prov = assertProvenanceScalar(BB, Arg);
       Value *Slot = ShadowStack.pushFrameHeaderSlot(EntryIRB);
-      Prov.store(EntryIRB, BS.PL, Slot);
+      Prov.store(EntryIRB, BS, Slot);
     }
 
     for (auto [Idx, AI] : llvm::enumerate(StaticAllocaVec)) {
@@ -768,7 +1234,7 @@ private:
       }
       setProvenance(AI, Prov);
       Value *Slot = ShadowStack.pushFrameHeaderSlot(EntryIRB);
-      Prov.store(EntryIRB, BS.PL, Slot);
+      Prov.store(EntryIRB, BS, Slot);
     }
   }
 
@@ -786,8 +1252,9 @@ private:
   }
 
   Value *newBorrowTag(IRBuilder<> &IRB) {
-    return IRB.CreateAtomicRMW(AtomicRMWInst::Add, BS.BorTagCounter, BS.One,
-                               std::nullopt, AtomicOrdering::Monotonic);
+    return IRB.CreateAtomicRMW(AtomicRMWInst::Add, BS.BorTagCounter,
+                               ConstantInt::get(BS.IntptrTy, 1), std::nullopt,
+                               AtomicOrdering::Monotonic);
   }
 
   Value *getLayoutArrayLength(Value *Start) {
@@ -799,7 +1266,7 @@ private:
         return ConstantInt::get(BS.IntptrTy, NumPointerSizedPairs);
       }
     }
-    return BS.Zero;
+    return ConstantInt::get(BS.IntptrTy, 0);
   }
 
   void instrumentRetagMem(CallBase &CB) {
@@ -807,7 +1274,7 @@ private:
     Value *Operand = CB.getOperand(0);
     Value *SrcAddr = IRB.CreateLoad(BS.PtrTy, Operand);
     Value *Shadow = IRB.CreateCall(BS.BsanFuncShadow, {Operand});
-    Provenance SrcProv = Provenance::load(IRB, BS.PL, Shadow);
+    Provenance SrcProv = Provenance::load(IRB, BS, Shadow);
     Provenance RetaggedProv = instrumentRetag(IRB, CB, SrcAddr, SrcProv);
     IRB.CreateCall(BS.BsanFuncRcStore,
                    {RetaggedProv.Tag, RetaggedProv.Info, Shadow});
@@ -834,7 +1301,7 @@ private:
                                           TargetProv.Tag, TargetProv.Info});
 
     Value *SlotPtr = allocStackSlot(IRB, RI.isProtected());
-    TargetProv.store(IRB, BS.PL, SlotPtr);
+    TargetProv.store(IRB, BS, SlotPtr);
 
     return TargetProv;
   }
@@ -891,15 +1358,15 @@ private:
 
     // We need to store the provenance for each argument onto the shadow stack.
     // First, we calculate the offset for each parameter's provenance.
-    Value *NumParamProv = BS.Zero;
-    Value *VarArgProvCount = BS.Zero;
+    Value *NumParamProv = ConstantInt::get(BS.IntptrTy, 0);
+    Value *VarArgProvCount = ConstantInt::get(BS.IntptrTy, 0);
     bool IsVarArg = CB.getFunctionType()->isVarArg();
     unsigned NumFixedParams = CB.getFunctionType()->getNumParams();
 
     SmallVector<std::pair<Value *, Provenance>> ParamOffsets;
     for (const auto &[i, Arg] : llvm::enumerate(CB.args())) {
       SmallVector<ProvenanceDesc> ProvDesc =
-          BS.PL.getProvenanceDesc(Before, Arg->getType());
+          BS.getProvenanceDesc(Before, Arg->getType());
       for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
         Value *NumProv = Before.CreateElementCount(BS.IntptrTy, Desc.Elems);
         NumParamProv = Before.CreateAdd(NumParamProv, NumProv);
@@ -908,8 +1375,7 @@ private:
           VarArgProvCount = Before.CreateAdd(VarArgProvCount, NumProv);
         }
 
-        Value *ByteOffset =
-            Before.CreateMul(NumParamProv, BS.PL.ProvenanceSize);
+        Value *ByteOffset = Before.CreateMul(NumParamProv, BS.ProvenanceSize);
         Provenance ProvSrc = assertProvenance(Before, Desc.Elems, {Arg, Idx});
         ParamOffsets.push_back(std::make_pair(ByteOffset, ProvSrc));
       }
@@ -936,14 +1402,14 @@ private:
 
       for (auto [ByteOffset, Prov] : ParamOffsets) {
         Value *Slot = ptrsub(Before, StackOffset, ByteOffset);
-        Prov.store(Before, BS.PL, Slot);
+        Prov.store(Before, BS, Slot);
       }
 
-      Before.CreateStore(StackOffset, BS.ProvStack);
+      Before.CreateStore(StackOffset, BS.ProvStackTLS);
     }
 
     if (IsVarArg) {
-      Before.CreateStore(VarArgProvCount, BS.VarArgCounter);
+      Before.CreateStore(VarArgProvCount, BS.VarArgCounterTLS);
     }
 
     // Skip the epilogue for musttail calls, since
@@ -970,11 +1436,11 @@ private:
     IRBuilder<> After(NextInst);
     After.SetCurrentDebugLocation(CB.getDebugLoc());
 
-    Value *NumReturnProv = BS.Zero;
+    Value *NumReturnProv = ConstantInt::get(BS.IntptrTy, 0);
     SmallVector<Value *> ReturnProvPtrs;
 
     SmallVector<ProvenanceDesc> ReturnDesc =
-        BS.PL.getProvenanceDesc(Before, CB.getType());
+        BS.getProvenanceDesc(Before, CB.getType());
 
     if (CB.getType()->isSized()) {
       // Unsized return types do not have provenance, so we can
@@ -1004,7 +1470,7 @@ private:
       // of the shadow stack.
       if (BS.shouldTrustFunction(TLI, &CB)) {
         Marker = Before.CreateCall(BS.BsanFuncMark, {NullPtr});
-        After.CreateStore(Marker, BS.Marker);
+        After.CreateStore(Marker, BS.MarkerTLS);
       } else {
         // Otherwise, we need to initialize the marker with the function
         // pointer that we're calling with, so that the callee can check
@@ -1021,7 +1487,7 @@ private:
       }
       // We always need to restore our boundary
       // marker to the value that it had before.
-      After.CreateStore(Marker, BS.Marker);
+      After.CreateStore(Marker, BS.MarkerTLS);
 
       if (auto *II = dyn_cast<InvokeInst>(&CB)) {
         // An invoke may unwind to an additional block, which might
@@ -1040,14 +1506,14 @@ private:
         BasicBlock *UnwindDest = II->getUnwindDest();
         IRBuilder<> UnwindIRB(UnwindDest, UnwindDest->getFirstInsertionPt());
         Value *ToRestore = UnwindIRB.CreateLoad(BS.PtrTy, MarkerAlloca);
-        UnwindIRB.CreateStore(ToRestore, BS.Marker);
+        UnwindIRB.CreateStore(ToRestore, BS.MarkerTLS);
       }
     }
 
     // Finally, store the return value's provenance to the shadow stack.
     for (const auto &[Idx, Ptr] : llvm::enumerate(ReturnProvPtrs)) {
       ElementCount Elems = ReturnDesc[Idx].Elems;
-      Provenance Prov = Provenance::load(After, BS.PL, Ptr, Elems);
+      Provenance Prov = Provenance::load(After, BS, Ptr, Elems);
       setProvenance({&CB, Idx}, Prov);
     }
   }
@@ -1076,9 +1542,9 @@ private:
     for (int Idx = 0; Idx < NumOutputs; Idx++) {
       Value *Operand = CB.getOperand(Idx);
       SmallVector<ProvenanceDesc> Components =
-          BS.PL.getProvenanceDesc(IRB, Operand->getType());
+          BS.getProvenanceDesc(IRB, Operand->getType());
       for (const auto &[Idx, Comp] : llvm::enumerate(Components)) {
-        setProvenance({Operand, Idx}, Provenance::omnivalid(BS.PL));
+        setProvenance({Operand, Idx}, Provenance::omnivalid(BS));
       }
     }
   }
@@ -1091,7 +1557,7 @@ private:
     PHINode *InfoNode = IRB.CreatePHI(BS.PtrTy, NumIncoming, "_bsphi_info");
     InfoNode->dropDbgRecords();
 
-    Provenance Omni = Provenance::omnivalid(BS.PL);
+    Provenance Omni = Provenance::omnivalid(BS);
     for (BasicBlock *BB : Blocks) {
       TagNode->addIncoming(Omni.Tag, BB);
       InfoNode->addIncoming(Omni.Info, BB);
@@ -1111,7 +1577,7 @@ private:
     IRBuilder<> IRB(&PN);
     unsigned NumIncoming = PN.getNumIncomingValues();
     SmallVector<ProvenanceDesc> Components =
-        BS.PL.getProvenanceDesc(IRB, PN.getType());
+        BS.getProvenanceDesc(IRB, PN.getType());
     for (auto [Idx, Comp] : llvm::enumerate(Components)) {
       Provenance Prov =
           createProvenancePHI(IRB, Comp, predecessors(PN.getParent()));
@@ -1123,7 +1589,7 @@ private:
   void updateStackPointer(Instruction &I) {
     IRBuilder<> Before(&I);
     Value *StackOffset = getStackOffset(Before, false);
-    Before.CreateStore(StackOffset, BS.ProvStack);
+    Before.CreateStore(StackOffset, BS.ProvStackTLS);
   }
 
   // Certain intrinsics and floating point conversions end up
@@ -1246,7 +1712,7 @@ private:
         IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeStoreSize(LI.getType()));
 
     SmallVector<ProvenanceDesc> Components =
-        BS.PL.getProvenanceDesc(IRB, LI.getType());
+        BS.getProvenanceDesc(IRB, LI.getType());
 
     Value *Base = LI.getPointerOperand();
     for (const auto &[Idx, Comp] : llvm::enumerate(Components)) {
@@ -1280,9 +1746,9 @@ private:
 
     Value *Base = SI.getPointerOperand();
     SmallVector<ProvenanceDesc> ProvDesc =
-        BS.PL.getProvenanceDesc(IRB, Val->getType());
+        BS.getProvenanceDesc(IRB, Val->getType());
 
-    Value *Offset = BS.Zero;
+    Value *Offset = ConstantInt::get(BS.IntptrTy, 0);
 
     for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
       Value *ByteOffset = Desc.ByteOffset;
@@ -1366,7 +1832,7 @@ private:
       for (unsigned CurrIdx = 0; CurrIdx < Idx; ++CurrIdx) {
         Type *ElemType = ST->getElementType(CurrIdx);
         SmallVector<ProvenanceDesc> ProvDesc =
-            BS.PL.getProvenanceDesc(IRB, ElemType);
+            BS.getProvenanceDesc(IRB, ElemType);
         Offset += ProvDesc.size();
       }
       return {ST->getElementType(Idx), Offset};
@@ -1374,7 +1840,7 @@ private:
 
     if (auto *AT = dyn_cast<ArrayType>(Ty)) {
       SmallVector<ProvenanceDesc> ProvDesc =
-          BS.PL.getProvenanceDesc(IRB, AT->getElementType());
+          BS.getProvenanceDesc(IRB, AT->getElementType());
       return {AT->getElementType(), ProvDesc.size() * Idx};
     }
 
@@ -1386,7 +1852,7 @@ private:
     Value *AggregateSrc = EI.getAggregateOperand();
 
     SmallVector<ProvenanceDesc> DestProvDesc =
-        BS.PL.getProvenanceDesc(IRB, EI.getType());
+        BS.getProvenanceDesc(IRB, EI.getType());
 
     Type *CurrType = AggregateSrc->getType();
     uint64_t StartIdx = 0;
@@ -1409,7 +1875,7 @@ private:
     BaseProvMap.transfer(II.getAggregateOperand(), &II);
     Value *ToInsert = II.getInsertedValueOperand();
     SmallVector<ProvenanceDesc> SrcProvDesc =
-        BS.PL.getProvenanceDesc(IRB, ToInsert->getType());
+        BS.getProvenanceDesc(IRB, ToInsert->getType());
 
     Type *CurrType = II.getType();
     uint64_t StartIdx = 0;
@@ -1429,7 +1895,7 @@ private:
   void visitSelectInst(SelectInst &SI) {
     IRBuilder<> IRB(&SI);
     SmallVector<ProvenanceDesc> ProvDesc =
-        BS.PL.getProvenanceDesc(IRB, SI.getType());
+        BS.getProvenanceDesc(IRB, SI.getType());
 
     for (auto [Idx, Desc] : llvm::enumerate(ProvDesc)) {
       if (Desc.Elems.isVector()) {
@@ -1462,32 +1928,32 @@ private:
       Value *NumProtectors =
           ShadowStack.getOutgoingOffset(DT, LI, IRB, BS.IntptrTy, true);
       Value *FrameHeaderBottom = ShadowStack.getOrInitFrameHeaderBottom(IRB);
-      Value *Offset = IRB.CreateMul(NumProtectors, BS.PL.ProvenanceSize);
+      Value *Offset = IRB.CreateMul(NumProtectors, BS.ProvenanceSize);
       Value *FrameBottom = ptrsub(IRB, FrameHeaderBottom, Offset);
       IRB.CreateCall(BS.BsanFuncPopFrame,
                      {FrameBottom, NumProtectors, NumStackAllocs});
     }
 
     if (auto FrameTop = ShadowStack.getFrameHeaderTop()) {
-      IRB.CreateStore(FrameTop.value(), BS.ProvStack);
+      IRB.CreateStore(FrameTop.value(), BS.ProvStackTLS);
     }
 
     if (RetVal) {
       SmallVector<ProvenanceDesc> ProvDesc =
-          BS.PL.getProvenanceDesc(IRB, RetVal->getType());
+          BS.getProvenanceDesc(IRB, RetVal->getType());
 
       if (!ProvDesc.empty()) {
-        Value *NumReturnProv = BS.Zero;
+        Value *NumReturnProv = ConstantInt::get(BS.IntptrTy, 0);
         Value *FrameTop = ShadowStack.getOrInitFrameHeaderTop(IRB);
         for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
           Value *NumProv = IRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
           NumReturnProv = IRB.CreateAdd(NumReturnProv, NumProv);
 
-          Value *ByteWidth = IRB.CreateMul(NumReturnProv, BS.PL.ProvenanceSize);
+          Value *ByteWidth = IRB.CreateMul(NumReturnProv, BS.ProvenanceSize);
           Value *Slot = ptrsub(IRB, FrameTop, ByteWidth);
 
           Provenance Prov = assertProvenance(IRB, Desc.Elems, {RetVal, Idx});
-          Prov.store(IRB, BS.PL, Slot);
+          Prov.store(IRB, BS, Slot);
         }
       }
     }
@@ -1508,195 +1974,7 @@ private:
   }
 };
 
-Instruction *BorrowSanitizer::createBsanModuleDtor(Module &M) {
-  IRBuilder<> IRB(M.getContext());
-
-  BsanDtorFunction = Function::createWithDefaultAttr(
-      FunctionType::get(IRB.getVoidTy(), false), GlobalValue::InternalLinkage,
-      0, "bsan.module_dtor", &M);
-  BsanDtorFunction->addFnAttr(Attribute::NoUnwind);
-
-  BasicBlock *BsanDtorBB = BasicBlock::Create(*C, "", BsanDtorFunction);
-  ReturnInst *BsanDtorRet = ReturnInst::Create(*C, BsanDtorBB);
-
-  auto *FnTy = FunctionType::get(IRB.getVoidTy(), false);
-  FunctionCallee DeinitFn = M.getOrInsertFunction(BSAN("deinit"), FnTy);
-
-  IRB.SetInsertPoint(BsanDtorRet);
-  CallInst *DeinitCall = IRB.CreateCall(DeinitFn, {});
-
-  appendToUsed(M, {BsanDtorFunction});
-  return DeinitCall;
-}
-
-bool BorrowSanitizer::instrumentModule(Module &M) {
-  // TODO: add version check.
-  std::tie(BsanCtorFunction, std::ignore) = createSanitizerCtorAndInitFunctions(
-      M, "bsan.module_ctor", BSAN("init"), /*InitArgTypes=*/{},
-      /*InitArgs=*/{}, "");
-
-  bool CtorComdat = false;
-  createBsanModuleDtor(M);
-
-  IRBuilder<> IRB(BsanCtorFunction->getEntryBlock().getTerminator());
-  instrumentGlobals(IRB, M, CtorComdat);
-
-  assert(BsanCtorFunction && BsanDtorFunction);
-  const int Priority = 1;
-
-  // Put the constructor and destructor in comdat if both
-  // (1) global instrumentation is not TU-specific
-  // (2) target is ELF.
-  if (CtorComdat && TargetTriple.isOSBinFormatELF()) {
-    BsanCtorFunction->setComdat(M.getOrInsertComdat("bsan.module_ctor"));
-    appendToGlobalCtors(M, BsanCtorFunction, Priority, BsanCtorFunction);
-
-    BsanDtorFunction->setComdat(M.getOrInsertComdat("bsan.module_dtor"));
-    appendToGlobalDtors(M, BsanDtorFunction, Priority, BsanDtorFunction);
-  } else {
-    appendToGlobalCtors(M, BsanCtorFunction, Priority);
-    appendToGlobalDtors(M, BsanDtorFunction, Priority);
-  }
-  return true;
-}
-
-static Constant *getOrInsertTLSGlobal(Module &M, StringRef Name, Type *Ty) {
-  return M.getOrInsertGlobal(Name, Ty, [&] {
-    return new GlobalVariable(
-        M, Ty, false, GlobalVariable::ExternalLinkage, nullptr, Name, nullptr,
-        GlobalVariable::InitialExecTLSModel, std::nullopt, true);
-  });
-}
-static Constant *getOrInsertGlobal(Module &M, StringRef Name, Type *Ty) {
-  return M.getOrInsertGlobal(Name, Ty, [&] {
-    return new GlobalVariable(
-        M, Ty, false, GlobalVariable::ExternalLinkage, nullptr, Name, nullptr,
-        GlobalVariable::NotThreadLocal, std::nullopt, true);
-  });
-}
-
-BorrowSanitizer::GlobalDescription
-BorrowSanitizer::getGlobalDescription(GlobalVariable *G) const {
-  GlobalDescription Skip = {true, std::nullopt};
-  Type *Ty = G->getValueType();
-
-  if (G->hasSection()) {
-    StringRef Section = G->getSection();
-    if (Section.starts_with(".preinit_array") ||
-        Section.starts_with(".init_array") ||
-        Section.starts_with(".fini_array")) {
-      Constant *Init = G->getInitializer()->stripPointerCasts();
-      if (Function *F = dyn_cast<Function>(Init)) {
-        return {true, F};
-      }
-    }
-  }
-
-  if (!G->hasInitializer())
-    return Skip;
-
-  if (auto *Init = G->getInitializer()) {
-    Value *Func = Init->stripPointerCasts();
-    if (auto *F = dyn_cast<Function>(Func)) {
-      Skip.AssocFn = F;
-    }
-  }
-  if (!Ty->isSized())
-    return Skip;
-  if (G->isThreadLocal())
-    return Skip;
-  return {true, Skip.AssocFn};
-}
-
-void BorrowSanitizer::instrumentGlobals(IRBuilder<> &IRB, Module &M,
-                                        bool CtorComdat) {}
-
-void BorrowSanitizer::initializeCallbacks(Module &M,
-                                          const TargetLibraryInfo &TLI) {
-  if (CallbacksInitialized) {
-    return;
-  }
-
-  IRBuilder<> IRB(*C);
-
-  AttributeList AL;
-
-  Type *Int32Ty = Type::getInt32Ty(*C);
-  Type *Int8Ty = Type::getInt8Ty(*C);
-
-  AL = AL.addFnAttribute(*C, Attribute::NoUnwind);
-
-  BsanFuncRetag = M.getOrInsertFunction(BSAN("retag"), AL, IntptrTy, PtrTy,
-                                        IntptrTy, Int8Ty, PtrTy, IntptrTy,
-                                        PtrTy, IntptrTy, IntptrTy, PtrTy);
-
-  BsanFuncPopFrame = M.getOrInsertFunction(
-      BSAN("pop_frame"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, IntptrTy);
-
-  BsanFuncRead = M.getOrInsertFunction(BSAN("read"), AL, IRB.getVoidTy(), PtrTy,
-                                       IntptrTy, IntptrTy, PtrTy);
-
-  BsanFuncWrite = M.getOrInsertFunction(BSAN("write"), AL, IRB.getVoidTy(),
-                                        PtrTy, IntptrTy, IntptrTy, PtrTy);
-
-  BsanFuncAllocStack =
-      M.getOrInsertFunction(BSAN("alloc_stack"), AL, IRB.getVoidTy(), PtrTy,
-                            IntptrTy, IntptrTy, PtrTy);
-  BsanFuncDeallocStack = M.getOrInsertFunction(
-      BSAN("dealloc_stack"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, PtrTy);
-
-  BsanFuncMark = M.getOrInsertFunction(BSAN("mark"), AL, PtrTy, PtrTy);
-
-  BsanFuncValidateParams = M.getOrInsertFunction(
-      BSAN("validate_params"), AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
-
-  BsanFuncValidateRetval = M.getOrInsertFunction(
-      BSAN("validate_retval"), AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
-
-  BsanFuncShadow = M.getOrInsertFunction(BSAN("shadow"), AL, PtrTy, PtrTy);
-
-  BsanFuncRcStore = M.getOrInsertFunction(BSAN("rc_store"), AL, IRB.getVoidTy(),
-                                          IntptrTy, PtrTy, PtrTy);
-
-  BsanFuncShadowClear = M.getOrInsertFunction(BSAN("shadow_clear"), AL,
-                                              IRB.getVoidTy(), PtrTy, IntptrTy);
-
-  BsanFuncMemCpy = M.getOrInsertFunction(BSAN("memcpy"), AL, IRB.getVoidTy(),
-                                         PtrTy, PtrTy, IntptrTy);
-
-  BsanFuncMemMove = M.getOrInsertFunction(BSAN("memmove"), AL, IRB.getVoidTy(),
-                                          PtrTy, PtrTy, IntptrTy);
-
-  BsanFuncMemSet = M.getOrInsertFunction(BSAN("memset"), AL, IRB.getVoidTy(),
-                                         PtrTy, Int32Ty, IntptrTy);
-
-  BsanFuncReserveStackSlot =
-      M.getOrInsertFunction(BSAN("reserve_stack_slot"),
-                            FunctionType::get(PtrTy, /*isVarArg=*/false), AL);
-
-  BsanFuncDestroyStackSlot = M.getOrInsertFunction(BSAN("destroy_stack_slot"),
-                                                   AL, IRB.getVoidTy(), PtrTy);
-
-  BsanFuncExposeProv = M.getOrInsertFunction(BSAN("expose_prov"), AL,
-                                             IRB.getVoidTy(), IntptrTy, PtrTy);
-
-  EHPersonality Pers = getDefaultEHPersonality(TargetTriple);
-  DefaultPersonalityFn =
-      M.getOrInsertFunction(getEHPersonalityName(Pers),
-                            FunctionType::get(Type::getInt32Ty(*C), true));
-
-  createUserspaceApi(M, TLI);
-  CallbacksInitialized = true;
-}
-
-void BorrowSanitizer::createUserspaceApi(Module &M,
-                                         const TargetLibraryInfo &TLI) {
-  IRBuilder<> IRB(*C);
-  Marker = getOrInsertTLSGlobal(M, BSAN("marker"), PtrTy);
-  VarArgCounter = getOrInsertTLSGlobal(M, BSAN("var_arg_ctr"), IntptrTy);
-  ProvStack = getOrInsertTLSGlobal(M, BSAN("shadow_stack"), PtrTy);
-  BorTagCounter = getOrInsertGlobal(M, BSAN("bor_tag_ctr"), IntptrTy);
-}
+} // end anonymous namespace
 
 bool BorrowSanitizer::instrumentFunction(Function &F,
                                          FunctionAnalysisManager &FAM) {

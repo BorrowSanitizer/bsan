@@ -1,18 +1,6 @@
 #include "BorrowSanitizerPass.h"
-#include "llvm/Analysis/GlobalsModRef.h"
-#include "llvm/Analysis/StackLifetime.h"
-#include "llvm/Analysis/ValueTracking.h"
-#include "llvm/IR/DIBuilder.h"
-#include "llvm/IR/EHPersonalities.h"
-#include "llvm/IR/Function.h"
-#include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/Module.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Plugins/PassPlugin.h"
-#include "llvm/Transforms/Utils/BasicBlockUtils.h"
-#include "llvm/Transforms/Utils/Instrumentation.h"
-#include "llvm/Transforms/Utils/Local.h"
-#include "llvm/Transforms/Utils/ModuleUtils.h"
 
 using namespace llvm;
 
