@@ -51,11 +51,17 @@ SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_write(void *ptr, uptr access_size, BorTag bor_tag,
                   AllocInfo *alloc_info);
 
-SANITIZER_WEAK_ATTRIBUTE
+SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_shadow_transfer(void *dest, const void *src, uptr access_size);
 
-SANITIZER_WEAK_ATTRIBUTE
+SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_shadow_clear(void *dest, uptr access_size);
+
+SANITIZER_INTERFACE_ATTRIBUTE
+Provenance *__bsan_shadow(void *addr);
+
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_rc_store(BorTag bor_tag, AllocInfo *alloc_info, Provenance *dest);
 
 } // extern "C"
 

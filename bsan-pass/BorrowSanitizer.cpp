@@ -827,6 +827,7 @@ private:
     BlockOffsets[InsertBB] = Offset;
     return BlockOffsets[InsertBB];
   }
+
   // Allocates the requested number of slots and returns the slot count offset.
   Value *alloc(DominatorTree &DT, LoopInfo &LI, IRBuilder<> &IRB,
                ElementCount EC, Type *Ty, bool IsFnEntry) {

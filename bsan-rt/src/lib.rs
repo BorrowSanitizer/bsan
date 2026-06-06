@@ -562,7 +562,7 @@ unsafe extern "C-unwind" fn __bsan_dealloc_stack_impl(
 /// to the address `dst_addr`. This function will silently fail, so it should only be called in conjunction with
 /// `bsan_read` and `bsan_write` or as part of an interceptor.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_shadow_transfer(
+unsafe extern "C-unwind" fn __bsan_shadow_transfer_impl(
     dst: *mut c_void,
     src: *const c_void,
     size: usize,
@@ -575,7 +575,7 @@ unsafe extern "C-unwind" fn __bsan_shadow_transfer(
 /// Clears the provenance stored in the range `[dst_addr, dst_addr + access_size)` within the
 /// shadow heap.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_shadow_clear(dst: *mut c_void, size: usize) {
+unsafe extern "C-unwind" fn __bsan_shadow_clear_impl(dst: *mut c_void, size: usize) {
     let ctx = unsafe { global_ctx() };
     ctx.shadow_heap().clear(dst.addr(), size)
 }
@@ -583,7 +583,7 @@ unsafe extern "C-unwind" fn __bsan_shadow_clear(dst: *mut c_void, size: usize) {
 /// Loads the provenance of a given address from shadow memory and stores
 /// the result in the return pointer.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_shadow(addr: *mut c_void) -> NonNull<Provenance> {
+unsafe extern "C-unwind" fn __bsan_shadow_impl(addr: *mut c_void) -> NonNull<Provenance> {
     unsafe { global_ctx().shadow_heap().get(addr.addr()) }
 }
 
@@ -597,12 +597,12 @@ unsafe extern "C-unwind" fn __bsan_rc_dec_impl(_bor_tag: BorTag, _alloc_info: *m
 
 /// Reserves a stack slot for allocation metadata.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_reserve_stack_slot() -> NonNull<AllocInfo> {
+unsafe extern "C" fn __bsan_reserve_stack_slot_impl() -> NonNull<AllocInfo> {
     unsafe { global_ctx().create_alloc_info(AllocInfo::invalid()) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_destroy_stack_slot(slot: NonNull<AllocInfo>) {
+unsafe extern "C" fn __bsan_destroy_stack_slot_impl(slot: NonNull<AllocInfo>) {
     let ctx = unsafe { global_ctx() };
     unsafe {
         ctx.destroy_alloc_info(slot);
