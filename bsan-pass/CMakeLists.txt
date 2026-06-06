@@ -17,7 +17,6 @@ set(BSAN_SOURCES
 )
 
 set(BSAN_HEADERS
-  BorrowSanitizer.h
   BorrowSanitizerPass.h
   Provenance.h
   Retag.h

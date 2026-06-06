@@ -1,4 +1,4 @@
-#include "BorrowSanitizer.h"
+#include "BorrowSanitizerPass.h"
 #include "Provenance.h"
 #include "Retag.h"
 #include "llvm/Analysis/CFG.h"
@@ -42,6 +42,99 @@ static cl::opt<bool> ClHandleAsmConservative(
     cl::desc("Conservatively handle inline assembly by setting all pointer "
              "outputs to wildcard Provenance"),
     cl::Hidden, cl::init(true));
+
+namespace {
+
+struct BorrowSanitizer {
+public:
+  BorrowSanitizer(Module &M, ModuleAnalysisManager &MAM) {
+    C = &(M.getContext());
+    DL = &M.getDataLayout();
+    TargetTriple = Triple(M.getTargetTriple());
+
+    PL = ProvenanceLayout(C, DL);
+    PtrTy = PointerType::getUnqual(*C);
+    unsigned PtrSize = M.getDataLayout().getPointerSize();
+    IntptrTy = Type::getIntNTy(*C, PtrSize * 8);
+    Zero = ConstantInt::get(IntptrTy, 0);
+    One = ConstantInt::get(IntptrTy, 1);
+  }
+
+  bool instrumentModule(Module &M);
+  bool instrumentFunction(Function &F, FunctionAnalysisManager &FAM);
+
+  void initializeCallbacks(Module &M, const TargetLibraryInfo &TLI);
+
+  struct GlobalDescription {
+    bool ShouldInstrument;
+    std::optional<Function *> AssocFn;
+  };
+  GlobalDescription getGlobalDescription(GlobalVariable *G) const;
+
+  void instrumentGlobals(IRBuilder<> &IRB, Module &M, bool CtorComdat);
+  Instruction *createBsanModuleDtor(Module &M);
+
+  // Adds thread-local global variables for passing the provenance for
+  // arguments and return values
+  void createUserspaceApi(Module &M, const TargetLibraryInfo &TLI);
+
+  LLVMContext *C;
+  const DataLayout *DL;
+  ProvenanceLayout PL;
+
+  Triple TargetTriple;
+  PointerType *PtrTy;
+  Type *IntptrTy;
+  Align IntptrAlign;
+
+  bool CallbacksInitialized = false;
+
+  Function *BsanCtorFunction = nullptr;
+  Function *BsanDtorFunction = nullptr;
+
+  FunctionCallee BsanFuncRetag;
+  FunctionCallee BsanFuncRead;
+  FunctionCallee BsanFuncWrite;
+  FunctionCallee BsanFuncAllocStack;
+  FunctionCallee BsanFuncDeallocStack;
+
+  FunctionCallee BsanFuncPopFrame;
+
+  FunctionCallee BsanFuncMark;
+  FunctionCallee BsanFuncValidateRetval;
+  FunctionCallee BsanFuncValidateParams;
+
+  FunctionCallee BsanFuncShadow;
+  FunctionCallee BsanFuncRcStore;
+
+  FunctionCallee BsanFuncMemSet;
+  FunctionCallee BsanFuncMemMove;
+  FunctionCallee BsanFuncMemCpy;
+  FunctionCallee BsanFuncShadowClear;
+
+  FunctionCallee BsanFuncReserveStackSlot;
+  FunctionCallee BsanFuncDestroyStackSlot;
+
+  FunctionCallee DefaultPersonalityFn;
+
+  FunctionCallee BsanFuncExposeProv;
+
+  // Thread-local storage for paramters
+  // and return values.
+  Value *ProvStack = nullptr;
+  Value *Marker = nullptr;
+  Value *VarArgCounter = nullptr;
+  Value *BorTagCounter = nullptr;
+
+  Constant *Zero = nullptr;
+  Constant *One = nullptr;
+
+  bool shouldTrustFunction(const TargetLibraryInfo *TLI, const Value *V);
+  bool shouldInstrumentAlloca(const DataLayout &DL, const AllocaInst &AI);
+  bool needsBoundaryValidation(const Function *Callee);
+};
+
+} // namespace
 
 bool BorrowSanitizer::needsBoundaryValidation(const Function *Callee) {
   return !Callee ||
@@ -103,6 +196,36 @@ static bool inSCC(DominatorTree &DT, LoopInfo &LI, BasicBlock *BB) {
     }
   }
   return false;
+}
+
+PreservedAnalyses BorrowSanitizerPass::run(Module &M,
+                                           ModuleAnalysisManager &MAM) {
+  if (checkIfAlreadyInstrumented(M, "nosanitize_borrow"))
+    return PreservedAnalyses::all();
+
+  BorrowSanitizer ModuleSanitizer(M, MAM);
+
+  bool Modified = false;
+
+  auto &FAM = MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+
+  for (Function &F : M) {
+    Modified |= ModuleSanitizer.instrumentFunction(F, FAM);
+  }
+  if (!Modified)
+    return PreservedAnalyses::all();
+
+  Modified |= ModuleSanitizer.instrumentModule(M);
+
+  PreservedAnalyses PA = PreservedAnalyses::none();
+  // We incrementally update the dominator tree throughout
+  // these analysis passes.
+  PA.preserve<DominatorTreeAnalysis>();
+  // GlobalsAA is considered stateless and does not get invalidated unless
+  // explicitly invalidated; PreservedAnalyses::none() is not enough. Sanitizers
+  // make changes that require GlobalsAA to be invalidated.
+  PA.abandon<GlobalsAA>();
+  return PA;
 }
 
 namespace {
