@@ -10,6 +10,7 @@ set(BSAN_SOURCES
   bsan_thread.cpp
   bsan_allocator.cpp
   bsan_shadow.cpp
+  bsan_meta_allocator.cpp
 )
 
 SET(BSAN_HEADERS
@@ -19,6 +20,7 @@ SET(BSAN_HEADERS
   bsan_interface_internal.h
   bsan_shadow.h
   bsan_allocator.h
+  bsan_meta_allocator.h
 )
 
 add_custom_target(clang-format
