@@ -1,5 +1,5 @@
-#include "bsan.h"
 #include "bsan_flags.h"
+#include "bsan.h"
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_flag_parser.h"
 #include "sanitizer_common/sanitizer_flags.h"
