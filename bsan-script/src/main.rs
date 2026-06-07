@@ -25,6 +25,8 @@ pub enum Command {
         /// Flags that are passed through to each subcommand.
         #[arg(trailing_var_arg = true, allow_hyphen_values(true))]
         args: Vec<String>,
+        #[arg(long)]
+        allow_unsafe_deps: bool,
     },
     /// Build documentation.
     Doc {
@@ -108,6 +110,9 @@ pub enum Command {
         /// it from scratch.
         #[arg(long)]
         keep_sysroot: bool,
+
+        #[arg(long)]
+        allow_unsafe_deps: bool,
     },
     /// Installs binaries into the custom toolchain.
     Install {
