@@ -16,6 +16,7 @@ struct MappingDesc {
   } type;
   const char *name;
 };
+
 #if SANITIZER_LINUX && defined(__aarch64__)
 // The mapping assumes 48-bit VMA. AArch64 maps:
 // - 0x0000000000000-0x0100000000000: 39/42/48-bits program own segments
@@ -42,6 +43,9 @@ const MappingDesc kMemoryLayout[] = {
 #define MEM_TO_SHADOW(mem) ((uptr)mem ^ 0xB00000000000ULL)
 #define SHADOW_TO_ORIGIN(shadow) (((uptr)(shadow)) + 0x200000000000ULL)
 
+const uptr kAllocatorSpace = 0xE00000000000ULL;
+const uptr kAllocatorSpaceSize = 0x40000000000; // 4T.
+
 #elif SANITIZER_LINUX && defined(__x86_64__)
 // All of the following configurations are supported.
 // ASLR disabled: main executable and DSOs at 0x555550000000
@@ -65,6 +69,10 @@ const MappingDesc kMemoryLayout[] = {
 
 #define MEM_TO_SHADOW(mem) (((uptr)(mem)) ^ 0x500000000000ULL)
 #define SHADOW_TO_ORIGIN(mem) (((uptr)(mem)) + 0x100000000000ULL)
+
+const uptr kAllocatorSpace = 0x700000000000ULL;
+const uptr kAllocatorSpaceSize = 0x40000000000; // 4T.
+
 #else
 #error "BorrowSanitizer: unsupported platform."
 #endif

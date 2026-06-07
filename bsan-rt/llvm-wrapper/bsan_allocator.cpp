@@ -26,19 +26,6 @@ struct BsanMapUnmapCallback {
   void OnUnmap(uptr p, uptr size) const {}
 };
 
-// Note: to ensure that the allocator is compatible with the application memory
-// layout (especially with high-entropy ASLR), kSpaceBeg and kSpaceSize must be
-// duplicated as MappingDesc::ALLOCATOR in bsan_shadow.h.
-#if defined(__aarch64__)
-const uptr kAllocatorSpace = 0xE00000000000ULL;
-const uptr kAllocatorSpaceSize = 0x40000000000; // 4T.
-#elif defined(__x86_64__)
-const uptr kAllocatorSpace = 0x700000000000ULL;
-const uptr kAllocatorSpaceSize = 0x40000000000; // 4T.
-#else
-#error "Unsupported architecture"
-#endif
-
 const uptr kMaxAllowedMallocSize = 1ULL << 40;
 
 struct AP64 { // Allocator64 parameters. Deliberately using a short name.

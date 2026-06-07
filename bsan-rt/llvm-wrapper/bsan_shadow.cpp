@@ -8,6 +8,7 @@
 
 // TODO: CheckMemoryLayoutSanity is based on msan.
 // Consider refactoring these into a shared implementation.
+[[maybe_unused]]
 static void CheckMemoryLayoutSanity() {
   uptr prev_end = 0;
   for (unsigned i = 0; i < kMemoryLayoutSize; ++i) {
