@@ -24,7 +24,8 @@ THREADLOCAL void *__bsan_marker = nullptr;
 
 // represents the number of provenance values that correspond to the variadic
 // arguments being passed to the current function
-SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __bsan_var_arg_ctr = 0;
+SANITIZER_INTERFACE_ATTRIBUTE
+THREADLOCAL uptr __bsan_var_arg_ctr = 0;
 
 // Pointer to the start of the current frame within the shadow
 // stack, which stores the provenance of pointers that are on
@@ -399,6 +400,16 @@ void __bsan_dealloc_stack(void *ptr, BorTag bor_tag, AllocInfo *alloc_info) {
     InterceptorBarrier Barrier;
     __bsan_dealloc_stack_impl(bor_tag, alloc_info, span);
     HANDLE_ERROR;
+  }
+}
+
+SANITIZER_WEAK_ATTRIBUTE
+void __bsan_expose_prov_impl(BorTag bor_tag, AllocInfo *alloc_info);
+
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_expose_prov(BorTag bor_tag, AllocInfo *alloc_info) {
+  if (__bsan_expose_prov_impl) {
+    __bsan_expose_prov_impl(bor_tag, alloc_info);
   }
 }
 

@@ -123,20 +123,19 @@ pub fn install_git_hooks(root_dir: &PathBuf) -> Result<()> {
         let hooks_dir = path!(root_dir / "bsan-script" / "etc");
         let hook_name = hook.value();
 
-        println!("Installing {:?} hook...", &hook_name);
+        println!("Installing {hook_name:?} hook...");
 
         let hook_path = path!(hooks_dir / format!("{hook_name}.sh"));
 
         if !hook_path.exists() {
-            show_error!("{} script {:?} not found", &hook_name, &hook_path);
+            show_error!("{hook_name} script {hook_path:?} not found");
         }
 
         if let Ok(metadata) = std::fs::symlink_metadata(path!(&git_hooks_dir / &hook_name))
             && metadata.is_symlink()
         {
             println!(
-                "{:?} hook is already symlinked (added). If you wish to reinstall, remove symlink from {:?}",
-                &hook_name, &git_hooks_dir
+                "{hook_name:?} hook is already symlinked (added). If you wish to reinstall, remove symlink from {git_hooks_dir:?}"
             );
             return;
         }
@@ -147,15 +146,15 @@ pub fn install_git_hooks(root_dir: &PathBuf) -> Result<()> {
             path!(hooks_dir / hook_script),
             path!(&git_hooks_dir / &hook_name),
         ) {
-            Err(e) => show_error!("Failed to symlink {} script\nFS ERROR: {e}", &hook_name),
+            Err(e) => show_error!("Failed to symlink {hook_name} script: {e:?}"),
             _ => {
                 // Check for successful symlink
                 match std::fs::symlink_metadata(path!(&git_hooks_dir / &hook_name)) {
                     Ok(metadata) => {
                         if !metadata.is_symlink() {
-                            show_error!("Failed to add {:?} hook. Failed symlink", &hook_name);
+                            show_error!("Failed to add {hook_name} hook. Failed symlink");
                         }
-                        println!("Successfully added {:?} hook", &hook_name);
+                        println!("Successfully added {hook_name} hook");
                     }
                     Err(e) => show_error!("{:?}", e),
                 }
@@ -169,7 +168,7 @@ pub fn install_git_hooks(root_dir: &PathBuf) -> Result<()> {
 
     for hook in GitHook::iter() {
         let hook_name = hook.value();
-        if prompt_user(&format!("Would you like to install {} hook?", &hook_name))?.unwrap()
+        if prompt_user(&format!("Would you like to install {hook_name} hook?"))?.unwrap()
             == PromptResult::No
         {
             continue;
