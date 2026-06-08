@@ -11,6 +11,7 @@
 //!   and the relative position of the access;
 //! - idempotency properties asserted in `perms.rs` (for optimizations)
 
+use alloc::boxed::Box;
 use core::ops::Range;
 use core::{cmp, fmt, mem};
 
@@ -1204,7 +1205,7 @@ impl Node {
 #[derive(Clone, Debug)]
 pub enum LazyTree {
     Uninit { root_tag: BorTag, size: Size, span: Span },
-    Init(EagerTree),
+    Init(Box<EagerTree>),
 }
 
 impl LazyTree {
@@ -1215,7 +1216,7 @@ impl LazyTree {
     /// Forces the tree into the `Init` state, constructing the underlying `Tree` if needed.
     fn ensure_init(&mut self) {
         if let LazyTree::Uninit { root_tag, size, span } = self {
-            *self = LazyTree::Init(EagerTree::new(*root_tag, *size, *span));
+            *self = LazyTree::Init(Box::new(EagerTree::new(*root_tag, *size, *span)));
         }
     }
 
