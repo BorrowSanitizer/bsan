@@ -7,7 +7,7 @@ LL | *x = 1; //miri: ~ERROR: write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
    --> bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:LL:CC
    |
-LL | .await
+LL | core::future::poll_fn(move |_| {
    |
 help: the accessed tag <TAG>(unprotected) later transitioned to Unique due to a child write access at offsets [0x8..0x9]
    --> bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:LL:CC
