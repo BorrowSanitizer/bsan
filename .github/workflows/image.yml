@@ -145,16 +145,12 @@ jobs:
             registry: ghcr.io
             username: ${{ github.actor }}
             password: ${{ secrets.GITHUB_TOKEN }}
-        - name: Fetch multi-platform package version SHAs
-          id: multi-arch-digests
-          run: |
-            package=$(docker manifest inspect ghcr.io/borrowsanitizer/bsan | jq -r '.manifests.[] | .digest' | paste -s -d ' ' -)
-            echo "multi-arch-digests=$package" >> $GITHUB_OUTPUT
-        - uses: snok/container-retention-policy@v3.0.1
+        - uses: snok/container-retention-policy@v3.1.0
+          env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           with:
             account: borrowsanitizer
             token: ${{ secrets.GITHUB_TOKEN }}
             image-names: bsan
             cut-off: 1months
-            skip-shas: ${{ steps.multi-arch-digests.outputs.multi-arch-digests }}
             tag-selection: both
