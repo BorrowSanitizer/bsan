@@ -18,7 +18,9 @@ name = "bsan_rt"
 crate-type = ["staticlib"]
 
 [features]
-default = ["pic"]
+default = ["pic", "lazy"]
 pic = []
 debug = []
 expensive-consistency-checks = []
+lazy = []
+eager = []

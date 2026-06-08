@@ -10,7 +10,7 @@ use crate::tree_borrows::data_structures::DedupRangeMap;
 use crate::tree_borrows::diagnostics::AccessCause;
 use crate::tree_borrows::perms::{AccessKind, Permission};
 use crate::tree_borrows::tree::LocationState;
-use crate::tree_borrows::{IdempotentForeignAccess, LazyTree, NewPermission};
+use crate::tree_borrows::{AllocState, AllocStateImpl, IdempotentForeignAccess, NewPermission};
 use crate::{AllocId, BorTag, GlobalCtx, Provenance, RetagFlags, RetagInfo};
 
 #[derive(Debug)]
@@ -18,15 +18,15 @@ pub struct BorrowTracker<'b> {
     alloc_id: AllocId,
     prov: Provenance,
     range: AllocRange,
-    tree: MutexGuard<'b, LazyTree>,
+    tree: MutexGuard<'b, AllocStateImpl>,
 }
 
 impl<'b> BorrowTracker<'b> {
-    fn tree_mut(&mut self) -> &mut LazyTree {
+    fn tree_mut(&mut self) -> &mut AllocStateImpl {
         &mut self.tree
     }
 
-    fn tree(&self) -> &LazyTree {
+    fn tree(&self) -> &AllocStateImpl {
         &self.tree
     }
 
@@ -291,7 +291,7 @@ impl<'b> BorrowTracker<'b> {
     }
 
     pub fn debug_print_diff(&self, ctx: &GlobalCtx) {
-        ctx.with_snapshot(self.alloc_id, |old_tree: &LazyTree| {
+        ctx.with_snapshot(self.alloc_id, |old_tree: &AllocStateImpl| {
             self.tree().print_tree_diff(old_tree, &ctx.protected_tags());
         });
     }

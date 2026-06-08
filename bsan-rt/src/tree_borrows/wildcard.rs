@@ -4,7 +4,7 @@ use core::fmt::Debug;
 use super::data_structures::{UniIndex, UniValMap};
 use super::perms::AccessKind;
 use super::tree::{AccessRelatedness, Node};
-use super::Tree;
+use super::EagerTree;
 #[cfg(feature = "expensive-consistency-checks")]
 use crate::borrow_tracker::GlobalState;
 use crate::BorTag;
@@ -190,11 +190,11 @@ impl ExposedCache {
     }
 }
 
-impl Tree {
+impl EagerTree {
     /// Marks the tag as exposed & updates the wildcard tracking data structure
     /// to represent its access level.
     /// Also takes as an argument whether the tag is protected or not.
-    pub fn expose_tag(&mut self, tag: BorTag, protected: bool) {
+    pub(super) fn expose_tag(&mut self, tag: BorTag, protected: bool) {
         let id = self.tag_mapping.get(&tag).unwrap();
         let node = self.nodes.get_mut(id).unwrap();
         if !node.is_exposed {
@@ -223,8 +223,6 @@ impl Tree {
     }
 
     #[allow(unused)]
-    /// This updates the wildcard tracking data structure to reflect the release of
-    /// the protector on `tag`.
     pub(super) fn update_exposure_for_protector_release(&mut self, tag: BorTag) {
         let idx = self.tag_mapping.get(&tag).unwrap();
 
@@ -248,7 +246,7 @@ impl Tree {
 }
 
 #[cfg(feature = "expensive-consistency-checks")]
-impl Tree {
+impl EagerTree {
     /// Checks that the wildcard tracking data structure is internally consistent and
     /// has the correct `exposed_as` values.
     pub fn verify_wildcard_consistency(&self, global: &GlobalState) {

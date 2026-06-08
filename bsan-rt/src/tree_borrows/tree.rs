@@ -31,6 +31,17 @@ use crate::sanitizer_common::Span;
 use crate::tree_borrows::{GlobalState, ProtectorKind};
 use crate::*;
 
+// Features in ./bsan-rt/Cargo.toml
+
+#[cfg(all(feature = "lazy", feature = "eager"))] // Ensure one selection
+compile_error!("Only one of the following features can be selected: 'lazy', 'eager'");
+
+#[cfg(feature = "lazy")]
+pub type AllocStateImpl = LazyTree;
+
+#[cfg(feature = "eager")]
+pub type AllocStateImpl = EagerTree;
+
 mod tests;
 
 /// Data for a reference at single *location*.
@@ -268,7 +279,7 @@ pub struct LocationTree {
 /// Tree structure with both parents and children since we want to be
 /// able to traverse the tree efficiently in both directions.
 #[derive(Clone, Debug)]
-pub struct Tree {
+pub struct EagerTree {
     /// Mapping from tags to keys. The key obtained can then be used in
     /// any of the `UniValMap` relative to this allocation, i.e.
     /// `nodes`, `LocationTree::perms` and `LocationTree::exposed_cache`
@@ -326,7 +337,7 @@ pub struct Node {
     pub debug_info: NodeDebugInfo,
 }
 
-impl Tree {
+impl EagerTree {
     /// Create a new tree, with only a root pointer.
     pub fn new(root_tag: BorTag, size: Size, span: Span) -> Self {
         // The root has `Disabled` as the default permission,
@@ -374,14 +385,14 @@ impl Tree {
     }
 }
 
-impl Tree {
+impl EagerTree {
     /// Insert a new tag in the tree.
     ///
     /// `inside_perm` defines the initial permissions for a block of memory starting at
     /// `base_offset`. These may nor may not be already marked as "accessed".
     /// `outside_perm` defines the initial permission for the rest of the allocation.
     /// These are definitely not "accessed".
-    pub(crate) fn new_child(
+    fn new_child(
         &mut self,
         base_offset: Size,
         parent_tag: BorTag,
@@ -511,7 +522,7 @@ impl Tree {
     /// Deallocation requires
     /// - a pointer that permits write accesses
     /// - the absence of Strong Protectors anywhere in the allocation
-    pub fn dealloc(
+    fn dealloc(
         &mut self,
         tag: BorTag,
         access_range: AllocRange,
@@ -608,7 +619,7 @@ impl Tree {
     /// - inserting into the map locations that do not exist yet,
     /// - trimming the traversal,
     /// - recording the history.
-    pub fn perform_access(
+    fn perform_access(
         &mut self,
         tag: BorTag,
         access_range: AllocRange,
@@ -654,8 +665,8 @@ impl Tree {
     /// - it will be recorded as a `FnExit` diagnostic access
     /// - and it will be a read except if the location is `Unique`, i.e. has been written to,
     ///   in which case it will be a write.
-    /// - otherwise identical to `Tree::perform_access`
-    pub fn perform_protector_end_access(
+    /// - otherwise identical to `EagerTree::perform_access`
+    fn perform_protector_end_access(
         &mut self,
         tag: BorTag,
         global: &GlobalState,
@@ -716,8 +727,8 @@ impl Tree {
 
 #[allow(unused)]
 /// Integration with Miri's garbage collector
-impl Tree {
-    pub fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
+impl EagerTree {
+    fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
         for i in 0..(self.roots.len()) {
             self.remove_useless_children(self.roots[i], live_tags);
         }
@@ -1193,7 +1204,7 @@ impl Node {
 #[derive(Clone, Debug)]
 pub enum LazyTree {
     Uninit { root_tag: BorTag, size: Size, span: Span },
-    Init(Tree),
+    Init(EagerTree),
 }
 
 impl LazyTree {
@@ -1204,13 +1215,13 @@ impl LazyTree {
     /// Forces the tree into the `Init` state, constructing the underlying `Tree` if needed.
     fn ensure_init(&mut self) {
         if let LazyTree::Uninit { root_tag, size, span } = self {
-            *self = LazyTree::Init(Tree::new(*root_tag, *size, *span));
+            *self = LazyTree::Init(EagerTree::new(*root_tag, *size, *span));
         }
     }
 
     /// Returns true if `tag` is present in this tree.
     /// In the `Uninit` state only the root tag exists.
-    pub fn contains_tag(&self, tag: BorTag) -> bool {
+    fn contains_tag(&self, tag: BorTag) -> bool {
         match self {
             LazyTree::Uninit { root_tag, .. } => *root_tag == tag,
             LazyTree::Init(tree) => tree.tag_mapping.contains_key(&tag),
@@ -1218,15 +1229,15 @@ impl LazyTree {
     }
 
     /// Returns the number of nodes in the tree (1 when `Uninit`).
-    pub fn node_count(&self) -> usize {
+    fn node_count(&self) -> usize {
         match self {
             LazyTree::Uninit { .. } => 1,
             LazyTree::Init(tree) => tree.tag_mapping.len(),
         }
     }
 
-    /// Adds a child tag. Forces initialization of the underlying `Tree` first.
-    pub(crate) fn new_child(
+    /// Adds a child tag. Forces initialization of the underlying `EagerTree` first.
+    fn new_child(
         &mut self,
         base_offset: Size,
         parent_tag: BorTag,
@@ -1251,7 +1262,7 @@ impl LazyTree {
 
     /// Performs an access. In the `Uninit` state (single root node with `Unique` permission,
     /// no protectors), any access by the root tag is trivially valid (so we short-circuit with `Ok(())`).
-    pub fn perform_access(
+    fn perform_access(
         &mut self,
         tag: BorTag,
         access_range: AllocRange,
@@ -1277,7 +1288,7 @@ impl LazyTree {
 
     /// Performs a deallocation. In the `Uninit` state the root always has write permission and
     /// no protectors exist, so this is a no-op.
-    pub fn dealloc(
+    fn dealloc(
         &mut self,
         tag: BorTag,
         access_range: AllocRange,
@@ -1293,7 +1304,7 @@ impl LazyTree {
 
     /// Performs the implicit access on protector release. In the `Uninit` state no protectors
     /// can exist (they are only registered when children are added), so this is a no-op.
-    pub fn perform_protector_end_access(
+    fn perform_protector_end_access(
         &mut self,
         tag: BorTag,
         global: &GlobalState,
@@ -1308,7 +1319,7 @@ impl LazyTree {
 
     /// Marks `tag` as exposed. No-op for `Uninit` trees since the root is always `Unique`
     /// and its permission can never be invalidated without a second node existing.
-    pub fn expose_tag(&mut self, tag: BorTag, protected: bool) {
+    fn expose_tag(&mut self, tag: BorTag, protected: bool) {
         self.ensure_init();
         if let LazyTree::Init(tree) = self {
             tree.expose_tag(tag, protected);
@@ -1317,7 +1328,7 @@ impl LazyTree {
 
     #[allow(unused)]
     /// GC pass: no-op on `Uninit` trees since there are no unreachable children.
-    pub fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
+    fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
         if let LazyTree::Init(tree) = self {
             tree.remove_unreachable_tags(live_tags);
         }
@@ -1342,3 +1353,167 @@ impl AccessRelatedness {
         matches!(self, AccessRelatedness::ForeignAccess)
     }
 }
+
+/// The public interface shared by all tree implementations.
+/// Consumers outside this module interact with the tree exclusively
+/// through this trait; the underlying implementations are
+/// module-private.
+pub trait AllocState: Clone {
+    fn contains_tag(&self, tag: BorTag) -> bool;
+    fn node_count(&self) -> usize;
+    fn new_child(
+        &mut self,
+        base_offset: Size,
+        parent_tag: BorTag,
+        new_tag: BorTag,
+        inside_perms: DedupRangeMap<LocationState>,
+        outside_perm: Permission,
+        protected: bool,
+        span: Span,
+    ) -> UBResult<()>;
+    fn perform_access(
+        &mut self,
+        tag: BorTag,
+        access_range: AllocRange,
+        access_kind: AccessKind,
+        access_cause: AccessCause,
+        global: &GlobalState,
+        alloc_id: AllocId,
+        span: Span,
+    ) -> UBResult<()>;
+    fn dealloc(
+        &mut self,
+        tag: BorTag,
+        access_range: AllocRange,
+        global: &GlobalState,
+        alloc_id: AllocId,
+        span: Span,
+    ) -> UBResult<()>;
+    fn perform_protector_end_access(
+        &mut self,
+        tag: BorTag,
+        global: &GlobalState,
+        alloc_id: AllocId,
+        span: Span,
+    ) -> UBResult<()>;
+    fn expose_tag(&mut self, tag: BorTag, protected: bool);
+    #[allow(dead_code)]
+    fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>);
+}
+
+impl AllocState for LazyTree {
+    fn contains_tag(&self, tag: BorTag) -> bool {
+        self.contains_tag(tag)
+    }
+    fn node_count(&self) -> usize {
+        self.node_count()
+    }
+    fn new_child(
+        &mut self,
+        base_offset: Size,
+        parent_tag: BorTag,
+        new_tag: BorTag,
+        inside_perms: DedupRangeMap<LocationState>,
+        outside_perm: Permission,
+        protected: bool,
+        span: Span,
+    ) -> UBResult<()> {
+        self.new_child(base_offset, parent_tag, new_tag, inside_perms, outside_perm, protected, span)
+    }
+    fn perform_access(
+        &mut self,
+        tag: BorTag,
+        access_range: AllocRange,
+        access_kind: AccessKind,
+        access_cause: AccessCause,
+        global: &GlobalState,
+        alloc_id: AllocId,
+        span: Span,
+    ) -> UBResult<()> {
+        self.perform_access(tag, access_range, access_kind, access_cause, global, alloc_id, span)
+    }
+    fn dealloc(
+        &mut self,
+        tag: BorTag,
+        access_range: AllocRange,
+        global: &GlobalState,
+        alloc_id: AllocId,
+        span: Span,
+    ) -> UBResult<()> {
+        self.dealloc(tag, access_range, global, alloc_id, span)
+    }
+    fn perform_protector_end_access(
+        &mut self,
+        tag: BorTag,
+        global: &GlobalState,
+        alloc_id: AllocId,
+        span: Span,
+    ) -> UBResult<()> {
+        self.perform_protector_end_access(tag, global, alloc_id, span)
+    }
+    fn expose_tag(&mut self, tag: BorTag, protected: bool) {
+        self.expose_tag(tag, protected)
+    }
+    fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
+        self.remove_unreachable_tags(live_tags)
+    }
+}
+
+impl AllocState for EagerTree {
+    fn contains_tag(&self, tag: BorTag) -> bool {
+        self.tag_mapping.contains_key(&tag)
+    }
+    fn node_count(&self) -> usize {
+        self.tag_mapping.len()
+    }
+    fn new_child(
+        &mut self,
+        base_offset: Size,
+        parent_tag: BorTag,
+        new_tag: BorTag,
+        inside_perms: DedupRangeMap<LocationState>,
+        outside_perm: Permission,
+        protected: bool,
+        span: Span,
+    ) -> UBResult<()> {
+        self.new_child(base_offset, parent_tag, new_tag, inside_perms, outside_perm, protected, span)
+    }
+    fn perform_access(
+        &mut self,
+        tag: BorTag,
+        access_range: AllocRange,
+        access_kind: AccessKind,
+        access_cause: AccessCause,
+        global: &GlobalState,
+        alloc_id: AllocId,
+        span: Span,
+    ) -> UBResult<()> {
+        self.perform_access(tag, access_range, access_kind, access_cause, global, alloc_id, span)
+    }
+    fn dealloc(
+        &mut self,
+        tag: BorTag,
+        access_range: AllocRange,
+        global: &GlobalState,
+        alloc_id: AllocId,
+        span: Span,
+    ) -> UBResult<()> {
+        self.dealloc(tag, access_range, global, alloc_id, span)
+    }
+    fn perform_protector_end_access(
+        &mut self,
+        tag: BorTag,
+        global: &GlobalState,
+        alloc_id: AllocId,
+        span: Span,
+    ) -> UBResult<()> {
+        self.perform_protector_end_access(tag, global, alloc_id, span)
+    }
+    fn expose_tag(&mut self, tag: BorTag, protected: bool) {
+        self.expose_tag(tag, protected)
+    }
+    fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
+        self.remove_unreachable_tags(live_tags)
+    }
+}
+
