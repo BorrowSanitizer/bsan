@@ -1418,7 +1418,15 @@ impl AllocState for LazyTree {
         protected: bool,
         span: Span,
     ) -> UBResult<()> {
-        self.new_child(base_offset, parent_tag, new_tag, inside_perms, outside_perm, protected, span)
+        self.new_child(
+            base_offset,
+            parent_tag,
+            new_tag,
+            inside_perms,
+            outside_perm,
+            protected,
+            span,
+        )
     }
     fn perform_access(
         &mut self,
@@ -1476,7 +1484,15 @@ impl AllocState for EagerTree {
         protected: bool,
         span: Span,
     ) -> UBResult<()> {
-        self.new_child(base_offset, parent_tag, new_tag, inside_perms, outside_perm, protected, span)
+        self.new_child(
+            base_offset,
+            parent_tag,
+            new_tag,
+            inside_perms,
+            outside_perm,
+            protected,
+            span,
+        )
     }
     fn perform_access(
         &mut self,
@@ -1516,4 +1532,3 @@ impl AllocState for EagerTree {
         self.remove_unreachable_tags(live_tags)
     }
 }
-
