@@ -35,3 +35,7 @@ CheckOptions:
     value:           1
   - key:             modernize-use-default-member-init.UseAssignment
     value:           1
+  - key:             readability-identifier-naming.GlobalConstantCase
+    value:           CamelCase
+  - key:             readability-identifier-naming.GlobalConstantPrefix
+    value:           k
