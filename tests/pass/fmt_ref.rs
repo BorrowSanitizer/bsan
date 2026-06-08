@@ -1,4 +1,4 @@
-//@run
+//@run:0
 /// Calling the `Display` implementation for a reference causes a pointer to
 /// an instrumented function to be passed into part of `alloc`, which may or may not
 /// be instrumented depending on whether our custom sysroot is being used. This

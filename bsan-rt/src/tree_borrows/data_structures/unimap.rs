@@ -17,6 +17,12 @@ use core::fmt::{self, Debug};
 use core::hash::Hash;
 use core::mem;
 
+#[cfg(feature = "smallvec-valmap")]
+use smallvec::SmallVec;
+
+#[cfg(feature = "smallvec-valmap")]
+const INLINE_CAP: usize = 16;
+
 use crate::helpers::{FxHashMap, ToUsize};
 
 /// Intermediate key between a UniKeyMap and a UniValMap.
@@ -44,6 +50,14 @@ pub struct UniKeyMap<K> {
 }
 
 /// From UniIndex to V
+#[cfg(feature = "smallvec-valmap")]
+#[derive(Debug, Clone, Eq)]
+pub struct UniValMap<V> {
+    data: SmallVec<[Option<V>; INLINE_CAP]>,
+}
+
+/// From UniIndex to V
+#[cfg(not(feature = "smallvec-valmap"))]
 #[derive(Debug, Clone, Eq)]
 pub struct UniValMap<V> {
     /// The mapping data. Thanks to Vec we get both fast accesses, and
@@ -82,7 +96,14 @@ impl<V: PartialEq> PartialEq for UniValMap<V> {
 
 impl<V> Default for UniValMap<V> {
     fn default() -> Self {
-        Self { data: Vec::default() }
+        #[cfg(feature = "smallvec-valmap")]
+        {
+            Self { data: SmallVec::new() }
+        }
+        #[cfg(not(feature = "smallvec-valmap"))]
+        {
+            Self { data: Vec::default() }
+        }
     }
 }
 
@@ -354,5 +375,14 @@ mod tests {
                 map.get(&key);
             }
         }
+    }
+
+    #[test]
+    fn test_sizes() {
+        use crate::tree_borrows::tree::{LocationState, Node};
+        assert_eq!(core::mem::size_of::<Node>(), 136);
+        assert_eq!(core::mem::size_of::<LocationState>(), 3);
+        assert_eq!(core::mem::size_of::<UniValMap<Node>>(), 2192);
+        assert_eq!(core::mem::size_of::<UniValMap<LocationState>>(), 64);
     }
 }

@@ -21,7 +21,7 @@ struct Provenance {
   AllocInfo *Info;
 };
 
-const Provenance WILDCARD = {0, nullptr};
+const Provenance OMNIVALID = {0, nullptr};
 
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance
     *__bsan_shadow_stack;
@@ -40,7 +40,17 @@ extern THREADLOCAL void *bsan_thread;
 extern bool bsan_inited;
 extern bool bsan_init_running;
 extern bool bsan_deinit_running;
+extern bool bsan_deinited;
 extern atomic_uintptr_t thread_id;
+
+extern THREADLOCAL int block_interception;
+
+struct InterceptorBarrier {
+  InterceptorBarrier() { ++block_interception; }
+  ~InterceptorBarrier() { --block_interception; }
+};
+
+bool BlockInterception();
 
 BorTag NewBorTag();
 
@@ -61,11 +71,20 @@ bool CallerIsInstrumented(void *sym);
 
 #define GET_SPAN_PC_BP                                                         \
   GET_SPAN;                                                                    \
-  uptr pc = StackTrace::GetCurrentPc();                                        \
-  uptr bp = GET_CURRENT_FRAME();
+  GET_CURRENT_PC_BP;
 
-#define HANDLE_ERROR(pc, bp)                                                   \
-  if (__bsan_had_error) {                                                      \
+#define HANDLE_ERROR                                                           \
+  if (UNLIKELY(__bsan_had_error)) {                                            \
+    uptr pc = StackTrace::GetCurrentPc();                                      \
+    uptr bp = GET_CURRENT_FRAME();                                             \
+    UNINITIALIZED BufferedStackTrace stack;                                    \
+    stack.Unwind(pc, bp, nullptr, true, __bsan::GetStackTraceLen());           \
+    PrintStackTrace(stack);                                                    \
+    Die();                                                                     \
+  }
+
+#define HANDLE_ERROR_PC_BP(pc, bp)                                             \
+  if (UNLIKELY(__bsan_had_error)) {                                            \
     UNINITIALIZED BufferedStackTrace stack;                                    \
     stack.Unwind(pc, bp, nullptr, true, __bsan::GetStackTraceLen());           \
     PrintStackTrace(stack);                                                    \

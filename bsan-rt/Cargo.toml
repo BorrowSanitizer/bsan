@@ -18,9 +18,10 @@ name = "bsan_rt"
 crate-type = ["staticlib"]
 
 [features]
-default = ["pic", "lazy"]
+default = ["pic", "lazy", "smallvec-valmap"]
 pic = []
 debug = []
 expensive-consistency-checks = []
 lazy = []
 eager = []
+smallvec-valmap = []

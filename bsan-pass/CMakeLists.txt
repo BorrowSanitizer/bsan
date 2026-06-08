@@ -12,15 +12,12 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${LLVM_CXXFLAGS}")
 set(BSAN_SOURCES
   BorrowSanitizer.cpp
   BorrowSanitizerPass.cpp
-  Provenance.cpp
-  TaintAnalysis.cpp
+  Retag.cpp
 )
 
 set(BSAN_HEADERS
-  BorrowSanitizer.h
   BorrowSanitizerPass.h
-  Provenance.h
-  TaintAnalysis.h
+  Retag.h
 )
 
 set(CMAKE_CXX_CLANG_TIDY clang-tidy;-warnings-as-errors=*)
