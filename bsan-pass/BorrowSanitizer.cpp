@@ -459,9 +459,9 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   AL = AL.addFnAttribute(*C, Attribute::NoUnwind);
 
-  BsanFuncRetag = M.getOrInsertFunction(BSAN("retag"), AL, IntptrTy, PtrTy,
-                                        IntptrTy, Int8Ty, PtrTy, IntptrTy,
-                                        PtrTy, IntptrTy, IntptrTy, PtrTy);
+  BsanFuncRetag = M.getOrInsertFunction(
+      BSAN("retag"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, Int8Ty, PtrTy,
+      IntptrTy, PtrTy, IntptrTy, IntptrTy, PtrTy);
 
   BsanFuncPopFrame = M.getOrInsertFunction(
       BSAN("pop_frame"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, IntptrTy);

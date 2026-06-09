@@ -51,7 +51,7 @@ impl BorrowTracker {
         // Our instrumentation pass guarantees that if a pointer's
         // provenance is non-null and not omnivalid, then it will contain
         // valid allocation info pointer.
-        debug_assert!(prov.alloc_info.is_null());
+        debug_assert!(!prov.alloc_info.is_null());
         let alloc_info: AllocInfoPtr = unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
         if alloc_info.tree.lock().is_none() {
             return Err(UBInfo::UseAfterFree);
