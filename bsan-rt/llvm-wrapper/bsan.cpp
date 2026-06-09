@@ -481,6 +481,14 @@ void __bsan_debug_print_diff(void *ptr) {
   __bsan_print_diff(Slot->Tag, Slot->Info);
 }
 
-void __bsan_abort() { Die(); }
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_abort() {
+  // Printf("BorrowSanitizer: aborting due to a fatal error.\n");
+  Die();
+}
+
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_clear_nodes(void *ptr) {
+  __bsan_clear_nodes_impl(ptr);
+}
+SANITIZER_WEAK_ATTRIBUTE void __bsan_clear_nodes_impl(void *ptr) {}
 
 } // extern "C"

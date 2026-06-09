@@ -48,7 +48,7 @@ fn bsan_config(
     // The BorrowSanitizer driver is rustc-like, so we create a default builder for rustc and modify it
     let mut program = CommandBuilder::rustc();
     let flags = expect_env("BSAN_RUSTFLAGS");
-    let flags = flags.trim().split(" ").map(|s| OsString::from(s)).collect::<Vec<_>>();
+    let flags = flagsplit(&flags).into_iter().map(OsString::from).collect::<Vec<_>>();
     program.args.extend_from_slice(&flags);
 
     let mut config = Config {
@@ -393,8 +393,17 @@ fn main() -> Result<()> {
     ui(Mode::Pass, "tests/pass", &target, WithoutDependencies, tmpdir.path(), false)?;
     ui(Mode::Pass, "tests/pass-dep", &target, WithDependencies, tmpdir.path(), false)?;
     ui(Mode::Pass, "tests/miri-tests/pass", &target, WithoutDependencies, tmpdir.path(), false)?;
-    ui(Mode::Fail, "tests/fail", &target, WithoutDependencies, tmpdir.path(), false)?;
-    ui(Mode::Fail, "tests/fail-dep", &target, WithDependencies, tmpdir.path(), false)?;
-    ui(Mode::Fail, "tests/miri-tests/fail", &target, WithoutDependencies, tmpdir.path(), false)?;
+    if std::env::var("BSAN_ONLY_PASS").is_err() {
+        ui(Mode::Fail, "tests/fail", &target, WithoutDependencies, tmpdir.path(), false)?;
+        ui(Mode::Fail, "tests/fail-dep", &target, WithDependencies, tmpdir.path(), false)?;
+        ui(
+            Mode::Fail,
+            "tests/miri-tests/fail",
+            &target,
+            WithoutDependencies,
+            tmpdir.path(),
+            false,
+        )?;
+    }
     Ok(())
 }

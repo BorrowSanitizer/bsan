@@ -34,6 +34,11 @@ extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __bsan_var_arg_ctr;
 
 extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uintptr_t __bsan_bor_tag_ctr;
 
+extern "C" {
+SANITIZER_INTERFACE_ATTRIBUTE void __bsan_clear_nodes(void *ptr);
+SANITIZER_WEAK_ATTRIBUTE void __bsan_clear_nodes_impl(void *ptr);
+}
+
 namespace __bsan {
 
 extern THREADLOCAL void *bsan_thread;

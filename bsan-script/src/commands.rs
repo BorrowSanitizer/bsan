@@ -472,13 +472,54 @@ impl Buildable for BsanRt {
     }
 
     fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
+        let llvm_ar = env.target_binary("llvm-ar");
         let llvm_objcopy = env.target_binary("llvm-objcopy");
+
         let rust_runtime = env.with_flags("RUSTFLAGS", RT_FLAGS, |env| {
             env.build("bsan-rt", args)?;
             Ok(env.assert_artifact(&self.artifact(env)))
         })?;
 
-        cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_*").arg(&rust_runtime).quiet().run()?;
+        let tmp_dir = env.sh.create_temp_dir()?;
+        env.cd(tmp_dir.path(), |env| {
+            cmd!(env.sh, "{llvm_ar} -x {rust_runtime}").quiet().run()?;
+
+            // Extract mimalloc objects as well if they exist
+            let build_dir = path!(env.artifact_dir() / "build");
+            if let Ok(mut entries) = fs::read_dir(build_dir) {
+                for entry in entries.flatten() {
+                    if entry.file_name().to_string_lossy().starts_with("libmimalloc-sys-") {
+                        let out_dir = entry.path().join("out");
+                        let lib_a = out_dir.join("libmimalloc.a");
+                        if lib_a.exists() {
+                            cmd!(env.sh, "{llvm_ar} -x {lib_a}").quiet().run()?;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            let file_names: Vec<String> = fs::read_dir(tmp_dir.path())
+                .unwrap()
+                .filter_map(|entry| {
+                    let path = entry.ok().unwrap().path();
+                    if path.is_file() {
+                        path.to_str().map(|s| s.to_owned())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Finally, repack the objects back into the static archive
+            cmd!(env.sh, "{llvm_ar} -r {rust_runtime}").args(file_names).quiet().run()?;
+            Ok(())
+        })?;
+
+        cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_* -G __BSAN_*")
+            .arg(&rust_runtime)
+            .quiet()
+            .run()?;
 
         Ok(Some(rust_runtime))
     }

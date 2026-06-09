@@ -181,6 +181,10 @@ where
             self.deassigned.push(idx);
         }
     }
+
+    pub(crate) fn keys(&self) -> impl Iterator<Item = &K> {
+        self.mapping.keys()
+    }
 }
 
 impl<V> UniValMap<V> {
