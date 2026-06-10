@@ -431,7 +431,6 @@ impl EagerTree {
             }
         }
     }
-
 }
 
 #[allow(unused)]
@@ -916,7 +915,6 @@ impl LazyTree {
             *self = LazyTree::Init(Box::new(EagerTree::new(*root_tag, *size, *span)));
         }
     }
-
 }
 
 /// Relative position of the access
@@ -1010,7 +1008,15 @@ impl AllocState for LazyTree {
     ) -> UBResult<()> {
         self.ensure_init();
         let LazyTree::Init(tree) = self else { unreachable!() };
-        tree.new_child(base_offset, parent_tag, new_tag, inside_perms, outside_perm, protected, span)
+        tree.new_child(
+            base_offset,
+            parent_tag,
+            new_tag,
+            inside_perms,
+            outside_perm,
+            protected,
+            span,
+        )
     }
     fn perform_access(
         &mut self,
@@ -1024,9 +1030,15 @@ impl AllocState for LazyTree {
     ) -> UBResult<()> {
         match self {
             LazyTree::Uninit { .. } => Ok(()),
-            LazyTree::Init(tree) => {
-                tree.perform_access(tag, access_range, access_kind, access_cause, global, alloc_id, span)
-            }
+            LazyTree::Init(tree) => tree.perform_access(
+                tag,
+                access_range,
+                access_kind,
+                access_cause,
+                global,
+                alloc_id,
+                span,
+            ),
         }
     }
     fn dealloc(
