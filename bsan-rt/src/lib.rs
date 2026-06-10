@@ -8,10 +8,8 @@
 
 #[macro_use]
 extern crate alloc;
-use core::cell::Cell;
 use core::ffi::c_void;
 use core::fmt::Debug;
-use core::ops::Deref;
 #[cfg(not(test))]
 use core::panic::PanicInfo;
 use core::ptr::NonNull;
@@ -32,8 +30,6 @@ mod local;
 
 mod errors;
 mod memory;
-
-use helpers::AllocRange;
 
 use crate::helpers::Size;
 use crate::local::{deinit_local_ctx, init_local_ctx};
@@ -93,11 +89,10 @@ macro_rules! debug_bsan {
     };
 }
 
-/// A unique identifier for an allocation
-///
-/// Every instrumented allocation receives a globally unique
-/// ID. This is exclusively for debugging. The ID '0' is reserved
-/// to indicate an invalid (freed) allocation.
+#[unsafe(no_mangle)]
+pub static __BSAN_ALLOC_ID_CTR: AtomicUsize = AtomicUsize::new(3);
+
+/// Unique identifier for an allocation
 #[repr(transparent)]
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AllocId(usize);
@@ -106,16 +101,28 @@ impl AllocId {
     pub fn get(&self) -> usize {
         self.0
     }
+    /// Represents any valid allocation
+    pub const fn wildcard() -> Self {
+        AllocId(0)
+    }
 
-    fn invalid() -> Self {
-        Self(0)
+    /// An invalid allocation
+    pub const fn invalid() -> Self {
+        AllocId(1)
+    }
+
+    /// A global or stack allocation, which cannot be manually freed
+    pub const fn sticky() -> Self {
+        AllocId(2)
+    }
+
+    pub const fn min() -> Self {
+        AllocId(3)
     }
 }
 
 impl Default for AllocId {
     fn default() -> Self {
-        #[unsafe(no_mangle)]
-        static __BSAN_ALLOC_ID_CTR: AtomicUsize = AtomicUsize::new(1);
         AllocId(__BSAN_ALLOC_ID_CTR.fetch_add(1, Ordering::Relaxed))
     }
 }
@@ -136,10 +143,10 @@ impl fmt::Display for AllocId {
     }
 }
 
-/// A unique identifier for a thread.
-///
-/// Each thread receives a globally unique ID. The ID 0 will
-/// always correspond to the main thread.
+#[unsafe(no_mangle)]
+pub static __BSAN_THREAD_ID_CTR: AtomicUsize = AtomicUsize::new(3);
+
+/// Unique identifier for a thread
 #[repr(transparent)]
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ThreadId(usize);
@@ -152,8 +159,6 @@ impl ThreadId {
 
 impl Default for ThreadId {
     fn default() -> Self {
-        #[unsafe(no_mangle)]
-        pub static __BSAN_THREAD_ID_CTR: AtomicUsize = AtomicUsize::new(0);
         ThreadId(__BSAN_THREAD_ID_CTR.fetch_add(1, Ordering::Relaxed))
     }
 }
@@ -173,10 +178,7 @@ unsafe extern "C" {
     unsafe static __BSAN_BOR_TAG_CTR: AtomicUsize;
 }
 
-/// A unique identifier for an access permission.
-///
-/// A borrow tag uniquely identifies a node within a tree. Tags
-/// are global, allowing users to identify an allocation by a tag.
+/// Unique identifier for a node within the tree
 #[repr(transparent)]
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BorTag(usize);
@@ -250,13 +252,29 @@ pub struct Provenance {
 unsafe impl Sync for Provenance {}
 unsafe impl Send for Provenance {}
 
+impl Provenance {
+    /// The default provenance value, which is assigned to dangling or invalid
+    /// pointers.
+    #[allow(unused)]
+    const fn null() -> Self {
+        Provenance { bor_tag: BorTag::invalid(), alloc_info: core::ptr::null_mut() }
+    }
+
+    /// Pointers cast from integers receive a "wildcard" provenance value,
+    /// which permits any access.
+    #[allow(unused)]
+    const fn wildcard() -> Self {
+        Provenance { bor_tag: BorTag::wildcard(), alloc_info: core::ptr::null_mut() }
+    }
+}
+
 #[derive(Clone, Copy)]
-pub(crate) union FreeListOrAddr {
+pub(crate) union FreeListAddrUnion {
     pub base_addr: Size,
     pub free_list_next: Option<NonNull<AllocInfo>>,
 }
 
-impl Debug for FreeListOrAddr {
+impl Debug for FreeListAddrUnion {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{:x}", unsafe { self.base_addr.bytes() })
     }
@@ -269,28 +287,28 @@ impl Debug for FreeListOrAddr {
 /// the tree for the allocation.
 #[repr(C)]
 pub struct AllocInfo {
-    alloc_id: Cell<AllocId>,
-    free_or_addr: Cell<FreeListOrAddr>,
-    size: Cell<Size>,
-    tree: Mutex<Option<LazyTree>>,
+    pub alloc_id: AllocId,
+    pub(crate) base_addr: FreeListAddrUnion,
+    pub size: Size,
+    pub tree_lock: Mutex<Option<LazyTree>>,
 }
 
 impl AllocInfo {
     fn invalid() -> Self {
         AllocInfo {
-            alloc_id: Cell::new(AllocId::invalid()),
-            free_or_addr: Cell::new(FreeListOrAddr { base_addr: Size::ZERO }),
-            size: Cell::new(Size::ZERO),
-            tree: Mutex::default(),
+            alloc_id: AllocId::invalid(),
+            base_addr: FreeListAddrUnion { base_addr: Size::ZERO },
+            size: Size::ZERO,
+            tree_lock: Mutex::default(),
         }
     }
 
     fn new(base_addr: Size, size: Size, bor_tag: BorTag, span: Span) -> Self {
         Self {
-            alloc_id: Cell::new(AllocId::default()),
-            free_or_addr: Cell::new(FreeListOrAddr { base_addr }),
-            size: Cell::new(size),
-            tree: Mutex::new(Some(LazyTree::new(bor_tag, size, span))),
+            alloc_id: AllocId::default(),
+            base_addr: FreeListAddrUnion { base_addr },
+            size,
+            tree_lock: Mutex::new(Some(LazyTree::new(bor_tag, size, span))),
         }
     }
 
@@ -301,44 +319,6 @@ impl AllocInfo {
             base_addr: self.base_addr,
             size: self.size,
         }
-    }
-}
-
-// A reference to an instance of `AllocInfo`
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-#[repr(transparent)]
-pub struct AllocInfoPtr(NonNull<AllocInfo>);
-
-// A pointer to an instance of `AllocInfo`.
-impl AllocInfoPtr {
-    /// # Safety
-    /// This instance of `AllocInfo` must represent a valid, non-freed allocation.
-    /// Otherwise, the contents of its base address will be initialized with the next
-    /// pointer in a free list.
-    pub unsafe fn range(&self) -> AllocRange {
-        AllocRange { start: unsafe { self.base_addr() }, size: self.size.get() }
-    }
-
-    /// # Safety
-    /// This instance of `AllocInfo` must represent a valid, non-freed allocation.
-    /// Otherwise, the contents of its base address will be initialized with the next
-    /// pointer in a free list.
-    pub unsafe fn base_addr(&self) -> Size {
-        unsafe { self.free_or_addr.get().base_addr }
-    }
-}
-
-impl Deref for AllocInfoPtr {
-    type Target = AllocInfo;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { self.0.as_ref() }
-    }
-}
-
-impl From<NonNull<AllocInfo>> for AllocInfoPtr {
-    fn from(value: NonNull<AllocInfo>) -> Self {
-        Self(value)
     }
 }
 
@@ -431,12 +411,12 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
     pin_len: usize,
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
-    dest: NonNull<Provenance>,
     pc: Span,
-) {
+) -> BorTag {
     debug_bsan!("retag", object_addr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
+
     let opt_slice = |opt_ptr: Option<NonNull<[Size; 2]>>, len| -> Option<_> {
         opt_ptr.map(|ptr| unsafe { slice::from_raw_parts(ptr.as_ptr(), len) })
     };
@@ -448,16 +428,14 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
         pin_layout: opt_slice(pin_data, pin_len),
     };
 
-    let prov = BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(size), |bt| {
+    BorrowTracker::for_access(prov, Size::from_addr(ptr), Some(size), |bt| {
         bt.retag(ctx, retag_info, pc).map(Some)
     })
-    .map(|opt| opt.unwrap_or(prov))
+    .map(|opt| opt.unwrap_or(bor_tag))
     .unwrap_or_else(|err| {
         ctx.handle_error(err, pc);
-        prov
-    });
-
-    unsafe { dest.write(prov) };
+        bor_tag
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -480,7 +458,7 @@ unsafe extern "C-unwind" fn __bsan_read_impl(
     debug_bsan!("read", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-    BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(access_size), |bt| {
+    BorrowTracker::for_access(prov, Size::from_addr(ptr), Some(access_size), |bt| {
         bt.access(ctx, AccessKind::Read, pc)
     })
     .unwrap_or_else(|err| ctx.handle_error(err, pc));
@@ -499,7 +477,7 @@ unsafe extern "C-unwind" fn __bsan_write_impl(
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
 
-    BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(access_size), |bt| {
+    BorrowTracker::for_access(prov, Size::from_addr(ptr), Some(access_size), |bt| {
         bt.access(ctx, AccessKind::Write, pc)
     })
     .unwrap_or_else(|err| ctx.handle_error(err, pc));
@@ -532,7 +510,7 @@ extern "C" fn __bsan_dealloc(
     debug_bsan!("dealloc", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov: Provenance = Provenance { bor_tag, alloc_info };
-    BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), None, |bt| bt.dealloc(ctx, pc))
+    BorrowTracker::for_access(prov, Size::from_addr(ptr), None, |bt| bt.dealloc(ctx, pc))
         .unwrap_or_else(|err| ctx.handle_error(err, pc));
     if let Some(alloc_info) = NonNull::new(alloc_info) {
         unsafe { ctx.destroy_alloc_info(alloc_info) };

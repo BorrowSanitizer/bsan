@@ -222,6 +222,7 @@ impl Tree {
         }
     }
 
+    #[allow(unused)]
     /// This updates the wildcard tracking data structure to reflect the release of
     /// the protector on `tag`.
     pub(super) fn update_exposure_for_protector_release(&mut self, tag: BorTag) {
