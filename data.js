@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781057456724,
+  "lastUpdate": 1781128363187,
   "repoUrl": "https://github.com/BorrowSanitizer/bsan",
   "entries": {
     "Benchmarks": [
@@ -1752,6 +1752,54 @@ window.BENCHMARK_DATA = {
           {
             "name": "indexmap@2.14.0 (nop) - x86_64-unknown-linux-gnu",
             "value": 4.8100000000000005,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\"}"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "icmccorm@cs.cmu.edu",
+            "name": "Ian McCormack",
+            "username": "icmccorm"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "037b387766bac9818539e9932417c1718f58d813",
+          "message": "Wildcard Provenance (Part #2) (#218)\n\n* Resolve exposed provenance values for wildcard accesses.\n\n* Add remaining wildcard tests.\n\n* Turn off all debug assertions.\n\n* Fix broken signature from merge.\n\n* fmt\n\n* Eagerly update the frame pointer.",
+          "timestamp": "2026-06-10T17:44:19-04:00",
+          "tree_id": "a59391ecdba6f013753ea09bd44645bd664d7912",
+          "url": "https://github.com/BorrowSanitizer/bsan/commit/037b387766bac9818539e9932417c1718f58d813"
+        },
+        "date": 1781128362464,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "hashbrown@0.17.0 (nop) - aarch64-unknown-linux-gnu",
+            "value": 4.57,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\"}"
+          },
+          {
+            "name": "indexmap@2.14.0 (nop) - aarch64-unknown-linux-gnu",
+            "value": 4.72,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\"}"
+          },
+          {
+            "name": "hashbrown@0.17.0 (nop) - x86_64-unknown-linux-gnu",
+            "value": 4.71,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\"}"
+          },
+          {
+            "name": "indexmap@2.14.0 (nop) - x86_64-unknown-linux-gnu",
+            "value": 4.78,
             "unit": "Median Relative Execution Time",
             "extra": "{\"mode\": \"nop\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\"}"
           }
