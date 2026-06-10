@@ -11,7 +11,7 @@ fn main() {
     let xref = unsafe { &*xraw };
     let xref_in_mem = Box::new(xref);
     unsafe { *xraw = 42 }; // unfreeze
-    let _val = *xref_in_mem;
+    let _val = *xref_in_mem; //miri: ~[tree]| ERROR: /reborrow through .* is forbidden/
     //miri: ~[stack]^ ERROR: /retag .* tag does not exist in the borrow stack/
-    //miri: ~[tree]| ERROR: /reborrow through .* is forbidden/
+    
 }
