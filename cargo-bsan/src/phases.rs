@@ -54,7 +54,6 @@ pub const BSAN_DEFAULT_RUSTFLAGS: &[&str] = &[
     "-Zinline-llvm=no",
     "-Cembed-bitcode=yes",
     "-Cdebuginfo=2",
-    "-Cdebug-assertions=off",
 ];
 
 pub const BSAN_DEFAULT_CFLAGS: &[&str] =

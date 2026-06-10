@@ -7,10 +7,10 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::errors::{ErrorFormatContext, UBInfo};
-use crate::helpers::{AllocRange, FxHashMap};
+use crate::helpers::FxHashMap;
 use crate::local::LocalCtx;
 use crate::memory::{Heap, ShadowHeap};
-use crate::tree_borrows::data_structures::{AccessType, RangeObjectMap};
+use crate::tree_borrows::data_structures::RangeObjectMap;
 use crate::tree_borrows::{LazyTree, ProtectorKind};
 use crate::*;
 
@@ -64,20 +64,20 @@ impl<'a> Deref for ProtectedTagsRef<'a> {
     }
 }
 
-pub struct ExposedProvenanceRef<'a>(RwLockReadGuard<'a, RangeObjectMap<AllocInfoPtr>>);
+pub struct ExposedProvenanceRef<'a>(RwLockReadGuard<'a, RangeObjectMap<NonNull<AllocInfo>>>);
 
 impl<'a> Deref for ExposedProvenanceRef<'a> {
-    type Target = RangeObjectMap<AllocInfoPtr>;
+    type Target = RangeObjectMap<NonNull<AllocInfo>>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-pub struct ExposedProvenanceRefMut<'a>(RwLockWriteGuard<'a, RangeObjectMap<AllocInfoPtr>>);
+pub struct ExposedProvenanceRefMut<'a>(RwLockWriteGuard<'a, RangeObjectMap<NonNull<AllocInfo>>>);
 
 impl<'a> Deref for ExposedProvenanceRefMut<'a> {
-    type Target = RangeObjectMap<AllocInfoPtr>;
+    type Target = RangeObjectMap<NonNull<AllocInfo>>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -105,7 +105,7 @@ pub struct GlobalCtx {
     alloc_metadata_map: Heap<AllocInfo>,
     snapshots: RwLock<FxHashMap<AllocId, LazyTree>>,
     threads: RwLock<FxHashMap<ThreadId, NonNull<LocalCtx>>>,
-    exposed_provenance: RwLock<RangeObjectMap<AllocInfoPtr>>,
+    exposed_provenance: RwLock<RangeObjectMap<NonNull<AllocInfo>>>,
 }
 
 impl GlobalCtx {
@@ -138,40 +138,6 @@ impl GlobalCtx {
 
     pub fn shadow_heap(&self) -> &ShadowHeap<Provenance> {
         &self.shadow_heap
-    }
-
-    pub fn get_exposed_provenance(&self, range: AllocRange) -> Option<AllocInfoPtr> {
-        // A zero-sized lookup (e.g. a deallocation, where the size of the access
-        // is determined by the allocation) still needs to resolve the allocation
-        // containing its start address, so we widen it to a single byte.
-        let size = core::cmp::max(range.size, Size::from_bytes(1));
-        let range = AllocRange { start: range.start, size };
-        let exposed = self.exposed_provenance.read();
-        match exposed.access_type(range) {
-            AccessType::PerfectlyOverlapping(ix) => Some(exposed[ix]),
-            AccessType::Empty(_) => None,
-            AccessType::ImperfectlyOverlapping(range) => {
-                (range.len() == 1).then(|| exposed[range.start])
-            }
-        }
-    }
-
-    /// Removes an exposed allocation from the global mapping when it is
-    /// deallocated, so that wildcard accesses can no longer resolve to it.
-    pub fn remove_exposed_provenance(&self, range: AllocRange) {
-        // Zero-sized allocations are never inserted into the mapping.
-        if range.size == Size::ZERO {
-            return;
-        }
-        // Most programs never expose any provenance, so we check with a read
-        // lock first to keep deallocation cheap in the common case.
-        if matches!(self.exposed_provenance.read().access_type(range), AccessType::Empty(_)) {
-            return;
-        }
-        let mut exposed = self.exposed_provenance.write();
-        if let AccessType::PerfectlyOverlapping(pos) = exposed.access_type(range) {
-            exposed.remove_from_pos(pos);
-        }
     }
 
     pub fn protected_tags<'a>(&'a self) -> ProtectedTagsRef<'a> {
