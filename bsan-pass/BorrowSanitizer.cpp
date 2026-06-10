@@ -216,9 +216,13 @@ private:
   /// application address.
   FunctionCallee BsanFuncShadow;
 
-  /// Runtime function storing a provenance value to shadow memory, updating
-  /// any associated reference counts.
-  FunctionCallee BsanFuncRcStore;
+  /// Runtime function for incrementing the reference count associated
+  /// with a provenance value.
+  FunctionCallee BsanFuncRcInc;
+
+  /// Runtime function for decrementing the reference count associated
+  /// with a provenance value.
+  FunctionCallee BsanFuncRcDec;
 
   /// Runtime function for clearing the contents of shadow memory at a given
   /// address.
@@ -488,8 +492,11 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   BsanFuncShadow = M.getOrInsertFunction(BSAN("shadow"), AL, PtrTy, PtrTy);
 
-  BsanFuncRcStore = M.getOrInsertFunction(BSAN("rc_store"), AL, IRB.getVoidTy(),
-                                          IntptrTy, PtrTy, PtrTy);
+  BsanFuncRcInc = M.getOrInsertFunction(BSAN("rc_inc"), AL, IRB.getVoidTy(),
+                                        IntptrTy, PtrTy);
+
+  BsanFuncRcDec = M.getOrInsertFunction(BSAN("rc_dec"), AL, IRB.getVoidTy(),
+                                        IntptrTy, PtrTy);
 
   BsanFuncShadowClear = M.getOrInsertFunction(BSAN("shadow_clear"), AL,
                                               IRB.getVoidTy(), PtrTy, IntptrTy);
@@ -1137,7 +1144,7 @@ private:
       report_fatal_error("Vectors are not supported.");
     } else {
       Value *Shadow = IRB.CreateCall(BS.BsanFuncShadow, {ObjAddr});
-      IRB.CreateCall(BS.BsanFuncRcStore, {Prov.Tag, Prov.Info, Shadow});
+      Prov.store(IRB, BS, Shadow);
     }
   }
 
@@ -1276,8 +1283,7 @@ private:
     Value *Shadow = IRB.CreateCall(BS.BsanFuncShadow, {Operand});
     Provenance SrcProv = Provenance::load(IRB, BS, Shadow);
     Provenance RetaggedProv = instrumentRetag(IRB, CB, SrcAddr, SrcProv);
-    IRB.CreateCall(BS.BsanFuncRcStore,
-                   {RetaggedProv.Tag, RetaggedProv.Info, Shadow});
+    RetaggedProv.store(IRB, BS, Shadow);
   }
 
   void instrumentRetagReg(CallBase &CB) {
