@@ -294,26 +294,24 @@ void __bsan_local_init(Provenance **prov) {}
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_local_deinit() {}
 
-SANITIZER_WEAK_ATTRIBUTE
-BorTag __bsan_retag_impl(void *object_addr, uptr access_size, u8 flags,
-                         const uptr im_data[2], uptr im_len,
-                         const uptr pin_data[2], uptr pin_len, BorTag bor_tag,
-                         AllocInfo *alloc_info, Span pc);
+SANITIZER_WEAK_ATTRIBUTE void
+__bsan_retag_impl(void *object_addr, uptr access_size, u8 flags,
+                  const uptr im_data[2], uptr im_len, const uptr pin_data[2],
+                  uptr pin_len, BorTag bor_tag, AllocInfo *alloc_info,
+                  void *dest, Span pc);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-BorTag __bsan_retag(void *object_addr, uptr access_size, u8 flags,
-                    const uptr im_data[2], uptr im_len, const uptr pin_data[2],
-                    uptr pin_len, BorTag bor_tag, AllocInfo *alloc_info) {
-  BorTag new_tag = bor_tag;
+void __bsan_retag(void *object_addr, uptr access_size, u8 flags,
+                  const uptr im_data[2], uptr im_len, const uptr pin_data[2],
+                  uptr pin_len, BorTag bor_tag, AllocInfo *alloc_info,
+                  void *dest) {
   if (__bsan_retag_impl) {
     GET_SPAN;
     InterceptorBarrier Barrier;
-    new_tag =
-        __bsan_retag_impl(object_addr, access_size, flags, im_data, im_len,
-                          pin_data, pin_len, bor_tag, alloc_info, span);
+    __bsan_retag_impl(object_addr, access_size, flags, im_data, im_len,
+                      pin_data, pin_len, bor_tag, alloc_info, dest, span);
     HANDLE_ERROR;
   }
-  return new_tag;
 }
 
 SANITIZER_WEAK_ATTRIBUTE
