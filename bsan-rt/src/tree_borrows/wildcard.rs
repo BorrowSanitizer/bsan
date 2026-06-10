@@ -191,37 +191,6 @@ impl ExposedCache {
 }
 
 impl EagerTree {
-    /// Marks the tag as exposed & updates the wildcard tracking data structure
-    /// to represent its access level.
-    /// Also takes as an argument whether the tag is protected or not.
-    pub(super) fn expose_tag(&mut self, tag: BorTag, protected: bool) {
-        let id = self.tag_mapping.get(&tag).unwrap();
-        let node = self.nodes.get_mut(id).unwrap();
-        if !node.is_exposed {
-            node.is_exposed = true;
-            let node = self.nodes.get(id).unwrap();
-
-            for (_, loc) in self.locations.iter_mut_all() {
-                let perm = loc
-                    .perms
-                    .get(id)
-                    .map(|p| p.permission())
-                    .unwrap_or_else(|| node.default_location_state().permission());
-
-                let access_level = perm.strongest_allowed_local_access(protected);
-                // An unexposed node gets treated as access level `None`. Therefore,
-                // the initial exposure transitions from `None` to the node's actual
-                // `access_level`.
-                loc.exposed_cache.update_exposure(
-                    &self.nodes,
-                    id,
-                    WildcardAccessLevel::None,
-                    access_level,
-                );
-            }
-        }
-    }
-
     #[allow(unused)]
     pub(super) fn update_exposure_for_protector_release(&mut self, tag: BorTag) {
         let idx = self.tag_mapping.get(&tag).unwrap();
