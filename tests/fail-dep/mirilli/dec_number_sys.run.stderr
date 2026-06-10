@@ -17,3 +17,7 @@ stack backtrace:
  at CARGO_REGISTRY/.../dec_quad.rs:LL:CC
 2: dec_number_sys::main
  at bsan/tests/fail-dep/mirilli/dec_number_sys.rs:LL:CC
+3: <fn() as core::ops::function::FnOnce<()>>::call_once
+ at RUSTLIB/core/src/ops/function.rs:LL:CC
+4: std::sys::backtrace::__rust_begin_short_backtrace
+ at RUSTLIB/std/src/sys/backtrace.rs:LL:CC

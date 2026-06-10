@@ -17,3 +17,15 @@ stack backtrace:
  at CARGO_REGISTRY/.../blitsort.rs:LL:CC
 2: tail_swap32
  at CARGO_REGISTRY/.../blitsort.rs:LL:CC
+3: blitsort32
+ at CARGO_REGISTRY/.../blitsort.rs:LL:CC
+4: blitsort
+      at CARGO_REGISTRY/.../index.crates.io-1949cf8c6b5b557f/blitsort-sys-0.1.0/./blitsort/blitsort.h:204:11
+5: <[i32] as blitsort_sys::BlitSort<i32>>::sorted
+ at bsan/tests/fail-dep/mirilli/blitsort-sys.rs:LL:CC
+6: blitsort_sys::main
+ at bsan/tests/fail-dep/mirilli/blitsort-sys.rs:LL:CC
+7: <fn() as core::ops::function::FnOnce<()>>::call_once
+ at RUSTLIB/core/src/ops/function.rs:LL:CC
+8: std::sys::backtrace::__rust_begin_short_backtrace
+ at RUSTLIB/std/src/sys/backtrace.rs:LL:CC

@@ -23,3 +23,21 @@ stack backtrace:
  at RUSTLIB/std/src/alloc.rs:LL:CC
 2: alloc::alloc::dealloc_nonnull
  at RUSTLIB/alloc/src/alloc.rs:LL:CC
+3: <alloc::alloc::Global>::deallocate_impl_runtime
+ at RUSTLIB/alloc/src/alloc.rs:LL:CC
+4: <alloc::alloc::Global>::deallocate_impl
+ at RUSTLIB/alloc/src/alloc.rs:LL:CC
+5: <alloc::alloc::Global as core::alloc::Allocator>::deallocate
+ at RUSTLIB/alloc/src/alloc.rs:LL:CC
+6: <alloc::boxed::Box<alloc::rc::Rc<core::cell::RefCell<dyn librsync::ReadAndSeek>>> as core::ops::drop::Drop>::drop
+ at RUSTLIB/alloc/src/boxed.rs:LL:CC
+7: core::ptr::drop_glue
+ at RUSTLIB/core/src/ptr/mod.rs:LL:CC
+8: core::ptr::drop_glue
+ at RUSTLIB/core/src/ptr/mod.rs:LL:CC
+9: core::ptr::drop_glue
+ at RUSTLIB/core/src/ptr/mod.rs:LL:CC
+10: librsync::main::{closure#0}
+ at bsan/tests/fail-dep/mirilli/librsync.rs:LL:CC
+11: std::sys::backtrace::__rust_begin_short_backtrace
+ at RUSTLIB/std/src/sys/backtrace.rs:LL:CC

@@ -23,3 +23,13 @@ stack backtrace:
  at CARGO_REGISTRY/.../decBasic.rs:LL:CC
 2: decQuadReduce
  at CARGO_REGISTRY/.../decBasic.rs:LL:CC
+3: <dec::context::Context<dec::decimal128::Decimal128>>::reduce
+ at CARGO_REGISTRY/.../decimal128.rs:LL:CC
+4: <dec::ordered::OrderedDecimal<dec::decimal128::Decimal128> as core::cmp::Ord>::cmp
+ at CARGO_REGISTRY/.../ordered.rs:LL:CC
+5: dec::main
+ at bsan/tests/fail-dep/mirilli/dec.rs:LL:CC
+6: <fn() -> core::result::Result<(), alloc::boxed::Box<dyn core::error::Error>> as core::ops::function::FnOnce<()>>::call_once
+ at RUSTLIB/core/src/ops/function.rs:LL:CC
+7: std::sys::backtrace::__rust_begin_short_backtrace
+ at RUSTLIB/std/src/sys/backtrace.rs:LL:CC

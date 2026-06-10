@@ -23,3 +23,29 @@ stack backtrace:
  at CARGO_REGISTRY/.../deflate.rs:LL:CC
 2: deflate
  at CARGO_REGISTRY/.../deflate.rs:LL:CC
+3: <flate2::ffi::c::Deflate as flate2::ffi::DeflateBackend>::compress
+ at CARGO_REGISTRY/.../c.rs:LL:CC
+4: <flate2::mem::Compress>::compress
+ at CARGO_REGISTRY/.../mem.rs:LL:CC
+5: <flate2::mem::Compress as flate2::zio::Ops>::run
+ at CARGO_REGISTRY/.../zio.rs:LL:CC
+6: flate2::zio::read
+ at CARGO_REGISTRY/.../zio.rs:LL:CC
+7: <flate2::deflate::bufread::DeflateEncoder<flate2::bufreader::BufReader<&[u8]>> as std::io::Read>::read
+ at CARGO_REGISTRY/.../bufread.rs:LL:CC
+8: <flate2::deflate::read::DeflateEncoder<&[u8]> as std::io::Read>::read
+ at CARGO_REGISTRY/.../read.rs:LL:CC
+9: std::io::default_read_to_end::small_probe_read
+ at RUSTLIB/std/src/io/mod.rs:LL:CC
+10: std::io::default_read_to_end
+ at RUSTLIB/std/src/io/mod.rs:LL:CC
+11: <flate2::deflate::read::DeflateEncoder<&[u8]> as std::io::Read>::read_to_end
+ at RUSTLIB/std/src/io/mod.rs:LL:CC
+12: flate2::zero_length_read_with_data
+ at bsan/tests/fail-dep/mirilli/flate2.rs:LL:CC
+13: flate2::main
+ at bsan/tests/fail-dep/mirilli/flate2.rs:LL:CC
+14: <fn() as core::ops::function::FnOnce<()>>::call_once
+ at RUSTLIB/core/src/ops/function.rs:LL:CC
+15: std::sys::backtrace::__rust_begin_short_backtrace
+ at RUSTLIB/std/src/sys/backtrace.rs:LL:CC

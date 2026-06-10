@@ -11,3 +11,9 @@ stack backtrace:
  at RUSTLIB/core/src/ptr/mut_ptr.rs:LL:CC
 2: access_oob::foo
  at bsan/tests/fail/baseline/access_oob.rs:LL:CC
+3: access_oob::main
+ at bsan/tests/fail/baseline/access_oob.rs:LL:CC
+4: <fn() as core::ops::function::FnOnce<()>>::call_once
+ at RUSTLIB/core/src/ops/function.rs:LL:CC
+5: std::sys::backtrace::__rust_begin_short_backtrace
+ at RUSTLIB/std/src/sys/backtrace.rs:LL:CC

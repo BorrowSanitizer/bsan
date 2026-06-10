@@ -97,6 +97,9 @@ void PrintStackTrace(StackTrace &stack) {
           common_flags()->strip_path_prefix);
       Printf("%ld: %s\n", (i - 1), frame_desc.data());
       frame_desc.clear();
+      if (frame->info.function &&
+          internal_strstr(frame->info.function, "__rust_begin_short_backtrace"))
+        break;
     }
   }
 }
