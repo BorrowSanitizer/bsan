@@ -161,7 +161,6 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
     HANDLE_ERROR_PC_BP(pc, bp);
   }
   void *nptr = bsan_realloc(ptr, size);
-  __bsan_shadow_transfer(nptr, ptr, size);
   if (is_inst) {
     Provenance *RetSlot = GetSlot(0);
     BorTag Tag = NewBorTag();
@@ -259,8 +258,10 @@ INTERCEPTOR(int, posix_memalign, void **memptr, SIZE_T alignment, SIZE_T size) {
     // The new pointer is returned through memory instead of the return slot,
     // so its provenance needs to be written into the shadow of `memptr`.
     BorTag Tag = NewBorTag();
-    AllocInfo *Info = __bsan_alloc(*memptr, size, Tag, span);
-    __bsan_rc_store(Tag, Info, __bsan_shadow((void *)memptr));
+    void *Info = __bsan_alloc(*memptr, size, Tag, span);
+    *((BorTag *)MEM_TO_SHADOW(memptr)) = Tag;
+    auto OriginPtr = (void **)(MEM_TO_ORIGIN(memptr));
+    *(OriginPtr) = ((void *)Info);
   }
   return res;
 }
@@ -273,7 +274,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memset(void *dest, int c, uptr n) {
   } else {
     ENSURE_BSAN_INITED();
     internal_memset(dest, c, n);
-    __bsan_shadow_clear(dest, n);
+    ClearShadow(dest, n);
   }
 }
 
@@ -283,9 +284,8 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memmove(void *dest, const void *src,
     internal_memmove(dest, src, n);
   } else {
     ENSURE_BSAN_INITED();
-    InterceptorBarrier barrier;
-    __bsan_shadow_transfer(dest, src, n);
     internal_memmove(dest, src, n);
+    MoveShadow(dest, src, n);
   }
 }
 
@@ -296,8 +296,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memcpy(void *dest, const void *src,
   } else {
     ENSURE_BSAN_INITED();
     internal_memcpy(dest, src, n);
-    InterceptorBarrier barrier;
-    __bsan_shadow_transfer(dest, src, n);
+    CopyShadow(dest, src, n);
   }
 }
 

@@ -6,10 +6,9 @@
 #include <sys/personality.h>
 #endif
 
-// TODO: CheckMemoryLayoutSanity is based on msan.
+// TODO: CheckMemoryLayout is based on msan.
 // Consider refactoring these into a shared implementation.
-[[maybe_unused]]
-static void CheckMemoryLayoutSanity() {
+static void CheckMemoryLayout() {
   uptr prev_end = 0;
   for (unsigned i = 0; i < kMemoryLayoutSize; ++i) {
     uptr start = kMemoryLayout[i].start;
@@ -83,9 +82,9 @@ static bool InitShadow(bool init_origins, bool dry_run) {
     VPrintf(1, "%s: %zx - %zx\n", kMemoryLayout[i].name, kMemoryLayout[i].start,
             kMemoryLayout[i].end - 1);
 
-  // TODO: Reenable sanity check once shadow is ready to use.
-  // This fails for layouts that lack shadow regions.
-  // CheckMemoryLayoutSanity();
+  // Verify the memory layout is internally consistent and that the
+  // application-to-shadow/origin mappings stay within their regions.
+  CheckMemoryLayout();
 
   if (!MEM_IS_APP(&__bsan_init)) {
     if (!dry_run)
@@ -224,5 +223,4 @@ void ClearShadow(void *dest, uptr size) {
   internal_memset((void *)MEM_TO_SHADOW(d_aligned), 0, d_size);
   internal_memset((void *)MEM_TO_ORIGIN(d_aligned), 0, d_size);
 }
-
 } // namespace __bsan

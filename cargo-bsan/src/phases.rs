@@ -279,19 +279,56 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
     }
 }
 
+/// Whether this rustc invocation links an executable (a `bin` or `cdylib`), as
+/// opposed to an rlib (which only records native-lib deps) or a Rust `dylib`
+/// such as `libstd.so` (which tolerates undefined symbols and must not pull the
+/// runtime). Only executables should whole-archive the runtime. An invocation
+/// with no explicit `--crate-type` (e.g. a bare `rustc foo.rs`) defaults to a
+/// binary.
+fn links_executable() -> bool {
+    let types: Vec<String> = get_arg_flag_values("--crate-type").collect();
+    if types.is_empty() {
+        return true;
+    }
+    types.iter().flat_map(|t| t.split(',')).any(|t| matches!(t, "bin" | "cdylib"))
+}
+
 fn bsan_rustflags(env: &EnvConfig, deps: &Dependencies, llvm_tools: &LlvmTools) -> Vec<String> {
     let mut additional_args =
         BSAN_DEFAULT_RUSTFLAGS.iter().map(ToString::to_string).collect::<Vec<_>>();
 
-    if !env.nop {
-        let (rust_include, rust_lib) = deps.rust_runtime();
-        additional_args.push(format!("-L{}", rust_include.display()));
-        additional_args.push(format!("-lstatic={rust_lib}"));
-    }
-
     let (llvm_include, llvm_lib) = deps.llvm_runtime();
     additional_args.push(format!("-L{}", llvm_include.display()));
     additional_args.push(format!("-lstatic={llvm_lib}"));
+
+    if !env.nop && links_executable() {
+        let (rust_include, rust_lib) = deps.rust_runtime();
+        // The C++ runtime references the Rust entry points (`__bsan_internal_init`
+        // and the `__bsan_*_impl` hooks) only through weak declarations, which do
+        // not pull a member out of a static archive — so the runtime must be
+        // force-linked or every hook stays NULL, silently disabling all provenance
+        // tracking. `--whole-archive` does that with no anchor symbol.
+        //
+        // Pass the archive straight to the linker (`-Clink-arg`) rather than via
+        // rustc's `-lstatic`: `-lstatic` records it as a native-lib dependency
+        // that propagates into every rlib's metadata and bundles a second copy
+        // into the sysroot, putting two copies on the link line (which
+        // whole-archiving then defines twice).
+        //
+        // Restrict this to crates that link an executable. `libbsan_rt.a` also
+        // bundles `compiler_builtins`/`core`/`alloc`; whole-archiving pulls those
+        // CGUs, whose internal hidden symbols go undefined when linked next to a
+        // second `compiler_builtins`, which breaks the `libstd.so` (Rust `dylib`)
+        // build during sysroot setup. Binaries link std statically, so `libstd.so`
+        // only needs to build — and a Rust `dylib` tolerates the undefined
+        // `__bsan_*` references, which the final executable link resolves from the
+        // whole-archived runtime. nop mode links no Rust runtime and keeps using
+        // the weak stubs, so it is unaffected.
+        additional_args.push(format!("-Clink-arg=-L{}", rust_include.display()));
+        additional_args.push(String::from("-Clink-arg=-Wl,--whole-archive"));
+        additional_args.push(format!("-Clink-arg=-l{rust_lib}"));
+        additional_args.push(String::from("-Clink-arg=-Wl,--no-whole-archive"));
+    }
 
     additional_args.push(format!("-Clinker={}", llvm_tools.clang.display()));
     additional_args.push(format!("-Clink-arg=-fuse-ld={}", llvm_tools.lld.display()));

@@ -140,7 +140,7 @@ static void *BsanReallocate(void *old_p, uptr new_size, uptr alignment) {
   void *new_p = BsanAllocate(new_size, alignment, false /*zeroise*/);
   if (new_p) {
     internal_memcpy(new_p, old_p, memcpy_size);
-    // CopyShadow(new_p, old_p, memcpy_size);
+    CopyShadow(new_p, old_p, memcpy_size);
     bsan_deallocate(old_p);
   }
   return new_p;

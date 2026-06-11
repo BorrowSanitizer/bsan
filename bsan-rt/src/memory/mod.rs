@@ -5,17 +5,14 @@
 //! on a linked list of page-sized "blocks" of memory.
 
 mod heap;
-pub use heap::Heap;
-use heap::Heapable;
-use libc::{pthread_attr_destroy, pthread_attr_init, pthread_attr_t, rlimit, _SC_PAGESIZE};
-
-mod shadow;
 use core::ffi::c_void;
 use core::mem::{self, MaybeUninit};
 use core::num::NonZero;
 use core::ptr::{self, NonNull};
 
-pub use shadow::ShadowHeap;
+pub use heap::Heap;
+use heap::Heapable;
+use libc::{pthread_attr_destroy, pthread_attr_init, pthread_attr_t, rlimit, _SC_PAGESIZE};
 
 use crate::{AllocInfo, BorTag};
 

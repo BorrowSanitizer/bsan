@@ -210,7 +210,6 @@ void __bsan_validate_params(void *current_fn, Provenance *frame_start,
     for (uptr i = 0; i < len; ++i) {
       frame_start[i] = OMNIVALID;
     }
-
     __bsan_var_arg_ctr = 0;
   }
   __bsan_marker = 0;
@@ -346,51 +345,11 @@ void __bsan_write(void *ptr, uptr access_size, BorTag bor_tag,
   }
 }
 
-// The following entry points are implemented in the Rust core runtime, which
-// may allocate or take locks. Calls into the Rust runtime must hold an
-// InterceptorBarrier: otherwise, a memory intrinsic (e.g. memcpy) executed
-// within the runtime will be intercepted and re-enter the runtime, deadlocking
-// on its (non-reentrant) internal locks.
-
-SANITIZER_WEAK_ATTRIBUTE
-Provenance *__bsan_shadow_impl(void *addr);
-
-SANITIZER_INTERFACE_ATTRIBUTE
-Provenance *__bsan_shadow(void *addr) {
-  if (__bsan_shadow_impl) {
-    InterceptorBarrier Barrier;
-    return __bsan_shadow_impl(addr);
-  }
-  return GetSlot(0);
-}
-
-SANITIZER_WEAK_ATTRIBUTE
-void __bsan_shadow_transfer_impl(void *dest, const void *src, uptr access_size);
-
-SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_shadow_transfer(void *dest, const void *src, uptr access_size) {
-  if (__bsan_shadow_transfer_impl) {
-    InterceptorBarrier Barrier;
-    __bsan_shadow_transfer_impl(dest, src, access_size);
-  }
-}
-
-SANITIZER_WEAK_ATTRIBUTE
-void __bsan_shadow_clear_impl(void *dest, uptr access_size);
-
-SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_shadow_clear(void *dest, uptr access_size) {
-  if (__bsan_shadow_clear_impl) {
-    InterceptorBarrier Barrier;
-    __bsan_shadow_clear_impl(dest, access_size);
-  }
-}
-
 SANITIZER_WEAK_ATTRIBUTE void __bsan_rc_inc_impl(BorTag Tag, AllocInfo *Info);
-
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_rc_inc(BorTag Tag, AllocInfo *Info) {
   if (__bsan_rc_inc_impl) {
+    InterceptorBarrier Barrier;
     __bsan_rc_inc_impl(Tag, Info);
   }
 }
@@ -401,6 +360,7 @@ void __bsan_rc_dec_impl(BorTag Tag, AllocInfo *Info);
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_rc_dec(BorTag Tag, AllocInfo *Info) {
   if (__bsan_rc_dec_impl) {
+    InterceptorBarrier Barrier;
     __bsan_rc_dec_impl(Tag, Info);
   }
 }
@@ -432,6 +392,7 @@ SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE AllocInfo *
 __bsan_alloc(void *base_addr, uptr size, BorTag bor_tag, Span pc) {
   return nullptr;
 }
+
 SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE void
 __bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info, Span pc) {}
 
