@@ -129,10 +129,15 @@ function populateControls(dataSets, render) {
 
     function populateSelect(select, values, allLabel) {
         select.innerHTML = '';
-        const allOption = document.createElement('option');
-        allOption.value = '';
-        allOption.textContent = allLabel;
-        select.appendChild(allOption);
+        // Only add the "all" option if there's more than
+        // one to choose from.
+        if (values.length > 1) {
+            const allOption = document.createElement('option');
+            allOption.value = '';
+            allOption.textContent = allLabel;
+            select.appendChild(allOption);
+        }
+
         for (const value of values) {
             const option = document.createElement('option');
             option.value = value;
