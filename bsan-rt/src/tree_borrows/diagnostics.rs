@@ -368,7 +368,7 @@ impl TbError<'_> {
                     format!(
                         "this {access} would cause the {conflicting_tag_name} tag {conflicting} (currently {before_disabled}) to become Disabled"
                     ),
-                    format!("protected tags must never be Disabled"),
+                    "protected tags must never be Disabled".to_string(),
                 ];
                 (title, details, conflicting_tag_name)
             }
@@ -407,7 +407,7 @@ pub fn no_valid_exposed_references_error(
         "{access_cause} through <wildcard> at {alloc_id:?}[{offset:#x}] is forbidden",
         offset = transition_range.start
     );
-    let details = vec![format!("there are no exposed tags which may perform this access here")];
+    let details = vec!["there are no exposed tags which may perform this access here".to_string()];
     let history = HistoryData::default();
     TreeBorrowsUb { title, details, history }
 }
