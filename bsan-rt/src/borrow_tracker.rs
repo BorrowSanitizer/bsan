@@ -11,8 +11,8 @@ use crate::tree_borrows::data_structures::{AccessType, DedupRangeMap};
 use crate::tree_borrows::diagnostics::AccessCause;
 use crate::tree_borrows::perms::{AccessKind, Permission};
 use crate::tree_borrows::tree::LocationState;
-use crate::tree_borrows::{IdempotentForeignAccess, NewPermission};
-use crate::{AllocId, AllocInfo, BorTag, GlobalCtx, LazyTree, Provenance, RetagFlags, RetagInfo};
+use crate::tree_borrows::{AllocState, AllocStateImpl, IdempotentForeignAccess, NewPermission};
+use crate::{AllocId, AllocInfo, BorTag, GlobalCtx, Provenance, RetagFlags, RetagInfo};
 
 #[derive(Debug)]
 pub struct BorrowTracker<'b> {
@@ -20,21 +20,21 @@ pub struct BorrowTracker<'b> {
     prov: Provenance,
     base_addr: Size,
     range: AllocRange,
-    tree: &'b Mutex<Option<LazyTree>>,
+    tree: &'b Mutex<Option<AllocStateImpl>>,
 }
 
 /// A guard over the `Tree` for an allocation.
-struct TreeGuard<'b>(MutexGuard<'b, Option<LazyTree>>);
+struct TreeGuard<'b>(MutexGuard<'b, Option<AllocStateImpl>>);
 
 impl Deref for TreeGuard<'_> {
-    type Target = LazyTree;
-    fn deref(&self) -> &LazyTree {
+    type Target = AllocStateImpl;
+    fn deref(&self) -> &AllocStateImpl {
         self.0.as_ref().unwrap()
     }
 }
 
 impl DerefMut for TreeGuard<'_> {
-    fn deref_mut(&mut self) -> &mut LazyTree {
+    fn deref_mut(&mut self) -> &mut AllocStateImpl {
         self.0.as_mut().unwrap()
     }
 }
@@ -356,7 +356,7 @@ impl<'b> BorrowTracker<'b> {
     }
 
     pub fn debug_print_diff(&self, ctx: &GlobalCtx) {
-        ctx.with_snapshot(self.alloc_id, |old_tree: &LazyTree| {
+        ctx.with_snapshot(self.alloc_id, |old_tree: &AllocStateImpl| {
             self.tree().print_tree_diff(old_tree, &ctx.protected_tags());
         });
     }

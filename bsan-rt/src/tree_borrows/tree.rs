@@ -11,6 +11,7 @@
 //!   and the relative position of the access;
 //! - idempotency properties asserted in `perms.rs` (for optimizations)
 
+// use alloc::boxed::Box;
 use core::ops::Range;
 use core::{cmp, fmt, mem};
 
@@ -24,12 +25,23 @@ use super::diagnostics::{
 use super::foreign_access_skipping::IdempotentForeignAccess;
 use super::perms::{AccessKind, PermTransition, Permission};
 use super::tree_visitor::{ChildrenVisitMode, ContinueTraversal, NodeAppArgs, TreeVisitor};
-use super::wildcard::ExposedCache;
+use super::wildcard::{ExposedCache, WildcardAccessLevel};
 use crate::errors::UBResult;
 use crate::helpers::{AllocRange, FxHashSet, Size};
 use crate::sanitizer_common::Span;
 use crate::tree_borrows::{GlobalState, ProtectorKind};
 use crate::*;
+
+// Features in ./bsan-rt/Cargo.toml
+
+#[cfg(all(feature = "lazy", feature = "eager"))] // Ensure one selection
+compile_error!("Only one of the following features can be selected: 'lazy', 'eager'");
+
+#[cfg(feature = "lazy")]
+pub type AllocStateImpl = LazyTree;
+
+#[cfg(feature = "eager")]
+pub type AllocStateImpl = EagerTree;
 
 mod tests;
 
@@ -268,7 +280,7 @@ pub struct LocationTree {
 /// Tree structure with both parents and children since we want to be
 /// able to traverse the tree efficiently in both directions.
 #[derive(Clone, Debug)]
-pub struct Tree {
+pub struct EagerTree {
     /// Mapping from tags to keys. The key obtained can then be used in
     /// any of the `UniValMap` relative to this allocation, i.e.
     /// `nodes`, `LocationTree::perms` and `LocationTree::exposed_cache`
@@ -326,7 +338,7 @@ pub struct Node {
     pub debug_info: NodeDebugInfo,
 }
 
-impl Tree {
+impl EagerTree {
     /// Create a new tree, with only a root pointer.
     pub fn new(root_tag: BorTag, size: Size, span: Span) -> Self {
         // The root has `Disabled` as the default permission,
@@ -374,95 +386,7 @@ impl Tree {
     }
 }
 
-impl Tree {
-    /// Insert a new tag in the tree.
-    ///
-    /// `inside_perm` defines the initial permissions for a block of memory starting at
-    /// `base_offset`. These may nor may not be already marked as "accessed".
-    /// `outside_perm` defines the initial permission for the rest of the allocation.
-    /// These are definitely not "accessed".
-    pub(crate) fn new_child(
-        &mut self,
-        base_offset: Size,
-        parent_tag: BorTag,
-        new_tag: BorTag,
-        inside_perms: DedupRangeMap<LocationState>,
-        outside_perm: Permission,
-        protected: bool,
-        span: Span,
-    ) -> UBResult<()> {
-        let idx = self.tag_mapping.insert(new_tag);
-        let parent_idx = if parent_tag.is_wildcard() {
-            None
-        } else {
-            Some(self.tag_mapping.get(&parent_tag).unwrap())
-        };
-        assert!(outside_perm.is_initial());
-
-        let default_strongest_idempotent =
-            outside_perm.strongest_idempotent_foreign_access(protected);
-        // Create the node
-        self.nodes.insert(
-            idx,
-            Node {
-                tag: new_tag,
-                parent: parent_idx,
-                children: SmallVec::default(),
-                default_initial_perm: outside_perm,
-                default_initial_idempotent_foreign_access: default_strongest_idempotent,
-                is_exposed: false,
-                debug_info: NodeDebugInfo::new(new_tag, outside_perm, span),
-            },
-        );
-        if let Some(parent_idx) = parent_idx {
-            let parent_node = self.nodes.get_mut(parent_idx).unwrap();
-            // Register new_tag as a child of parent_tag
-            parent_node.children.push(idx);
-        } else {
-            // If the parent had wildcard provenance, then register the idx
-            // as a new wildcard root.
-            // This preserves the orderedness of `roots` because a newly created
-            // tag is greater than all previous tags.
-            self.roots.push(idx);
-        }
-
-        // We need to know the weakest SIFA for `update_idempotent_foreign_access_after_retag`.
-        let mut min_sifa = default_strongest_idempotent;
-        for (Range { start, end }, &perm) in
-            inside_perms.iter(Size::from_bytes(0), inside_perms.size())
-        {
-            assert!(perm.permission.is_initial());
-            assert_eq!(
-                perm.idempotent_foreign_access,
-                perm.permission.strongest_idempotent_foreign_access(protected)
-            );
-
-            min_sifa = cmp::min(min_sifa, perm.idempotent_foreign_access);
-            for (_range, loc) in self
-                .locations
-                .iter_mut(Size::from_bytes(start) + base_offset, Size::from_bytes(end - start))
-            {
-                loc.perms.insert(idx, perm);
-            }
-        }
-
-        // We don't have to update `exposed_cache` as the new node is not exposed and
-        // has no children so the default counts of 0 are correct.
-
-        // If the parent is a wildcard pointer, then it doesn't track SIFA and doesn't need to be updated.
-        if let Some(parent_idx) = parent_idx {
-            // Inserting the new perms might have broken the SIFA invariant (see
-            // `foreign_access_skipping.rs`) if the SIFA we inserted is weaker than that of some parent.
-            // We now weaken the recorded SIFA for our parents, until the invariant is restored. We
-            // could weaken them all to `None`, but it is more efficient to compute the SIFA for the new
-            // permission statically, and use that. For this we need the *minimum* SIFA (`None` needs
-            // more fixup than `Write`).
-            self.update_idempotent_foreign_access_after_retag(parent_idx, min_sifa);
-        }
-
-        Ok(())
-    }
-
+impl EagerTree {
     /// Restores the SIFA "children are stronger"/"parents are weaker" invariant after a retag:
     /// reduce the SIFA of `current` and its parents to be no stronger than `strongest_allowed`.
     /// See `foreign_access_skipping.rs` and [`Tree::new_child`].
@@ -507,227 +431,11 @@ impl Tree {
             }
         }
     }
-
-    /// Deallocation requires
-    /// - a pointer that permits write accesses
-    /// - the absence of Strong Protectors anywhere in the allocation
-    pub fn dealloc(
-        &mut self,
-        tag: BorTag,
-        access_range: AllocRange,
-        global: &GlobalState,
-        alloc_id: AllocId, // diagnostics
-        span: Span,        // diagnostics
-    ) -> UBResult<()> {
-        self.perform_access(
-            tag,
-            access_range,
-            AccessKind::Write,
-            AccessCause::Dealloc,
-            global,
-            alloc_id,
-            span,
-        )?;
-
-        let start_idx =
-            if tag.is_wildcard() { None } else { Some(self.tag_mapping.get(&tag).unwrap()) };
-
-        // Check if this breaks any strong protector.
-        // (Weak protectors are already handled by `perform_access`.)
-        for (loc_range, loc) in self.locations.iter_mut(access_range.start, access_range.size) {
-            let diagnostics = DiagnosticInfo {
-                alloc_id,
-                span,
-                transition_range: loc_range,
-                access_range: Some(access_range),
-                access_cause: AccessCause::Dealloc,
-            };
-            // Checks the tree containing `idx` for strong protector violations.
-            // It does this in traversal order.
-            let mut check_tree = |idx| {
-                TreeVisitor { nodes: &mut self.nodes, data: loc }
-                    .traverse_this_parents_children_other(
-                        idx,
-                        // Visit all children, skipping none.
-                        |_| ContinueTraversal::Recurse,
-                        |args: NodeAppArgs<'_, _>| {
-                            let node = args.nodes.get(args.idx).unwrap();
-
-                            let perm = args
-                                .data
-                                .perms
-                                .get(args.idx)
-                                .copied()
-                                .unwrap_or_else(|| node.default_location_state());
-                            if global.get_protector_kind(node.tag)
-                                == Some(ProtectorKind::StrongProtector)
-                                // Don't check for protector if it is a Cell (see `unsafe_cell_deallocate` in `interior_mutability.rs`).
-                                // Related to https://github.com/rust-lang/rust/issues/55005.
-                                && !perm.permission.is_cell()
-                                // Only trigger UB if the accessed bit is set, i.e. if the protector is actually protecting this offset. See #4579.
-                                && perm.accessed
-                            {
-                                Err(TbError {
-                                    error_kind: TransitionError::ProtectedDealloc,
-                                    access_info: &diagnostics,
-                                    conflicting_node_info: &node.debug_info,
-                                    accessed_node_info: start_idx
-                                        .map(|idx| &args.nodes.get(idx).unwrap().debug_info),
-                                }
-                                .build())
-                            } else {
-                                Ok(())
-                            }
-                        },
-                    )
-            };
-            // If we have a start index we first check its subtree in traversal order.
-            // This results in us showing the error of the closest node instead of an
-            // arbitrary one.
-            let accessed_root = start_idx.map(&mut check_tree).transpose()?;
-            // Afterwards we check all other trees.
-            // We iterate over the list in reverse order to ensure that we do not visit
-            // a parent before its child.
-            for &root in self.roots.iter().rev() {
-                if Some(root) == accessed_root {
-                    continue;
-                }
-                check_tree(root)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Map the per-node and per-location `LocationState::perform_access`
-    /// to each location of the first component of `access_range_and_kind`,
-    /// on every tag of the allocation.
-    ///
-    /// `LocationState::perform_access` will take care of raising transition
-    /// errors and updating the `accessed` status of each location,
-    /// this traversal adds to that:
-    /// - inserting into the map locations that do not exist yet,
-    /// - trimming the traversal,
-    /// - recording the history.
-    pub fn perform_access(
-        &mut self,
-        tag: BorTag,
-        access_range: AllocRange,
-        access_kind: AccessKind,
-        access_cause: AccessCause, // diagnostics
-        global: &GlobalState,
-        alloc_id: AllocId, // diagnostics
-        span: Span,        // diagnostics
-    ) -> UBResult<()> {
-        #[cfg(feature = "expensive-consistency-checks")]
-        if self.roots.len() > 1 || matches!(prov, ProvenanceExtra::Wildcard) {
-            self.verify_wildcard_consistency(global);
-        }
-
-        let source_idx =
-            if tag.is_wildcard() { None } else { Some(self.tag_mapping.get(&tag).unwrap()) };
-
-        // We iterate over affected locations and traverse the tree for each of them.
-        for (loc_range, loc) in self.locations.iter_mut(access_range.start, access_range.size) {
-            let diagnostics = DiagnosticInfo {
-                access_cause,
-                access_range: Some(access_range),
-                alloc_id,
-                span,
-                transition_range: loc_range,
-            };
-            loc.perform_access(
-                self.roots.iter().copied(),
-                &mut self.nodes,
-                source_idx,
-                access_kind,
-                global,
-                ChildrenVisitMode::VisitChildrenOfAccessed,
-                &diagnostics,
-                /* min_exposed_child */ None, // only matters for protector end access,
-            )?;
-        }
-        Ok(())
-    }
-    /// This is the special access that is applied on protector release:
-    /// - the access will be applied only to accessed locations of the allocation,
-    /// - it will not be visible to children,
-    /// - it will be recorded as a `FnExit` diagnostic access
-    /// - and it will be a read except if the location is `Unique`, i.e. has been written to,
-    ///   in which case it will be a write.
-    /// - otherwise identical to `Tree::perform_access`
-    pub fn perform_protector_end_access(
-        &mut self,
-        tag: BorTag,
-        global: &GlobalState,
-        alloc_id: AllocId, // diagnostics
-        span: Span,        // diagnostics
-    ) -> UBResult<()> {
-        #[cfg(feature = "expensive-consistency-checks")]
-        if self.roots.len() > 1 {
-            self.verify_wildcard_consistency(global);
-        }
-
-        let source_idx = self.tag_mapping.get(&tag).unwrap();
-
-        let min_exposed_child = if self.roots.len() > 1 {
-            LocationTree::get_min_exposed_child(source_idx, &self.nodes)
-        } else {
-            // There's no point in computing this when there is just one tree.
-            None
-        };
-
-        // This is a special access through the entire allocation.
-        // It actually only affects `accessed` locations, so we need
-        // to filter on those before initiating the traversal.
-        //
-        // In addition this implicit access should not be visible to children,
-        // thus the use of `traverse_nonchildren`.
-        // See the test case `returned_mut_is_usable` from
-        // `tests/pass/tree_borrows/tree-borrows.rs` for an example of
-        // why this is important.
-        for (loc_range, loc) in self.locations.iter_mut_all() {
-            // Only visit accessed permissions
-            if let Some(p) = loc.perms.get(source_idx)
-                && let Some(access_kind) = p.permission.protector_end_access()
-                && p.accessed
-            {
-                let diagnostics = DiagnosticInfo {
-                    access_cause: AccessCause::FnExit(access_kind),
-                    access_range: None,
-                    alloc_id,
-                    span,
-                    transition_range: loc_range,
-                };
-                loc.perform_access(
-                    self.roots.iter().copied(),
-                    &mut self.nodes,
-                    Some(source_idx),
-                    access_kind,
-                    global,
-                    ChildrenVisitMode::SkipChildrenOfAccessed,
-                    &diagnostics,
-                    min_exposed_child,
-                )?;
-            }
-        }
-        Ok(())
-    }
 }
 
 #[allow(unused)]
 /// Integration with Miri's garbage collector
-impl Tree {
-    pub fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
-        for i in 0..(self.roots.len()) {
-            self.remove_useless_children(self.roots[i], live_tags);
-        }
-        // Right after the GC runs is a good moment to check if we can
-        // merge some adjacent ranges that were made equal by the removal of some
-        // tags (this does not necessarily mean that they have identical internal representations,
-        // see the `PartialEq` impl for `UniValMap`)
-        self.locations.merge_adjacent_thorough();
-    }
-
+impl EagerTree {
     /// Checks if a node is useless and should be GC'ed.
     /// A node is useless if it has no children and also the tag is no longer live.
     fn is_useless(&self, idx: UniIndex, live: &FxHashSet<BorTag>) -> bool {
@@ -1193,7 +901,7 @@ impl Node {
 #[derive(Clone, Debug)]
 pub enum LazyTree {
     Uninit { root_tag: BorTag, size: Size, span: Span },
-    Init(Tree),
+    Init(EagerTree),
 }
 
 impl LazyTree {
@@ -1202,34 +910,93 @@ impl LazyTree {
     }
 
     /// Forces the tree into the `Init` state, constructing the underlying `Tree` if needed.
-    fn ensure_init(&mut self) -> &mut Tree {
-        if matches!(self, LazyTree::Uninit { .. }) {
-            let LazyTree::Uninit { root_tag, size, span } = *self else { unreachable!() };
-            *self = LazyTree::Init(Tree::new(root_tag, size, span));
+    fn ensure_init(&mut self) {
+        if let LazyTree::Uninit { root_tag, size, span } = self {
+            *self = LazyTree::Init(EagerTree::new(*root_tag, *size, *span));
         }
-        let LazyTree::Init(tree) = self else { unreachable!() };
-        tree
     }
+}
 
-    /// Returns true if `tag` is present in this tree.
-    /// In the `Uninit` state only the root tag exists.
-    pub fn contains_tag(&self, tag: BorTag) -> bool {
+/// Relative position of the access
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccessRelatedness {
+    /// The access happened either through the node itself or one of
+    /// its transitive children.
+    LocalAccess,
+    /// The access happened through this nodes ancestor or through
+    /// a sibling/cousin/uncle/etc.
+    ForeignAccess,
+}
+
+impl AccessRelatedness {
+    /// Check that access is either Ancestor or Distant, i.e. not
+    /// a transitive child (initial pointer included).
+    pub fn is_foreign(self) -> bool {
+        matches!(self, AccessRelatedness::ForeignAccess)
+    }
+}
+
+/// The public interface shared by all tree implementations.
+/// Consumers outside this module interact with the tree exclusively
+/// through this trait; the underlying implementations are
+/// module-private.
+pub trait AllocState: Clone {
+    fn contains_tag(&self, tag: BorTag) -> bool;
+    fn node_count(&self) -> usize;
+    fn new_child(
+        &mut self,
+        base_offset: Size,
+        parent_tag: BorTag,
+        new_tag: BorTag,
+        inside_perms: DedupRangeMap<LocationState>,
+        outside_perm: Permission,
+        protected: bool,
+        span: Span,
+    ) -> UBResult<()>;
+    fn perform_access(
+        &mut self,
+        tag: BorTag,
+        access_range: AllocRange,
+        access_kind: AccessKind,
+        access_cause: AccessCause,
+        global: &GlobalState,
+        alloc_id: AllocId,
+        span: Span,
+    ) -> UBResult<()>;
+    fn dealloc(
+        &mut self,
+        tag: BorTag,
+        access_range: AllocRange,
+        global: &GlobalState,
+        alloc_id: AllocId,
+        span: Span,
+    ) -> UBResult<()>;
+    fn perform_protector_end_access(
+        &mut self,
+        tag: BorTag,
+        global: &GlobalState,
+        alloc_id: AllocId,
+        span: Span,
+    ) -> UBResult<()>;
+    fn expose_tag(&mut self, tag: BorTag, protected: bool);
+    #[allow(dead_code)]
+    fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>);
+}
+
+impl AllocState for LazyTree {
+    fn contains_tag(&self, tag: BorTag) -> bool {
         match self {
             LazyTree::Uninit { root_tag, .. } => *root_tag == tag,
             LazyTree::Init(tree) => tree.tag_mapping.contains_key(&tag),
         }
     }
-
-    /// Returns the number of nodes in the tree (1 when `Uninit`).
-    pub fn node_count(&self) -> usize {
+    fn node_count(&self) -> usize {
         match self {
             LazyTree::Uninit { .. } => 1,
             LazyTree::Init(tree) => tree.tag_mapping.len(),
         }
     }
-
-    /// Adds a child tag. Forces initialization of the underlying `Tree` first.
-    pub(crate) fn new_child(
+    fn new_child(
         &mut self,
         base_offset: Size,
         parent_tag: BorTag,
@@ -1239,7 +1006,9 @@ impl LazyTree {
         protected: bool,
         span: Span,
     ) -> UBResult<()> {
-        self.ensure_init().new_child(
+        self.ensure_init();
+        let LazyTree::Init(tree) = self else { unreachable!() };
+        tree.new_child(
             base_offset,
             parent_tag,
             new_tag,
@@ -1249,10 +1018,7 @@ impl LazyTree {
             span,
         )
     }
-
-    /// Performs an access. In the `Uninit` state (single root node with `Unique` permission,
-    /// no protectors), any access by the root tag is trivially valid.
-    pub fn perform_access(
+    fn perform_access(
         &mut self,
         tag: BorTag,
         access_range: AllocRange,
@@ -1275,10 +1041,7 @@ impl LazyTree {
             ),
         }
     }
-
-    /// Performs a deallocation. In the `Uninit` state the root always has write permission and
-    /// no protectors exist, so this is a no-op.
-    pub fn dealloc(
+    fn dealloc(
         &mut self,
         tag: BorTag,
         access_range: AllocRange,
@@ -1291,10 +1054,7 @@ impl LazyTree {
             LazyTree::Init(tree) => tree.dealloc(tag, access_range, global, alloc_id, span),
         }
     }
-
-    /// Performs the implicit access on protector release. In the `Uninit` state no protectors
-    /// can exist (they are only registered when children are added), so this is a no-op.
-    pub fn perform_protector_end_access(
+    fn perform_protector_end_access(
         &mut self,
         tag: BorTag,
         global: &GlobalState,
@@ -1306,36 +1066,275 @@ impl LazyTree {
             LazyTree::Init(tree) => tree.perform_protector_end_access(tag, global, alloc_id, span),
         }
     }
-
-    /// Marks `tag` as exposed. Forces initialization because the wildcard tracking lives
-    /// inside `Tree`. Pointer-to-integer casts are rare so the cost is acceptable.
-    pub fn expose_tag(&mut self, tag: BorTag, protected: bool) {
-        self.ensure_init().expose_tag(tag, protected);
+    fn expose_tag(&mut self, tag: BorTag, protected: bool) {
+        self.ensure_init();
+        if let LazyTree::Init(tree) = self {
+            tree.expose_tag(tag, protected);
+        }
     }
-
-    ///// GC pass: no-op on `Uninit` trees since there are no unreachable children.
-    // pub fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
-    //     if let LazyTree::Init(tree) = self {
-    //         tree.remove_unreachable_tags(live_tags);
-    //     }
-    // }
+    fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
+        if let LazyTree::Init(tree) = self {
+            tree.remove_unreachable_tags(live_tags);
+        }
+    }
 }
 
-/// Relative position of the access
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AccessRelatedness {
-    /// The access happened either through the node itself or one of
-    /// its transitive children.
-    LocalAccess,
-    /// The access happened through this nodes ancestor or through
-    /// a sibling/cousin/uncle/etc.
-    ForeignAccess,
-}
+impl AllocState for EagerTree {
+    fn contains_tag(&self, tag: BorTag) -> bool {
+        self.tag_mapping.contains_key(&tag)
+    }
+    fn node_count(&self) -> usize {
+        self.tag_mapping.len()
+    }
+    fn new_child(
+        &mut self,
+        base_offset: Size,
+        parent_tag: BorTag,
+        new_tag: BorTag,
+        inside_perms: DedupRangeMap<LocationState>,
+        outside_perm: Permission,
+        protected: bool,
+        span: Span,
+    ) -> UBResult<()> {
+        let idx = self.tag_mapping.insert(new_tag);
+        let parent_idx = if parent_tag.is_wildcard() {
+            None
+        } else {
+            Some(self.tag_mapping.get(&parent_tag).unwrap())
+        };
+        assert!(outside_perm.is_initial());
 
-impl AccessRelatedness {
-    /// Check that access is either Ancestor or Distant, i.e. not
-    /// a transitive child (initial pointer included).
-    pub fn is_foreign(self) -> bool {
-        matches!(self, AccessRelatedness::ForeignAccess)
+        let default_strongest_idempotent =
+            outside_perm.strongest_idempotent_foreign_access(protected);
+        self.nodes.insert(
+            idx,
+            Node {
+                tag: new_tag,
+                parent: parent_idx,
+                children: SmallVec::default(),
+                default_initial_perm: outside_perm,
+                default_initial_idempotent_foreign_access: default_strongest_idempotent,
+                is_exposed: false,
+                debug_info: NodeDebugInfo::new(new_tag, outside_perm, span),
+            },
+        );
+        if let Some(parent_idx) = parent_idx {
+            let parent_node = self.nodes.get_mut(parent_idx).unwrap();
+            parent_node.children.push(idx);
+        } else {
+            self.roots.push(idx);
+        }
+
+        let mut min_sifa = default_strongest_idempotent;
+        for (Range { start, end }, &perm) in
+            inside_perms.iter(Size::from_bytes(0), inside_perms.size())
+        {
+            assert!(perm.permission.is_initial());
+            assert_eq!(
+                perm.idempotent_foreign_access,
+                perm.permission.strongest_idempotent_foreign_access(protected)
+            );
+
+            min_sifa = cmp::min(min_sifa, perm.idempotent_foreign_access);
+            for (_range, loc) in self
+                .locations
+                .iter_mut(Size::from_bytes(start) + base_offset, Size::from_bytes(end - start))
+            {
+                loc.perms.insert(idx, perm);
+            }
+        }
+
+        if let Some(parent_idx) = parent_idx {
+            self.update_idempotent_foreign_access_after_retag(parent_idx, min_sifa);
+        }
+
+        Ok(())
+    }
+    fn perform_access(
+        &mut self,
+        tag: BorTag,
+        access_range: AllocRange,
+        access_kind: AccessKind,
+        access_cause: AccessCause,
+        global: &GlobalState,
+        alloc_id: AllocId,
+        span: Span,
+    ) -> UBResult<()> {
+        #[cfg(feature = "expensive-consistency-checks")]
+        if self.roots.len() > 1 || matches!(prov, ProvenanceExtra::Wildcard) {
+            self.verify_wildcard_consistency(global);
+        }
+
+        let source_idx =
+            if tag.is_wildcard() { None } else { Some(self.tag_mapping.get(&tag).unwrap()) };
+
+        for (loc_range, loc) in self.locations.iter_mut(access_range.start, access_range.size) {
+            let diagnostics = DiagnosticInfo {
+                access_cause,
+                access_range: Some(access_range),
+                alloc_id,
+                span,
+                transition_range: loc_range,
+            };
+            loc.perform_access(
+                self.roots.iter().copied(),
+                &mut self.nodes,
+                source_idx,
+                access_kind,
+                global,
+                ChildrenVisitMode::VisitChildrenOfAccessed,
+                &diagnostics,
+                /* min_exposed_child */ None,
+            )?;
+        }
+        Ok(())
+    }
+    fn dealloc(
+        &mut self,
+        tag: BorTag,
+        access_range: AllocRange,
+        global: &GlobalState,
+        alloc_id: AllocId,
+        span: Span,
+    ) -> UBResult<()> {
+        self.perform_access(
+            tag,
+            access_range,
+            AccessKind::Write,
+            AccessCause::Dealloc,
+            global,
+            alloc_id,
+            span,
+        )?;
+
+        let start_idx =
+            if tag.is_wildcard() { None } else { Some(self.tag_mapping.get(&tag).unwrap()) };
+
+        for (loc_range, loc) in self.locations.iter_mut(access_range.start, access_range.size) {
+            let diagnostics = DiagnosticInfo {
+                alloc_id,
+                span,
+                transition_range: loc_range,
+                access_range: Some(access_range),
+                access_cause: AccessCause::Dealloc,
+            };
+            let mut check_tree = |idx| {
+                TreeVisitor { nodes: &mut self.nodes, data: loc }
+                    .traverse_this_parents_children_other(
+                        idx,
+                        |_| ContinueTraversal::Recurse,
+                        |args: NodeAppArgs<'_, _>| {
+                            let node = args.nodes.get(args.idx).unwrap();
+
+                            let perm = args
+                                .data
+                                .perms
+                                .get(args.idx)
+                                .copied()
+                                .unwrap_or_else(|| node.default_location_state());
+                            if global.get_protector_kind(node.tag)
+                                == Some(ProtectorKind::StrongProtector)
+                                && !perm.permission.is_cell()
+                                && perm.accessed
+                            {
+                                Err(TbError {
+                                    error_kind: TransitionError::ProtectedDealloc,
+                                    access_info: &diagnostics,
+                                    conflicting_node_info: &node.debug_info,
+                                    accessed_node_info: start_idx
+                                        .map(|idx| &args.nodes.get(idx).unwrap().debug_info),
+                                }
+                                .build())
+                            } else {
+                                Ok(())
+                            }
+                        },
+                    )
+            };
+            let accessed_root = start_idx.map(&mut check_tree).transpose()?;
+            for &root in self.roots.iter().rev() {
+                if Some(root) == accessed_root {
+                    continue;
+                }
+                check_tree(root)?;
+            }
+        }
+        Ok(())
+    }
+    fn perform_protector_end_access(
+        &mut self,
+        tag: BorTag,
+        global: &GlobalState,
+        alloc_id: AllocId,
+        span: Span,
+    ) -> UBResult<()> {
+        #[cfg(feature = "expensive-consistency-checks")]
+        if self.roots.len() > 1 {
+            self.verify_wildcard_consistency(global);
+        }
+
+        let source_idx = self.tag_mapping.get(&tag).unwrap();
+
+        let min_exposed_child = if self.roots.len() > 1 {
+            LocationTree::get_min_exposed_child(source_idx, &self.nodes)
+        } else {
+            None
+        };
+
+        for (loc_range, loc) in self.locations.iter_mut_all() {
+            if let Some(p) = loc.perms.get(source_idx)
+                && let Some(access_kind) = p.permission.protector_end_access()
+                && p.accessed
+            {
+                let diagnostics = DiagnosticInfo {
+                    access_cause: AccessCause::FnExit(access_kind),
+                    access_range: None,
+                    alloc_id,
+                    span,
+                    transition_range: loc_range,
+                };
+                loc.perform_access(
+                    self.roots.iter().copied(),
+                    &mut self.nodes,
+                    Some(source_idx),
+                    access_kind,
+                    global,
+                    ChildrenVisitMode::SkipChildrenOfAccessed,
+                    &diagnostics,
+                    min_exposed_child,
+                )?;
+            }
+        }
+        Ok(())
+    }
+    fn expose_tag(&mut self, tag: BorTag, protected: bool) {
+        let id = self.tag_mapping.get(&tag).unwrap();
+        let node = self.nodes.get_mut(id).unwrap();
+        if !node.is_exposed {
+            node.is_exposed = true;
+            let node = self.nodes.get(id).unwrap();
+
+            for (_, loc) in self.locations.iter_mut_all() {
+                let perm = loc
+                    .perms
+                    .get(id)
+                    .map(|p| p.permission())
+                    .unwrap_or_else(|| node.default_location_state().permission());
+
+                let access_level = perm.strongest_allowed_local_access(protected);
+                loc.exposed_cache.update_exposure(
+                    &self.nodes,
+                    id,
+                    WildcardAccessLevel::None,
+                    access_level,
+                );
+            }
+        }
+    }
+    fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
+        for i in 0..(self.roots.len()) {
+            self.remove_useless_children(self.roots[i], live_tags);
+        }
+        self.locations.merge_adjacent_thorough();
     }
 }

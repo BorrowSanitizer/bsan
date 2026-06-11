@@ -18,7 +18,7 @@ pub use foreign_access_skipping::IdempotentForeignAccess;
 pub use perms::*;
 
 use self::perms::Permission;
-pub use self::tree::{LazyTree, Tree};
+pub use self::tree::{AllocState, AllocStateImpl, EagerTree, LazyTree};
 
 type GlobalState = ProtectedTags;
 
