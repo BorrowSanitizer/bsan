@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781128493713,
+  "lastUpdate": 1781186842310,
   "repoUrl": "https://github.com/BorrowSanitizer/bsan",
   "entries": {
     "Benchmarks": [
@@ -1848,6 +1848,54 @@ window.BENCHMARK_DATA = {
           {
             "name": "indexmap@2.14.0 (nop) - x86_64-unknown-linux-gnu",
             "value": 4.725,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\"}"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "111544848+vnt1c@users.noreply.github.com",
+            "name": "Ryan Hung",
+            "username": "vnt1c"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e1871de33363ffed6f1af6f587876de95777e7a0",
+          "message": "Fixed Lazy Tree Allocation (#215)\n\n* Simplified ensure_init() for LazyTree, removing unreachable macros and the Tree return. Updated ensure_init() calls accordingly. Added #[allow(unused)] to LazyTree's remove_unreachable_tags\n\n* Add AllocState trait with lazy/eager features\n\n- Renamed `Tree` to `EagerTree` across tree.rs, diagnostics.rs, wildcard.rs\n- Introduced `AllocState` trait exposing the public interface of both tree types\n- Made all `LazyTree`/`EagerTree` methods module-private; access is now through the trait\n- Added `lazy` and `eager` Cargo features; `AllocStateImpl` type alias resolves to the selected implementation (default: `lazy`)\n- Updated all external consumers (borrow_tracker, global, lib) to use `AllocStateImpl` and import `AllocState`\n\n* Fix rustfmt formatting in tree.rs\n\n* Fix rustfmt formatting in global.rs\n\n* Box EagerTree in LazyTree for Init field\n\n* refactor(tree): moved inherent methods into AllocState trait impls\n\n* formatting\n\n* Changing LazyTree Init state to EagerTree without",
+          "timestamp": "2026-06-11T09:58:24-04:00",
+          "tree_id": "8fde09893c66ee96dcda3286175b54597fa0c411",
+          "url": "https://github.com/BorrowSanitizer/bsan/commit/e1871de33363ffed6f1af6f587876de95777e7a0"
+        },
+        "date": 1781186841511,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "hashbrown@0.17.0 (nop) - aarch64-unknown-linux-gnu",
+            "value": 4.705,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\"}"
+          },
+          {
+            "name": "indexmap@2.14.0 (nop) - aarch64-unknown-linux-gnu",
+            "value": 4.805,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\"}"
+          },
+          {
+            "name": "hashbrown@0.17.0 (nop) - x86_64-unknown-linux-gnu",
+            "value": 4.85,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\"}"
+          },
+          {
+            "name": "indexmap@2.14.0 (nop) - x86_64-unknown-linux-gnu",
+            "value": 4.9,
             "unit": "Median Relative Execution Time",
             "extra": "{\"mode\": \"nop\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\"}"
           }
