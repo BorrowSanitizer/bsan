@@ -899,6 +899,7 @@ impl Node {
 /// time a child is added via `new_child`. All operations on a single-node tree short-circuit
 /// without ever allocating the underlying `Tree`.
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum LazyTree {
     Uninit { root_tag: BorTag, size: Size, span: Span },
     Init(EagerTree),
