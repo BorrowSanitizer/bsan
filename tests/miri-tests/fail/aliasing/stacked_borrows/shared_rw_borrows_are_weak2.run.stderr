@@ -14,7 +14,7 @@ help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to 
    |
 LL | crate::intrinsics::write_via_move(dest, src);
    |
-help: this transition corresponds to a loss of read permissions
+    = help: this transition corresponds to a loss of read permissions
 
 stack backtrace:
 0: shared_rw_borrows_are_weak2::main

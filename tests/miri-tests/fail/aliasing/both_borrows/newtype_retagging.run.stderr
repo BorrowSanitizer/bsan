@@ -21,7 +21,7 @@ help: the protected tag <TAG>(StrongProtector) later transitioned to Reserved (c
    |
 LL | Box(unsafe { Unique::new_unchecked(raw) }, alloc)
    |
-help: this transition corresponds to a temporary loss of write permissions until function exit
+     = help: this transition corresponds to a temporary loss of write permissions until function exit
 
 stack backtrace:
 0: <std::alloc::System as core::alloc::global::GlobalAlloc>::dealloc

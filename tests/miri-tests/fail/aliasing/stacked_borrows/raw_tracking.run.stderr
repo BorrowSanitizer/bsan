@@ -14,7 +14,7 @@ help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to 
    |
 LL | unsafe { *raw1 = 13 }; //miri: ~ ERROR: /write access .* tag does not exist in the borrow stack/
    |
-help: this transition corresponds to a loss of read and write permissions
+   = help: this transition corresponds to a loss of read and write permissions
 
 stack backtrace:
 0: raw_tracking::main

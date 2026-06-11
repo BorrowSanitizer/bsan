@@ -14,7 +14,7 @@ help: the accessed tag <TAG>(StrongProtector) later transitioned to Reserved (co
    |
 LL | do_something(*orig_ptr);
    |
-help: this transition corresponds to a temporary loss of write permissions until function exit
+   = help: this transition corresponds to a temporary loss of write permissions until function exit
 
 stack backtrace:
 0: repeated_foreign_read_lazy_conflicted::access_after_sub_1

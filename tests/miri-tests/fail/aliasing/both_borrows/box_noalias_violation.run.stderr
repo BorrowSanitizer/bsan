@@ -21,7 +21,7 @@ help: the protected tag <TAG>(WeakProtector) later transitioned to Unique due to
    |
 LL | *x = 5;
    |
-help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
+   = help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
 
 stack backtrace:
 0: box_noalias_violation::test

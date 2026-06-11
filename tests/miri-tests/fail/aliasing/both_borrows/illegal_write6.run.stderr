@@ -21,7 +21,7 @@ help: the protected tag <TAG>(StrongProtector) later transitioned to Unique due 
    |
 LL | *a = 1;
    |
-help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
+   = help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
 
 stack backtrace:
 0: illegal_write6::foo

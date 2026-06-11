@@ -124,7 +124,7 @@ fn run_tests(
     config.program.envs.push(("BSAN_TEMP".into(), Some(tmpdir.to_owned().into())));
     // If a test ICEs, we want to see a backtrace.
     config.program.envs.push(("RUST_BACKTRACE".into(), Some("1".into())));
-    config.program.envs.push(("BSAN_OPTIONS".into(), Some("stacktrace_max_len=3".into())));
+    config.program.envs.push(("BSAN_OPTIONS".into(), Some("stacktrace_max_len=32".into())));
     config
         .program
         .envs

@@ -14,7 +14,7 @@ help: the accessed tag <TAG>(StrongProtector) later transitioned to Reserved (co
    |
 LL | fn safe(x: &mut i32, y: &i32) {
    |
-help: this transition corresponds to a temporary loss of write permissions until function exit
+  = help: this transition corresponds to a temporary loss of write permissions until function exit
 
 stack backtrace:
 0: aliasing_mut3::safe

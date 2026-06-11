@@ -57,14 +57,18 @@ impl ErrorFormatContext {
         let mut buffer = String::new();
 
         let mut max_indentation = symbol.line_length();
-        let event_symbols: Vec<(Symbol, String)> = error
+        let event_symbols: Vec<(Option<Symbol>, String)> = error
             .history
             .events
             .drain(..)
             .map(|evt| {
-                let symbol = SanitizerCommon::symbolize(evt.0.unwrap_or(Span::dummy()));
-                max_indentation = max_indentation.max(symbol.line_length());
-                (symbol, evt.1)
+                if let Some(span) = evt.0 {
+                    let sym = SanitizerCommon::symbolize(span);
+                    max_indentation = max_indentation.max(sym.line_length());
+                    (Some(sym), evt.1)
+                } else {
+                    (None, evt.1)
+                }
             })
             .collect();
 
@@ -78,8 +82,12 @@ impl ErrorFormatContext {
         }
 
         for (symbol, msg) in event_symbols {
-            buffer.push_str(&format!("help: {}\n", msg));
-            buffer.push_str(&self.format_symbol(symbol, max_indentation));
+            if let Some(symbol) = symbol {
+                buffer.push_str(&format!("help: {}\n", msg));
+                buffer.push_str(&self.format_symbol(symbol, max_indentation));
+            } else {
+                buffer.push_str(&format!("{} = help: {}\n", " ".repeat(max_indentation), msg));
+            }
         }
         buffer.push('\n');
         buffer

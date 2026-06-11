@@ -14,7 +14,7 @@ help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to 
    |
 LL | data[5] = 1;
    |
-help: this transition corresponds to a loss of read permissions
+   = help: this transition corresponds to a loss of read permissions
 
 stack backtrace:
 0: error_range::main
