@@ -28,8 +28,7 @@ struct MappingDesc {
 const MappingDesc kMemoryLayout[] = {
     {0X0000000000000, 0X0100000000000, MappingDesc::APP, "app-10-13"},
     {0X0100000000000, 0X0200000000000, MappingDesc::SHADOW, "shadow-14"},
-    {0X0200000000000, 0X0300000000000, MappingDesc::ALLOCATOR,
-     "meta-allocator"},
+    {0X0200000000000, 0X0300000000000, MappingDesc::INVALID, "invalid"},
     {0X0300000000000, 0X0400000000000, MappingDesc::ORIGIN, "origin-14"},
     {0X0400000000000, 0X0600000000000, MappingDesc::SHADOW, "shadow-15"},
     {0X0600000000000, 0X0800000000000, MappingDesc::ORIGIN, "origin-15"},
@@ -47,9 +46,6 @@ const MappingDesc kMemoryLayout[] = {
 const uptr kAllocatorSpace = 0xE00000000000ULL;
 const uptr kAllocatorSpaceSize = 0x40000000000ULL; // 4T.
 
-const uptr kMetaAllocatorSpace = 0X0200000000000ULL;
-const uptr kMetaAllocatorSpaceSize = 0x10000000000ULL; // 1T.
-
 #elif SANITIZER_LINUX && defined(__x86_64__)
 // All of the following configurations are supported.
 // ASLR disabled: main executable and DSOs at 0x555550000000
@@ -59,8 +55,7 @@ const uptr kMetaAllocatorSpaceSize = 0x10000000000ULL; // 1T.
 const MappingDesc kMemoryLayout[] = {
     {0x000000000000ULL, 0x010000000000ULL, MappingDesc::APP, "app-1"},
     {0x010000000000ULL, 0x100000000000ULL, MappingDesc::SHADOW, "shadow-2"},
-    {0x100000000000ULL, 0x110000000000ULL, MappingDesc::ALLOCATOR,
-     "meta-allocator"},
+    {0x100000000000ULL, 0x110000000000ULL, MappingDesc::INVALID, "invalid"},
     {0x110000000000ULL, 0x200000000000ULL, MappingDesc::ORIGIN, "origin-2"},
     {0x200000000000ULL, 0x300000000000ULL, MappingDesc::SHADOW, "shadow-3"},
     {0x300000000000ULL, 0x400000000000ULL, MappingDesc::ORIGIN, "origin-3"},
@@ -77,9 +72,6 @@ const MappingDesc kMemoryLayout[] = {
 
 const uptr kAllocatorSpace = 0x700000000000ULL;
 const uptr kAllocatorSpaceSize = 0x40000000000ULL; // 4T.
-
-const uptr kMetaAllocatorSpace = 0x100000000000ULL;
-const uptr kMetaAllocatorSpaceSize = 0x10000000000ULL; // 1T.
 
 #else
 #error "BorrowSanitizer: unsupported platform."

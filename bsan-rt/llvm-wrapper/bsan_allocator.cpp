@@ -73,8 +73,7 @@ void BsanThreadLocalMallocStorage::CommitBack() {
 static void *BsanAllocate(uptr size, uptr alignment, bool zeroise) {
   if (size > max_malloc_size) {
     if (AllocatorMayReturnNull()) {
-      Report("WARNING: BorrowSanitizer failed to allocate 0x%zx bytes\n",
-             size);
+      Report("WARNING: BorrowSanitizer failed to allocate 0x%zx bytes\n", size);
       return nullptr;
     }
     UNINITIALIZED BufferedStackTrace stack;
