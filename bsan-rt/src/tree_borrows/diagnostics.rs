@@ -8,7 +8,7 @@ use super::data_structures::UniIndex;
 use super::perms::{AccessKind, PermTransition, Permission, ProtectorKind};
 use super::tree::LocationState;
 use crate::helpers::AllocRange;
-use crate::tree_borrows::{LazyTree, Tree};
+use crate::tree_borrows::{EagerTree, LazyTree};
 use crate::{eprintln, *};
 
 /// Cause of an access: either a real access or one
@@ -224,7 +224,7 @@ impl fmt::Display for NodeDebugInfo {
 }
 
 #[allow(unused)]
-impl Tree {
+impl EagerTree {
     /// Climb the tree to get the tag of a distant ancestor.
     /// Allows operations on tags that are unreachable by the program
     /// but still exist in the tree. Not guaranteed to perform consistently
@@ -368,7 +368,7 @@ impl TbError<'_> {
                     format!(
                         "this {access} would cause the {conflicting_tag_name} tag {conflicting} (currently {before_disabled}) to become Disabled"
                     ),
-                    format!("protected tags must never be Disabled"),
+                    "protected tags must never be Disabled".to_string(),
                 ];
                 (title, details, conflicting_tag_name)
             }
@@ -407,7 +407,7 @@ pub fn no_valid_exposed_references_error(
         "{access_cause} through <wildcard> at {alloc_id:?}[{offset:#x}] is forbidden",
         offset = transition_range.start
     );
-    let details = vec![format!("there are no exposed tags which may perform this access here")];
+    let details = vec!["there are no exposed tags which may perform this access here".to_string()];
     let history = HistoryData::default();
     TreeBorrowsUb { title, details, history }
 }
@@ -644,7 +644,7 @@ struct DisplayRepr {
 }
 
 impl DisplayRepr {
-    fn from(tree: &Tree, root: UniIndex, show_unnamed: bool) -> Option<Self> {
+    fn from(tree: &EagerTree, root: UniIndex, show_unnamed: bool) -> Option<Self> {
         let mut v = Vec::new();
         extraction_aux(tree, root, show_unnamed, &mut v);
         let Some(root) = v.pop() else {
@@ -659,7 +659,7 @@ impl DisplayRepr {
         return Some(root);
 
         fn extraction_aux(
-            tree: &Tree,
+            tree: &EagerTree,
             idx: UniIndex,
             show_unnamed: bool,
             acc: &mut Vec<DisplayRepr>,
@@ -878,7 +878,7 @@ const DEFAULT_FORMATTER: DisplayFmt = DisplayFmt {
     accessed: DisplayFmtAccess { yes: " ", no: "?", meh: "-" },
 };
 
-impl Tree {
+impl EagerTree {
     /// Display the contents of the tree.
     pub fn print_tree(&self, protected_tags: &ProtectedTagsRef<'_>, show_unnamed: bool) {
         let mut indenter = DisplayIndent::new();
@@ -907,7 +907,7 @@ impl Tree {
     }
 
     // Print the diff between me and an older tree
-    pub fn print_tree_diff(&self, old_tree: &Tree, _protected_tags: &ProtectedTagsRef<'_>) {
+    pub fn print_tree_diff(&self, old_tree: &EagerTree, _protected_tags: &ProtectedTagsRef<'_>) {
         let mut new_tags = Vec::new();
         let mut changed_tags = Vec::new();
 
@@ -971,7 +971,7 @@ impl LazyTree {
         match self {
             LazyTree::Init(tree) => tree.print_tree(protected_tags, show_unnamed),
             LazyTree::Uninit { root_tag, size, span } => {
-                Tree::new(*root_tag, *size, *span).print_tree(protected_tags, show_unnamed)
+                EagerTree::new(*root_tag, *size, *span).print_tree(protected_tags, show_unnamed)
             }
         }
     }
@@ -979,11 +979,11 @@ impl LazyTree {
     pub fn print_tree_diff(&self, old_tree: &LazyTree, protected_tags: &ProtectedTagsRef<'_>) {
         let self_tree = match self {
             LazyTree::Init(t) => t.clone(),
-            LazyTree::Uninit { root_tag, size, span } => Tree::new(*root_tag, *size, *span),
+            LazyTree::Uninit { root_tag, size, span } => EagerTree::new(*root_tag, *size, *span),
         };
         let old_tree = match old_tree {
             LazyTree::Init(t) => t.clone(),
-            LazyTree::Uninit { root_tag, size, span } => Tree::new(*root_tag, *size, *span),
+            LazyTree::Uninit { root_tag, size, span } => EagerTree::new(*root_tag, *size, *span),
         };
         self_tree.print_tree_diff(&old_tree, protected_tags);
     }

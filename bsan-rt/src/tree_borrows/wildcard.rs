@@ -4,7 +4,7 @@ use core::fmt::Debug;
 use super::data_structures::{UniIndex, UniValMap};
 use super::perms::AccessKind;
 use super::tree::{AccessRelatedness, Node};
-use super::Tree;
+use super::EagerTree;
 #[cfg(feature = "expensive-consistency-checks")]
 use crate::borrow_tracker::GlobalState;
 use crate::BorTag;
@@ -190,41 +190,8 @@ impl ExposedCache {
     }
 }
 
-impl Tree {
-    /// Marks the tag as exposed & updates the wildcard tracking data structure
-    /// to represent its access level.
-    /// Also takes as an argument whether the tag is protected or not.
-    pub fn expose_tag(&mut self, tag: BorTag, protected: bool) {
-        let id = self.tag_mapping.get(&tag).unwrap();
-        let node = self.nodes.get_mut(id).unwrap();
-        if !node.is_exposed {
-            node.is_exposed = true;
-            let node = self.nodes.get(id).unwrap();
-
-            for (_, loc) in self.locations.iter_mut_all() {
-                let perm = loc
-                    .perms
-                    .get(id)
-                    .map(|p| p.permission())
-                    .unwrap_or_else(|| node.default_location_state().permission());
-
-                let access_level = perm.strongest_allowed_local_access(protected);
-                // An unexposed node gets treated as access level `None`. Therefore,
-                // the initial exposure transitions from `None` to the node's actual
-                // `access_level`.
-                loc.exposed_cache.update_exposure(
-                    &self.nodes,
-                    id,
-                    WildcardAccessLevel::None,
-                    access_level,
-                );
-            }
-        }
-    }
-
+impl EagerTree {
     #[allow(unused)]
-    /// This updates the wildcard tracking data structure to reflect the release of
-    /// the protector on `tag`.
     pub(super) fn update_exposure_for_protector_release(&mut self, tag: BorTag) {
         let idx = self.tag_mapping.get(&tag).unwrap();
 
@@ -248,7 +215,7 @@ impl Tree {
 }
 
 #[cfg(feature = "expensive-consistency-checks")]
-impl Tree {
+impl EagerTree {
     /// Checks that the wildcard tracking data structure is internally consistent and
     /// has the correct `exposed_as` values.
     pub fn verify_wildcard_consistency(&self, global: &GlobalState) {

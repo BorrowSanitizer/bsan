@@ -1,8 +1,8 @@
 artifact_url = "https://github.com/BorrowSanitizer/rust/releases/download/"
-tag = "rolling-1.97.0-dev-be3e7c3"
-sha = "be3e7c375a3db751debedb11043116832adb408f"
-version = "1.97.0-dev"
+tag = "rolling-1.98.0-dev-0d3a8b3"
+sha = "0d3a8b3f36e43f9cb92d63ec47ba38daa903128c"
+version = "1.98.0-dev"
 dependencies = ["cmake", "ninja", "curl", "clang", "clang-tidy", "python3"]
 targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
-llvm_branch = "rustc/22.1-2026-03-22"
+llvm_branch = "rustc/22.1-2026-05-19"
 llvm_url = "https://github.com/rust-lang/llvm-project.git"

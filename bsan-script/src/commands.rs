@@ -102,13 +102,15 @@ impl Command {
 
     fn ci(env: &mut BsanEnv, args: &[String], allow_unsafe_deps: bool) -> Result<()> {
         let components = crate::all_components!();
-        // We want to ensure that all formatting steps are completed for every component
-        // before we try running more expensive checks, like unit and integration tests.
-        Self::fmt(env, true)?;
-        components.iter().try_for_each(|c| c.clippy(env, args))?;
-        components.iter().try_for_each(|c| c.test(env, args))?;
-        //components.iter().try_for_each(|c| c.miri(env, args))?;
-        Self::ui(env, false, false, allow_unsafe_deps)
+        env.with_flags("RUSTFLAGS", &["-Dwarnings"], |env| {
+            // We want to ensure that all formatting steps are completed for every component
+            // before we try running more expensive checks, like unit and integration tests.
+            Self::fmt(env, true)?;
+            components.iter().try_for_each(|c| c.clippy(env, args))?;
+            components.iter().try_for_each(|c| c.test(env, args))?;
+            //components.iter().try_for_each(|c| c.miri(env, args))?;
+            Self::ui(env, false, false, allow_unsafe_deps)
+        })
     }
 
     fn clean(env: &mut BsanEnv) -> Result<()> {

@@ -11,7 +11,7 @@ use crate::helpers::FxHashMap;
 use crate::local::LocalCtx;
 use crate::memory::{Heap, ShadowHeap};
 use crate::tree_borrows::data_structures::RangeObjectMap;
-use crate::tree_borrows::{LazyTree, ProtectorKind};
+use crate::tree_borrows::{AllocStateImpl, ProtectorKind};
 use crate::*;
 
 pub static DISABLE_NODE_DEBUG_INFO: AtomicBool = AtomicBool::new(false);
@@ -103,7 +103,7 @@ pub struct GlobalCtx {
     protected_tags: RwLock<ProtectedTags>,
     shadow_heap: ShadowHeap<Provenance>,
     alloc_metadata_map: Heap<AllocInfo>,
-    snapshots: RwLock<FxHashMap<AllocId, LazyTree>>,
+    snapshots: RwLock<FxHashMap<AllocId, AllocStateImpl>>,
     threads: RwLock<FxHashMap<ThreadId, NonNull<LocalCtx>>>,
     exposed_provenance: RwLock<RangeObjectMap<NonNull<AllocInfo>>>,
 }
@@ -165,13 +165,13 @@ impl GlobalCtx {
         }
     }
 
-    pub fn take_snapshot(&self, alloc_id: AllocId, tree: LazyTree) {
+    pub fn take_snapshot(&self, alloc_id: AllocId, tree: AllocStateImpl) {
         self.snapshots.write().insert(alloc_id, tree);
     }
 
     pub fn with_snapshot<F>(&self, alloc_id: AllocId, f: F)
     where
-        F: FnOnce(&LazyTree),
+        F: FnOnce(&AllocStateImpl),
     {
         self.snapshots.read().get(&alloc_id).map(f);
     }
