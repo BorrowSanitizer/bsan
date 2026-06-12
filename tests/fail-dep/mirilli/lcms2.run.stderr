@@ -5,9 +5,9 @@ LL | mlu ->MemPool  = NewPtr;
    |
    = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-  --> CARGO_REGISTRY/.../lib.rs:LL:CC
+  --> CARGO_REGISTRY/.../mlu.rs:LL:CC
    |
-LL | fn as_ptr(&self) -> *mut Self::CType {
+LL | self.as_ptr(),
    |
 
 stack backtrace:

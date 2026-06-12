@@ -104,6 +104,44 @@ void PrintStackTrace(StackTrace &stack) {
   }
 }
 
+// Returns true if the file path belongs to a cargo or rustup library
+// should be skipped when looking for the first meaningful user-code frame.
+static bool IsInternalFile(const char *file) {
+  if (!file || *file == '\0')
+    return true;
+  return internal_strstr(file, ".cargo") || internal_strstr(file, ".rustup");
+}
+
+// Returns true if any frame at this PC resolves to a user code file.
+static bool HasUserInlineFrame(const SymbolizedStack *frame) {
+  for (const SymbolizedStack *cur = frame; cur; cur = cur->next) {
+    if (!IsInternalFile(cur->info.file))
+      return true;
+  }
+  return false;
+}
+
+// Scans the symbolized stack for the first user-code frame, bounded above by
+// __rust_begin_short_backtrace (which marks the start of Rust runtime startup).
+// Returns 0 when the symbolizer is unavailable or no user frame is found.
+uptr FindUserFramePc(StackTrace &stack) {
+  if (GetEnv("BSAN_SYMBOLIZER") == nullptr)
+    return 0;
+  for (uptr i = 1; i < stack.size; ++i) {
+    SymbolizedStackHolder sym(
+        Symbolizer::GetOrInit()->SymbolizePC(stack.trace[i]));
+    const SymbolizedStack *frame = sym.get();
+    if (!frame)
+      continue;
+    if (frame->info.function &&
+        internal_strstr(frame->info.function, "__rust_begin_short_backtrace"))
+      break;
+    if (HasUserInlineFrame(frame))
+      return stack.trace[i];
+  }
+  return 0;
+}
+
 bool CallerIsInstrumented(void *sym) {
   if (__bsan_shadow_stack == nullptr) {
     return false;
@@ -120,6 +158,11 @@ bool CallerIsInstrumented(void *sym) {
 }
 
 } // namespace __bsan
+
+// Weak fallback used when the Rust runtime is not linked (e.g. --nop mode).
+// The strong definition in libbsan_rt overrides this when present.
+SANITIZER_WEAK_ATTRIBUTE
+void __bsan_format_pending_ub(uptr) {}
 
 void __sanitizer::BufferedStackTrace::UnwindImpl(uptr pc, uptr bp,
                                                  void *context,
@@ -234,7 +277,8 @@ void __bsan_validate_retval(void *prev_marker, Provenance *frame, uptr len) {
 }
 
 // Symbolize a single PC into file:line:column, writing the file path into
-// the provided buffer. Returns 1 on success, 0 otherwise.
+// the provided buffer. Returns 0 on failure, 1 when the frame resolves to
+// user code, and 2 when every candidate frame is internal library code
 SANITIZER_INTERFACE_ATTRIBUTE
 u32 __bsan_symbolize_pc(uptr pc, char *file_buf, uptr file_buf_len, u32 *line,
                         u32 *column) {
@@ -246,19 +290,34 @@ u32 __bsan_symbolize_pc(uptr pc, char *file_buf, uptr file_buf_len, u32 *line,
   if (!res) {
     return 0;
   }
-  const char *fname = res->info.file;
-  if (!fname) {
+  // The chain lists inline frames innermost first. Prefer the first frame
+  // outside the stdlib/runtime: when e.g. ptr::write is inlined into user
+  // code, the innermost frame points at RUSTLIB even though the PC lives in
+  // a user function.
+  const __sanitizer::SymbolizedStack *best = nullptr;
+  for (const __sanitizer::SymbolizedStack *cur = res; cur; cur = cur->next) {
+    if (!cur->info.file)
+      continue;
+    if (!best)
+      best = cur;
+    if (!IsInternalFile(cur->info.file)) {
+      best = cur;
+      break;
+    }
+  }
+  if (!best) {
     res->ClearAll();
     return 0;
   }
 
-  __sanitizer::internal_strlcpy(file_buf, fname, file_buf_len);
+  __sanitizer::internal_strlcpy(file_buf, best->info.file, file_buf_len);
   if (line)
-    *line = res->info.line;
+    *line = best->info.line;
   if (column)
-    *column = res->info.column;
+    *column = best->info.column;
+  u32 result = IsInternalFile(best->info.file) ? 2 : 1;
   res->ClearAll();
-  return 1;
+  return result;
 }
 
 // Read the entire file at path into the buffer.

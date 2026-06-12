@@ -1,18 +1,18 @@
 error: Undefined Behavior: write access through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
-   --> RUSTLIB/core/src/mem/mod.rs:LL:CC
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/aliasing_mut4.rs:LL:CC
    |
-LL | crate::intrinsics::write_via_move(dest, src);
+LL | y.set(1);
    |
-    = help: the accessed tag <TAG>(StrongProtector) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
-    = help: this foreign write access would cause the protected tag <TAG>(StrongProtector) (currently Frozen) to become Disabled
-    = help: protected tags must never be Disabled
+   = help: the accessed tag <TAG>(StrongProtector) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
+   = help: this foreign write access would cause the protected tag <TAG>(StrongProtector) (currently Frozen) to become Disabled
+   = help: protected tags must never be Disabled
 help: the accessed tag <TAG>(StrongProtector) was created here
-   --> RUSTLIB/core/src/mem/mod.rs:LL:CC
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/aliasing_mut4.rs:LL:CC
    |
-LL | pub const fn replace<T>(dest: &mut T, src: T) -> T {
+LL | y.set(1);
    |
 help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Frozen
-   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/aliasing_mut4.rs:LL:CC
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/aliasing_mut4.rs:LL:CC
    |
 LL | fn safe(x: &i32, y: &mut Cell<i32>) {
    |

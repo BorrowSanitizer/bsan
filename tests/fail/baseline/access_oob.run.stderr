@@ -1,7 +1,7 @@
 error: Undefined Behavior: an access of size 4b at offset 0x4 is out of bounds for ALLOC of size 4b.
-    --> RUSTLIB/core/src/ptr/mod.rs:LL:CC
+  --> bsan/tests/fail/baseline/access_oob.rs:LL:CC
    |
-LL | intrinsics::write_via_move(dst, src)
+LL | unsafe { p.add(1).write(0) }
    |
 
 stack backtrace:

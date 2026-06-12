@@ -1,13 +1,13 @@
 error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-   --> CARGO_REGISTRY/.../crc4.rs:LL:CC
+  --> CARGO_REGISTRY/.../crc4.rs:LL:CC
    |
 LL | n_prom[0] = ((n_prom[0]) & $HEX);  // CRC byte is replaced by 0
    |
-    = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
+   = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-   --> RUSTLIB/core/src/slice/mod.rs:LL:CC
+  --> bsan/tests/fail-dep/mirilli/ms5837.rs:LL:CC
    |
-LL | pub const fn as_ptr(&self) -> *const T {
+LL | c_implementation::crc4(c_input_buffer.as_ptr());
    |
 
 stack backtrace:

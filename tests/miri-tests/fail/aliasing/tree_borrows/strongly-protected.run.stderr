@@ -1,17 +1,17 @@
 error: Undefined Behavior: deallocation through <TAG>(WeakProtector) at ALLOC[0x0] is forbidden
-    --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
+  --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/strongly-protected.rs:LL:CC
    |
-LL | unsafe { libc::free(ptr as *mut libc::c_void) }
+LL | drop(unsafe { Box::from_raw(raw) });
    |
-     = help: the allocation of the accessed tag <TAG>(WeakProtector) also contains the strongly protected tag <TAG>(StrongProtector)
-     = help: the strongly protected tag <TAG>(StrongProtector) disallows deallocations
+   = help: the allocation of the accessed tag <TAG>(WeakProtector) also contains the strongly protected tag <TAG>(StrongProtector)
+   = help: the strongly protected tag <TAG>(StrongProtector) disallows deallocations
 help: the accessed tag <TAG>(WeakProtector) was created here
-    --> RUSTLIB/core/src/mem/mod.rs:LL:CC
+  --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/strongly-protected.rs:LL:CC
    |
-LL | pub const fn drop<T>(_x: T)
+LL | drop(unsafe { Box::from_raw(raw) });
    |
 help: the strongly protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
-    --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/strongly-protected.rs:LL:CC
+  --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/strongly-protected.rs:LL:CC
    |
 LL | fn inner(x: &mut i32, f: fn(*mut i32)) {
    |

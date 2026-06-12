@@ -1,20 +1,20 @@
 error: Undefined Behavior: deallocation through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-    --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
+  --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/illegal_deALLOC.rs:LL:CC
    |
-LL | unsafe { libc::free(ptr as *mut libc::c_void) }
+LL | dealloc(ptr2, Layout::from_size_align_unchecked(1, 1));
    |
-     = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this deallocation (acting as a child write access)
+   = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this deallocation (acting as a child write access)
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
-    --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/illegal_deALLOC.rs:LL:CC
+  --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/illegal_deALLOC.rs:LL:CC
    |
 LL | let ptr2 = (&mut *ptr1) as *mut u8;
    |
 help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x0..0x1]
-    --> RUSTLIB/core/src/ptr/mod.rs:LL:CC
+  --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/illegal_deALLOC.rs:LL:CC
    |
-LL | intrinsics::write_via_move(dst, src)
+LL | ptr1.write(0);
    |
-     = help: this transition corresponds to a loss of read and write permissions
+   = help: this transition corresponds to a loss of read and write permissions
 
 stack backtrace:
 0: <std::alloc::System as core::alloc::global::GlobalAlloc>::dealloc

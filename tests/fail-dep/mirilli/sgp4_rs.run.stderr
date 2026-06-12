@@ -5,9 +5,9 @@ LL | longstr1[j] = '_';
    |
     = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-   --> RUSTLIB/core/src/slice/mod.rs:LL:CC
+   --> CARGO_REGISTRY/.../sgp4_sys.rs:LL:CC
    |
-LL | pub const fn as_ptr(&self) -> *const T {
+LL | l1.as_ptr(),
    |
 
 stack backtrace:

@@ -5,14 +5,14 @@ LL | if (s->avail_in_expect != s->strm->avail_in)
    |
     = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child read access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
-   --> CARGO_REGISTRY/.../mem.rs:LL:CC
+   --> CARGO_REGISTRY/.../bufread.rs:LL:CC
    |
-LL | ffi::BZ2_bzCompressInit(&mut *raw, lvl.level() as c_int, 0, work_factor as c_int),
+LL | data: Compress::new(level, 30),
    |
 help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x8..0xc]
-   --> CARGO_REGISTRY/.../mem.rs:LL:CC
+   --> CARGO_REGISTRY/.../bufread.rs:LL:CC
    |
-LL | self.inner.raw.avail_in = input.len().min(c_uint::MAX as usize) as c_uint;
+LL | ret = self.data.compress(input, buf, action);
    |
     = help: this transition corresponds to a loss of read and write permissions
 

@@ -3,13 +3,30 @@ use alloc::string::{String, ToString};
 use core::ffi::c_char;
 use core::{fmt, ptr, slice};
 
-#[repr(transparent)]
+/// Number of raw caller PCs captured per span. Must match `kSpanMaxFrames`
+/// in `bsan.h`.
+pub const SPAN_MAX_FRAMES: usize = 4;
+
+/// Raw caller-PC chain captured by the C++ interceptors, innermost first.
+/// `pcs[0]` is the immediate retag/access site; deeper entries let
+/// display-time symbolization skip stdlib/bsan-rt wrappers (e.g.
+/// `core::ptr::write` for `x.write(0)`) and report the user call site
+/// instead. Unused entries are 0.
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct Span(usize);
+pub struct Span {
+    pub pcs: [usize; SPAN_MAX_FRAMES],
+}
 
 impl Span {
     pub const fn dummy() -> Self {
-        Self(0)
+        Self { pcs: [0; SPAN_MAX_FRAMES] }
+    }
+
+    pub fn new(pc: usize) -> Self {
+        let mut pcs = [0; SPAN_MAX_FRAMES];
+        pcs[0] = pc;
+        Self { pcs }
     }
 }
 
@@ -52,23 +69,45 @@ impl fmt::Display for Symbol {
 pub struct SanitizerCommon;
 
 impl SanitizerCommon {
-    pub fn symbolize(span: Span) -> Symbol {
-        if span.0 == 0 {
-            return Symbol::Unused;
-        }
+    /// Symbolizes `pc`, returning the symbol and whether it resolves to an
+    /// internal library path (`.cargo`/`.rustup`). The criteria live in
+    /// `IsInternalFile` in `llvm-wrapper/bsan.cpp`. Internal paths are not
+    /// informative as primary error locations for reported diagnostic events.
+    fn symbolize_pc(pc: usize) -> (Symbol, bool) {
         let mut buf = [0u8; 512];
         let mut line: u32 = 0;
         let mut column: u32 = 0;
-        let ok = unsafe {
-            __bsan_symbolize_pc(span.0, buf.as_mut_ptr(), buf.len(), &mut line, &mut column)
-        };
-        if ok == 1 {
+        let ok =
+            unsafe { __bsan_symbolize_pc(pc, buf.as_mut_ptr(), buf.len(), &mut line, &mut column) };
+        if ok != 0 {
             let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
             if let Ok(s) = core::str::from_utf8(&buf[..end]) {
-                return Symbol::Resolved { file: s.to_string(), line, col: column };
+                return (Symbol::Resolved { file: s.to_string(), line, col: column }, ok == 2);
             }
         }
-        Symbol::Unresolved { pc: span.0 }
+        (Symbol::Unresolved { pc }, false)
+    }
+
+    pub fn symbolize(span: Span) -> Symbol {
+        if span.pcs[0] == 0 {
+            return Symbol::Unused;
+        }
+        let (primary, internal) = Self::symbolize_pc(span.pcs[0]);
+        if matches!(primary, Symbol::Resolved { .. }) && !internal {
+            return primary;
+        }
+        // The immediate site is inside a library: walk the captured caller
+        // chain for the first user-code location instead.
+        for &pc in &span.pcs[1..] {
+            if pc == 0 {
+                break;
+            }
+            let (backup, internal) = Self::symbolize_pc(pc);
+            if matches!(backup, Symbol::Resolved { .. }) && !internal {
+                return backup;
+            }
+        }
+        primary
     }
 
     /// Read entire file into a String
@@ -105,7 +144,8 @@ unsafe extern "C" {
     #[thread_local]
     pub unsafe static mut __bsan_had_error: usize;
 
-    /// Symbolize a single PC into "file:line:column" and returns 1 on success.
+    /// Symbolize a single PC into "file:line:column". Returns 0 on failure,
+    /// 1 for user code, 2 for internal library code (cargo/rustup paths).
     fn __bsan_symbolize_pc(
         pc: usize,
         file_buf: *mut u8,

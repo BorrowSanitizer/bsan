@@ -5,9 +5,9 @@ LL | GETCOEFF(df, bcdar);           // use macro
    |
      = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-    --> RUSTLIB/core/src/slice/mod.rs:LL:CC
+    --> CARGO_REGISTRY/.../dec_quad.rs:LL:CC
    |
-LL | pub const fn as_ptr(&self) -> *const T {
+LL | unsafe { decQuadGetCoefficient(x, bcd.as_ptr()) }
    |
 
 stack backtrace:

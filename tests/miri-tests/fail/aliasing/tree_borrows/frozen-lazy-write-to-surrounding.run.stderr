@@ -1,11 +1,11 @@
 error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-    --> RUSTLIB/core/src/ptr/mod.rs:LL:CC
+ --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/frozen-lazy-write-to-surrounding.rs:LL:CC
    |
-LL | intrinsics::write_via_move(dst, src)
+LL | unsafe { ptr.write(0) }; //miri: ~ERROR: /write access .* forbidden/
    |
-     = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
+  = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-    --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/frozen-lazy-write-to-surrounding.rs:LL:CC
+ --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/frozen-lazy-write-to-surrounding.rs:LL:CC
    |
 LL | let x = &pair.0;
    |

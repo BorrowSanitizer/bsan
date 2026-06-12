@@ -95,9 +95,9 @@ extern "C" void *__bsan_crt_malloc(SIZE_T size) {
 }
 
 INTERCEPTOR(void *, malloc, SIZE_T size) {
-  GET_SPAN;
   if (DlsymAlloc::Use())
     return DlsymAlloc::Allocate(size);
+  GET_SPAN;
   bool already_in_scope = BlockInterception();
   InterceptorBarrier barrier;
   void *ptr = REAL(malloc)(size);
@@ -118,11 +118,11 @@ extern "C" void __bsan_crt_free(void *ptr) {
 }
 
 INTERCEPTOR(void, free, void *ptr) {
-  GET_SPAN_PC_BP;
   if (UNLIKELY(!ptr))
     return;
   if (DlsymAlloc::PointerIsMine(ptr))
     return DlsymAlloc::Free(ptr);
+  GET_SPAN_PC_BP;
   bool already_in_scope = BlockInterception();
   InterceptorBarrier barrier;
   if (!already_in_scope && INST_CALLER(free)) {
@@ -134,9 +134,9 @@ INTERCEPTOR(void, free, void *ptr) {
 }
 
 INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
-  uptr span = GET_CALLER_PC();
   if (DlsymAlloc::Use())
     return DlsymAlloc::Callocate(nmemb, size);
+  GET_SPAN;
   bool already_in_scope = BlockInterception();
   InterceptorBarrier barrier;
   void *ptr = REAL(calloc)(nmemb, size);
@@ -149,9 +149,9 @@ INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
 }
 
 INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
-  GET_SPAN_PC_BP;
   if (DlsymAlloc::Use() || DlsymAlloc::PointerIsMine(ptr))
     return DlsymAlloc::Realloc(ptr, size);
+  GET_SPAN_PC_BP;
   bool already_in_scope = BlockInterception();
   InterceptorBarrier barrier;
   bool is_inst = !already_in_scope && INST_CALLER(realloc);

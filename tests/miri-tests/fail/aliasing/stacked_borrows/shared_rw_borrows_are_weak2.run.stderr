@@ -1,20 +1,20 @@
 error: Undefined Behavior: read access through <TAG>(unprotected) at ALLOC[0x8] is forbidden
-   --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/shared_rw_borrows_are_weak2.rs:LL:CC
+  --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/shared_rw_borrows_are_weak2.rs:LL:CC
    |
 LL | let _val = *y; //miri: ~ ERROR: /read access .* tag does not exist in the borrow stack/
    |
-    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child read access
+   = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child read access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-   --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/shared_rw_borrows_are_weak2.rs:LL:CC
+  --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/shared_rw_borrows_are_weak2.rs:LL:CC
    |
 LL | let y: &i32 = mem::transmute(&*x.borrow()); // launder lifetime
    |
 help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x8..0xc]
-   --> RUSTLIB/core/src/mem/mod.rs:LL:CC
+  --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/shared_rw_borrows_are_weak2.rs:LL:CC
    |
-LL | crate::intrinsics::write_via_move(dest, src);
+LL | shr_rw.replace(1);
    |
-    = help: this transition corresponds to a loss of read permissions
+   = help: this transition corresponds to a loss of read permissions
 
 stack backtrace:
 0: shared_rw_borrows_are_weak2::main

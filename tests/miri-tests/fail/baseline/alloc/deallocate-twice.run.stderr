@@ -1,7 +1,7 @@
 error: Undefined Behavior: trying to access an allocation that has been freed.
-  --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
+ --> bsan/tests/miri-tests/fail/baseline/alloc/deallocate-twice.rs:LL:CC
    |
-LL | unsafe { libc::free(ptr as *mut libc::c_void) }
+LL | dealloc(x, Layout::from_size_align_unchecked(1, 1)); //miri: ~ERROR: has been freed
    |
 
 stack backtrace:

@@ -1,20 +1,20 @@
 error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/load_invalid_shr.rs:LL:CC
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/load_invalid_shr.rs:LL:CC
    |
 LL | let _val = *xref_in_mem; //miri: ~[tree]| ERROR: /reborrow through .* is forbidden/
    |
-    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow (acting as a child read access)
+   = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow (acting as a child read access)
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-   --> RUSTLIB/alloc/src/boxed.rs:LL:CC
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/load_invalid_shr.rs:LL:CC
    |
-LL | unsafe { core::intrinsics::write_via_move(ptr, x) };
+LL | let xref_in_mem = Box::new(xref);
    |
 help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x0..0x4]
-   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/load_invalid_shr.rs:LL:CC
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/load_invalid_shr.rs:LL:CC
    |
 LL | unsafe { *xraw = 42 }; // unfreeze
    |
-    = help: this transition corresponds to a loss of read permissions
+   = help: this transition corresponds to a loss of read permissions
 
 stack backtrace:
 0: load_invalid_shr::main

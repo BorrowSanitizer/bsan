@@ -5,14 +5,14 @@ LL | if (s->strm->avail_in == 0) break;
    |
     = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child read access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
-   --> CARGO_REGISTRY/.../c.rs:LL:CC
+   --> CARGO_REGISTRY/.../mem.rs:LL:CC
    |
-LL | &mut *state,
+LL | inner: Deflate::make(level, zlib_header, ffi::MZ_DEFAULT_WINDOW_BITS as u8),
    |
 help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x8..0xc]
-   --> CARGO_REGISTRY/.../c.rs:LL:CC
+   --> CARGO_REGISTRY/.../mem.rs:LL:CC
    |
-LL | raw.avail_in = cmp::min(input.len(), c_uint::MAX as usize) as c_uint;
+LL | self.inner.compress(input, output, flush)
    |
     = help: this transition corresponds to a loss of read and write permissions
 

@@ -1,0 +1,7 @@
+error: Undefined Behavior: an access of size 80b at offset $HEX is out of bounds for ALLOC of size 1b.
+   --> RUSTLIB/std/src/sys/pal/unix/stack_overflow.rs:LL:CC
+   |
+LL | let fault_addr = unsafe { (*info).si_addr().addr() };
+   |
+
+stack backtrace:

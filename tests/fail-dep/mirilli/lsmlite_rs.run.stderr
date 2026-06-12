@@ -1,10 +1,10 @@
 error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-   --> CARGO_REGISTRY/.../lsm_main.rs:LL:CC
-    = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
+  --> CARGO_REGISTRY/.../lsm_main.rs:LL:CC
+   = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-   --> CARGO_REGISTRY/.../lsmdb.rs:LL:CC
+  --> bsan/tests/fail-dep/mirilli/lsmlite_rs.rs:LL:CC
    |
-LL | rc = lsm_new(null_mut(), &db_handle);
+LL | db.connect().unwrap();
    |
 
 stack backtrace:

@@ -1,18 +1,18 @@
 error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x3] is forbidden
-   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/outside-range.rs:LL:CC
+  --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/outside-range.rs:LL:CC
    |
 LL | *y.add(3) = 42; //miri: ~ ERROR: /write access through .* is forbidden/
    |
-    = help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
-    = help: this foreign write access would cause the protected tag <TAG>(StrongProtector) (currently Reserved) to become Disabled
-    = help: protected tags must never be Disabled
+   = help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
+   = help: this foreign write access would cause the protected tag <TAG>(StrongProtector) (currently Reserved) to become Disabled
+   = help: protected tags must never be Disabled
 help: the accessed tag <TAG>(unprotected) was created here
-   --> RUSTLIB/core/src/slice/mod.rs:LL:CC
+  --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/outside-range.rs:LL:CC
    |
-LL | pub const fn as_mut_ptr(&mut self) -> *mut T {
+LL | let raw = data.as_mut_ptr();
    |
 help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
-   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/outside-range.rs:LL:CC
+  --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/outside-range.rs:LL:CC
    |
 LL | unsafe fn stuff(x: &mut u8, y: *mut u8) {
    |

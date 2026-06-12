@@ -1,26 +1,26 @@
 error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x8] is forbidden
-   --> bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:LL:CC
+  --> bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:LL:CC
    |
 LL | *x = 1; //miri: ~ERROR: write access
    |
-    = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
+   = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
-   --> bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:LL:CC
+  --> bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:LL:CC
    |
 LL | core::future::poll_fn(move |_| {
    |
 help: the accessed tag <TAG>(unprotected) later transitioned to Unique due to a child write access at offsets [0x8..0x9]
-   --> bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:LL:CC
+  --> bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:LL:CC
    |
 LL | *x = 1; //miri: ~ERROR: write access
    |
-    = help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
+   = help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
 help: the accessed tag <TAG>(unprotected) later transitioned to Frozen due to a reborrow (acting as a foreign read access) at offsets [0x0..0x10]
-   --> RUSTLIB/core/src/ops/deref.rs:LL:CC
+  --> bsan/tests/miri-tests/fail/aliasing/async-shared-mutable.rs:LL:CC
    |
-LL | self
+LL | let _: Pin<&_> = f.as_ref(); // Or: `f.as_mut().into_ref()`.
    |
-    = help: this transition corresponds to a loss of write permissions
+   = help: this transition corresponds to a loss of write permissions
 
 stack backtrace:
 0: async_shared_mutable::main::{closure#0}::{closure#0}
