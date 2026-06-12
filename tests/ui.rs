@@ -390,11 +390,17 @@ fn main() -> Result<()> {
 
     let target = get_version_info();
     let tmpdir = tempfile::Builder::new().prefix("bsan-uitest-").tempdir()?;
+
     ui(Mode::Pass, "tests/pass", &target, WithoutDependencies, tmpdir.path(), false)?;
-    ui(Mode::Pass, "tests/pass-dep", &target, WithDependencies, tmpdir.path(), false)?;
     ui(Mode::Pass, "tests/miri-tests/pass", &target, WithoutDependencies, tmpdir.path(), false)?;
+
     ui(Mode::Fail, "tests/fail", &target, WithoutDependencies, tmpdir.path(), false)?;
-    ui(Mode::Fail, "tests/fail-dep", &target, WithDependencies, tmpdir.path(), false)?;
     ui(Mode::Fail, "tests/miri-tests/fail", &target, WithoutDependencies, tmpdir.path(), false)?;
+
+    if env::var("BSAN_UNSAFE_DEPS").is_ok() {
+        ui(Mode::Pass, "tests/pass-dep", &target, WithDependencies, tmpdir.path(), false)?;
+        ui(Mode::Fail, "tests/fail-dep", &target, WithDependencies, tmpdir.path(), false)?;
+    }
+
     Ok(())
 }

@@ -26,7 +26,7 @@ impl Command {
         match self {
             Command::Setup => Self::setup(env),
             Command::Clean => Self::clean(env),
-            Command::Ci { args } => Self::ci(env, &args),
+            Command::Ci { args, allow_unsafe_deps } => Self::ci(env, &args, allow_unsafe_deps),
             Command::Doc { components, args } => components.iter().try_for_each(|c| {
                 c.doc(env, &args)?;
                 Ok(())
@@ -51,7 +51,9 @@ impl Command {
             Command::Install { components, args } => {
                 components.iter().try_for_each(|c| c.install(env, &args))
             }
-            Command::UI { bless, keep_sysroot } => Self::ui(env, bless, keep_sysroot),
+            Command::UI { bless, keep_sysroot, allow_unsafe_deps } => {
+                Self::ui(env, bless, keep_sysroot, allow_unsafe_deps)
+            }
             Command::Miri { components, args } => components.iter().try_for_each(|c| {
                 c.miri(env, &args)?;
                 Ok(())
@@ -78,8 +80,15 @@ impl Command {
         CompilerRt::fmt(env, check)
     }
 
-    fn ui(env: &mut BsanEnv, bless: bool, keep_sysroot: bool) -> Result<()> {
-        run_tests(env, bless, false, keep_sysroot)?;
+    fn ui(
+        env: &mut BsanEnv,
+        bless: bool,
+        keep_sysroot: bool,
+        allow_unsafe_deps: bool,
+    ) -> Result<()> {
+        let config = TestConfig { keep_sysroot, allow_unsafe_deps, bless, fix: false };
+
+        run_tests(env, config)?;
 
         crate::all_components!().iter().try_for_each(|c| c.install(env, &[]))?;
 
@@ -91,17 +100,16 @@ impl Command {
         Ok(())
     }
 
-    fn ci(env: &mut BsanEnv, args: &[String]) -> Result<()> {
+    fn ci(env: &mut BsanEnv, args: &[String], allow_unsafe_deps: bool) -> Result<()> {
         let components = crate::all_components!();
         env.with_flags("RUSTFLAGS", &["-Dwarnings"], |env| {
             // We want to ensure that all formatting steps are completed for every component
             // before we try running more expensive checks, like unit and integration tests.
             Self::fmt(env, true)?;
             components.iter().try_for_each(|c| c.clippy(env, args))?;
-            //components.iter().try_for_each(|c| c.test(env, args))?;
+            components.iter().try_for_each(|c| c.test(env, args))?;
             //components.iter().try_for_each(|c| c.miri(env, args))?;
-            //Self::ui(env, false, false)
-            Ok(())
+            Self::ui(env, false, false, allow_unsafe_deps)
         })
     }
 
@@ -218,19 +226,32 @@ impl Command {
     }
 
     fn fix(env: &mut BsanEnv, keep_sysroot: bool) -> Result<()> {
-        run_tests(env, false, true, keep_sysroot)?;
+        let config = TestConfig { keep_sysroot, bless: false, fix: true, allow_unsafe_deps: false };
+        run_tests(env, config)?;
         Ok(())
     }
 }
 
-fn run_tests(
-    env: &mut BsanEnv,
+#[derive(Clone, Copy, Debug)]
+struct TestConfig {
+    /// Record test output as canonical
     bless: bool,
+    /// If tests that "should" fail or pass have the correct
+    /// output, then move them into the corresponding folder.
     fix: bool,
+    /// Use the current sysroot, if it exists, to build test
+    /// cases.
     keep_sysroot: bool,
-) -> Result<(), anyhow::Error> {
+    /// Build tests that have dependencies. This includes tests
+    /// with known security vulnerabilities or undefined behaviors
+    /// that we can recreate with BorrowSanitizer. This should only
+    /// be used in CI, or in a secure environment.
+    allow_unsafe_deps: bool,
+}
+
+fn run_tests(env: &mut BsanEnv, config: TestConfig) -> Result<(), anyhow::Error> {
     let sysroot_dir = path!(&env.build_dir / "sysroot");
-    if !keep_sysroot {
+    if !config.keep_sysroot {
         cmd!(env.sh, "rm -rf {sysroot_dir}").quiet().run()?;
         // The cached build of the test suite's dependencies goes stale for the
         // same reasons as the sysroot: Cargo does not know to rebuild it when
@@ -256,7 +277,7 @@ fn run_tests(
         env_guards.push(env.sh.push_env("BSAN_SYMBOLIZER", &symbolizer));
         env_guards.push(env.sh.push_env("CARGO_BSAN", &cargo_bsan));
 
-        if fix {
+        if config.fix {
             let root = &env.root_dir;
             let miri_sp = count_rs(&path!(root / "tests" / "miri-tests" / "should-pass"))?;
             let miri_sf = count_rs(&path!(root / "tests" / "miri-tests" / "should-fail"))?;
@@ -274,7 +295,11 @@ fn run_tests(
 
         env_guards.push(env.sh.push_env("BSAN_RUSTFLAGS", rustflags.trim()));
 
-        let add_bless = if bless { "--bless" } else { "" };
+        if config.allow_unsafe_deps {
+            env_guards.push(env.sh.push_env("BSAN_UNSAFE_DEPS", "1"))
+        }
+
+        let add_bless = if config.bless { "--bless" } else { "" };
         cmd!(env.sh, "cargo test -p bsan --test ui -- {add_bless}").run()?;
         Ok(())
     })?;

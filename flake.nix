@@ -34,6 +34,11 @@
             cmake
             ninja
 
+            perf
+            hyperfine
+            jq
+            valgrind
+
             rustup
             clang
             gcc

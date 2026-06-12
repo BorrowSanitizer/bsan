@@ -1,4 +1,7 @@
 name: CI
+permissions:
+  contents: read
+  packages: read
 on:
   push:
     branches: [ "main" ]
@@ -28,8 +31,10 @@ jobs:
     name: '${{ matrix.config.target }}'
     steps:
     - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
     - name: Setup dependencies
       run: |
         ln -s /root/.rustup/ $HOME/.rustup
     - name: CI
-      run: ./xb ci
+      run: ./xb ci --allow-unsafe-deps
