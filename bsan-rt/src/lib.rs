@@ -561,16 +561,13 @@ unsafe extern "C-unwind" fn __bsan_shadow(addr: *mut c_void) -> NonNull<Provenan
     unsafe { global_ctx().shadow_heap().get(addr.addr()) }
 }
 
-/// Stores the given provenance value into shadow memory at the location for the given address.
+/// Increments the reference count associated with a provenance value.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_rc_store(
-    bor_tag: BorTag,
-    alloc_info: *mut AllocInfo,
-    dest: NonNull<Provenance>,
-) {
-    let prov = Provenance { bor_tag, alloc_info };
-    unsafe { dest.write(prov) };
-}
+unsafe extern "C-unwind" fn __bsan_rc_inc_impl(_bor_tag: BorTag, _alloc_info: *mut AllocInfo) {}
+
+/// Decrements the reference count associated with a provenance value.
+#[unsafe(no_mangle)]
+unsafe extern "C-unwind" fn __bsan_rc_dec_impl(_bor_tag: BorTag, _alloc_info: *mut AllocInfo) {}
 
 /// Reserves a stack slot for allocation metadata.
 #[unsafe(no_mangle)]

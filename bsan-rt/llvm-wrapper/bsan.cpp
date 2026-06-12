@@ -357,8 +357,24 @@ __bsan_shadow_transfer(void *dest, const void *src, uptr access_size) {}
 SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE void
 __bsan_shadow_clear(void *dest, uptr access_size) {}
 
-SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE void
-__bsan_rc_store(BorTag Tag, AllocInfo *Info, Provenance *Dest) {}
+SANITIZER_WEAK_ATTRIBUTE void __bsan_rc_inc_impl(BorTag Tag, AllocInfo *Info);
+
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_rc_inc(BorTag Tag, AllocInfo *Info) {
+  if (__bsan_rc_inc_impl) {
+    __bsan_rc_inc_impl(Tag, Info);
+  }
+}
+
+SANITIZER_WEAK_ATTRIBUTE
+void __bsan_rc_dec_impl(BorTag Tag, AllocInfo *Info);
+
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_rc_dec(BorTag Tag, AllocInfo *Info) {
+  if (__bsan_rc_dec_impl) {
+    __bsan_rc_dec_impl(Tag, Info);
+  }
+}
 
 SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE AllocInfo *
 __bsan_reserve_stack_slot() {
