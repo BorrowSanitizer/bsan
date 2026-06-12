@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781289342242,
+  "lastUpdate": 1781290195509,
   "repoUrl": "https://github.com/BorrowSanitizer/bsan",
   "entries": {
     "Benchmarks": [
@@ -1992,6 +1992,54 @@ window.BENCHMARK_DATA = {
           {
             "name": "indexmap@2.14.0 (nop) - x86_64-unknown-linux-gnu",
             "value": 6.33,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\"}"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "icmccorm@cs.cmu.edu",
+            "name": "Ian McCormack",
+            "username": "icmccorm"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "44cef4ff5f6b6be121125b716e4538ad3be8d795",
+          "message": "Add benchmarking tools and `jq` to flake",
+          "timestamp": "2026-06-12T14:42:22-04:00",
+          "tree_id": "2878964403bdc828128e7f3448a80266dc2884da",
+          "url": "https://github.com/BorrowSanitizer/bsan/commit/44cef4ff5f6b6be121125b716e4538ad3be8d795"
+        },
+        "date": 1781290195154,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "hashbrown@0.17.0 (nop) - aarch64-unknown-linux-gnu",
+            "value": 4.665,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\"}"
+          },
+          {
+            "name": "indexmap@2.14.0 (nop) - aarch64-unknown-linux-gnu",
+            "value": 4.81,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\"}"
+          },
+          {
+            "name": "hashbrown@0.17.0 (nop) - x86_64-unknown-linux-gnu",
+            "value": 4.8149999999999995,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\"}"
+          },
+          {
+            "name": "indexmap@2.14.0 (nop) - x86_64-unknown-linux-gnu",
+            "value": 4.895,
             "unit": "Median Relative Execution Time",
             "extra": "{\"mode\": \"nop\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\"}"
           }
