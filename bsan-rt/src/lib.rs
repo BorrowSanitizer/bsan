@@ -504,7 +504,7 @@ unsafe extern "C-unwind" fn __bsan_write_impl(
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
     BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(access_size), |bt| {
-        bt.access(ctx, AccessKind::Read, pc)
+        bt.access(ctx, AccessKind::Write, pc)
     })
     .unwrap_or_else(|err| ctx.handle_error(err, pc));
 }
