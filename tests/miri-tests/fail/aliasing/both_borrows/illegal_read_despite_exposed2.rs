@@ -22,8 +22,8 @@ fn main() {
         // Stack if _fool existed: Unknown(<N), Disabled(N), SRW(N+1); collapsed to Unknown(<N+2) which would not cause an ERROR
 
         // Stack borrows would also fail if we replaced this with a read, but tree borrows would let it pass.
-        *root2 = 3;
+        *root2 = 3; //miri: ~[tree]| ERROR: /write access through .* is forbidden/
         //miri: ~[stack]^ ERROR: /write access .* tag does not exist in the borrow stack/
-        //miri: ~[tree]| ERROR: /write access through .* is forbidden/
+        
     }
 }

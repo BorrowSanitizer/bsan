@@ -1,0 +1,25 @@
+error: Undefined Behavior: read access through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+  --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/protector_release.rs:LL:CC
+   |
+LL | let _fail = unsafe { *ptr }; //miri: ~ ERROR: /read access through .* is forbidden/
+   |
+   = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child read access
+help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
+  --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/protector_release.rs:LL:CC
+   |
+LL | let ref6 = unsafe { &mut *ref3.get() };
+   |
+help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a protector release (acting as a foreign write access) on every location previously accessed by this tag
+  --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/protector_release.rs:LL:CC
+   |
+LL | };
+   |
+help: this transition corresponds to a loss of read and write permissions
+
+stack backtrace:
+0: protector_release::main
+ at bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/protector_release.rs:LL:CC
+1: <fn() as core::ops::function::FnOnce<()>>::call_once
+ at RUSTLIB/core/src/ops/function.rs:LL:CC
+2: std::sys::backtrace::__rust_begin_short_backtrace
+ at RUSTLIB/std/src/sys/backtrace.rs:LL:CC
