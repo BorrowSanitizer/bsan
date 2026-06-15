@@ -3,6 +3,11 @@ error: Undefined Behavior: deallocation through <TAG>(unprotected) at ALLOC[0x0]
    |
 LL | dealloc(ptr2, Layout::from_size_align_unchecked(1, 1));
    |
+note: the origin of the error is in library code, here:
+  --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
+   |
+LL | unsafe { libc::free(ptr as *mut libc::c_void) }
+   |
    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this deallocation (acting as a child write access)
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
   --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/illegal_deALLOC.rs:LL:CC

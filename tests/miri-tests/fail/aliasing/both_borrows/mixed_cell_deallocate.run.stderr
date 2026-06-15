@@ -3,6 +3,11 @@ error: Undefined Behavior: deallocation through <TAG>(StrongProtector) at ALLOC[
    |
 LL | unsafe { alloc::dealloc(x as *const _ as *mut T as *mut u8, layout) }; //miri: ~ERROR: dealloc
    |
+note: the origin of the error is in library code, here:
+  --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
+   |
+LL | unsafe { libc::free(ptr as *mut libc::c_void) }
+   |
    = help: the accessed tag <TAG>(StrongProtector) has state Frozen which forbids this deallocation (acting as a child write access)
 help: the accessed tag <TAG>(StrongProtector) was created here, in the initial state Cell
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/mixed_cell_deallocate.rs:LL:CC

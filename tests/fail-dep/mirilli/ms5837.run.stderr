@@ -3,6 +3,11 @@ error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x0]
    |
 LL | c_implementation::crc4(c_input_buffer.as_ptr());
    |
+note: the origin of the error is in library code, here:
+  --> CARGO_REGISTRY/.../crc4.rs:LL:CC
+   |
+LL | n_prom[0] = ((n_prom[0]) & $HEX);  // CRC byte is replaced by 0
+   |
    = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
   --> bsan/tests/fail-dep/mirilli/ms5837.rs:LL:CC

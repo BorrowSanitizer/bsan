@@ -3,6 +3,8 @@ error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x0]
    |
 LL | db.connect().unwrap();
    |
+note: the origin of the error is in library code, here:
+  --> CARGO_REGISTRY/.../lsm_main.rs:LL:CC
    = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
   --> bsan/tests/fail-dep/mirilli/lsmlite_rs.rs:LL:CC

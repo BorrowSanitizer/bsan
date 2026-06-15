@@ -3,6 +3,11 @@ error: Undefined Behavior: read access through <TAG>(unprotected) at ALLOC[0xc] 
    |
 LL | assert_eq!(lhs.cmp(&rhs), expected);
    |
+note: the origin of the error is in library code, here:
+  --> CARGO_REGISTRY/.../decBasic.rs:LL:CC
+   |
+LL | if (DFISCCZERO(df)) return result;  // coefficient continuation is 0
+   |
    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child read access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
   --> bsan/tests/fail-dep/mirilli/dec.rs:LL:CC

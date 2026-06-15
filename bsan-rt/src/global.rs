@@ -30,9 +30,6 @@ unsafe extern "C" {
 
 /// Called from the `HANDLE_ERROR` C++ macro after the stack trace has been
 /// captured and the first user-code frame PC has been located.
-///
-/// `user_frame_pc` is the PC of that frame, or 0 when the symbolizer is
-/// unavailable or no user frame was found.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __bsan_format_pending_ub(user_frame_pc: usize) {
     let ptr = unsafe { *PENDING_ERROR.get() };
@@ -41,9 +38,12 @@ pub unsafe extern "C" fn __bsan_format_pending_ub(user_frame_pc: usize) {
     }
     unsafe { *PENDING_ERROR.get() = core::ptr::null_mut() };
     let (ub_info, original_pc) = unsafe { *alloc::boxed::Box::from_raw(ptr) };
-    let effective_pc = if user_frame_pc != 0 { Span::new(user_frame_pc) } else { original_pc };
+    let (primary, origin) = crate::sanitizer_common::SanitizerCommon::resolve_error_location(
+        user_frame_pc,
+        original_pc,
+    );
     let mut ctx = ErrorFormatContext::default();
-    crate::eprint!("error: {}", ctx.display_ub(ub_info, effective_pc));
+    crate::eprint!("error: {}", ctx.display_ub(ub_info, primary, origin));
 }
 
 #[derive(Default)]

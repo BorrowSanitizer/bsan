@@ -1,11 +1,16 @@
 error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x20] is forbidden
- --> bsan/tests/fail-dep/mirilli/lcms2.rs:LL:CC
+  --> bsan/tests/fail-dep/mirilli/lcms2.rs:LL:CC
    |
 LL | assert!(m.set_text("Hello 世界！", Locale::none()));
    |
-  = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
+note: the origin of the error is in library code, here:
+  --> CARGO_REGISTRY/.../cmsnamed.rs:LL:CC
+   |
+LL | mlu ->MemPool  = NewPtr;
+   |
+   = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
- --> bsan/tests/fail-dep/mirilli/lcms2.rs:LL:CC
+  --> bsan/tests/fail-dep/mirilli/lcms2.rs:LL:CC
    |
 LL | assert!(m.set_text("Hello 世界！", Locale::none()));
    |

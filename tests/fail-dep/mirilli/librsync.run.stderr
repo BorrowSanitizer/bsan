@@ -3,6 +3,11 @@ error: Undefined Behavior: deallocation through <TAG>(WeakProtector) at ALLOC[0x
    |
 LL | });
    |
+note: the origin of the error is in library code, here:
+   --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
+   |
+LL | unsafe { libc::free(ptr as *mut libc::c_void) }
+   |
     = help: the accessed tag <TAG>(WeakProtector) has state Reserved (conflicted) which forbids this deallocation (acting as a child write access)
 help: the accessed tag <TAG>(WeakProtector) was created here, in the initial state Reserved
    --> bsan/tests/fail-dep/mirilli/librsync.rs:LL:CC

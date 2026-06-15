@@ -3,6 +3,11 @@ error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x4]
    |
 LL | blitsort(
    |
+note: the origin of the error is in library code, here:
+  --> CARGO_REGISTRY/.../blitsort.rs:LL:CC
+   |
+LL | parity_merge_two(swap, array, x, y, ptl, ptr, pts, cmp);
+   |
    = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
   --> bsan/tests/fail-dep/mirilli/blitsort-sys.rs:LL:CC

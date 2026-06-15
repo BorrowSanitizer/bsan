@@ -3,6 +3,11 @@ error: Undefined Behavior: trying to access an allocation that has been freed.
    |
 LL | dealloc(x, Layout::from_size_align_unchecked(1, 1)); //miri: ~ERROR: has been freed
    |
+note: the origin of the error is in library code, here:
+  --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
+   |
+LL | unsafe { libc::free(ptr as *mut libc::c_void) }
+   |
 
 stack backtrace:
 0: <std::alloc::System as core::alloc::global::GlobalAlloc>::dealloc

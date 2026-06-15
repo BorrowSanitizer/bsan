@@ -69,10 +69,8 @@ impl fmt::Display for Symbol {
 pub struct SanitizerCommon;
 
 impl SanitizerCommon {
-    /// Symbolizes `pc`, returning the symbol and whether it resolves to an
-    /// internal library path (`.cargo`/`.rustup`). The criteria live in
-    /// `IsInternalFile` in `llvm-wrapper/bsan.cpp`. Internal paths are not
-    /// informative as primary error locations for reported diagnostic events.
+    /// Symbolizes `pc` to a [`Symbol`], reporting whether it lies in an
+    /// internal library path.
     fn symbolize_pc(pc: usize) -> (Symbol, bool) {
         let mut buf = [0u8; 512];
         let mut line: u32 = 0;
@@ -88,26 +86,58 @@ impl SanitizerCommon {
         (Symbol::Unresolved { pc }, false)
     }
 
+    /// Resolves `span` to its primary error location
     pub fn symbolize(span: Span) -> Symbol {
+        Self::symbolize_with_origin(span).0
+    }
+
+    /// Symbolizes `pc`, returning `Some` only when it resolves to user code.
+    fn symbolize_user(pc: usize) -> Option<Symbol> {
+        match Self::symbolize_pc(pc) {
+            (sym @ Symbol::Resolved { .. }, false) => Some(sym),
+            _ => None,
+        }
+    }
+
+    /// Symbolizes the immediate access site `pc` as an origin note.
+    fn library_origin(pc: usize) -> Option<Symbol> {
+        let (sym, internal) = Self::symbolize_pc(pc);
+        internal.then_some(sym)
+    }
+
+    /// Resolves the primary error location and an optional origin note.
+    pub fn resolve_error_location(
+        user_frame_pc: usize,
+        captured: Span,
+    ) -> (Symbol, Option<Symbol>) {
+        if user_frame_pc == 0 {
+            return Self::symbolize_with_origin(captured);
+        }
+        (Self::symbolize_pc(user_frame_pc).0, Self::library_origin(captured.pcs[0]))
+    }
+
+    /// Resolves `span` to its primary location and an optional origin note.
+    ///
+    /// When the immediate access site is library code, the primary location
+    /// becomes the nearest user-code caller and the access site is returned as
+    /// the origin. The origin is `None` when the access site is already user
+    /// code, or when no caller resolves to user code.
+    pub fn symbolize_with_origin(span: Span) -> (Symbol, Option<Symbol>) {
         if span.pcs[0] == 0 {
-            return Symbol::Unused;
+            return (Symbol::Unused, None);
         }
-        let (primary, internal) = Self::symbolize_pc(span.pcs[0]);
-        if matches!(primary, Symbol::Resolved { .. }) && !internal {
-            return primary;
+        let (immediate, internal) = Self::symbolize_pc(span.pcs[0]);
+
+        if !internal && matches!(immediate, Symbol::Resolved { .. }) {
+            return (immediate, None);
         }
-        // The immediate site is inside a library: walk the captured caller
-        // chain for the first user-code location instead.
-        for &pc in &span.pcs[1..] {
-            if pc == 0 {
-                break;
-            }
-            let (backup, internal) = Self::symbolize_pc(pc);
-            if matches!(backup, Symbol::Resolved { .. }) && !internal {
-                return backup;
-            }
+
+        let user_caller =
+            span.pcs[1..].iter().copied().take_while(|&pc| pc != 0).find_map(Self::symbolize_user);
+        match user_caller {
+            Some(caller) => (caller, internal.then_some(immediate)),
+            None => (immediate, None),
         }
-        primary
     }
 
     /// Read entire file into a String

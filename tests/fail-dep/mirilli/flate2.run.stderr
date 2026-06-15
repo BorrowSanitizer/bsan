@@ -3,6 +3,11 @@ error: Undefined Behavior: read access through <TAG>(unprotected) at ALLOC[0x8] 
    |
 LL | c.read_to_end(&mut result).unwrap();
    |
+note: the origin of the error is in library code, here:
+   --> CARGO_REGISTRY/.../deflate.rs:LL:CC
+   |
+LL | if (s->strm->avail_in == 0) break;
+   |
     = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child read access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
    --> CARGO_REGISTRY/.../c.rs:LL:CC
