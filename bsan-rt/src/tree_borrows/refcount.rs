@@ -2,8 +2,7 @@ use core::sync::atomic::{fence, AtomicUsize, Ordering};
 
 /// A thread-safe reference count with correct atomic ordering semantics.
 // TODO: remove `allow(dead_code)` once the `__bsan_rc_inc`/`__bsan_rc_dec`
-// endpoints (lib.rs) actually drive this type. Until then it is unused in
-// non-test builds, which `-Dwarnings` would otherwise reject.
+// endpoints (lib.rs) actually drive this type.
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct RefCount {
