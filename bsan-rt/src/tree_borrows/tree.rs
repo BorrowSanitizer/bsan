@@ -1339,7 +1339,7 @@ impl AllocState for EagerTree {
             }
         }
     }
-    
+
     fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
         for i in 0..(self.roots.len()) {
             self.remove_useless_children(self.roots[i], live_tags);

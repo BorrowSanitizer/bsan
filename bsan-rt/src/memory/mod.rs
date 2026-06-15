@@ -109,7 +109,6 @@ unsafe impl Heapable for AllocInfo {
     }
 }
 
-
 /// Credit: bumpalo
 /// Like `round_up_to` but turns overflow into undefined behavior rather than
 /// returning `None`.
