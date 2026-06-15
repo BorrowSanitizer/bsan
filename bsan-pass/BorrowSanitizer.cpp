@@ -1496,13 +1496,8 @@ private:
     IRB.CreateCall(BS.BsanFuncRetag,
                    {SrcAddr, RI.Size, RI.Perms, RI.ImArray, ImArrayLen,
                     RI.PinArray, PinArrayLen, SrcProv.Tag, SrcProv.Info, Slot});
-    Provenance RetaggedProv = loadProveannce(IRB, Slot);
+    Provenance RetaggedProv = loadProvenance(IRB, Slot);
     storeProvenanceToShadow(IRB, Operand, RetaggedProv);
-    if (RI.isProtected()) {
-      Provenance RetaggedProv = Provenance::load(IRB, BS, Shadow);
-      Value *Slot = allocStackSlot(IRB, RI.isProtected());
-      RetaggedProv.store(IRB, BS, Slot);
-    }
   }
 
   void instrumentRetagReg(CallBase &CB) {
@@ -1516,7 +1511,7 @@ private:
       IRB.CreateCall(BS.BsanFuncRetag,
                      {Ptr, RI.Size, RI.Perms, RI.ImArray, ImArrayLen,
                       RI.PinArray, PinArrayLen, Prov->Tag, Prov->Info, Dest});
-      setProvenance(&CB, Provenance::load(IRB, BS, Dest));
+      setProvenance(&CB, loadProvenance(IRB, Dest));
     }
   }
 
