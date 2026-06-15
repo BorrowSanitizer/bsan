@@ -10,6 +10,7 @@ pub mod diagnostics;
 mod exhaustive;
 mod foreign_access_skipping;
 pub mod perms;
+pub mod refcount;
 pub mod tree;
 mod tree_visitor;
 mod wildcard;
