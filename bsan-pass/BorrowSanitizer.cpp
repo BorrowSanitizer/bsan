@@ -1143,7 +1143,7 @@ private:
     if (Prov.Elems.isVector()) {
       report_fatal_error("Vectors are not supported.");
     } else {
-      Provenance* old = Prov.load(IRB, BS, Shadow);
+      Provenance *old = Prov.load(IRB, BS, Shadow);
 
       IRB.createCall(BS.BsanFuncRcInc, {Prov.Tag, Prov.Info});
       Value *Shadow = IRB.CreateCall(BS.BsanFuncShadow, {ObjAddr});
