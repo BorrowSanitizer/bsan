@@ -138,16 +138,23 @@ struct ProvenanceDesc {
   Value *ByteOffset;
   // The byte width of this field.
   Value *ByteWidth;
-  // The alignment of this field.
-  MaybeAlign Align;
+  // The minimum common alignment between this field its offset within
+  // the parent type. This is "none" for scalable types.
+  MaybeAlign FieldAlign;
   // The number of provenance values in this field.
   ElementCount Elems;
 
 public:
   ProvenanceDesc(Value *ByteOffset, Value *ByteWidth, ElementCount Elems,
-                 MaybeAlign Align)
+                 MaybeAlign FieldAlign)
       : ByteOffset(ByteOffset), ByteWidth(ByteWidth), Elems(Elems),
-        Align(Align) {}
+        FieldAlign(FieldAlign) {}
+
+  MaybeAlign alignRelativeTo(Align BaseAlign) {
+    if (!FieldAlign)
+      return std::nullopt;
+    return MaybeAlign(std::min(*FieldAlign, BaseAlign));
+  }
 };
 
 // Instrument functions of a module to detect violations of Rust's aliasing
@@ -280,6 +287,9 @@ private:
   /// and also clears shadow memory.
   FunctionCallee BsanFuncMemCpy;
 
+  /// Runtime function for clearing a range within shadow memory.
+  FunctionCallee BsanFuncShadowClear;
+
   /// Runtime function for incrementing the reference count associated
   /// with a provenance value.
   FunctionCallee BsanFuncRcInc;
@@ -342,11 +352,8 @@ Value *BorrowSanitizer::getProvenanceDesc(IRBuilder<> &IRB,
   case Type::PointerTyID: {
     TypeSize AllocTySize = DL->getTypeAllocSize(CurrentTy);
     Value *AllocSize = IRB.CreateTypeSize(IntptrTy, AllocTySize);
-    // The alignment of this field relative to the base of the access. When the
-    // byte offset is a compile-time constant, combine it with the pointer's
-    // ABI alignment so that callers can decide whether the shadow address is
-    // already provenance-aligned (and skip masking). Otherwise leave it
-    // unknown, forcing a conservative mask down to kMinProvAlignment.
+    // The alignment of this field relative to its offset within the parent
+    // This is intentionally left as a nullopt for scalable types.
     MaybeAlign FieldAlign = std::nullopt;
     if (auto *CI = dyn_cast<ConstantInt>(ByteOffset))
       FieldAlign =
@@ -573,6 +580,9 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   BsanFuncMemSet = M.getOrInsertFunction(BSAN("memset"), AL, IRB.getVoidTy(),
                                          PtrTy, Int32Ty, IntptrTy);
+
+  BsanFuncShadowClear = M.getOrInsertFunction(BSAN("shadow_clear"), AL,
+                                              IRB.getVoidTy(), PtrTy, IntptrTy);
 
   BsanFuncReserveStackSlot =
       M.getOrInsertFunction(BSAN("reserve_stack_slot"),
@@ -1151,9 +1161,6 @@ private:
   /// shown to be at least kMinProvAlignment, the offset is additionally rounded
   /// down to a provenance-slot (kMinProvAlignment) boundary, so sub-slot
   /// addresses map to the slot that holds their provenance.
-  ///
-  /// Note: for efficiency, many shadow mappings only use the XorMask and
-  ///       OriginBase; the AndMask and ShadowBase are often zero.
   Value *getShadowPtrOffset(Value *Addr, IRBuilder<> &IRB,
                             MaybeAlign Alignment) {
     Type *IntptrTy = ptrToIntPtrType(Addr->getType());
@@ -1219,20 +1226,6 @@ private:
       return Prov;
     }
     report_fatal_error("Vectors are not supported.");
-  }
-
-  void storeProvenance(IRBuilder<> &IRB, Provenance Prov, Value *Base) {
-    if (Prov.Elems.isScalar()) {
-      Value *ZeroIdx = ConstantInt::get(IRB.getInt64Ty(), 0);
-      Value *TagPtr = Base;
-      Value *InfoPtr =
-          IRB.CreateGEP(BS.ProvenanceTy, Base,
-                        {ZeroIdx, ConstantInt::get(IRB.getInt32Ty(), 1)});
-      IRB.CreateAlignedStore(Prov.Tag, TagPtr, kMinProvAlignment);
-      IRB.CreateAlignedStore(Prov.Info, InfoPtr, kMinProvAlignment);
-      return;
-    }
-    report_fatal_error("Vector provenance is not supported yet");
   }
 
   Provenance loadProvenance(IRBuilder<> &IRB, Value *Src,
@@ -1333,8 +1326,22 @@ private:
     BaseProvMap.set(Key, Prov);
   }
 
+  void storeProvenance(IRBuilder<> &IRB, Provenance Prov, Value *Base) {
+    if (Prov.Elems.isVector()) {
+      report_fatal_error("Vector provenance is not supported yet");
+    }
+    Value *ZeroIdx = ConstantInt::get(IRB.getInt64Ty(), 0);
+    Value *TagPtr = Base;
+    Value *InfoPtr =
+        IRB.CreateGEP(BS.ProvenanceTy, Base,
+                      {ZeroIdx, ConstantInt::get(IRB.getInt32Ty(), 1)});
+    storeProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Prov);
+  }
+
   // Stores a provenance value into shadow memory, starting at the given object
-  // address.
+  // address. The alignment provided is used to determine whether the shadow
+  // address needs to be manually aligned, or if it is already at the correct
+  // alignment.
   void
   storeProvenanceToShadow(IRBuilder<> &IRB, Value *ObjAddr, Provenance Prov,
                           MaybeAlign Alignment = kMinProvAlignment,
@@ -1344,9 +1351,16 @@ private:
     } else {
       Value *TagPtr, *InfoPtr;
       std::tie(TagPtr, InfoPtr) = getShadowOriginPtr(IRB, ObjAddr, Alignment);
-      IRB.CreateAlignedStore(Prov.Tag, TagPtr, kMinProvAlignment);
-      IRB.CreateAlignedStore(Prov.Info, InfoPtr, kMinProvAlignment);
+      storeProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Prov);
     }
+  }
+
+  // Stores a provenance value into shadow memory pairwise at the specified
+  // addresses, which must be aligned correctly.
+  void storeProvenanceAlignedPairwise(IRBuilder<> &IRB, Value *TagPtr,
+                                      Value *InfoPtr, Provenance Prov) {
+    IRB.CreateAlignedStore(Prov.Tag, TagPtr, kMinProvAlignment);
+    IRB.CreateAlignedStore(Prov.Info, InfoPtr, kMinProvAlignment);
   }
 
   // Populates the array of argument provenance pointers and initializes the
@@ -1892,7 +1906,7 @@ private:
     for (const auto &[Idx, Comp] : llvm::enumerate(Components)) {
       Value *ByteOffset = Comp.ByteOffset;
       Value *ObjAddr = ptradd(IRB, Base, ByteOffset);
-      MaybeAlign Alignment = effectiveProvAlign(Comp.Align, LI.getAlign());
+      MaybeAlign Alignment = Comp.alignRelativeTo(LI.getAlign());
       Provenance Prov = loadProvenanceFromShadow(IRB, ObjAddr, Alignment,
                                                  Comp.Elems, LI.getOrdering());
       setProvenance({&LI, Idx}, Prov);
@@ -1925,66 +1939,39 @@ private:
 
     Value *Offset = ConstantInt::get(BS.IntptrTy, 0);
 
+    SmallVector<std::tuple<Value *, Value *>> SlotsToClear;
+
     for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
       Value *ByteOffset = Desc.ByteOffset;
       if (Clear) {
         if (Offset != Desc.ByteOffset) {
-          Value *CurrOffset = Offset;
-          Value *GapSize = IRB.CreateSub(ByteOffset, CurrOffset);
-          Value *BaseAddr = ptradd(IRB, Base, CurrOffset);
-          clearProvenance(IRB, BaseAddr, GapSize,
-                          offsetProvAlign(SI.getAlign(), CurrOffset),
-                          SI.getOrdering());
+          Value *GapSize = IRB.CreateSub(ByteOffset, Offset);
+          SlotsToClear.push_back(std::make_tuple(Offset, GapSize));
         }
         Offset = IRB.CreateAdd(Desc.ByteOffset, Desc.ByteWidth);
       }
       Value *ObjAddr = ptradd(IRB, Base, ByteOffset);
-      MaybeAlign Alignment = effectiveProvAlign(Desc.Align, SI.getAlign());
+      MaybeAlign Alignment = Desc.alignRelativeTo(SI.getAlign());
       Provenance Prov =
           assertProvenance(IRB, Desc.Elems, {SI.getValueOperand(), Idx});
       storeProvenanceToShadow(IRB, ObjAddr, Prov, Alignment, SI.getOrdering());
     }
 
     if (Clear) {
-      Value *OffsetVal = Offset;
-      Value *Remaining = IRB.CreateSub(EntireSize, OffsetVal);
-      Value *RemainingAddr = ptradd(IRB, Base, OffsetVal);
-      clearProvenance(IRB, RemainingAddr, Remaining,
-                      offsetProvAlign(SI.getAlign(), OffsetVal),
-                      SI.getOrdering());
+      Value *GapSize = IRB.CreateSub(EntireSize, Offset);
+      SlotsToClear.push_back(std::make_tuple(Offset, GapSize));
+    }
+
+    for (auto &[Offset, GapSize] : SlotsToClear) {
+      Value *BaseAddr = ptradd(IRB, Base, Offset);
+      MaybeAlign GapAlign = std::nullopt;
+      if (auto *CI = dyn_cast<ConstantInt>(Offset))
+        GapAlign = commonAlignment(SI.getAlign(), CI->getZExtValue());
+      clearProvenance(IRB, BaseAddr, GapSize, GapAlign, SI.getOrdering());
     }
   }
 
-  // Combines the offset-relative alignment recorded in a ProvenanceDesc with
-  // the alignment of the access's base pointer to obtain the alignment that
-  // can be guaranteed for the field's shadow address. Returns std::nullopt
-  // when no alignment can be proven, forcing a conservative mask down to
-  // kMinProvAlignment.
-  MaybeAlign effectiveProvAlign(MaybeAlign FieldAlign, Align BaseAlign) {
-    if (!FieldAlign)
-      return std::nullopt;
-    return MaybeAlign(std::min(*FieldAlign, BaseAlign));
-  }
-
-  // Alignment of `BaseAlign`-aligned base plus a byte offset, when the offset
-  // is a compile-time constant; std::nullopt otherwise.
-  MaybeAlign offsetProvAlign(Align BaseAlign, Value *Offset) {
-    if (auto *CI = dyn_cast<ConstantInt>(Offset))
-      return commonAlignment(BaseAlign, CI->getZExtValue());
-    return std::nullopt;
-  }
-
-  // Clears the provenance of the application range [Base, Base + Size) by
-  // zeroing the corresponding tag (shadow) and info (origin) bytes. Provenance
-  // is tracked at kMinProvAlignment granularity, so the cleared region is
-  // rounded up to a whole number of provenance slots. Small ranges are cleared
-  // with direct stores; larger ranges fall back to a memset.
-  //
-  // `Alignment` is the provable alignment of `Base`. When it is at least
-  // kMinProvAlignment the shadow address is already slot-aligned, so the size
-  // rounding is exact; otherwise getShadowOriginPtr masks the address down to
-  // kMinProvAlignment, matching the runtime's ClearShadow behavior of aligning
-  // the destination range.
+  // Clears the provenance of the application range.
   void clearProvenance(IRBuilder<> &IRB, Value *Base, Value *Size,
                        MaybeAlign Alignment, AtomicOrdering Ordering) {
     ConstantInt *CI = dyn_cast<ConstantInt>(Size);
@@ -2001,24 +1988,19 @@ private:
     Value *TagPtr, *InfoPtr;
     std::tie(TagPtr, InfoPtr) = getShadowOriginPtr(IRB, Base, Alignment);
 
-    // Threshold below which inline stores are cheaper than a memset call.
     const uint64_t MaxInlineSlots = 8;
     uint64_t NumSlots = AlignedBytes / SlotSize;
 
     if (NumSlots <= MaxInlineSlots) {
-      Value *ZeroTag = ConstantInt::get(BS.IntptrTy, 0);
-      Value *ZeroInfo = ConstantPointerNull::get(BS.PtrTy);
       for (uint64_t I = 0; I < NumSlots; ++I) {
         Value *Idx = ConstantInt::get(BS.IntptrTy, I * SlotSize);
-        IRB.CreateAlignedStore(ZeroTag, ptradd(IRB, TagPtr, Idx),
-                               kMinProvAlignment);
-        IRB.CreateAlignedStore(ZeroInfo, ptradd(IRB, InfoPtr, Idx),
-                               kMinProvAlignment);
+        TagPtr = ptradd(IRB, TagPtr, Idx);
+        InfoPtr = ptradd(IRB, InfoPtr, Idx);
+        storeProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr,
+                                       Provenance::omnivalid(BS));
       }
     } else {
-      IRB.CreateMemSet(TagPtr, IRB.getInt8(0), AlignedBytes, kMinProvAlignment);
-      IRB.CreateMemSet(InfoPtr, IRB.getInt8(0), AlignedBytes,
-                       kMinProvAlignment);
+      IRB.CreateCall(BS.BsanFuncShadowClear, {Base, Size});
     }
   }
 

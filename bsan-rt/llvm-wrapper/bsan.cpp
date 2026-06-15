@@ -365,6 +365,9 @@ void __bsan_rc_dec(BorTag Tag, AllocInfo *Info) {
   }
 }
 
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_shadow_clear(void *dest, uptr size) { ClearShadow(dest, size); }
+
 SANITIZER_WEAK_ATTRIBUTE
 AllocInfo *__bsan_reserve_stack_slot_impl();
 
