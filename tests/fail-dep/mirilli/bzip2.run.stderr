@@ -1,18 +1,18 @@
 error: Undefined Behavior: read access through <TAG>(unprotected) at ALLOC[0x8] is forbidden
-   --> CARGO_REGISTRY/.../bzlib.rs:LL:CC
+   --> bsan/tests/fail-dep/mirilli/bzip2.rs:LL:CC
    |
-LL | if (s->avail_in_expect != s->strm->avail_in)
+LL | c.read_to_end(&mut result).unwrap();
    |
     = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child read access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
-   --> CARGO_REGISTRY/.../bufread.rs:LL:CC
+   --> bsan/tests/fail-dep/mirilli/bzip2.rs:LL:CC
    |
-LL | data: Compress::new(level, 30),
+LL | let mut c = BzEncoder::new(&m[..], Compression::default());
    |
 help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x8..0xc]
-   --> CARGO_REGISTRY/.../bufread.rs:LL:CC
+   --> CARGO_REGISTRY/.../mem.rs:LL:CC
    |
-LL | ret = self.data.compress(input, buf, action);
+LL | self.inner.raw.avail_in = input.len().min(c_uint::MAX as usize) as c_uint;
    |
     = help: this transition corresponds to a loss of read and write permissions
 

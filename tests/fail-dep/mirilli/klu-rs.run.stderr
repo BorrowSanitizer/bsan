@@ -1,13 +1,13 @@
 error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x4c] is forbidden
-   --> CARGO_REGISTRY/.../klu_analyze.rs:LL:CC
+  --> bsan/tests/fail-dep/mirilli/klu-rs.rs:LL:CC
    |
-LL | Common->status = KLU_OK ;
+LL | builder.finish(KluSettings::new())
    |
-    = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
+   = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-   --> CARGO_REGISTRY/.../lib.rs:LL:CC
+  --> CARGO_REGISTRY/.../lib.rs:LL:CC
    |
-LL | self.settings.as_ffi(),
+LL | self.data.as_ref() as *const I::KluCommon as *mut I::KluCommon
    |
 
 stack backtrace:
