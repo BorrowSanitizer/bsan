@@ -5,15 +5,14 @@ use core::sync::atomic::{fence, AtomicUsize, Ordering};
 // endpoints (lib.rs) actually drive this type.
 #[allow(dead_code)]
 #[derive(Debug)]
-pub struct RefCount {
-    count: AtomicUsize,
-}
+#[repr(transparent)]
+pub struct RefCount(AtomicUsize);
 
 #[allow(dead_code)]
 impl RefCount {
     /// Creates a new `RefCount` initialized to 1.
     pub fn new() -> Self {
-        Self { count: AtomicUsize::new(1) }
+        Self(AtomicUsize::new(1))
     }
 
     /// Increments the reference count.
@@ -24,7 +23,7 @@ impl RefCount {
     /// Panics if the count would overflow `usize::MAX / 2`. In practice this is
     /// unreachable, but the check prevents silent wraparound to zero.
     pub fn increment(&self) {
-        let prev = self.count.fetch_add(1, Ordering::Relaxed);
+        let prev = self.0.fetch_add(1, Ordering::Relaxed);
         debug_assert!(prev <= usize::MAX / 2, "RefCount overflow");
     }
 
@@ -32,7 +31,7 @@ impl RefCount {
     /// zero, indicating the caller is responsible for cleanup. Otherwise,
     /// returns `false` if the count is non-zero.
     pub fn decrement(&self) -> bool {
-        let prev = self.count.fetch_sub(1, Ordering::Release);
+        let prev = self.0.fetch_sub(1, Ordering::Release);
         debug_assert!(prev > 0, "RefCount decremented below zero");
         if prev == 1 {
             // Pair with every prior Release decrement.
@@ -45,7 +44,7 @@ impl RefCount {
 
     /// Returns the current reference count at the time this function is called.
     pub fn get(&self) -> usize {
-        self.count.load(Ordering::Relaxed)
+        self.0.load(Ordering::Relaxed)
     }
 
     /// Creates a new `RefCount` with the given initial value.
@@ -53,7 +52,7 @@ impl RefCount {
     /// Test-only: the runtime always starts a count at 1 via [`RefCount::new`].
     #[cfg(test)]
     fn with_count(n: usize) -> Self {
-        Self { count: AtomicUsize::new(n) }
+        Self(AtomicUsize::new(n))
     }
 
     /// Returns `true` if the reference count is exactly 1 at the time this function is called.
@@ -61,7 +60,7 @@ impl RefCount {
     /// Test-only: the zero transition is reported by [`RefCount::decrement`] instead.
     #[cfg(test)]
     fn is_unique(&self) -> bool {
-        self.count.load(Ordering::Acquire) == 1
+        self.0.load(Ordering::Acquire) == 1
     }
 }
 
@@ -74,7 +73,7 @@ mod tests {
 
     use super::*;
 
-    // ---- single-threaded API sanity checks ----
+    // ---- single-threaded API smoke checks ----
 
     #[test]
     fn new_starts_at_one() {
