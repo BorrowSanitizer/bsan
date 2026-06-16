@@ -17,7 +17,7 @@ use crate::memory::{mmap, munmap, round_mut_ptr_up_to_unchecked, PageSize, WordA
 /// but large enough to store a pointer to another `Heapable` instance.
 /// This allows values to act as nodes in a free list.
 pub(crate) unsafe trait Heapable: WordAligned {
-    fn next(&mut self) -> *mut Option<NonNull<Self>>;
+    fn next(ptr: *mut Self) -> *mut Option<NonNull<Self>>;
 
     fn is_heapable() -> bool {
         debug_assert!(Self::is_word_aligned());
@@ -60,7 +60,7 @@ impl<T: Heapable> Heap<T> {
             let header = self.parent_header(head);
             header.increment_used();
 
-            let next = unsafe { (*head.as_ptr()).next() };
+            let next = T::next(head.as_ptr());
             *free_list = unsafe { *next };
 
             let head = head.cast::<T>();
@@ -89,7 +89,7 @@ impl<T: Heapable> Heap<T> {
         let header = self.parent_header(ptr);
         header.decrement_used();
         unsafe {
-            let ptr_next = (*ptr.as_ptr()).next();
+            let ptr_next = T::next(ptr.as_ptr());
             *ptr_next = *free_list;
             *free_list = Some(ptr);
         }
@@ -206,8 +206,8 @@ mod test {
     unsafe impl WordAligned for Link {}
 
     unsafe impl Heapable for Link {
-        fn next(&mut self) -> *mut Option<NonNull<Link>> {
-            (&raw mut self.next).cast::<Option<NonNull<Link>>>()
+        fn next(ptr: *mut Link) -> *mut Option<NonNull<Link>> {
+            unsafe { (&raw mut (*ptr).next).cast::<Option<NonNull<Link>>>() }
         }
     }
 
