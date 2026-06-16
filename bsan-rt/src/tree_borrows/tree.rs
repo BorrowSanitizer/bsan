@@ -24,6 +24,7 @@ use super::diagnostics::{
 };
 use super::foreign_access_skipping::IdempotentForeignAccess;
 use super::perms::{AccessKind, PermTransition, Permission};
+use super::refcount::RefCount;
 use super::tree_visitor::{ChildrenVisitMode, ContinueTraversal, NodeAppArgs, TreeVisitor};
 use super::wildcard::{ExposedCache, WildcardAccessLevel};
 use crate::errors::UBResult;
@@ -334,6 +335,9 @@ pub struct Node {
     default_initial_idempotent_foreign_access: IdempotentForeignAccess,
     /// Whether a wildcard access could happen through this node.
     pub is_exposed: bool,
+    /// Number of live references to this node. Always accessed under the
+    /// allocation's tree `Mutex`.
+    pub refcount: RefCount,
     /// Some extra information useful only for debugging purposes.
     pub debug_info: NodeDebugInfo,
 }
@@ -361,6 +365,7 @@ impl EagerTree {
                     // The root may never be skipped, all accesses will be local.
                     default_initial_idempotent_foreign_access: IdempotentForeignAccess::None,
                     is_exposed: false,
+                    refcount: RefCount::new(),
                     debug_info,
                 },
             );
@@ -1116,6 +1121,7 @@ impl AllocState for EagerTree {
                 default_initial_perm: outside_perm,
                 default_initial_idempotent_foreign_access: default_strongest_idempotent,
                 is_exposed: false,
+                refcount: RefCount::new(),
                 debug_info: NodeDebugInfo::new(new_tag, outside_perm, span),
             },
         );
