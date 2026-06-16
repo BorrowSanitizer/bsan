@@ -463,9 +463,9 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   AL = AL.addFnAttribute(*C, Attribute::NoUnwind);
 
-  BsanFuncRetag = M.getOrInsertFunction(BSAN("retag"), AL, IntptrTy, PtrTy,
-                                        IntptrTy, Int8Ty, PtrTy, IntptrTy,
-                                        PtrTy, IntptrTy, IntptrTy, PtrTy);
+  BsanFuncRetag = M.getOrInsertFunction(
+      BSAN("retag"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, Int8Ty, PtrTy,
+      IntptrTy, PtrTy, IntptrTy, IntptrTy, PtrTy, PtrTy);
 
   BsanFuncPopFrame = M.getOrInsertFunction(
       BSAN("pop_frame"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, IntptrTy);
@@ -565,6 +565,8 @@ public:
                          ElementCount Elems = ElementCount::getFixed(1));
   static Provenance omnivalid(BorrowSanitizer &BS,
                               ElementCount Elems = ElementCount::getFixed(1));
+  static Provenance wildcard(BorrowSanitizer &BS,
+                             ElementCount Elems = ElementCount::getFixed(1));
 };
 
 struct ProvenanceKey {
@@ -632,6 +634,15 @@ Provenance Provenance::omnivalid(BorrowSanitizer &BS, ElementCount Elems) {
     Value *Zero = ConstantInt::get(BS.IntptrTy, 0);
     Value *InvalidPtr = ConstantPointerNull::get(BS.PtrTy);
     return Provenance(Zero, InvalidPtr, Elems);
+  }
+  report_fatal_error("Vector provenance is not supported yet");
+}
+
+Provenance Provenance::wildcard(BorrowSanitizer &BS, ElementCount Elems) {
+  if (Elems.isScalar()) {
+    Value *Two = ConstantInt::get(BS.IntptrTy, 2);
+    Value *InvalidPtr = ConstantPointerNull::get(BS.PtrTy);
+    return Provenance(Two, InvalidPtr, Elems);
   }
   report_fatal_error("Vector provenance is not supported yet");
 }
@@ -852,6 +863,13 @@ public:
     return FrameHeaderTop;
   }
 
+  std::optional<Value *> getFrameHeaderBottom() {
+    if (FrameHeaderBottom) {
+      return FrameHeaderBottom;
+    }
+    return std::nullopt;
+  }
+
   Value *getOrInitFrameHeaderBottom(IRBuilder<> &IRB) {
     if (!FrameHeaderBottom) {
       initFrameHeader(IRB, ConstantInt::get(SlotSize->getType(), 0));
@@ -875,7 +893,13 @@ public:
     Value *SlotOffset =
         alloc(DT, LI, IRB, Elems, SlotSize->getType(), IsFnEntry);
     Value *ProvOffset = IRB.CreateMul(SlotOffset, SlotSize);
-    return ptrsub(IRB, getOrInitFrameHeaderBottom(IRB), ProvOffset);
+    Value *FramePtr = ptrsub(IRB, getOrInitFrameHeaderBottom(IRB), ProvOffset);
+    // We need to update the bottom of the frame every time we allocate a slot,
+    // because arbitrary instructions can be lowered into calls to instrumented
+    // compiler-rt runtimes (e.g. __multi3, __udivti3, __floatuntidf) that will
+    // use the shadow stack.
+    IRB.CreateStore(FramePtr, FramePtrSrc);
+    return FramePtr;
   }
 
   // Returns a pointer to the bottom of the specified section of the
@@ -1248,6 +1272,14 @@ private:
       Value *Slot = ShadowStack.pushFrameHeaderSlot(EntryIRB);
       Prov.store(EntryIRB, BS, Slot);
     }
+
+    // We have initialized the frame header, but we have not updated the frame
+    // pointer to reflect it. We need to do this eagerly, because we cannot
+    // reliably determine when an instruction will compile into a call to an
+    // instrumented libcall.
+    if (std::optional<Value *> FHB = ShadowStack.getFrameHeaderBottom()) {
+      EntryIRB.CreateStore(*FHB, BS.ProvStackTLS);
+    }
   }
 
   void patchShadowPHINodes() {
@@ -1287,34 +1319,35 @@ private:
     Value *SrcAddr = IRB.CreateLoad(BS.PtrTy, Operand);
     Value *Shadow = IRB.CreateCall(BS.BsanFuncShadow, {Operand});
     Provenance SrcProv = Provenance::load(IRB, BS, Shadow);
-    Provenance RetaggedProv = instrumentRetag(IRB, CB, SrcAddr, SrcProv);
-    RetaggedProv.store(IRB, BS, Shadow);
+
+    RetagInfo RI(&CB);
+    Value *ImArrayLen = getLayoutArrayLength(RI.ImArray);
+    Value *PinArrayLen = getLayoutArrayLength(RI.PinArray);
+
+    IRB.CreateCall(BS.BsanFuncRetag, {SrcAddr, RI.Size, RI.Perms, RI.ImArray,
+                                      ImArrayLen, RI.PinArray, PinArrayLen,
+                                      SrcProv.Tag, SrcProv.Info, Shadow});
+
+    if (RI.isProtected()) {
+      Provenance RetaggedProv = Provenance::load(IRB, BS, Shadow);
+      Value *Slot = allocStackSlot(IRB, RI.isProtected());
+      RetaggedProv.store(IRB, BS, Slot);
+    }
   }
 
   void instrumentRetagReg(CallBase &CB) {
     IRBuilder<> IRB(&CB);
-    if (auto Prov = getProvenance(CB.getParent(), CB.getOperand(0))) {
-      Provenance Retagged = instrumentRetag(IRB, CB, CB.getOperand(0), *Prov);
-      setProvenance(&CB, Retagged);
+    Value *Ptr = CB.getOperand(0);
+    if (auto Prov = getProvenance(CB.getParent(), Ptr)) {
+      RetagInfo RI(&CB);
+      Value *ImArrayLen = getLayoutArrayLength(RI.ImArray);
+      Value *PinArrayLen = getLayoutArrayLength(RI.PinArray);
+      Value *Dest = allocStackSlot(IRB, RI.isProtected());
+      IRB.CreateCall(BS.BsanFuncRetag,
+                     {Ptr, RI.Size, RI.Perms, RI.ImArray, ImArrayLen,
+                      RI.PinArray, PinArrayLen, Prov->Tag, Prov->Info, Dest});
+      setProvenance(&CB, Provenance::load(IRB, BS, Dest));
     }
-  }
-
-  Provenance instrumentRetag(IRBuilder<> &IRB, CallBase &CB, Value *Target,
-                             Provenance TargetProv) {
-    RetagInfo RI(&CB);
-
-    Value *ImArrayLen = getLayoutArrayLength(RI.ImArray);
-    Value *PinArrayLen = getLayoutArrayLength(RI.PinArray);
-
-    TargetProv.Tag =
-        IRB.CreateCall(BS.BsanFuncRetag, {Target, RI.Size, RI.Perms, RI.ImArray,
-                                          ImArrayLen, RI.PinArray, PinArrayLen,
-                                          TargetProv.Tag, TargetProv.Info});
-
-    Value *SlotPtr = allocStackSlot(IRB, RI.isProtected());
-    TargetProv.store(IRB, BS, SlotPtr);
-
-    return TargetProv;
   }
 
   Value *allocStackSlot(IRBuilder<> &IRB, bool IsFnEntry,
@@ -1463,10 +1496,10 @@ private:
       // we are calling is uninstrumented, then we need ensure that the return
       // array is populated with default values.
       for (const auto &[Idx, Desc] : llvm::enumerate(ReturnDesc)) {
-        Value *Slot = allocStackSlot(Before, false, Desc.Elems);
+        Value *Slot = allocStackSlot(After, false, Desc.Elems);
         ReturnProvPtrs.push_back(Slot);
-        Value *NumProv = Before.CreateElementCount(BS.IntptrTy, Desc.Elems);
-        NumReturnProv = Before.CreateAdd(NumReturnProv, NumProv);
+        Value *NumProv = After.CreateElementCount(BS.IntptrTy, Desc.Elems);
+        NumReturnProv = After.CreateAdd(NumReturnProv, NumProv);
       }
     }
 
@@ -1491,7 +1524,7 @@ private:
         // we do not need to validate any part of the shadow stack
         // on return.
         if (!match(NumReturnProv, m_Zero())) {
-          Value *Slot = getStackOffset(Before, false);
+          Value *Slot = getStackOffset(After, false);
           After.CreateCall(BS.BsanFuncValidateRetval,
                            {Marker, Slot, NumReturnProv});
         }
@@ -1597,41 +1630,15 @@ private:
     }
   }
 
-  void updateStackPointer(Instruction &I) {
-    IRBuilder<> Before(&I);
-    Value *StackOffset = getStackOffset(Before, false);
-    Before.CreateStore(StackOffset, BS.ProvStackTLS);
-  }
-
-  // Certain intrinsics and floating point conversions end up
-  // being codegened into calls to instrumented components of
-  // compiler-rt. We need to ensure that the stack pointer is
-  // not clobbered when this happens.
-  void visitFPToSIInst(CastInst &I) { updateStackPointer(I); }
-  void visitFPToUIInst(CastInst &I) { updateStackPointer(I); }
-  void visitSIToFPInst(CastInst &I) { updateStackPointer(I); }
-  void visitUIToFPInst(CastInst &I) { updateStackPointer(I); }
-  void visitFPExtInst(CastInst &I) { updateStackPointer(I); }
-  void visitFPTruncInst(CastInst &I) { updateStackPointer(I); }
-
-  // We can skip intrinsics that do not update the stack pointer.
-  bool canSkipIntrinsic(IntrinsicInst &I) {
-    return I.isDebugOrPseudoInst() || I.isLaunderOrStripInvariantGroup() ||
-           I.isAssumeLikeIntrinsic() || I.isLifetimeStartOrEnd();
-  }
-
   void visitIntrinsicInst(IntrinsicInst &I) {
     switch (I.getIntrinsicID()) {
-    case Intrinsic::lifetime_start: {
+    case Intrinsic::lifetime_start:
       return instrumentLifetimeStart(I);
-    } break;
-    case Intrinsic::lifetime_end: {
+    case Intrinsic::lifetime_end:
       return instrumentLifetimeEnd(I);
-    } break;
+    default:
+      break;
     }
-    if (canSkipIntrinsic(I))
-      return;
-    updateStackPointer(I);
   }
 
   Provenance createAllocaMetadata(IRBuilder<> &IRB, AllocaInst *AI) {
@@ -1811,6 +1818,10 @@ private:
       IRBuilder<> IRB(&I);
       IRB.CreateCall(BS.BsanFuncExposeProv, {(*Prov).Tag, (*Prov).Info});
     }
+  }
+
+  void visitIntToPtrInst(IntToPtrInst &I) {
+    setProvenance(&I, Provenance::wildcard(BS));
   }
 
   void visitAddrSpaceCastInst(AddrSpaceCastInst &I) {
