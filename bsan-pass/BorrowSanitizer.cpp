@@ -1237,11 +1237,9 @@ private:
     if (Elems.isScalar()) {
       Value *TagPtr, *InfoPtr;
       std::tie(TagPtr, InfoPtr) = getShadowOriginPtr(IRB, Base, Alignment);
-      Value *Tag =
-          IRB.CreateAlignedLoad(BS.IntptrTy, TagPtr, kMinProvAlignment);
-      Value *Info = IRB.CreateAlignedLoad(BS.PtrTy, InfoPtr, kMinProvAlignment);
+      Provenance Prov =
+          loadProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Ordering);
       Value *Slot = allocStackSlot(IRB, false);
-      Provenance Prov = Provenance(Tag, Info);
       storeProvenance(IRB, Prov, Slot);
       return Prov;
     }
@@ -1256,12 +1254,8 @@ private:
       Value *InfoPtr =
           IRB.CreateGEP(BS.ProvenanceTy, Src,
                         {ZeroIdx, ConstantInt::get(IRB.getInt32Ty(), 1)});
-      LoadInst *Tag =
-          IRB.CreateAlignedLoad(BS.IntptrTy, TagPtr, kMinProvAlignment);
-      LoadInst *Info =
-          IRB.CreateAlignedLoad(BS.PtrTy, InfoPtr, kMinProvAlignment);
-
-      return Provenance(Tag, Info, ElementCount::getFixed(1));
+      return loadProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr,
+                                           AtomicOrdering::NotAtomic);
     }
     report_fatal_error("Vector provenance is not supported yet");
   }
@@ -1374,6 +1368,34 @@ private:
       std::tie(TagPtr, InfoPtr) = getShadowOriginPtr(IRB, ObjAddr, Alignment);
       storeProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Prov, Ordering);
     }
+  }
+
+  void updateReferenceCount(IRBuilder<> &IRB, Provenance Dec, Provenance Inc) {
+    IRB.CreateCall(BS.BsanFuncRcDec, {Dec.Tag, Dec.Info});
+    IRB.CreateCall(BS.BsanFuncRcInc, {Inc.Tag, Inc.Info});
+  }
+
+  // Loads a provenance value into shadow memory pairwise at the specified
+  // addresses. Each address must be aligned to the wordsize.
+  Provenance loadProvenanceAlignedPairwise(IRBuilder<> &IRB, Value *TagPtr,
+                                           Value *InfoPtr,
+                                           AtomicOrdering Ordering) {
+    LoadInst *Tag =
+        IRB.CreateAlignedLoad(BS.IntptrTy, TagPtr, kMinProvAlignment);
+    Tag->setAtomic(Ordering);
+    LoadInst *Info =
+        IRB.CreateAlignedLoad(BS.PtrTy, InfoPtr, kMinProvAlignment);
+    Info->setAtomic(Ordering);
+    return Provenance(Tag, Info);
+  }
+
+  void storeProvenanceWithReferenceCount(IRBuilder<> &IRB, Value *TagPtr,
+                                         Value *InfoPtr, Provenance Prov,
+                                         AtomicOrdering Ordering) {
+    Provenance Old =
+        loadProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Ordering);
+    updateReferenceCount(IRB, Old, Prov);
+    storeProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Prov, Ordering);
   }
 
   // Stores a provenance value into shadow memory pairwise at the specified
