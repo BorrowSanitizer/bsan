@@ -1091,16 +1091,19 @@ impl AllocState for LazyTree {
     fn increment(&self, tag: BorTag) {
         match self {
             LazyTree::Uninit { root_tag, refcount, .. } => {
-                if *root_tag == tag {
-                    refcount.increment();
-                }
+                // In the Uninit state the only node is the root, we add an debug_assert instead
+                debug_assert!(*root_tag == tag);
+                refcount.increment_nonatomic();
             }
             LazyTree::Init(tree) => tree.increment(tag),
         }
     }
     fn decrement(&self, tag: BorTag) -> bool {
         match self {
-            LazyTree::Uninit { root_tag, refcount, .. } => *root_tag == tag && refcount.decrement(),
+            LazyTree::Uninit { root_tag, refcount, .. } => {
+                debug_assert!(*root_tag == tag);
+                refcount.decrement_nonatomic()
+            }
             LazyTree::Init(tree) => tree.decrement(tag),
         }
     }
@@ -1375,14 +1378,14 @@ impl AllocState for EagerTree {
     }
     fn increment(&self, tag: BorTag) {
         if let Some(node) = self.tag_mapping.get(&tag).and_then(|idx| self.nodes.get(idx)) {
-            node.refcount.increment();
+            node.refcount.increment_nonatomic();
         }
     }
     fn decrement(&self, tag: BorTag) -> bool {
         self.tag_mapping
             .get(&tag)
             .and_then(|idx| self.nodes.get(idx))
-            .map(|node| node.refcount.decrement())
+            .map(|node| node.refcount.decrement_nonatomic())
             .unwrap_or(false)
     }
 }

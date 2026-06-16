@@ -49,6 +49,26 @@ impl RefCount {
         }
     }
 
+    /// Increments the reference count **without** atomic synchronization.
+    pub fn increment_nonatomic(&self) {
+        unsafe {
+            let count = self.0.as_ptr();
+            debug_assert!(*count <= usize::MAX / 2, "RefCount overflow");
+            *count += 1;
+        }
+    }
+
+    /// Decrements the reference count **without** atomic synchronization,
+    /// returning `true` if the count reached zero.
+    pub fn decrement_nonatomic(&self) -> bool {
+        unsafe {
+            let count = self.0.as_ptr();
+            debug_assert!(*count > 0, "RefCount decremented below zero");
+            *count -= 1;
+            *count == 0
+        }
+    }
+
     /// Returns the current reference count at the time this function is called.
     pub fn get(&self) -> usize {
         self.0.load(Ordering::Relaxed)
