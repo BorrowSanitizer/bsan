@@ -1,7 +1,6 @@
 # This script calculates BorrowSanitizer's relative execution time
-# across all test cases for a crate, and provides the output in a 
+# across all test cases for a crate, and provides the output in a
 # .JSON file.
-from dataclasses import dataclass
 import argparse
 import statistics
 import json
@@ -23,7 +22,7 @@ NATIVE = {
 
 MIRI = {
     "name": "miri-tb",
-    "flags": ["-Zmiri-tree-borrows", "-Zmiri-provenance-gc=0"],
+    "flags": ["-Zmiri-tree-borrows", "-Zmiri-provenance-gc=0", "-Zmiri-mute-stdout-stderr"],
     "runs": 1,
     "warmup": 1
 }
@@ -44,7 +43,7 @@ CONFIGS = [
 ]
 
 
-ALL = [NATIVE] + CONFIGS
+ALL_BINARY_CONFIGS = [NATIVE] + CONFIGS
 
 def run(
     cmd: list[str],
@@ -102,7 +101,7 @@ def download_crate(crate: str, version: str, dest_dir: Path) -> Path:
 def compile_test_binary(config: dict, cwd: Path, out_dir: Path) -> Path:
     """Compiles the test binary for the given cargo invocation and return its
     path. Aborts on compile failure or if no test executable is produced."""
-    print(f">>> compiling test binary ({config["name"]}): {' '.join(config["cmd"])}",
+    print(f">>> compiling tests ({config["name"]}): {' '.join(config["cmd"])}",
           file=sys.stderr)
     # We need to parse the output JSON to find the name of the test binary.
     msg_json = run_capture(
@@ -121,15 +120,15 @@ def compile_test_binary(config: dict, cwd: Path, out_dir: Path) -> Path:
         target = msg.get("target") or {}
         if exe and target.get("test"):
             print(">>> done.")
-            bin = out_dir / config["name"]
-            shutil.copy2(exe, bin)
-            bin.chmod(0o755)
+            binary = out_dir / config["name"]
+            shutil.copy2(exe, binary)
+            binary.chmod(0o755)
             return
-        
+
     sys.exit(f"Error: could not locate {config["name"]} test binary.")
 
 def compile_miri_tests(cwd: Path):
-    print(f">>> compiling test binary MIR for Miri")
+    print(">>> compiling tests (Miri)")
     run_capture(
         ["cargo", "miri", "test", "--no-run", "--message-format=json"],
         cwd=cwd,
@@ -181,7 +180,7 @@ def process_config(
     crate = cfg.get("name")
     version = cfg.get("version")
     excluded_tests = set(cfg.get("exclude") or [])
-    
+
     if not crate or not version:
         sys.exit(f"Error: invalid per-crate config:\n{cfg}")
 
@@ -194,14 +193,12 @@ def process_config(
             print(f"- {test_name}")
 
     src_dir = download_crate(crate, version, scratch)
-    compile_test_binary(NATIVE, cwd=src_dir, out_dir=scratch)
-    try:
-        run(["cargo", "clean", "--quiet"], cwd=src_dir)
-    except subprocess.CalledProcessError:
-        pass
-
-    for config in CONFIGS:
+    for config in ALL_BINARY_CONFIGS:
         compile_test_binary(config, cwd=src_dir, out_dir=scratch)
+        try:
+            run(["cargo", "clean", "--quiet"], cwd=src_dir)
+        except subprocess.CalledProcessError:
+            pass
 
     all_tests = list_tests(scratch / NATIVE["name"])
     if not all_tests:
@@ -210,34 +207,33 @@ def process_config(
     tests = [t for t in all_tests if t not in excluded_tests]
     if not tests:
         sys.exit(f"Error: every discovered test was excluded for {bench_name}.")
-    
     compile_miri_tests(src_dir)
 
     means = {}
     for t in tests:
         print(f"  -> {t}")
-        for config in ALL:
-            bin = scratch / config["name"]
-            mean = hyperfine_mean(f"{bin} --exact {t} --nocapture", config)
+        for config in ALL_BINARY_CONFIGS:
+            binary = scratch / config["name"]
+            mean = hyperfine_mean(f"{binary} --exact {t} --nocapture", config)
             if mean <= 0:
                 sys.exit(f"Reported 0s mean native execution time for test {t} from {bench_name}")
             print(f"    - {config["name"]}={round(mean, 8)}s")
             means[config["name"]] = mean
         mean = run_miri_test(src_dir, t, MIRI)
-
+        means[MIRI["name"]] = mean
     results = []
 
     native_mean = means[NATIVE["name"]]
     del means[NATIVE["name"]]
 
-    for key in means.keys():
-        ratio = means[key] / native_mean
+    for mode, mean in means.items():
+        ratio = mean / native_mean
         results.append({
             "name": bench_name,
             "unit": "Median Relative Execution Time",
             "value": statistics.median(ratio),
             "extra": json.dumps({
-                "mode": key,
+                "mode": mode,
                 "target": target,
                 "version": version,
                 "crate": crate
