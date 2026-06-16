@@ -26,7 +26,7 @@ MIRI = {
         "-Zmiri-tree-borrows",
         "-Zmiri-provenance-gc=0",
         "-Zmiri-mute-stdout-stderr",
-        "-Zmiri-disable-data-race-detector"
+        "-Zmiri-disable-data-race-detector",
         "-Zmiri-deterministic-concurrency",
         "-Zmiri-disable-alignment-check"
     ],
