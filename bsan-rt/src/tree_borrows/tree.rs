@@ -952,6 +952,8 @@ impl AccessRelatedness {
 pub trait AllocState: Clone {
     fn contains_tag(&self, tag: BorTag) -> bool;
     fn node_count(&self) -> usize;
+    fn increment(&self, tag: BorTag);
+    fn decrement(&self, tag: BorTag) -> bool;
     fn new_child(
         &mut self,
         base_offset: Size,
@@ -1084,6 +1086,22 @@ impl AllocState for LazyTree {
     fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
         if let LazyTree::Init(tree) = self {
             tree.remove_unreachable_tags(live_tags);
+        }
+    }
+    fn increment(&self, tag: BorTag) {
+        match self {
+            LazyTree::Uninit { root_tag, refcount, .. } => {
+                if *root_tag == tag {
+                    refcount.increment();
+                }
+            }
+            LazyTree::Init(tree) => tree.increment(tag),
+        }
+    }
+    fn decrement(&self, tag: BorTag) -> bool {
+        match self {
+            LazyTree::Uninit { root_tag, refcount, .. } => *root_tag == tag && refcount.decrement(),
+            LazyTree::Init(tree) => tree.decrement(tag),
         }
     }
 }
@@ -1354,5 +1372,17 @@ impl AllocState for EagerTree {
             self.remove_useless_children(self.roots[i], live_tags);
         }
         self.locations.merge_adjacent_thorough();
+    }
+    fn increment(&self, tag: BorTag) {
+        if let Some(node) = self.tag_mapping.get(&tag).and_then(|idx| self.nodes.get(idx)) {
+            node.refcount.increment();
+        }
+    }
+    fn decrement(&self, tag: BorTag) -> bool {
+        self.tag_mapping
+            .get(&tag)
+            .and_then(|idx| self.nodes.get(idx))
+            .map(|node| node.refcount.decrement())
+            .unwrap_or(false)
     }
 }
