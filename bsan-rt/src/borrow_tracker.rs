@@ -274,6 +274,14 @@ impl BorrowTracker {
         )
     }
 
+    pub fn increment(&self) {
+        self.tree().increment(self.bor_tag);
+    }
+
+    pub fn decrement(&self) -> bool {
+        self.tree().decrement(self.bor_tag)
+    }
+
     pub fn access(
         &self,
         global_ctx: &GlobalCtx,
