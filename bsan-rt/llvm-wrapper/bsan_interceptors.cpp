@@ -407,8 +407,7 @@ static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso) {
   } while (false)
 
 #define COMMON_INTERCEPTOR_WRITE_RANGE(ctx, ptr, size)                         \
-  do {                                                                         \
-  } while (false)
+  __bsan_shadow_clear(ptr, size)
 
 #define COMMON_INTERCEPTOR_READ_RANGE(ctx, ptr, size)                          \
   do {                                                                         \
@@ -502,9 +501,7 @@ static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso) {
 #define COMMON_SYSCALL_POST_READ_RANGE(p, s)                                   \
   do {                                                                         \
   } while (false)
-#define COMMON_SYSCALL_POST_WRITE_RANGE(p, s)                                  \
-  do {                                                                         \
-  } while (false)
+#define COMMON_SYSCALL_POST_WRITE_RANGE(p, s) __bsan_shadow_clear(p, s)
 
 // clang-format off
 #include "sanitizer_common/sanitizer_common_syscalls.inc"

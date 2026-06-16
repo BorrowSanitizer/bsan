@@ -25,6 +25,9 @@ SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_memset(void *s, int c, uptr n);
 
 SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_shadow_clear(void *dest, uptr size);
+
+SANITIZER_INTERFACE_ATTRIBUTE
 u32 __bsan_symbolize_pc(uptr pc, char *file_buf, uptr file_buf_len, u32 *line,
                         u32 *column);
 
