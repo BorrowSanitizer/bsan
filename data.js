@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781624206816,
+  "lastUpdate": 1781640031062,
   "repoUrl": "https://github.com/BorrowSanitizer/bsan",
   "entries": {
     "Benchmarks": [
@@ -2232,6 +2232,54 @@ window.BENCHMARK_DATA = {
           {
             "name": "indexmap@2.14.0 (nop) - x86_64-unknown-linux-gnu",
             "value": 5.18,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\"}"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "icmccorm@cs.cmu.edu",
+            "name": "Ian McCormack",
+            "username": "icmccorm"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ac84c8979981aa020d9bf8749a74cce4e007e2bc",
+          "message": "Switch to using the sanitizers' allocator implementation for system allocations. (#221)\n\n* Clean our sysroot by default when running UI tests.\n\n* Added shadow mappings and sanitizer allocator.\n\n* Add unused flag and move allocator constants into shadow header.\n\n* fmt\n\n* Added fixed region for custom allocator.\n\n* fmt\n\n* Used fixed shadow mapping.\n\n* By default, allow the allocator to return null for allocations that are too large.\n\n* Remove meta-allocator (for now).\n\n* Removed unused TaintAnalysis and consolidated shadow memory handling.\n\n* Fixed merge.\n\n* Added shadow clearing to interceptor write macros.\n\n* Thread atomics orderings through shadow stores.\n\n* Rebase for RC increment and decrement.",
+          "timestamp": "2026-06-16T15:50:40-04:00",
+          "tree_id": "af3b18e5e850fd5704f3f94b48c19ddd100fcb6b",
+          "url": "https://github.com/BorrowSanitizer/bsan/commit/ac84c8979981aa020d9bf8749a74cce4e007e2bc"
+        },
+        "date": 1781640030621,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "hashbrown@0.17.0 (nop) - aarch64-unknown-linux-gnu",
+            "value": 6.615,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\"}"
+          },
+          {
+            "name": "indexmap@2.14.0 (nop) - aarch64-unknown-linux-gnu",
+            "value": 6.6850000000000005,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\"}"
+          },
+          {
+            "name": "hashbrown@0.17.0 (nop) - x86_64-unknown-linux-gnu",
+            "value": 9.01,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\"}"
+          },
+          {
+            "name": "indexmap@2.14.0 (nop) - x86_64-unknown-linux-gnu",
+            "value": 9.09,
             "unit": "Median Relative Execution Time",
             "extra": "{\"mode\": \"nop\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\"}"
           }
