@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781558372877,
+  "lastUpdate": 1781617763128,
   "repoUrl": "https://github.com/BorrowSanitizer/bsan",
   "entries": {
     "Benchmarks": [
@@ -2136,6 +2136,54 @@ window.BENCHMARK_DATA = {
           {
             "name": "indexmap@2.14.0 (nop) - x86_64-unknown-linux-gnu",
             "value": 5.01,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\"}"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "111544848+vnt1c@users.noreply.github.com",
+            "name": "Ryan Hung",
+            "username": "vnt1c"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d217edabaaa78929403d961d7ae9a6afcdb4f29f",
+          "message": "Implemented `RefCount` struct with appropriate endpoints. (#236)\n\n* Implemented `RefCount` struct with appropriate endpoints.\n\nTests delivered in [refcount.rs].\n\n* Single-threaded: new starts at 1, increment/decrement/get work as expected, decrement returns true only when hitting zero.\n* Concurrent: 16 threads do balanced inc/dec ops and the count returns to 1. Exactly one thread observes zero on the final decrement. A Release/Acquire test verifies that writes from all threads are visible to the thread that hits zero (Miri catches ordering violations here). Thread counts scale down under cfg!(miri).\n\nResults.\n\n* `cargo test`: 9/9 pass.\n* `cargo miri test`: 9/9 pass, and the three concurrent tests pass across 16 Miri seeds. No ordering violations found.\n\n* edit comment\n\n* Changed  from a regular struct to a tuple struct.",
+          "timestamp": "2026-06-16T09:40:33-04:00",
+          "tree_id": "a98c8f86aaaf9c119938051ed92cec97b1a7bd77",
+          "url": "https://github.com/BorrowSanitizer/bsan/commit/d217edabaaa78929403d961d7ae9a6afcdb4f29f"
+        },
+        "date": 1781617762779,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "hashbrown@0.17.0 (nop) - aarch64-unknown-linux-gnu",
+            "value": 4.8,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\"}"
+          },
+          {
+            "name": "indexmap@2.14.0 (nop) - aarch64-unknown-linux-gnu",
+            "value": 4.945,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\"}"
+          },
+          {
+            "name": "hashbrown@0.17.0 (nop) - x86_64-unknown-linux-gnu",
+            "value": 4.84,
+            "unit": "Median Relative Execution Time",
+            "extra": "{\"mode\": \"nop\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\"}"
+          },
+          {
+            "name": "indexmap@2.14.0 (nop) - x86_64-unknown-linux-gnu",
+            "value": 4.85,
             "unit": "Median Relative Execution Time",
             "extra": "{\"mode\": \"nop\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\"}"
           }
