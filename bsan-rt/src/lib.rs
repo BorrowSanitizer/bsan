@@ -1,6 +1,5 @@
 #![cfg_attr(not(test), no_std)]
 #![cfg_attr(not(test), feature(core_intrinsics))]
-#![cfg_attr(test, feature(test))]
 #![feature(thread_local)]
 #![feature(allocator_api)]
 #![feature(never_type)]
@@ -558,35 +557,6 @@ unsafe extern "C-unwind" fn __bsan_dealloc_stack_impl(
     }
 }
 
-/// Copies the provenance stored in the range `[src_addr, src_addr + access_size)` within the shadow heap
-/// to the address `dst_addr`. This function will silently fail, so it should only be called in conjunction with
-/// `bsan_read` and `bsan_write` or as part of an interceptor.
-#[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_shadow_transfer(
-    dst: *mut c_void,
-    src: *const c_void,
-    size: usize,
-) {
-    let ctx = unsafe { global_ctx() };
-    let heap = ctx.shadow_heap();
-    heap.memcpy(dst.addr(), src.addr(), size)
-}
-
-/// Clears the provenance stored in the range `[dst_addr, dst_addr + access_size)` within the
-/// shadow heap.
-#[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_shadow_clear(dst: *mut c_void, size: usize) {
-    let ctx = unsafe { global_ctx() };
-    ctx.shadow_heap().clear(dst.addr(), size)
-}
-
-/// Loads the provenance of a given address from shadow memory and stores
-/// the result in the return pointer.
-#[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_shadow(addr: *mut c_void) -> NonNull<Provenance> {
-    unsafe { global_ctx().shadow_heap().get(addr.addr()) }
-}
-
 /// Increments the reference count associated with a provenance value.
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_rc_inc_impl(_bor_tag: BorTag, _alloc_info: *mut AllocInfo) {}
@@ -597,12 +567,12 @@ unsafe extern "C-unwind" fn __bsan_rc_dec_impl(_bor_tag: BorTag, _alloc_info: *m
 
 /// Reserves a stack slot for allocation metadata.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_reserve_stack_slot() -> NonNull<AllocInfo> {
+unsafe extern "C" fn __bsan_reserve_stack_slot_impl() -> NonNull<AllocInfo> {
     unsafe { global_ctx().create_alloc_info(AllocInfo::invalid()) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_destroy_stack_slot(slot: NonNull<AllocInfo>) {
+unsafe extern "C" fn __bsan_destroy_stack_slot_impl(slot: NonNull<AllocInfo>) {
     let ctx = unsafe { global_ctx() };
     unsafe {
         ctx.destroy_alloc_info(slot);
