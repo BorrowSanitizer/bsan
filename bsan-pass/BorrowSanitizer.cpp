@@ -1144,7 +1144,7 @@ private:
       report_fatal_error("Vectors are not supported.");
     } else {
       Value *Shadow = IRB.CreateCall(BS.BsanFuncShadow, {ObjAddr});
-      Provenance *Old = Prov.load(IRB, BS, Shadow);
+      Provenance Old = Prov.load(IRB, BS, Shadow);
 
       IRB.CreateCall(BS.BsanFuncRcInc, {Prov.Tag, Prov.Info});
       IRB.CreateCall(BS.BsanFuncRcDec, {Old.Tag, Old.Info});
