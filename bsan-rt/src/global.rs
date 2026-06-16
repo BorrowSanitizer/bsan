@@ -9,7 +9,7 @@ use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use crate::errors::{ErrorFormatContext, UBInfo};
 use crate::helpers::FxHashMap;
 use crate::local::LocalCtx;
-use crate::memory::{Heap, ShadowHeap};
+use crate::memory::Heap;
 use crate::tree_borrows::data_structures::{AccessType, RangeObjectMap};
 use crate::tree_borrows::{AllocStateImpl, ProtectorKind};
 use crate::*;
@@ -101,7 +101,6 @@ impl<'a> DerefMut for ExposedProvenanceRefMut<'a> {
 /// of unsafety throughout the library.
 pub struct GlobalCtx {
     protected_tags: RwLock<ProtectedTags>,
-    shadow_heap: ShadowHeap<Provenance>,
     alloc_metadata_map: Heap<AllocInfo>,
     snapshots: RwLock<FxHashMap<AllocId, AllocStateImpl>>,
     threads: RwLock<FxHashMap<ThreadId, NonNull<LocalCtx>>>,
@@ -113,7 +112,6 @@ impl GlobalCtx {
         Self {
             protected_tags: RwLock::new(ProtectedTags::default()),
             alloc_metadata_map: Heap::new(),
-            shadow_heap: ShadowHeap::new(),
             snapshots: RwLock::new(FxHashMap::default()),
             threads: RwLock::new(FxHashMap::default()),
             exposed_provenance: RwLock::new(RangeObjectMap::new()),
@@ -134,10 +132,6 @@ impl GlobalCtx {
 
     pub(crate) fn deregister_thread(&self, thread: ThreadId) {
         self.threads.write().remove(&thread);
-    }
-
-    pub fn shadow_heap(&self) -> &ShadowHeap<Provenance> {
-        &self.shadow_heap
     }
 
     pub fn protected_tags<'a>(&'a self) -> ProtectedTagsRef<'a> {

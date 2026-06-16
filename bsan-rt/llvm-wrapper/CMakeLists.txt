@@ -8,6 +8,8 @@ set(BSAN_SOURCES
   bsan_interceptors.cpp
   bsan_linux.cpp
   bsan_thread.cpp
+  bsan_allocator.cpp
+  bsan_shadow.cpp
 )
 
 SET(BSAN_HEADERS
@@ -15,6 +17,8 @@ SET(BSAN_HEADERS
   bsan_flags.h
   bsan_thread.h
   bsan_interface_internal.h
+  bsan_shadow.h
+  bsan_allocator.h
 )
 
 add_custom_target(clang-format
