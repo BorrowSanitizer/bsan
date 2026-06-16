@@ -47,6 +47,40 @@ static cl::opt<bool> ClHandleAsmConservative(
              "outputs to wildcard Provenance"),
     cl::Hidden, cl::init(true));
 
+static AtomicOrdering addAcquireOrdering(AtomicOrdering A) {
+  switch (A) {
+  case AtomicOrdering::NotAtomic:
+    return AtomicOrdering::NotAtomic;
+  case AtomicOrdering::Unordered:
+  case AtomicOrdering::Monotonic:
+  case AtomicOrdering::Acquire:
+    return AtomicOrdering::Acquire;
+  case AtomicOrdering::Release:
+  case AtomicOrdering::AcquireRelease:
+    return AtomicOrdering::AcquireRelease;
+  case AtomicOrdering::SequentiallyConsistent:
+    return AtomicOrdering::SequentiallyConsistent;
+  }
+  llvm_unreachable("Unknown ordering");
+}
+
+static AtomicOrdering addReleaseOrdering(AtomicOrdering A) {
+  switch (A) {
+  case AtomicOrdering::NotAtomic:
+    return AtomicOrdering::NotAtomic;
+  case AtomicOrdering::Unordered:
+  case AtomicOrdering::Monotonic:
+  case AtomicOrdering::Release:
+    return AtomicOrdering::Release;
+  case AtomicOrdering::Acquire:
+  case AtomicOrdering::AcquireRelease:
+    return AtomicOrdering::AcquireRelease;
+  case AtomicOrdering::SequentiallyConsistent:
+    return AtomicOrdering::SequentiallyConsistent;
+  }
+  llvm_unreachable("Unknown ordering");
+}
+
 static Value *ptradd(IRBuilder<> &IRB, Value *Pointer, Value *Offset) {
   if (match(Offset, m_Zero()))
     return Pointer;
@@ -100,10 +134,6 @@ struct MemoryMapParams {
   uint64_t OriginBase;
 };
 
-struct PlatformMemoryMapParams {
-  const MemoryMapParams *Bits64;
-};
-
 } // end anonymous namespace
 
 // x86_64 Linux
@@ -122,14 +152,6 @@ static const MemoryMapParams kLinuxAArch64MemoryMapParams = {
     0x0200000000000, // OriginBase
 };
 
-static const PlatformMemoryMapParams kLinuxX86MemoryMapParams = {
-    &kLinuxX8664MemoryMapParams,
-};
-
-static const PlatformMemoryMapParams kLinuxARMMemoryMapParams = {
-    &kLinuxAArch64MemoryMapParams,
-};
-
 namespace {
 // A component of a type that carries provenance information.
 // This is either a pointer or a vector of pointers.
@@ -138,8 +160,7 @@ struct ProvenanceDesc {
   Value *ByteOffset;
   // The byte width of this field.
   Value *ByteWidth;
-  // The minimum common alignment between this field its offset within
-  // the parent type. This is "none" for scalable types.
+  // The alignment of this field relative to its parent type.
   MaybeAlign FieldAlign;
   // The number of provenance values in this field.
   ElementCount Elems;
@@ -175,11 +196,10 @@ public:
     case Triple::Linux:
       switch (TargetTriple.getArch()) {
       case Triple::x86_64:
-        MapParams = kLinuxX86MemoryMapParams.Bits64;
+        MapParams = &kLinuxX8664MemoryMapParams;
         break;
       case Triple::aarch64:
-      case Triple::aarch64_be:
-        MapParams = kLinuxARMMemoryMapParams.Bits64;
+        MapParams = &kLinuxAArch64MemoryMapParams;
         break;
       default:
         report_fatal_error("unsupported architecture");
@@ -1326,7 +1346,8 @@ private:
     BaseProvMap.set(Key, Prov);
   }
 
-  void storeProvenance(IRBuilder<> &IRB, Provenance Prov, Value *Base) {
+  void storeProvenance(IRBuilder<> &IRB, Provenance Prov, Value *Base,
+                       AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
     if (Prov.Elems.isVector()) {
       report_fatal_error("Vector provenance is not supported yet");
     }
@@ -1335,7 +1356,7 @@ private:
     Value *InfoPtr =
         IRB.CreateGEP(BS.ProvenanceTy, Base,
                       {ZeroIdx, ConstantInt::get(IRB.getInt32Ty(), 1)});
-    storeProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Prov);
+    storeProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Prov, Ordering);
   }
 
   // Stores a provenance value into shadow memory, starting at the given object
@@ -1351,16 +1372,19 @@ private:
     } else {
       Value *TagPtr, *InfoPtr;
       std::tie(TagPtr, InfoPtr) = getShadowOriginPtr(IRB, ObjAddr, Alignment);
-      storeProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Prov);
+      storeProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Prov, Ordering);
     }
   }
 
   // Stores a provenance value into shadow memory pairwise at the specified
-  // addresses, which must be aligned correctly.
+  // addresses. Each address must be aligned to the word size.
   void storeProvenanceAlignedPairwise(IRBuilder<> &IRB, Value *TagPtr,
-                                      Value *InfoPtr, Provenance Prov) {
-    IRB.CreateAlignedStore(Prov.Tag, TagPtr, kMinProvAlignment);
-    IRB.CreateAlignedStore(Prov.Info, InfoPtr, kMinProvAlignment);
+                                      Value *InfoPtr, Provenance Prov,
+                                      AtomicOrdering Ordering) {
+    IRB.CreateAlignedStore(Prov.Tag, TagPtr, kMinProvAlignment)
+        ->setAtomic(Ordering);
+    IRB.CreateAlignedStore(Prov.Info, InfoPtr, kMinProvAlignment)
+        ->setAtomic(Ordering);
   }
 
   // Populates the array of argument provenance pointers and initializes the
@@ -1912,9 +1936,6 @@ private:
   bool shouldClearProvenance(IRBuilder<> &IRB, StoreInst &SI) { return true; }
 
   void visitStoreInst(StoreInst &SI) {
-    if (SI.isAtomic())
-      return;
-
     IRBuilder<> PrevIRB(&SI);
     Value *Ptr, *Val;
     Ptr = SI.getPointerOperand();
@@ -1992,7 +2013,7 @@ private:
         TagPtr = ptradd(IRB, TagPtr, Idx);
         InfoPtr = ptradd(IRB, InfoPtr, Idx);
         storeProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr,
-                                       Provenance::omnivalid(BS));
+                                       Provenance::omnivalid(BS), Ordering);
       }
     } else {
       IRB.CreateCall(BS.BsanFuncShadowClear, {Base, Size});
