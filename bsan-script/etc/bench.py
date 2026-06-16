@@ -15,6 +15,7 @@ from pathlib import Path
 
 NATIVE = {
     "name": "native",
+    "label": "uninstrumented native execution",
     "cmd": ["cargo", "test", "--lib"],
     "runs": 3,
     "warmup": 1
@@ -22,6 +23,7 @@ NATIVE = {
 
 MIRI = {
     "name": "miri-tb",
+    "label": "Miri (Tree Borrows)",
     "env": {
         "MIRIFLAGS": [
             "-Zmiri-tree-borrows",
@@ -39,12 +41,14 @@ MIRI = {
 BSAN_CONFIGS = [
     {
         "name": "full",
+        "label": "checks enabled",
         "cmd": ["cargo", "bsan", "test", "--lib"],
         "runs": 3,
         "warmup": 1
     },
     {
         "name": "no-op",
+        "label": "no-op",
         "cmd": ["cargo", "bsan", "test", "--nop", "--lib"],
         "runs": 3,
         "warmup": 1
@@ -114,7 +118,7 @@ def download_crate(crate: str, version: str, dest_dir: Path) -> Path:
         sys.exit(f"Error: expected extracted directory {extracted} not found.")
     return extracted
 
-def compile_test_binary(config: dict, cwd: Path, out_dir: Path) -> Path:
+def compile_test_binary(config: dict, cwd: Path, out_dir: Path, env: dict = {}) -> Path:
     """Compiles the test binary for the given cargo invocation and return its
     path. Aborts on compile failure or if no test executable is produced."""
     print(f">>> compiling tests ({config["name"]}): {' '.join(config["cmd"])}",
@@ -123,6 +127,7 @@ def compile_test_binary(config: dict, cwd: Path, out_dir: Path) -> Path:
     msg_json = run_capture(
         config["cmd"] + ["--no-run", "--message-format=json"],
         cwd=cwd,
+        env=env,
     )
     for line in msg_json.splitlines():
         if not line.strip():
@@ -216,7 +221,10 @@ def process_config(
 
     src_dir = download_crate(crate, version, scratch)
     for config in ALL_BINARY_CONFIGS:
-        compile_test_binary(config, cwd=src_dir, out_dir=scratch)
+        env = {}
+        if config == NATIVE:
+            env["RUSTFLAGS"] = "--cfg=bsan"
+        compile_test_binary(config, cwd=src_dir, out_dir=scratch, env=env)
         try:
             run(["cargo", "clean", "--quiet"], cwd=src_dir)
         except subprocess.CalledProcessError:
