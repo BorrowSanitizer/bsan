@@ -16,34 +16,42 @@ from pathlib import Path
 NATIVE = {
     "name": "native",
     "cmd": ["cargo", "test", "--lib"],
-    "runs": 1,
+    "runs": 3,
     "warmup": 1
 }
 
 MIRI = {
     "name": "miri-tb",
     "flags": ["-Zmiri-tree-borrows", "-Zmiri-provenance-gc=0", "-Zmiri-mute-stdout-stderr"],
-    "runs": 1,
+    "runs": 3,
     "warmup": 1
 }
 
-CONFIGS = [
+BSAN_CONFIGS = [
     {
         "name": "full",
         "cmd": ["cargo", "bsan", "test", "--lib"],
-        "runs": 1,
+        "runs": 3,
         "warmup": 1
     },
     {
         "name": "no-op",
         "cmd": ["cargo", "bsan", "test", "--nop", "--lib"],
-        "runs": 1,
+        "runs": 3,
         "warmup": 1
     }
 ]
 
 
-ALL_BINARY_CONFIGS = [NATIVE] + CONFIGS
+ALL_BINARY_CONFIGS = [NATIVE] + BSAN_CONFIGS
+
+def _build_env(kwargs: dict) -> dict:
+    """Pop an optional `env` mapping from kwargs and merge it on top of a copy
+    of the current environment, so callers can override individual variables
+    without dropping the inherited ones."""
+    env = os.environ.copy()
+    env.update(kwargs.pop("env", None) or {})
+    return env
 
 def run(
     cmd: list[str],
@@ -53,8 +61,7 @@ def run(
 
     The command inherits the current environment.
     """
-    return subprocess.run(cmd, check=True, env=os.environ.copy(), **kwargs)
-
+    return subprocess.run(cmd, check=True, env=_build_env(kwargs), **kwargs)
 
 def run_capture(
     cmd: list[str],
@@ -67,7 +74,7 @@ def run_capture(
     proc = subprocess.run(
         cmd, check=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        env=os.environ.copy(),
+        env=_build_env(kwargs),
         **kwargs,
     )
     return proc.stdout
@@ -127,15 +134,20 @@ def compile_test_binary(config: dict, cwd: Path, out_dir: Path) -> Path:
 
     sys.exit(f"Error: could not locate {config["name"]} test binary.")
 
+def miri_env(config: dict) -> dict:
+    """Build the environment overrides for a Miri run, exposing the config's
+    `flags` as the MIRIFLAGS variable."""
+    return {"MIRIFLAGS": " ".join(config.get("flags") or [])}
+
 def compile_miri_tests(cwd: Path):
-    print(">>> compiling tests (Miri)")
+    print(">>> compiling tests (miri)")
     run_capture(
         ["cargo", "miri", "test", "--no-run", "--message-format=json"],
         cwd=cwd,
     )
 def run_miri_test(cwd: Path, t: str, config: dict):
     cmd = f"cargo miri test -q --lib -- --exact {t} --nocapture"
-    return hyperfine_mean(cmd, config, cwd=cwd)
+    return hyperfine_mean(cmd, config, cwd=cwd, env=miri_env(config))
 
 def list_tests(test_bin: Path) -> list[str]:
     """Return all #[test] names discovered in the given test binary."""
@@ -154,6 +166,7 @@ def hyperfine_mean(cmd, config: dict, **kwargs) -> float:
         out_path = Path(out_json.name)
     try:
         kwargs["stdout"] = subprocess.DEVNULL
+        kwargs["stderr"] = subprocess.DEVNULL
         run(
             [
                 "hyperfine",
@@ -221,6 +234,7 @@ def process_config(
             means[config["name"]] = mean
         mean = run_miri_test(src_dir, t, MIRI)
         means[MIRI["name"]] = mean
+        print(f"    - {MIRI["name"]}={round(mean, 8)}s")
     results = []
 
     native_mean = means[NATIVE["name"]]
