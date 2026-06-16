@@ -22,14 +22,16 @@ NATIVE = {
 
 MIRI = {
     "name": "miri-tb",
-    "flags": [
-        "-Zmiri-tree-borrows",
-        "-Zmiri-provenance-gc=0",
-        "-Zmiri-mute-stdout-stderr",
-        "-Zmiri-disable-data-race-detector",
-        "-Zmiri-deterministic-concurrency",
-        "-Zmiri-disable-alignment-check"
-    ],
+    "env": {
+        "MIRIFLAGS": [
+            "-Zmiri-tree-borrows",
+            "-Zmiri-provenance-gc=0",
+            "-Zmiri-mute-stdout-stderr",
+            "-Zmiri-disable-data-race-detector",
+            "-Zmiri-deterministic-concurrency",
+            "-Zmiri-disable-alignment-check"
+        ]
+    },
     "runs": 3,
     "warmup": 1
 }
@@ -230,7 +232,6 @@ def process_config(
     compile_miri_tests(src_dir)
 
     ratios: dict[tuple[str, str], list[float]] = {}
-
     for t in tests:
         print(f"  -> {t}")
         per_test_means = {}
@@ -246,9 +247,6 @@ def process_config(
         if miri_mean <= 0:
             sys.exit(f"Reported 0s mean execution time for {MIRI['name']} on test {t} from {bench_name}")
         print(f"    - {MIRI['name']}={round(miri_mean, 8)}s")
-
-        # Baselines (denominators). Pop native out of per_test_means so what's
-        # left is exactly the BSAN modes (the numerators).
         baselines = {
             NATIVE["name"]: per_test_means.pop(NATIVE["name"]),
             MIRI["name"]: miri_mean,
@@ -264,14 +262,16 @@ def process_config(
     for (mode, baseline), ratio_list in ratios.items():
         results.append({
             "name": bench_name,
-            "unit": "Median Relative Execution Time",
-            "value": statistics.median(ratio_list),
+            "unit": "Mean Relative Execution Time",
+            "value": statistics.mean(ratio_list),
             "extra": json.dumps({
                 "mode": mode,
                 "baseline": baseline,
                 "target": target,
                 "version": version,
                 "crate": crate,
+                "max": max(ratio_list),
+                "min": min(ratio_list)
             }),
         })
     return results
