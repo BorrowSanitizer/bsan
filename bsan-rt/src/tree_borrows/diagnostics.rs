@@ -970,7 +970,7 @@ impl LazyTree {
     pub fn print_tree(&self, protected_tags: &ProtectedTagsRef<'_>, show_unnamed: bool) {
         match self {
             LazyTree::Init(tree) => tree.print_tree(protected_tags, show_unnamed),
-            LazyTree::Uninit { root_tag, size, span } => {
+            LazyTree::Uninit { root_tag, size, span, .. } => {
                 EagerTree::new(*root_tag, *size, *span).print_tree(protected_tags, show_unnamed)
             }
         }
@@ -979,11 +979,11 @@ impl LazyTree {
     pub fn print_tree_diff(&self, old_tree: &LazyTree, protected_tags: &ProtectedTagsRef<'_>) {
         let self_tree = match self {
             LazyTree::Init(t) => t.clone(),
-            LazyTree::Uninit { root_tag, size, span } => EagerTree::new(*root_tag, *size, *span),
+            LazyTree::Uninit { root_tag, size, span, .. } => EagerTree::new(*root_tag, *size, *span),
         };
         let old_tree = match old_tree {
             LazyTree::Init(t) => t.clone(),
-            LazyTree::Uninit { root_tag, size, span } => EagerTree::new(*root_tag, *size, *span),
+            LazyTree::Uninit { root_tag, size, span, .. } => EagerTree::new(*root_tag, *size, *span),
         };
         self_tree.print_tree_diff(&old_tree, protected_tags);
     }

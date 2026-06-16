@@ -31,9 +31,9 @@ impl RefCount {
         debug_assert!(prev <= usize::MAX / 2, "RefCount overflow");
     }
 
-    /// Decrements the reference count. 
-    /// 
-    /// Returns `true` if the count reached zero, indicating the caller is 
+    /// Decrements the reference count.
+    ///
+    /// Returns `true` if the count reached zero, indicating the caller is
     /// responsible for cleanup. Otherwise, returns `false` if the count
     /// is non-zero.
     pub fn decrement(&self) -> bool {

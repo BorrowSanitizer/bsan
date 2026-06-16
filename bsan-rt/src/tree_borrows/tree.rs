@@ -906,19 +906,22 @@ impl Node {
 #[derive(Clone, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum LazyTree {
-    Uninit { root_tag: BorTag, size: Size, span: Span },
+    Uninit { root_tag: BorTag, size: Size, span: Span, refcount: RefCount },
     Init(EagerTree),
 }
 
 impl LazyTree {
     pub fn new(root_tag: BorTag, size: Size, span: Span) -> Self {
-        LazyTree::Uninit { root_tag, size, span }
+        LazyTree::Uninit { root_tag, size, span, refcount: RefCount::new() }
     }
 
     /// Forces the tree into the `Init` state, constructing the underlying `Tree` if needed.
     fn ensure_init(&mut self) {
-        if let LazyTree::Uninit { root_tag, size, span } = self {
-            *self = LazyTree::Init(EagerTree::new(*root_tag, *size, *span));
+        if let LazyTree::Uninit { root_tag, size, span, refcount } = self {
+            let mut tree = EagerTree::new(*root_tag, *size, *span);
+            let root_idx = tree.tag_mapping.get(root_tag).unwrap();
+            tree.nodes.get_mut(root_idx).unwrap().refcount = refcount.clone();
+            *self = LazyTree::Init(tree);
         }
     }
 }
