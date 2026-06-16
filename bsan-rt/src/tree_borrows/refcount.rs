@@ -40,7 +40,7 @@ impl RefCount {
         let prev = self.0.fetch_sub(1, Ordering::Release);
         debug_assert!(prev > 0, "RefCount decremented below zero");
         if prev == 1 {
-            // Pair with every prior Release decrement. Ensures operations 
+            // Pair with every prior Release decrement. Ensures operations
             // before the last decrement happen before the RefCount becomes 0.
             fence(Ordering::Acquire);
             true
