@@ -22,7 +22,14 @@ NATIVE = {
 
 MIRI = {
     "name": "miri-tb",
-    "flags": ["-Zmiri-tree-borrows", "-Zmiri-provenance-gc=0", "-Zmiri-mute-stdout-stderr"],
+    "flags": [
+        "-Zmiri-tree-borrows",
+        "-Zmiri-provenance-gc=0",
+        "-Zmiri-mute-stdout-stderr",
+        "-Zmiri-disable-data-race-detector"
+        "-Zmiri-deterministic-concurrency",
+        "-Zmiri-disable-alignment-check"
+    ],
     "runs": 3,
     "warmup": 1
 }
@@ -222,35 +229,49 @@ def process_config(
         sys.exit(f"Error: every discovered test was excluded for {bench_name}.")
     compile_miri_tests(src_dir)
 
-    means = {}
+    ratios: dict[tuple[str, str], list[float]] = {}
+
     for t in tests:
         print(f"  -> {t}")
+        per_test_means = {}
         for config in ALL_BINARY_CONFIGS:
             binary = scratch / config["name"]
             mean = hyperfine_mean(f"{binary} --exact {t} --nocapture", config)
             if mean <= 0:
-                sys.exit(f"Reported 0s mean native execution time for test {t} from {bench_name}")
-            print(f"    - {config["name"]}={round(mean, 8)}s")
-            means[config["name"]] = mean
-        mean = run_miri_test(src_dir, t, MIRI)
-        means[MIRI["name"]] = mean
-        print(f"    - {MIRI["name"]}={round(mean, 8)}s")
+                sys.exit(f"Reported 0s mean execution time for {config['name']} on test {t} from {bench_name}")
+            print(f"    - {config['name']}={round(mean, 8)}s")
+            per_test_means[config["name"]] = mean
+
+        miri_mean = run_miri_test(src_dir, t, MIRI)
+        if miri_mean <= 0:
+            sys.exit(f"Reported 0s mean execution time for {MIRI['name']} on test {t} from {bench_name}")
+        print(f"    - {MIRI['name']}={round(miri_mean, 8)}s")
+
+        # Baselines (denominators). Pop native out of per_test_means so what's
+        # left is exactly the BSAN modes (the numerators).
+        baselines = {
+            NATIVE["name"]: per_test_means.pop(NATIVE["name"]),
+            MIRI["name"]: miri_mean,
+        }
+
+        for mode, mode_mean in per_test_means.items():
+            for baseline, baseline_mean in baselines.items():
+                ratio = mode_mean / baseline_mean
+                ratios.setdefault((mode, baseline), []).append(ratio)
+                print(f"      {mode} vs {baseline} = {round(ratio, 4)}x")
+
     results = []
-
-    native_mean = means[NATIVE["name"]]
-    del means[NATIVE["name"]]
-
-    for mode, mean in means.items():
-        ratio = mean / native_mean
+    for (mode, baseline), ratio_list in ratios.items():
         results.append({
             "name": bench_name,
             "unit": "Median Relative Execution Time",
-            "value": statistics.median(ratio),
+            "value": statistics.median(ratio_list),
             "extra": json.dumps({
                 "mode": mode,
+                "baseline": baseline,
                 "target": target,
                 "version": version,
-                "crate": crate
+                "crate": crate,
             }),
         })
     return results
