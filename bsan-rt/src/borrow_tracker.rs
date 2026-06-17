@@ -274,6 +274,16 @@ impl BorrowTracker {
         )
     }
 
+    pub fn increment(&self) -> UBResult<()> {
+        self.tree().increment(self.bor_tag);
+        Ok(())
+    }
+
+    pub fn decrement(&self) -> UBResult<()> {
+        let _reached_zero = self.tree().decrement(self.bor_tag);
+        Ok(())
+    }
+
     pub fn access(
         &self,
         global_ctx: &GlobalCtx,

@@ -24,6 +24,7 @@ use super::diagnostics::{
 };
 use super::foreign_access_skipping::IdempotentForeignAccess;
 use super::perms::{AccessKind, PermTransition, Permission};
+use super::refcount::RefCount;
 use super::tree_visitor::{ChildrenVisitMode, ContinueTraversal, NodeAppArgs, TreeVisitor};
 use super::wildcard::{ExposedCache, WildcardAccessLevel};
 use crate::errors::UBResult;
@@ -334,6 +335,9 @@ pub struct Node {
     default_initial_idempotent_foreign_access: IdempotentForeignAccess,
     /// Whether a wildcard access could happen through this node.
     pub is_exposed: bool,
+    /// Number of live references to this node. Always accessed under the
+    /// allocation's tree `Mutex`.
+    pub refcount: RefCount,
     /// Some extra information useful only for debugging purposes.
     pub debug_info: NodeDebugInfo,
 }
@@ -361,6 +365,7 @@ impl EagerTree {
                     // The root may never be skipped, all accesses will be local.
                     default_initial_idempotent_foreign_access: IdempotentForeignAccess::None,
                     is_exposed: false,
+                    refcount: RefCount::new(),
                     debug_info,
                 },
             );
@@ -901,19 +906,22 @@ impl Node {
 #[derive(Clone, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum LazyTree {
-    Uninit { root_tag: BorTag, size: Size, span: Span },
+    Uninit { root_tag: BorTag, size: Size, span: Span, refcount: RefCount },
     Init(EagerTree),
 }
 
 impl LazyTree {
     pub fn new(root_tag: BorTag, size: Size, span: Span) -> Self {
-        LazyTree::Uninit { root_tag, size, span }
+        LazyTree::Uninit { root_tag, size, span, refcount: RefCount::new() }
     }
 
     /// Forces the tree into the `Init` state, constructing the underlying `Tree` if needed.
     fn ensure_init(&mut self) {
-        if let LazyTree::Uninit { root_tag, size, span } = self {
-            *self = LazyTree::Init(EagerTree::new(*root_tag, *size, *span));
+        if let LazyTree::Uninit { root_tag, size, span, refcount } = self {
+            let mut tree = EagerTree::new(*root_tag, *size, *span);
+            let root_idx = tree.tag_mapping.get(root_tag).unwrap();
+            tree.nodes.get_mut(root_idx).unwrap().refcount = refcount.clone();
+            *self = LazyTree::Init(tree);
         }
     }
 }
@@ -944,6 +952,8 @@ impl AccessRelatedness {
 pub trait AllocState: Clone {
     fn contains_tag(&self, tag: BorTag) -> bool;
     fn node_count(&self) -> usize;
+    fn increment(&self, tag: BorTag);
+    fn decrement(&self, tag: BorTag) -> bool;
     fn new_child(
         &mut self,
         base_offset: Size,
@@ -1078,6 +1088,25 @@ impl AllocState for LazyTree {
             tree.remove_unreachable_tags(live_tags);
         }
     }
+    fn increment(&self, tag: BorTag) {
+        match self {
+            LazyTree::Uninit { root_tag, refcount, .. } => {
+                // In the Uninit state the only node is the root, we add an debug_assert instead
+                debug_assert!(*root_tag == tag);
+                refcount.increment_nonatomic();
+            }
+            LazyTree::Init(tree) => tree.increment(tag),
+        }
+    }
+    fn decrement(&self, tag: BorTag) -> bool {
+        match self {
+            LazyTree::Uninit { root_tag, refcount, .. } => {
+                debug_assert!(*root_tag == tag);
+                refcount.decrement_nonatomic()
+            }
+            LazyTree::Init(tree) => tree.decrement(tag),
+        }
+    }
 }
 
 impl AllocState for EagerTree {
@@ -1116,6 +1145,7 @@ impl AllocState for EagerTree {
                 default_initial_perm: outside_perm,
                 default_initial_idempotent_foreign_access: default_strongest_idempotent,
                 is_exposed: false,
+                refcount: RefCount::new(),
                 debug_info: NodeDebugInfo::new(new_tag, outside_perm, span),
             },
         );
@@ -1345,5 +1375,17 @@ impl AllocState for EagerTree {
             self.remove_useless_children(self.roots[i], live_tags);
         }
         self.locations.merge_adjacent_thorough();
+    }
+    fn increment(&self, tag: BorTag) {
+        if let Some(node) = self.tag_mapping.get(&tag).and_then(|idx| self.nodes.get(idx)) {
+            node.refcount.increment_nonatomic();
+        }
+    }
+    fn decrement(&self, tag: BorTag) -> bool {
+        self.tag_mapping
+            .get(&tag)
+            .and_then(|idx| self.nodes.get(idx))
+            .map(|node| node.refcount.decrement_nonatomic())
+            .unwrap_or(false)
     }
 }

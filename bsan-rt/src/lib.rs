@@ -559,11 +559,17 @@ unsafe extern "C-unwind" fn __bsan_dealloc_stack_impl(
 
 /// Increments the reference count associated with a provenance value.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_rc_inc_impl(_bor_tag: BorTag, _alloc_info: *mut AllocInfo) {}
+unsafe extern "C-unwind" fn __bsan_rc_inc_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+    let prov = Provenance { bor_tag, alloc_info };
+    let _ = BorrowTracker::for_alloc(prov, |bt| bt.increment());
+}
 
 /// Decrements the reference count associated with a provenance value.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_rc_dec_impl(_bor_tag: BorTag, _alloc_info: *mut AllocInfo) {}
+unsafe extern "C-unwind" fn __bsan_rc_dec_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+    let prov = Provenance { bor_tag, alloc_info };
+    let _ = BorrowTracker::for_alloc(prov, |bt| bt.decrement());
+}
 
 /// Reserves a stack slot for allocation metadata.
 #[unsafe(no_mangle)]

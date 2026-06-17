@@ -8,6 +8,13 @@ use core::sync::atomic::{fence, AtomicUsize, Ordering};
 #[repr(transparent)]
 pub struct RefCount(AtomicUsize);
 
+impl Clone for RefCount {
+    /// Snapshots the current count into a fresh `RefCount`.
+    fn clone(&self) -> Self {
+        Self(AtomicUsize::new(self.0.load(Ordering::Relaxed)))
+    }
+}
+
 #[allow(dead_code)]
 impl RefCount {
     /// Creates a new `RefCount` initialized to 1.
@@ -19,26 +26,46 @@ impl RefCount {
     ///
     /// The caller must already hold a live reference. Resurrecting a
     /// reference count from zero is undefined behavior in this design.
-    ///
-    /// Panics if the count would overflow `usize::MAX / 2`. In practice this is
-    /// unreachable, but the check prevents silent wraparound to zero.
     pub fn increment(&self) {
         let prev = self.0.fetch_add(1, Ordering::Relaxed);
         debug_assert!(prev <= usize::MAX / 2, "RefCount overflow");
     }
 
-    /// Decrements the reference count. Returns `true` if the count reached
-    /// zero, indicating the caller is responsible for cleanup. Otherwise,
-    /// returns `false` if the count is non-zero.
+    /// Decrements the reference count.
+    ///
+    /// Returns `true` if the count reached zero, indicating the caller is
+    /// responsible for cleanup. Otherwise, returns `false` if the count
+    /// is non-zero.
     pub fn decrement(&self) -> bool {
         let prev = self.0.fetch_sub(1, Ordering::Release);
         debug_assert!(prev > 0, "RefCount decremented below zero");
         if prev == 1 {
-            // Pair with every prior Release decrement.
+            // Pair with every prior Release decrement. Ensures operations
+            // before the last decrement happen before the RefCount becomes 0.
             fence(Ordering::Acquire);
             true
         } else {
             false
+        }
+    }
+
+    /// Increments the reference count **without** atomic synchronization.
+    pub fn increment_nonatomic(&self) {
+        unsafe {
+            let count = self.0.as_ptr();
+            debug_assert!(*count <= usize::MAX / 2, "RefCount overflow");
+            *count += 1;
+        }
+    }
+
+    /// Decrements the reference count **without** atomic synchronization,
+    /// returning `true` if the count reached zero.
+    pub fn decrement_nonatomic(&self) -> bool {
+        unsafe {
+            let count = self.0.as_ptr();
+            debug_assert!(*count > 0, "RefCount decremented below zero");
+            *count -= 1;
+            *count == 0
         }
     }
 
