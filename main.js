@@ -1,11 +1,15 @@
 "use strict";
 /* global Chart */
 // The primary color of the chart
-const COLOR = "#ff3838";
+const COLOR = "#28a745";
 
-// The background color of the chart,
-// underneath the line. (Add alpha for #rrggbbaa)
-const BG_COLOR = COLOR + "60";
+// The fill color of the shaded band between the min and max lines.
+// (Add alpha for #rrggbbaa)
+const BG_COLOR = COLOR + "33";
+
+// The stroke color of the min / max boundary lines — a translucent
+// version of the primary color so they read as secondary to the mean.
+const BAND_LINE_COLOR = COLOR + "AA";
 
 // ex: Monday, May 18, 2026 at 10:03 AM EDT
 const DATE_FORMAT_OPTS = {
@@ -69,10 +73,16 @@ function initDatasets() {
                 };
                 
                 result.bench.extra = parseExtra(result.bench.extra);
-                
-                const arr = map.get(result.bench.name);
+                const extra = result.bench.extra;
+                const key = [
+                    result.bench.name,
+                    extra?.mode ?? '',
+                    extra?.baseline ?? '',
+                ].join('\x00');
+
+                const arr = map.get(key);
                 if (arr === undefined) {
-                    map.set(result.bench.name, [result]);
+                    map.set(key, [result]);
                 } else {
                     arr.push(result);
                 }
@@ -127,11 +137,11 @@ function sortedUnique(values) {
 // of the dataset.
 function populateControls(dataSets, render) {
 
-    function populateSelect(select, values, allLabel) {
+    function populateSelect(select, values, allLabel, { allowAll = true } = {}) {
         select.innerHTML = '';
         // Only add the "all" option if there's more than
         // one to choose from.
-        if (values.length > 1) {
+        if (allowAll && values.length > 1) {
             const allOption = document.createElement('option');
             allOption.value = '';
             allOption.textContent = allLabel;
@@ -149,6 +159,7 @@ function populateControls(dataSets, render) {
     const crateSelect = document.getElementById('crate-select');
     const targetSelect = document.getElementById('target-select');
     const modeSelect = document.getElementById('mode-select');
+    const baselineSelect = document.getElementById('baseline-select');
 
     const parsedDataSets = [];
     for (const { dataSet } of dataSets) {
@@ -164,10 +175,17 @@ function populateControls(dataSets, render) {
         populateSelect(crateSelect, sortedUnique(parsedDataSets.map(d => d.crate)), 'All crates');
         populateSelect(targetSelect, sortedUnique(parsedDataSets.map(d => d.target)), 'All targets');
         populateSelect(modeSelect, sortedUnique(parsedDataSets.map(d => d.mode)), 'All modes');
+        populateSelect(
+            baselineSelect,
+            sortedUnique(parsedDataSets.map(d => d.baseline)),
+            'All baselines',
+            { allowAll: false }
+        );
 
         crateSelect.addEventListener('change', render);
         targetSelect.addEventListener('change', render);
         modeSelect.addEventListener('change', render);
+        baselineSelect.addEventListener('change', render);
     } else {
         const missing = 'No data';
         populateSelect(crateSelect, [], missing);
@@ -178,14 +196,18 @@ function populateControls(dataSets, render) {
 
         populateSelect(modeSelect, [], missing);
         modeSelect.disabled = true;
+
+        populateSelect(baselineSelect, [], missing);
+        baselineSelect.disabled = true;
     }
 }
 
 function filterDataset(dataset, filters) {
    return dataset.filter((d) => {
-        return (!filters.crate  || d.bench.extra?.crate === filters.crate)  &&
-               (!filters.target || d.bench.extra?.target === filters.target) &&
-               (!filters.mode   || d.bench.extra?.mode === filters.mode);
+        return (!filters.crate    || d.bench.extra?.crate === filters.crate)  &&
+               (!filters.target   || d.bench.extra?.target === filters.target) &&
+               (!filters.mode     || d.bench.extra?.mode === filters.mode) &&
+               (!filters.baseline || d.bench.extra?.baseline === filters.baseline);
    });
 }
 
@@ -194,31 +216,46 @@ function formatBenchExtra(bench) {
     if (!metadata) {
         return [];
     }
-    return [
+    const lines = [
         'crate: ' + metadata.crate,
         'mode: ' + metadata.mode,
         'target: ' + metadata.target,
         'version: ' + metadata.version,
+        'baseline: ' + metadata.baseline,
     ];
+    if (metadata.min !== undefined && metadata.max !== undefined) {
+        const fmt = v => Number(v).toLocaleString(undefined, { maximumFractionDigits: 3 });
+        lines.push('range: ' + fmt(metadata.min) + ' – ' + fmt(metadata.max));
+    }
+    return lines;
 }
 
 function renderAllCharts(dataSets) {
 
-    function renderGraph(parent, name, dataset) {
+    function renderGraph(parent, dataset) {
         const panel = document.createElement('section');
         panel.className = 'chart-panel';
         parent.appendChild(panel);
 
+        const latestMetadata = dataset[dataset.length - 1]?.bench.extra ?? null;
+        const benchName = dataset[dataset.length - 1]?.bench.name ?? '';
+
+        // Each chart represents one configuration. The title fully describes
+        // it; the subtitle carries the target architecture.
+        const titleText = latestMetadata
+            ? 'Mean execution time in "' + latestMetadata.mode + '" mode as a multiple of ' +
+              latestMetadata.baseline + ', for ' + latestMetadata.crate
+            : benchName;
+
         const title = document.createElement('h2');
         title.className = 'chart-title';
-        title.textContent = name;
+        title.textContent = titleText;
         panel.appendChild(title);
 
-        const latestMetadata = dataset[dataset.length - 1]?.bench.extra ?? null;
         const meta = document.createElement('p');
         meta.className = 'chart-meta';
         meta.textContent = latestMetadata ?
-            latestMetadata.crate + '@' + latestMetadata.version + ' - ' + latestMetadata.mode + ' - ' + latestMetadata.target :
+            latestMetadata.target + ' - v' + latestMetadata.version :
             'No data points';
         panel.appendChild(meta);
 
@@ -230,29 +267,55 @@ function renderAllCharts(dataSets) {
         canvas.className = 'benchmark-chart';
         canvasWrap.appendChild(canvas);
 
+        // Three lines per chart: the mean, the max, and the min.
+        // The min line fills up to the max line (fill: '-1') so that the band
+        // between them is shaded.
         const data = {
             labels: dataset.map(d => d.commit.id.slice(0, 7)),
-            datasets: [{
-                label: name,
-                data: dataset.map(d => d.bench.value),
-                borderColor: COLOR,
-                backgroundColor: BG_COLOR
-            }],
+            datasets: [
+                {
+                    label: titleText,
+                    data: dataset.map(d => d.bench.value),
+                    borderColor: COLOR,
+                    backgroundColor: COLOR,
+                    fill: false,
+                },
+                {
+                    label: 'max',
+                    data: dataset.map(d => d.bench.extra?.max ?? d.bench.value),
+                    borderColor: BAND_LINE_COLOR,
+                    backgroundColor: BG_COLOR,
+                    borderWidth: 1,
+                    pointRadius: 0,
+                    pointHoverRadius: 0,
+                    fill: false,
+                },
+                {
+                    label: 'min',
+                    data: dataset.map(d => d.bench.extra?.min ?? d.bench.value),
+                    borderColor: BAND_LINE_COLOR,
+                    backgroundColor: BG_COLOR,
+                    borderWidth: 1,
+                    pointRadius: 0,
+                    pointHoverRadius: 0,
+                    fill: '-1',
+                },
+            ],
         };
-        
+
         const options = {
             ...DEFAULT_CHART_OPTS,
             scales: {
                 xAxes: [{
                     scaleLabel: {
                         display: true,
-                        labelString: 'commit',
+                        labelString: 'Commit',
                     },
                 }],
                 yAxes: [{
                     scaleLabel: {
                         display: true,
-                        labelString: dataset.length > 0 ? dataset[0].bench.unit : '',
+                        labelString: 'Median',
                     },
                     ticks: {
                         beginAtZero: true,
@@ -263,6 +326,9 @@ function renderAllCharts(dataSets) {
                 }],
             },
             tooltips: {
+                // The max / min lines mirror the mean's metadata, so only
+                // surface a tooltip for the mean (dataset index 0).
+                filter: item => item.datasetIndex === 0,
                 callbacks: {
                     afterTitle: items => {
                         const { index } = items[0];
@@ -327,10 +393,10 @@ function renderAllCharts(dataSets) {
         graphsElem.className = 'benchmark-graphs';
         setElem.appendChild(graphsElem);
 
-        for (const [benchName, benches] of benchSet.entries()) {
+        for (const benches of benchSet.values()) {
             const filtered = filterDataset(benches, filters);
             if (filtered.length > 0) {
-                renderGraph(graphsElem, benchName, filtered);
+                renderGraph(graphsElem, filtered);
             }
         }
 
@@ -347,6 +413,7 @@ function renderAllCharts(dataSets) {
         crate: document.getElementById('crate-select').value,
         target: document.getElementById('target-select').value,
         mode: document.getElementById('mode-select').value,
+        baseline: document.getElementById('baseline-select').value,
     };
 
     let rendered = 0;
