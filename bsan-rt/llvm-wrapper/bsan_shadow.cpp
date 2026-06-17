@@ -220,7 +220,20 @@ void ClearShadow(void *dest, uptr size) {
     return;
   uptr d_aligned, d_size;
   AlignRange8((uptr)dest, size, d_aligned, d_size);
-  internal_memset((void *)MEM_TO_SHADOW(d_aligned), 0, d_size);
-  internal_memset((void *)MEM_TO_ORIGIN(d_aligned), 0, d_size);
+
+  uptr shadow_start = MEM_TO_SHADOW(d_aligned);
+  uptr origin_start = MEM_TO_ORIGIN(d_aligned);
+
+  const uptr step = 8; // kMinProvAlignment
+
+  for (uptr s = d_aligned; s < d_aligned + d_size; s += step) {
+    uptr offset = s - d_aligned;
+    BorTag tag = *reinterpret_cast<BorTag *>(shadow_start + offset);
+    AllocInfo *info = *reinterpret_cast<AllocInfo **>(origin_start + offset);
+    __bsan_rc_dec(tag, info);
+  }
+
+  internal_memset((void *)shadow_start, 0, d_size);
+  internal_memset((void *)origin_start, 0, d_size);
 }
 } // namespace __bsan
