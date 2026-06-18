@@ -345,7 +345,7 @@ void __bsan_write(void *ptr, uptr access_size, BorTag bor_tag,
   }
 }
 
-SANITIZER_WEAK_ATTRIBUTE 
+SANITIZER_WEAK_ATTRIBUTE
 bool __bsan_rc_inc_impl(BorTag Tag, AllocInfo *Info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
