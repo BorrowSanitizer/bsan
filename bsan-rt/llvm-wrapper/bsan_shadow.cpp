@@ -234,7 +234,6 @@ void ClearShadow(void *dest, uptr size) {
     if (*info_ptr != nullptr)
       __bsan_rc_dec(*tag_ptr, *info_ptr);
 
-    *tag_ptr = 0;
     *info_ptr = nullptr;
   }
 }
