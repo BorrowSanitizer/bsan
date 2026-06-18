@@ -42,16 +42,22 @@
         </div>
       </div>
       <p class="dashboard-explanation">
-        <strong>Important: </strong> At the moment, we are recording results in a "nop" mode. BorrowSanitizer's run-time checks are being inserted, but they do not do anything. 
-        This is helpful for debugging the LLVM components of our tool. However, you can expect fully instrumented execution to be orders of magnitude worse.
-      </p>
-      <p class="dashboard-explanation">
-        We measure performance as a multiple of the execution time of an uninstrumented program.
-        To summarize the performance of a crate, we calculate this metric for every unit test and then report the median value.
-        When we execute individual tests, we record wall time  as the mean of 10 iterations after three "warm-up" runs using <a rel="noopener" href="https://github.com/sharkdp/hyperfine">hyperfine</a>. 
-        We execute benchmarks on standard GitHub Actions runners, so these results are definitely noisy. This data is still useful for gauging performance, even though it is not scientifically rigorous.
-      </p>
+        We measure performance as a multiple of the execution time of a baseline configuration. There are three baselines: "native" is uninstrumented
+        native execution in debug mode, "miri-tb" is Miri with Tree Borrows enabled, and "miri-base" is Miri without Tree Borrows enabled. We disable all other forms 
+        of run-time checking for each of the Miri baselines, and we intercept invocations of Miri's interpreter to avoid including its Cargo plugin in our timing
+         measurements. This ensures that we are only measuring the time when Miri is actually interpreting a program. 
 
+        To summarize the performance of a crate, we calculate relative execution time for every unit test and report the mean value. We use 
+        <a rel="noopener" href="https://github.com/sharkdp/hyperfine">hyperfine</a> to measure individual tests, recording wall time as the mean of three iterations 
+        after a "warm-up" run. 
+        
+        We also use <a rel="noopener" href="https://github.com/BorrowSanitizer/rust">a fork</a> of the Rust compiler. This includes a change to Rust's test harness that 
+        lets us disable parsing information about the user's terminal. Miri already disables this feature using its own conditional compilation directive. We use this 
+        configuration for both the "native" baseline and each of BorrowSanitizer's configurations.
+
+        BorrowSanitizer currently has two configurations. The "full" mode has all of our checking enabled. The "no-op" mode inserts all of our run-time instrumentation,
+        but it disables the checks themselves. No errors are reported to the user.
+      </p>
     </section>
     <main id="main"></main>
     <footer>
