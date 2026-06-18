@@ -111,7 +111,7 @@ footer {
   box-shadow: 0 2px 8px rgb(32 35 42 / 6%);
 }
 
-#controls-container {
+#explanation-container, #controls-container {
   border: 1px solid #cfd6df;
   background: #fff;
   border-radius: 5px;
@@ -144,11 +144,32 @@ footer {
 }
 
 .dashboard-explanation {
-  border-top: 1px solid #e5e7eb;
   color: #20232a;
   line-height: 1.5;
-  margin: 18px 0 0;
-  padding-top: 14px;
+  margin: 0;
+}
+
+.dashboard-explanation p:first-child {
+  margin-top: 0;
+}
+
+.dashboard-explanation p:last-child {
+  margin-bottom: 0;
+}
+
+
+.dashboard-explanation h2 {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.dashboard-explanation ul {
+  margin: 8px 0;
+  padding-left: 22px;
+}
+
+.dashboard-explanation li {
+  margin: 4px 0;
 }
 
 .benchmark-set {

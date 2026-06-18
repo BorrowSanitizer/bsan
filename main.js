@@ -243,8 +243,8 @@ function renderAllCharts(dataSets) {
         // Each chart represents one configuration. The title fully describes
         // it; the subtitle carries the target architecture.
         const titleText = latestMetadata
-            ? 'Mean execution time in "' + latestMetadata.mode + '" mode as a multiple of ' +
-              latestMetadata.baseline + ', for ' + latestMetadata.crate
+            ? 'Mean execution time in "' + latestMetadata.mode + '" mode as a multiple of "' +
+              latestMetadata.baseline + '," for ' + latestMetadata.crate
             : benchName;
 
         const title = document.createElement('h2');

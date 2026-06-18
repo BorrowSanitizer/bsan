@@ -1,72 +1,98 @@
 <!-- This site has been modified from the default output produced by github-actions-benchmark -->
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, minimum-scale=1.0, initial-scale=1, user-scalable=yes">
-    <link rel="stylesheet" href="style.css">
-    <title>BorrowSanitizer Benchmarks</title>
-    <link rel="icon" type="image/x-icon" href="favicon.svg">
-  </head>
-  <body>
-    <header id="header">
-      <h1 class="dashboard-title">BorrowSanitizer Benchmarks</h1>
-      <div class="dashboard-meta">
-        <div class="header-item">
-          <strong class="header-label">Last Update:</strong>
-          <span id="last-update"></span>
-        </div>
-        <div class="header-item">
-          <strong class="header-label">Repository:</strong>
-          <a id="repository-link" rel="noopener" href="https://github.com/BorrowSanitizer/bsan">github.com/BorrowSanitizer/bsan</a>
-        </div>
-      </div>
-    </header>
-    <section id="controls-container" aria-label="Benchmark controls">
-      <div id="controls">
-        <div class="control-field">
-          <label for="crate-select">Crate</label>
-          <select id="crate-select"></select>
-        </div>
-        <div class="control-field">
-          <label for="target-select">Target</label>
-          <select id="target-select"></select>
-        </div>
-        <div class="control-field">
-          <label for="mode-select">Mode</label>
-          <select id="mode-select"></select>
-        </div>
-        <div class="control-field">
-          <label for="baseline-select">Baseline</label>
-          <select id="baseline-select"></select>
-        </div>
-      </div>
-      <p class="dashboard-explanation">
-        We measure performance as a multiple of the execution time of a baseline configuration. There are three baselines: "native" is uninstrumented
-        native execution in debug mode, "miri-tb" is Miri with Tree Borrows enabled, and "miri-base" is Miri without Tree Borrows enabled. We disable all other forms 
-        of run-time checking for each of the Miri baselines, and we intercept invocations of Miri's interpreter to avoid including its Cargo plugin in our timing
-         measurements. This ensures that we are only measuring the time when Miri is actually interpreting a program. 
 
-        To summarize the performance of a crate, we calculate relative execution time for every unit test and report the mean value. We use 
-        <a rel="noopener" href="https://github.com/sharkdp/hyperfine">hyperfine</a> to measure individual tests, recording wall time as the mean of three iterations 
-        after a "warm-up" run. 
-        
-        We also use <a rel="noopener" href="https://github.com/BorrowSanitizer/rust">a fork</a> of the Rust compiler. This includes a change to Rust's test harness that 
-        lets us disable parsing information about the user's terminal. Miri already disables this feature using its own conditional compilation directive. We use this 
-        configuration for both the "native" baseline and each of BorrowSanitizer's configurations.
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, minimum-scale=1.0, initial-scale=1, user-scalable=yes">
+  <link rel="stylesheet" href="style.css">
+  <title>BorrowSanitizer Benchmarks</title>
+  <link rel="icon" type="image/x-icon" href="favicon.svg">
+</head>
 
-        BorrowSanitizer currently has two configurations. The "full" mode has all of our checking enabled. The "no-op" mode inserts all of our run-time instrumentation,
-        but it disables the checks themselves. No errors are reported to the user.
-      </p>
-    </section>
-    <main id="main"></main>
-    <footer>
-      <button id="dl-button" hidden>Download data as JSON</button>
-      <div class="spacer"></div>
-      <div class="small">Powered by <a rel="noopener" href="https://github.com/marketplace/actions/continuous-benchmark">github-action-benchmark</a></div>
-    </footer>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.2/dist/Chart.min.js"></script>
-    <script src="data.js"></script>
-    <script src="main.js"></script>
-  </body>
+<body>
+  <header id="header">
+    <h1 class="dashboard-title">BorrowSanitizer Benchmarks</h1>
+    <div class="dashboard-meta">
+      <div class="header-item">
+        <strong class="header-label">Last Update:</strong>
+        <span id="last-update"></span>
+      </div>
+      <div class="header-item">
+        <strong class="header-label">Repository:</strong>
+        <a id="repository-link" rel="noopener"
+          href="https://github.com/BorrowSanitizer/bsan">github.com/BorrowSanitizer/bsan</a>
+      </div>
+    </div>
+  </header>
+<section id="explanation-container" aria-label="Benchmark explanation">
+  <div class="dashboard-explanation">
+    <h2>Overview</h2>
+    <p>
+      We measure performance as a multiple of the execution time of a baseline configuration.
+      There are three baselines:
+    </p>
+    <ul>
+      <li><strong>native</strong> &mdash; Uninstrumented native execution in debug mode.</li>
+      <li><strong>miri-tb</strong> &mdash; Miri with Tree Borrows enabled.</li>
+      <li><strong>miri-base</strong> &mdash; Miri without Tree Borrows enabled.</li>
+    </ul>
+    <p>
+      We disable all other forms of run-time checking for each of the Miri baselines, and we intercept
+      invocations of Miri's interpreter to avoid including its Cargo plugin in our timing measurements.
+      This ensures that we are only measuring the time when Miri is actually interpreting a program.
+    </p>
+    <p>
+      BorrowSanitizer has two configurations that we can compare against these baselines:
+    </p>
+    <ul>
+      <li><strong>full</strong> &mdash; All of our checking is enabled.</li>
+      <li><strong>no-op</strong> &mdash; Inserts all of our run-time instrumentation, but disables the checks
+        themselves.</li>
+    </ul>
+    <p>
+      To summarize the performance of a crate, we calculate relative execution time for every unit test
+      and report the mean value. We use <a rel="noopener" href="https://github.com/sharkdp/hyperfine">hyperfine</a>
+      to measure individual tests, recording wall time as the mean of three iterations after a "warm-up" run.
+    </p>
+    <p>
+      We also use <a rel="noopener" href="https://github.com/BorrowSanitizer/rust">a fork</a> of the Rust
+      compiler. This includes a change to Rust's test harness that lets us disable parsing information about
+      the user's terminal. Miri already disables this feature using its own conditional compilation directive.
+      We use this configuration for both the "native" baseline and each of BorrowSanitizer's configurations.
+    </p>
+  </div>
+</section>
+<section id="controls-container" aria-label="Benchmark controls">
+  <div id="controls">
+    <div class="control-field">
+      <label for="crate-select">Crate</label>
+      <select id="crate-select"></select>
+    </div>
+    <div class="control-field">
+      <label for="target-select">Target</label>
+      <select id="target-select"></select>
+    </div>
+    <div class="control-field">
+      <label for="mode-select">Mode</label>
+      <select id="mode-select"></select>
+    </div>
+    <div class="control-field">
+      <label for="baseline-select">Baseline</label>
+      <select id="baseline-select"></select>
+    </div>
+  </div>
+</section>
+  <main id="main"></main>
+  <footer>
+    <button id="dl-button" hidden>Download data as JSON</button>
+    <div class="spacer"></div>
+    <div class="small">Powered by <a rel="noopener"
+        href="https://github.com/marketplace/actions/continuous-benchmark">github-action-benchmark</a></div>
+  </footer>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.2/dist/Chart.min.js"></script>
+  <script src="data.js"></script>
+  <script src="main.js"></script>
+</body>
+
 </html>
