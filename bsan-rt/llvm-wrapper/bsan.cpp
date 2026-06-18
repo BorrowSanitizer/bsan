@@ -345,24 +345,28 @@ void __bsan_write(void *ptr, uptr access_size, BorTag bor_tag,
   }
 }
 
-SANITIZER_WEAK_ATTRIBUTE void __bsan_rc_inc_impl(BorTag Tag, AllocInfo *Info);
+SANITIZER_WEAK_ATTRIBUTE 
+bool __bsan_rc_inc_impl(BorTag Tag, AllocInfo *Info);
+
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_rc_inc(BorTag Tag, AllocInfo *Info) {
+bool __bsan_rc_inc(BorTag Tag, AllocInfo *Info) {
   if (__bsan_rc_inc_impl) {
     InterceptorBarrier Barrier;
-    __bsan_rc_inc_impl(Tag, Info);
+    return __bsan_rc_inc_impl(Tag, Info);
   }
+  return false;
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_rc_dec_impl(BorTag Tag, AllocInfo *Info);
+bool __bsan_rc_dec_impl(BorTag Tag, AllocInfo *Info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_rc_dec(BorTag Tag, AllocInfo *Info) {
+bool __bsan_rc_dec(BorTag Tag, AllocInfo *Info) {
   if (__bsan_rc_dec_impl) {
     InterceptorBarrier Barrier;
-    __bsan_rc_dec_impl(Tag, Info);
+    return __bsan_rc_dec_impl(Tag, Info);
   }
+  return false;
 }
 
 SANITIZER_INTERFACE_ATTRIBUTE

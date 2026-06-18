@@ -274,14 +274,16 @@ impl BorrowTracker {
         )
     }
 
-    pub fn increment(&self) -> UBResult<()> {
-        self.tree().increment(self.bor_tag);
-        Ok(())
+    /// Increments the reference count, returning `true` if the count went from
+    /// zero to one.
+    pub fn increment(&self) -> UBResult<bool> {
+        Ok(self.tree().increment(self.bor_tag))
     }
 
-    pub fn decrement(&self) -> UBResult<()> {
-        let _reached_zero = self.tree().decrement(self.bor_tag);
-        Ok(())
+    /// Decrements the reference count, returning `true` if the count reached
+    /// zero.
+    pub fn decrement(&self) -> UBResult<bool> {
+        Ok(self.tree().decrement(self.bor_tag))
     }
 
     pub fn access(

@@ -586,10 +586,10 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncValidateRetval = M.getOrInsertFunction(
       BSAN("validate_retval"), AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
 
-  BsanFuncRcInc = M.getOrInsertFunction(BSAN("rc_inc"), AL, IRB.getVoidTy(),
+  BsanFuncRcInc = M.getOrInsertFunction(BSAN("rc_inc"), AL, IRB.getInt1Ty(),
                                         IntptrTy, PtrTy);
 
-  BsanFuncRcDec = M.getOrInsertFunction(BSAN("rc_dec"), AL, IRB.getVoidTy(),
+  BsanFuncRcDec = M.getOrInsertFunction(BSAN("rc_dec"), AL, IRB.getInt1Ty(),
                                         IntptrTy, PtrTy);
 
   BsanFuncMemCpy = M.getOrInsertFunction(BSAN("memcpy"), AL, IRB.getVoidTy(),
