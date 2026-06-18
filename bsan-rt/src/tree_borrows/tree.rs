@@ -448,6 +448,13 @@ impl EagerTree {
         node.children.is_empty() && !live.contains(&node.tag)
     }
 
+    /// Like [`Self::is_useless`], but takes a set of *dead* tags instead of
+    /// *live* ones.
+    fn is_useless_dead(&self, idx: UniIndex, dead: &FxHashSet<BorTag>) -> bool {
+        let node = self.nodes.get(idx).unwrap();
+        node.children.is_empty() && dead.contains(&node.tag)
+    }
+
     /// Checks whether a node can be replaced by its only child.
     /// If so, returns the index of said only child.
     /// If not, returns none.
@@ -467,6 +474,48 @@ impl EagerTree {
         // Since protected nodes are never GC'd (see `borrow_tracker::FrameExtra::visit_provenance`),
         // we know that `node` is not protected because otherwise `live` would
         // have contained `node.tag`.
+        let child = self.nodes.get(child_idx).unwrap();
+        // Check that for that one child, `can_be_replaced_by_child` holds for the permission
+        // on all locations.
+        for (_range, loc) in self.locations.iter_all() {
+            let parent_perm = loc
+                .perms
+                .get(idx)
+                .map(|x| x.permission)
+                .unwrap_or_else(|| node.default_initial_perm);
+            let child_perm = loc
+                .perms
+                .get(child_idx)
+                .map(|x| x.permission)
+                .unwrap_or_else(|| child.default_initial_perm);
+            if !parent_perm.can_be_replaced_by_child(child_perm) {
+                return None;
+            }
+        }
+
+        Some(child_idx)
+    }
+
+    /// Like [`Self::can_be_replaced_by_single_child`], but takes a set of
+    /// *dead* tags instead of *live* ones: the node is a candidate for
+    /// replacement when its tag *is* in the dead set (rather than absent
+    /// from the live set).
+    fn can_be_replaced_by_single_child_dead(
+        &self,
+        idx: UniIndex,
+        dead: &FxHashSet<BorTag>,
+    ) -> Option<UniIndex> {
+        let node = self.nodes.get(idx).unwrap();
+
+        let [child_idx] = node.children[..] else { return None };
+
+        // We never want to replace the root node, as it is also kept in `root_ptr_tags`.
+        if !dead.contains(&node.tag) || node.parent.is_none() {
+            return None;
+        }
+        // Since protected nodes are never GC'd (see `borrow_tracker::FrameExtra::visit_provenance`),
+        // they are never added to the dead set, so reaching this point (where `node.tag` is
+        // in `dead`) guarantees that `node` is not protected.
         let child = self.nodes.get(child_idx).unwrap();
         // Check that for that one child, `can_be_replaced_by_child` holds for the permission
         // on all locations.
@@ -557,6 +606,68 @@ impl EagerTree {
                         false
                     } else {
                         if let Some(nextchild) = self.can_be_replaced_by_single_child(*idx, live) {
+                            // `nextchild` is our grandchild, and will become our direct child.
+                            // Delete the in-between node, `idx`.
+                            self.remove_useless_node(*idx);
+                            // Set the new child's parent.
+                            self.nodes.get_mut(nextchild).unwrap().parent = Some(*tag);
+                            // Save the new child in children_of_node.
+                            *idx = nextchild;
+                        }
+                        // retain it
+                        true
+                    }
+                });
+                // Put back the now-filtered vector.
+                self.nodes.get_mut(*tag).unwrap().children = children_of_node;
+
+                // We are done, the parent can continue.
+                stack.pop();
+                continue;
+            }
+        }
+    }
+
+    /// Like [`Self::remove_useless_children`], but takes a set of *dead* tags
+    /// to remove instead of a set of *live* tags to keep. See [`AllocState::remove_dead_tags`].
+    fn remove_useless_children_dead(&mut self, root: UniIndex, dead: &FxHashSet<BorTag>) {
+        // To avoid stack overflows, we roll our own stack.
+        // Each element in the stack consists of the current tag, and the number of the
+        // next child to be processed.
+
+        // The other functions are written using the `TreeVisitorStack`, but that does not work here
+        // since we need to 1) do a post-traversal and 2) remove nodes from the tree.
+        // Since we do a post-traversal (by deleting nodes only after handling all children),
+        // we also need to be a bit smarter than "pop node, push all children."
+        let mut stack = vec![(root, 0)];
+        while let Some((tag, nth_child)) = stack.last_mut() {
+            let node = self.nodes.get(*tag).unwrap();
+            if *nth_child < node.children.len() {
+                // Visit the child by pushing it to the stack.
+                // Also increase `nth_child` so that when we come back to the `tag` node, we
+                // look at the next child.
+                let next_child = node.children[*nth_child];
+                *nth_child += 1;
+                stack.push((next_child, 0));
+                continue;
+            } else {
+                // We have processed all children of `node`, so now it is time to process `node` itself.
+                // First, get the current children of `node`. To appease the borrow checker,
+                // we have to temporarily move the list out of the node, and then put the
+                // list of remaining children back in.
+                let mut children_of_node =
+                    mem::take(&mut self.nodes.get_mut(*tag).unwrap().children);
+                // Remove all useless children.
+                children_of_node.retain_mut(|idx| {
+                    if self.is_useless_dead(*idx, dead) {
+                        // Delete `idx` node everywhere else.
+                        self.remove_useless_node(*idx);
+                        // And delete it from children_of_node.
+                        false
+                    } else {
+                        if let Some(nextchild) =
+                            self.can_be_replaced_by_single_child_dead(*idx, dead)
+                        {
                             // `nextchild` is our grandchild, and will become our direct child.
                             // Delete the in-between node, `idx`.
                             self.remove_useless_node(*idx);
@@ -992,6 +1103,8 @@ pub trait AllocState: Clone {
     fn expose_tag(&mut self, tag: BorTag, protected: bool);
     #[allow(dead_code)]
     fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>);
+    #[allow(dead_code)]
+    fn remove_dead_tags(&mut self, dead_tags: &FxHashSet<BorTag>);
 }
 
 impl AllocState for LazyTree {
@@ -1086,6 +1199,11 @@ impl AllocState for LazyTree {
     fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
         if let LazyTree::Init(tree) = self {
             tree.remove_unreachable_tags(live_tags);
+        }
+    }
+    fn remove_dead_tags(&mut self, dead_tags: &FxHashSet<BorTag>) {
+        if let LazyTree::Init(tree) = self {
+            tree.remove_dead_tags(dead_tags);
         }
     }
     fn increment(&self, tag: BorTag) {
@@ -1373,6 +1491,12 @@ impl AllocState for EagerTree {
     fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
         for i in 0..(self.roots.len()) {
             self.remove_useless_children(self.roots[i], live_tags);
+        }
+        self.locations.merge_adjacent_thorough();
+    }
+    fn remove_dead_tags(&mut self, dead_tags: &FxHashSet<BorTag>) {
+        for i in 0..(self.roots.len()) {
+            self.remove_useless_children_dead(self.roots[i], dead_tags);
         }
         self.locations.merge_adjacent_thorough();
     }
