@@ -259,7 +259,7 @@ void MoveShadow(void *dest, const void *src, uptr size) {
     for (uptr offset = 0; offset < s_size; offset += step)
       UpdateShadowSlot(d_aligned, s_aligned, offset);
   } else {
-    for (uptr offset = s_size - step; ; offset -= step) {
+    for (uptr offset = s_size - step;; offset -= step) {
       UpdateShadowSlot(d_aligned, s_aligned, offset);
       // signed so must break at 0
       if (offset == 0)
