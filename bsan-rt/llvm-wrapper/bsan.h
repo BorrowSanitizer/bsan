@@ -24,6 +24,8 @@ struct Provenance {
 
 const Provenance OMNIVALID = {0, nullptr};
 
+static constexpr uptr kMinProvAlignment = 8;
+
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance
     *__bsan_shadow_stack;
 
