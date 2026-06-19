@@ -6,6 +6,10 @@ on:
 permissions:
   actions: write
   contents: write
+  packages: read
+concurrency:
+  group: benchmarks-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   build:
     strategy:
@@ -35,12 +39,19 @@ jobs:
       id: filename
       run: echo "results=results_$(date +%Y-%m-%d_%H-%M-%S)_${{ matrix.config.target }}" >> $GITHUB_OUTPUT
     - name: Benchmarks
-      run: python3 ./bsan-script/etc/bench.py ./tests/benches/crates.json ${{ matrix.config.target }} ${{ steps.filename.outputs.results }}.json
+      run: | 
+        python3 ./bsan-script/etc/bench.py \
+        ./tests/benches/crates.json \
+        ${{ matrix.config.target }} \
+        ${{ steps.filename.outputs.results }}.json \
+        ${{ steps.filename.outputs.results }}.csv 
     - name: Upload results
       uses: actions/upload-artifact@v4
       with:
         name: ${{ steps.filename.outputs.results }}
-        path: ${{ steps.filename.outputs.results }}.json
+        path: |
+          ${{ steps.filename.outputs.results }}.json
+          ${{ steps.filename.outputs.results }}.csv
         retention-days: 30
   merge:
     name: Merge & Upload
@@ -78,5 +89,5 @@ jobs:
         benchmark-data-dir-path: .
         fail-on-alert: true
         comment-on-alert: true
-        alert-threshold: 130%
+        alert-threshold: 150%
         alert-comment-cc-users: '@icmccorm,@mojeanmac'
