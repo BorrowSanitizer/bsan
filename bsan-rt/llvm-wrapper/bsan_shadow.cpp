@@ -194,7 +194,8 @@ void CopyAligned(void *dest, const void *src, uptr size) {
   internal_memcpy((void *)d_aligned, (const void *)s_aligned, s_size);
 }
 
-static void UpdateShadowSlot(uptr d_aligned, uptr s_aligned, uptr offset) {
+ALWAYS_INLINE static void UpdateShadowSlot(uptr d_aligned, uptr s_aligned,
+                                           uptr offset) {
   uptr d_shadow = MEM_TO_SHADOW(d_aligned);
   uptr d_origin = MEM_TO_ORIGIN(d_aligned);
   uptr s_shadow = MEM_TO_SHADOW(s_aligned);
@@ -206,22 +207,25 @@ static void UpdateShadowSlot(uptr d_aligned, uptr s_aligned, uptr offset) {
   BorTag *dest_tag = reinterpret_cast<BorTag *>(d_shadow + offset);
   BorTag *source_tag = reinterpret_cast<BorTag *>(s_shadow + offset);
 
+  BorTag src_tag = *source_tag;
+  AllocInfo *src_info = *source_info;
+
   if (*dest_info != nullptr)
     __bsan_rc_dec(*dest_tag, *dest_info);
 
-  if (*source_info != nullptr)
-    __bsan_rc_inc(*source_tag, *source_info);
+  if (src_info != nullptr)
+    __bsan_rc_inc(src_tag, src_info);
 
-  for (uptr i = 0; i < kMinProvAlignment; ++i) {
-    ((char *)dest_info)[i] = ((char *)source_info)[i];
-    ((char *)dest_tag)[i] = ((char *)source_tag)[i];
-  }
+  *dest_tag = src_tag;
+  *dest_info = src_info;
 }
 
 void CopyShadow(void *dest, const void *src, uptr size) {
   if (!MEM_IS_APP(dest))
     return;
   if (!MEM_IS_APP(src))
+    return;
+  if (size == 0)
     return;
 
   const uptr step = kMinProvAlignment;
@@ -230,8 +234,6 @@ void CopyShadow(void *dest, const void *src, uptr size) {
   uptr s_aligned, s_size;
   AlignPtr8((uptr)dest, d_aligned);
   AlignRange8((uptr)src, size, s_aligned, s_size);
-  if (s_size == 0)
-    return;
 
   for (uptr offset = 0; offset < s_size; offset += step)
     UpdateShadowSlot(d_aligned, s_aligned, offset);
@@ -242,6 +244,8 @@ void MoveShadow(void *dest, const void *src, uptr size) {
     return;
   if (!MEM_IS_APP(src))
     return;
+  if (size == 0)
+    return;
 
   const uptr step = kMinProvAlignment;
 
@@ -249,8 +253,6 @@ void MoveShadow(void *dest, const void *src, uptr size) {
   uptr s_aligned, s_size;
   AlignPtr8((uptr)dest, d_aligned);
   AlignRange8((uptr)src, size, s_aligned, s_size);
-  if (s_size == 0)
-    return;
 
   if (d_aligned == s_aligned)
     return;
@@ -284,11 +286,10 @@ void ClearShadow(void *dest, uptr size) {
     AllocInfo **info_ptr =
         reinterpret_cast<AllocInfo **>(origin_start + offset);
 
-    if (*info_ptr != nullptr)
+    if (*info_ptr != nullptr) {
       __bsan_rc_dec(*tag_ptr, *info_ptr);
-
-    *tag_ptr = 0;
-    *info_ptr = nullptr;
+      *info_ptr = nullptr;
+    }
   }
 }
 
