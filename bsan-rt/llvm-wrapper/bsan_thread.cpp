@@ -1,5 +1,6 @@
 #include "bsan_thread.h"
 #include "bsan.h"
+#include "bsan_global.h"
 #include "bsan_interface_internal.h"
 #include "sanitizer_common/sanitizer_atomic.h"
 
@@ -13,37 +14,54 @@ BsanThread *BsanThread::Create(thread_callback_t start_routine, void *arg) {
   thread->start_routine_ = start_routine;
   thread->arg_ = arg;
   thread->destructor_iterations_ = GetPthreadDestructorIterations();
-  thread->id = atomic_fetch_add(&thread_id, 1, memory_order_relaxed);
+  global_ctx()->Threads().RegisterThread(thread);
   return thread;
 }
 
 void BsanThread::Init() {
   GetThreadStackTopAndBottom(IsMainThread(), &stack_top_, &stack_bottom_);
-  prov_stack_size_ = stack_top_ - stack_bottom_;
-  prov_stack_ = MmapOrDie(prov_stack_size_, __func__);
-  __bsan_shadow_stack = (Provenance *)(((u8 *)prov_stack_) + prov_stack_size_);
-  // The Rust runtime may allocate, so we need to block our interceptors.
-  InterceptorBarrier Barrier;
-  __bsan_local_init(&__bsan_shadow_stack);
+  shadow_stack_size_ = stack_top_ - stack_bottom_;
+  shadow_stack_bottom_ = MmapOrDie(shadow_stack_size_, __func__);
+  __bsan_shadow_stack =
+      (Provenance *)(((uptr)shadow_stack_bottom_) + shadow_stack_size_);
+  // We record the address of the thread-local shadow stack pointer so
+  // that the GC can accurately read the initialized contents of the
+  // shadow stack when it stops the world.
+  shadow_stack_ptr_ = &__bsan_shadow_stack;
 }
 
-void BsanThread::TSDDtor(void *tsd) {
+void BsanThread::Destroy(void *tsd) {
   BsanThread *t = (BsanThread *)tsd;
-  t->Destroy();
-}
-
-void BsanThread::Destroy() {
-  UnmapOrDie(prov_stack_, prov_stack_size_);
+  global_ctx()->Threads().DeregisterThread(t->id);
+  t->zero_count_set_.~ConcreteProvenanceSet();
+  UnmapOrDie(t->shadow_stack_bottom_, t->shadow_stack_size_);
   uptr size = RoundUpTo(sizeof(BsanThread), GetPageSizeCached());
-  UnmapOrDie(this, size);
-  // The Rust runtime may deallocate, so we need to block our interceptors.
-  InterceptorBarrier Barrier;
-  __bsan_local_deinit();
+  UnmapOrDie(t, size);
 }
 
-thread_return_t BsanThread::ThreadStart() {
+thread_return_t BsanThread::Start() {
   if (!start_routine_) {
     return 0;
   }
   return start_routine_(arg_);
+}
+
+void *BsanThread::StartCallback(void *arg) {
+  BsanThread *t = (BsanThread *)arg;
+  SetCurrentThread(t);
+  t->Init();
+  SetSigProcMask(&t->starting_sigset_, nullptr);
+  return t->Start();
+}
+
+void ThreadManager::RegisterThread(BsanThread *thread) {
+  Lock l(&mtx_);
+  uptr tid = atomic_fetch_add(&thread_id_ctr, 1, memory_order_relaxed);
+  threads[tid] = thread;
+  thread->id = tid;
+}
+
+void ThreadManager::DeregisterThread(ThreadId tid) {
+  Lock l(&mtx_);
+  threads.erase(tid);
 }

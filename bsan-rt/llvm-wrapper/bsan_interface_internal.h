@@ -10,9 +10,6 @@ SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_init();
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_deinit();
-
-SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_abort();
 
 SANITIZER_INTERFACE_ATTRIBUTE
@@ -46,12 +43,6 @@ AllocInfo *__bsan_alloc(void *base_addr, uptr size, BorTag bor_tag, Span pc);
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info, Span pc);
 
-SANITIZER_WEAK_ATTRIBUTE
-void __bsan_local_init(Provenance **prov);
-
-SANITIZER_WEAK_ATTRIBUTE
-void __bsan_local_deinit();
-
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_read(void *ptr, uptr access_size, BorTag bor_tag,
                  AllocInfo *alloc_info);
@@ -59,6 +50,15 @@ void __bsan_read(void *ptr, uptr access_size, BorTag bor_tag,
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_write(void *ptr, uptr access_size, BorTag bor_tag,
                   AllocInfo *alloc_info);
+
+// Records a zero-count (alloc_info, bor_tag) pair in the zero-count table.
+// Called by the Rust core when a node's reference count reaches zero.
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_release(BorTag bor_tag, AllocInfo *alloc_info);
+
+// Requests a garbage collection. Any thread may call this.
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_request_gc();
 
 } // extern "C"
 

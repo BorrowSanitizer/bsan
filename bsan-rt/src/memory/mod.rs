@@ -10,8 +10,7 @@ use core::mem::{self, MaybeUninit};
 use core::num::NonZero;
 use core::ptr::{self, NonNull};
 
-pub use heap::Heap;
-use heap::Heapable;
+pub use heap::*;
 use libc::{pthread_attr_destroy, pthread_attr_init, pthread_attr_t, rlimit, _SC_PAGESIZE};
 
 use crate::{AllocInfo, BorTag};

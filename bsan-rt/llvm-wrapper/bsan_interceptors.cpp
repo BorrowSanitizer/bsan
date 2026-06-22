@@ -1,7 +1,9 @@
 #define SANITIZER_COMMON_NO_REDEFINE_BUILTINS
 
 #include "bsan.h"
+#include "bsan_global.h"
 #include "bsan_interface_internal.h"
+#include "bsan_shadow.h"
 #include "bsan_thread.h"
 #include "interception/interception.h"
 #include "sanitizer_common/sanitizer_allocator.h"
@@ -42,7 +44,7 @@ struct DlsymAlloc : public DlSymAllocator<DlsymAlloc> {
 #define ENSURE_BSAN_INITED()                                                   \
   do {                                                                         \
     CHECK(!bsan_init_running);                                                 \
-    if (!bsan_inited && !bsan_deinited) {                                      \
+    if (!bsan_inited) {                                                        \
       __bsan_init();                                                           \
     }                                                                          \
   } while (0)
@@ -50,25 +52,6 @@ struct DlsymAlloc : public DlSymAllocator<DlsymAlloc> {
 struct LocalInterceptorContext {
   bool block_interception;
 };
-
-struct GlobalInterceptorContext {
-  Mutex AtExitLock;
-  Vector<struct BSanAtExitRecord *> AtExitStack;
-  GlobalInterceptorContext() : AtExitStack() {}
-};
-
-alignas(64) static char ictx[sizeof(GlobalInterceptorContext)];
-GlobalInterceptorContext *global_interceptor_ctx() {
-  return reinterpret_cast<GlobalInterceptorContext *>(&ictx[0]);
-}
-
-static void *BsanThreadStartFunc(void *arg) {
-  BsanThread *t = (BsanThread *)arg;
-  SetCurrentThread(t);
-  t->Init();
-  SetSigProcMask(&t->starting_sigset_, nullptr);
-  return t->ThreadStart();
-}
 
 INTERCEPTOR(int, pthread_create, void *th, void *attr,
             void *(*callback)(void *), void *param) {
@@ -80,12 +63,16 @@ INTERCEPTOR(int, pthread_create, void *th, void *attr,
   }
   BsanThread *t = BsanThread::Create(callback, param);
   ScopedBlockSignals block(&t->starting_sigset_);
-  int res = REAL(pthread_create)(th, attr, BsanThreadStartFunc, t);
+  int res = REAL(pthread_create)(th, attr, BsanThread::StartCallback, t);
 
   if (attr == &myattr) {
     pthread_attr_destroy(&myattr);
   }
   return res;
+}
+
+INTERCEPTOR(int, pthread_join, void *thread, void **retval) {
+  return REAL(pthread_join)(thread, retval);
 }
 
 extern "C" void *__bsan_crt_malloc(SIZE_T size) {
@@ -126,8 +113,8 @@ INTERCEPTOR(void, free, void *ptr) {
   bool already_in_scope = BlockInterception();
   InterceptorBarrier barrier;
   if (!already_in_scope && INST_CALLER(free)) {
-    Provenance *Slot = GetSlot(0);
-    __bsan_dealloc(ptr, Slot->Tag, Slot->Info, span);
+    Provenance *slot = GetSlot(0);
+    __bsan_dealloc(ptr, slot->tag, slot->info, span);
     HANDLE_ERROR_PC_BP(pc, bp);
   }
   return bsan_deallocate(ptr);
@@ -156,8 +143,8 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
   InterceptorBarrier barrier;
   bool is_inst = !already_in_scope && INST_CALLER(realloc);
   if (is_inst) {
-    Provenance *Slot = GetSlot(0);
-    __bsan_dealloc(ptr, Slot->Tag, Slot->Info, span);
+    Provenance *slot = GetSlot(0);
+    __bsan_dealloc(ptr, slot->tag, slot->info, span);
     HANDLE_ERROR_PC_BP(pc, bp);
   }
   void *nptr = bsan_realloc(ptr, size);
@@ -255,13 +242,9 @@ INTERCEPTOR(int, posix_memalign, void **memptr, SIZE_T alignment, SIZE_T size) {
   bool is_inst = !already_in_scope && INST_CALLER(posix_memalign);
   int res = bsan_posix_memalign(memptr, alignment, size);
   if (!res && is_inst) {
-    // The new pointer is returned through memory instead of the return slot,
-    // so its provenance needs to be written into the shadow of `memptr`.
     BorTag Tag = NewBorTag();
-    void *Info = __bsan_alloc(*memptr, size, Tag, span);
-    *((BorTag *)MEM_TO_SHADOW(memptr)) = Tag;
-    auto OriginPtr = (void **)(MEM_TO_ORIGIN(memptr));
-    *(OriginPtr) = ((void *)Info);
+    AllocInfo *Info = __bsan_alloc(*memptr, size, Tag, span);
+    WriteShadow({Tag, Info}, memptr);
   }
   return res;
 }
@@ -302,19 +285,15 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memcpy(void *dest, const void *src,
 
 } // extern "C"
 
-struct BSanAtExitRecord {
-  void (*func)(void *arg);
-  void *arg;
-};
-
 void BSanAtExitWrapper() {
-  BSanAtExitRecord *r;
+  AtExitRecord *r;
   {
-    Lock l(&global_interceptor_ctx()->AtExitLock);
+    Lock l(&global_ctx()->AtExitMutex());
 
-    uptr element = global_interceptor_ctx()->AtExitStack.Size() - 1;
-    r = global_interceptor_ctx()->AtExitStack[element];
-    global_interceptor_ctx()->AtExitStack.PopBack();
+    Vector<AtExitRecord *> &stack = global_ctx()->AtExitStack();
+    uptr element = stack.Size() - 1;
+    r = stack[element];
+    stack.PopBack();
   }
 
   ClearSlot(0);
@@ -324,7 +303,7 @@ void BSanAtExitWrapper() {
 
 void BSanCxaAtExitWrapper(void *arg) {
   ClearSlot(0);
-  BSanAtExitRecord *r = (BSanAtExitRecord *)arg;
+  AtExitRecord *r = (AtExitRecord *)arg;
   // libc before 2.27 had race which caused occasional double handler execution
   // https://sourceware.org/ml/libc-alpha/2017-08/msg01204.html
   if (!r->func)
@@ -353,8 +332,7 @@ INTERCEPTOR(int, atexit, void (*func)()) {
 
 static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso) {
   ENSURE_BSAN_INITED();
-  BSanAtExitRecord *r =
-      (BSanAtExitRecord *)InternalAlloc(sizeof(BSanAtExitRecord));
+  auto *r = (AtExitRecord *)InternalAlloc(sizeof(AtExitRecord));
   r->func = (void (*)(void *a))f;
   r->arg = arg;
   int res;
@@ -362,11 +340,11 @@ static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso) {
     // NetBSD does not preserve the 2nd argument if dso is equal to 0
     // Store ctx in a local stack-like structure
 
-    Lock l(&global_interceptor_ctx()->AtExitLock);
+    Lock l(&global_ctx()->AtExitMutex());
 
     res = REAL(__cxa_atexit)((void (*)(void *a))BSanAtExitWrapper, 0, 0);
     if (!res) {
-      global_interceptor_ctx()->AtExitStack.PushBack(r);
+      global_ctx()->AtExitStack().PushBack(r);
     }
   } else {
     res = REAL(__cxa_atexit)(BSanCxaAtExitWrapper, r, dso);
@@ -515,12 +493,11 @@ void InitializeInterceptors() {
   CHECK_EQ(inited, 0);
   __interception::DoesNotSupportStaticLinking();
 
-  new (global_interceptor_ctx()) GlobalInterceptorContext();
-
   InitializeCommonInterceptors();
   InitializeSignalInterceptors();
 
   INTERCEPT_FUNCTION(pthread_create);
+  INTERCEPT_FUNCTION(pthread_join);
   INTERCEPT_FUNCTION(free);
   INTERCEPT_FUNCTION(malloc);
   INTERCEPT_FUNCTION(calloc);
@@ -538,3 +515,16 @@ void InitializeInterceptors() {
 }
 
 } // namespace __bsan
+
+// DEFINE_INTERNAL_PTHREAD_FUNCTIONS.
+namespace __sanitizer {
+int internal_pthread_create(void *th, void *attr, void *(*callback)(void *),
+                            void *param) {
+  InterceptorBarrier barrier;
+  return REAL(pthread_create)(th, attr, callback, param);
+}
+int internal_pthread_join(void *th, void **ret) {
+  InterceptorBarrier barrier;
+  return REAL(pthread_join)(th, ret);
+}
+} // namespace __sanitizer

@@ -27,16 +27,14 @@ mod helpers;
 mod sanitizer_common;
 use borrow_tracker::*;
 
-mod local;
-
 mod errors;
 mod memory;
 
 use crate::helpers::{AllocRange, Size};
-use crate::local::{deinit_local_ctx, init_local_ctx};
 use crate::sanitizer_common::Span;
 use crate::tree_borrows::perms::AccessKind;
 use crate::tree_borrows::tree::AllocStateImpl;
+use crate::tree_borrows::AllocState;
 
 #[thread_local]
 #[unsafe(no_mangle)]
@@ -141,36 +139,6 @@ impl fmt::Debug for AllocId {
 impl fmt::Display for AllocId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_fmt(format_args!("{:?}", self))
-    }
-}
-
-#[unsafe(no_mangle)]
-pub static __BSAN_THREAD_ID_CTR: AtomicUsize = AtomicUsize::new(3);
-
-/// Unique identifier for a thread
-#[repr(transparent)]
-#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ThreadId(usize);
-
-impl ThreadId {
-    pub fn get(&self) -> usize {
-        self.0
-    }
-}
-
-impl Default for ThreadId {
-    fn default() -> Self {
-        ThreadId(__BSAN_THREAD_ID_CTR.fetch_add(1, Ordering::Relaxed))
-    }
-}
-
-impl fmt::Debug for ThreadId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if f.alternate() {
-            write!(f, "t{}", self.0)
-        } else {
-            write!(f, "thread{}", self.0)
-        }
     }
 }
 
@@ -345,22 +313,6 @@ unsafe extern "C-unwind" fn __bsan_internal_deinit() {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_local_init(prov: *mut NonNull<Provenance>) {
-    unsafe {
-        let ctx = global_ctx();
-        init_local_ctx(ctx, prov);
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_local_deinit() {
-    unsafe {
-        let ctx = global_ctx();
-        deinit_local_ctx(ctx);
-    }
-}
-
 bitflags::bitflags! {
     #[repr(C)]
     #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -474,7 +426,7 @@ unsafe extern "C-unwind" fn __bsan_write_impl(
 
 // Registers a heap allocation of size `size`, storing its provenance in the return pointer.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_alloc(
+unsafe extern "C-unwind" fn __bsan_alloc_impl(
     base_addr: *mut c_void,
     size: Size,
     bor_tag: BorTag,
@@ -532,6 +484,12 @@ unsafe extern "C-unwind" fn __bsan_rc_inc_impl(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) -> bool {
+    // A null `alloc_info` denotes an empty/cleared shadow slot (e.g. one whose
+    // info was nulled by `ClearShadow` while a stale tag lingered). There is no
+    // allocation to deref, so there is nothing to count.
+    if alloc_info.is_null() {
+        return false;
+    }
     let prov = Provenance { bor_tag, alloc_info };
     BorrowTracker::for_alloc(prov, |bt| bt.increment()).unwrap_or(false)
 }
@@ -544,6 +502,11 @@ unsafe extern "C-unwind" fn __bsan_rc_dec_impl(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) -> bool {
+    // See `__bsan_rc_inc_impl`: a null `alloc_info` is an empty shadow slot with
+    // no live reference to release.
+    if alloc_info.is_null() {
+        return false;
+    }
     let prov = Provenance { bor_tag, alloc_info };
     BorrowTracker::for_alloc(prov, |bt| bt.decrement()).unwrap_or(false)
 }
@@ -588,6 +551,35 @@ unsafe extern "C" fn __bsan_expose_prov_impl(bor_tag: BorTag, alloc_info: *mut A
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
     BorrowTracker::expose(global_ctx, prov);
+}
+
+/// Prunes a series of nodes that are identified by the list of borrow tags.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __bsan_prune(
+    alloc_info: NonNull<AllocInfo>,
+    bor_tags: *const BorTag,
+    len: usize,
+) -> bool {
+    let alloc: AllocInfoPtr = alloc_info.into();
+    let dead_tags = unsafe { slice::from_raw_parts(bor_tags, len) };
+    alloc.tree.lock().as_mut().map(|tree| tree.remove_dead_tags(&dead_tags)).unwrap_or(false)
+}
+
+/// Deallocates an instance of [AllocInfo]. This instance must
+/// be unreachable from any provenance value in shadow memory.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __bsan_eject(alloc_info: NonNull<AllocInfo>) {
+    let ctx = unsafe { global_ctx() };
+    unsafe {
+        // # Safety
+        // Normally, we would have to lock the instance prior
+        // to deallocating it. However, we can assume that it is no
+        // longer reachable in shadow memory, so it is not subject
+        // to races (at least, until it's been returned to the bump
+        // allocator by `destroy_alloc_info`).
+        drop(alloc_info.replace(AllocInfo::invalid()));
+        ctx.destroy_alloc_info(alloc_info);
+    }
 }
 
 #[unsafe(no_mangle)]

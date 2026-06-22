@@ -448,6 +448,13 @@ impl EagerTree {
         node.children.is_empty() && !live.contains(&node.tag)
     }
 
+    /// Like [`Self::is_useless`], but takes a set of *dead* tags instead of
+    /// *live* ones.
+    fn is_useless_dead(&self, idx: UniIndex, dead: &FxHashSet<BorTag>) -> bool {
+        let node = self.nodes.get(idx).unwrap();
+        node.refcount.get() == 0 && node.children.is_empty() && dead.contains(&node.tag)
+    }
+
     /// Checks whether a node can be replaced by its only child.
     /// If so, returns the index of said only child.
     /// If not, returns none.
@@ -636,6 +643,12 @@ impl EagerTree {
             // The ZCT may contain tags with a non-zero reference count. Since this is
             // possible, we skip these tags
             if node.refcount.get() != 0 {
+                continue;
+            }
+
+            // Do not remove exposed nodes. They could be used for future accesses via
+            // wildcard pointers.
+            if node.is_exposed {
                 continue;
             }
 
@@ -1099,7 +1112,7 @@ pub trait AllocState: Clone {
     #[allow(dead_code)]
     fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>);
     #[allow(dead_code)]
-    fn remove_dead_tags(&mut self, dead_tags: &[BorTag]);
+    fn remove_dead_tags(&mut self, dead_tags: &[BorTag]) -> bool;
 }
 
 impl AllocState for LazyTree {
@@ -1196,9 +1209,11 @@ impl AllocState for LazyTree {
             tree.remove_unreachable_tags(live_tags);
         }
     }
-    fn remove_dead_tags(&mut self, dead_tags: &[BorTag]) {
+    fn remove_dead_tags(&mut self, dead_tags: &[BorTag]) -> bool {
         if let LazyTree::Init(tree) = self {
-            tree.remove_dead_tags(dead_tags);
+            tree.remove_dead_tags(dead_tags)
+        } else {
+            false
         }
     }
     fn increment(&self, tag: BorTag) -> bool {
@@ -1489,9 +1504,10 @@ impl AllocState for EagerTree {
         }
         self.locations.merge_adjacent_thorough();
     }
-    fn remove_dead_tags(&mut self, dead_tags: &[BorTag]) {
+    fn remove_dead_tags(&mut self, dead_tags: &[BorTag]) -> bool {
         self.remove_useless_children_dead(dead_tags);
         self.locations.merge_adjacent_thorough();
+        self.roots.is_empty()
     }
     fn increment(&self, tag: BorTag) -> bool {
         self.tag_mapping

@@ -230,7 +230,6 @@ private:
   };
   GlobalDescription getGlobalDescription(GlobalVariable *G) const;
   void instrumentGlobals(IRBuilder<> &IRB, Module &M, bool CtorComdat);
-  Function *createBsanModuleDtor(Module &M);
   void createUserspaceApi(Module &M, const TargetLibraryInfo &TLI);
 
   LLVMContext *C;
@@ -454,42 +453,19 @@ bool BorrowSanitizer::shouldInstrumentAlloca(const AllocaInst &AI) {
           !AllocSize.value().isZero());
 }
 
-Function *BorrowSanitizer::createBsanModuleDtor(Module &M) {
-  Function *Dtor;
-  IRBuilder<> IRB(M.getContext());
-
-  Dtor = Function::createWithDefaultAttr(
-      FunctionType::get(IRB.getVoidTy(), false), GlobalValue::InternalLinkage,
-      0, "bsan.module_dtor", &M);
-  Dtor->addFnAttr(Attribute::NoUnwind);
-
-  BasicBlock *BsanDtorBB = BasicBlock::Create(*C, "", Dtor);
-  ReturnInst *BsanDtorRet = ReturnInst::Create(*C, BsanDtorBB);
-
-  auto *FnTy = FunctionType::get(IRB.getVoidTy(), false);
-  FunctionCallee DeinitFn = M.getOrInsertFunction(BSAN("deinit"), FnTy);
-
-  IRB.SetInsertPoint(BsanDtorRet);
-  CallInst *DeinitCall = IRB.CreateCall(DeinitFn, {});
-
-  appendToUsed(M, {Dtor});
-  return Dtor;
-}
-
 bool BorrowSanitizer::instrumentModule(Module &M) {
-  Function *BsanCtorFunction, *BsanDtorFunction;
+  Function *BsanCtorFunction;
   // TODO: add version check.
   std::tie(BsanCtorFunction, std::ignore) = createSanitizerCtorAndInitFunctions(
       M, "bsan.module_ctor", BSAN("init"), /*InitArgTypes=*/{},
       /*InitArgs=*/{}, "");
 
   bool CtorComdat = false;
-  BsanDtorFunction = createBsanModuleDtor(M);
 
   IRBuilder<> IRB(BsanCtorFunction->getEntryBlock().getTerminator());
   instrumentGlobals(IRB, M, CtorComdat);
 
-  assert(BsanCtorFunction && BsanDtorFunction);
+  assert(BsanCtorFunction);
   const int Priority = 1;
 
   // Put the constructor and destructor in comdat if both
@@ -498,12 +474,8 @@ bool BorrowSanitizer::instrumentModule(Module &M) {
   if (CtorComdat && TargetTriple.isOSBinFormatELF()) {
     BsanCtorFunction->setComdat(M.getOrInsertComdat("bsan.module_ctor"));
     appendToGlobalCtors(M, BsanCtorFunction, Priority, BsanCtorFunction);
-
-    BsanDtorFunction->setComdat(M.getOrInsertComdat("bsan.module_dtor"));
-    appendToGlobalDtors(M, BsanDtorFunction, Priority, BsanDtorFunction);
   } else {
     appendToGlobalCtors(M, BsanCtorFunction, Priority);
-    appendToGlobalDtors(M, BsanDtorFunction, Priority);
   }
   return true;
 }
@@ -1400,13 +1372,8 @@ private:
     } else {
       Value *TagPtr, *InfoPtr;
       std::tie(TagPtr, InfoPtr) = getShadowOriginPtr(IRB, ObjAddr, Alignment);
-      storeProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Prov, Ordering);
+      storeProvenanceWithReferenceCount(IRB, TagPtr, InfoPtr, Prov, Ordering);
     }
-  }
-
-  void updateReferenceCount(IRBuilder<> &IRB, Provenance Dec, Provenance Inc) {
-    IRB.CreateCall(BS.BsanFuncRcDec, {Dec.Tag, Dec.Info});
-    IRB.CreateCall(BS.BsanFuncRcInc, {Inc.Tag, Inc.Info});
   }
 
   // Loads a provenance value into shadow memory pairwise at the specified
@@ -1426,9 +1393,16 @@ private:
   void storeProvenanceWithReferenceCount(IRBuilder<> &IRB, Value *TagPtr,
                                          Value *InfoPtr, Provenance Prov,
                                          AtomicOrdering Ordering) {
-    Provenance Old =
-        loadProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Ordering);
-    updateReferenceCount(IRB, Old, Prov);
+    // We only decrement on nonatomic loads. This leaks provenance exposed to
+    // atomic operations, which is necessary to support them without locking.
+    if (Ordering == AtomicOrdering::NotAtomic) {
+      Provenance Old =
+          loadProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Ordering);
+      IRB.CreateCall(BS.BsanFuncRcDec, {Old.Tag, Old.Info});
+    }
+    if (Prov != Provenance::omnivalid(BS)) {
+      IRB.CreateCall(BS.BsanFuncRcInc, {Prov.Tag, Prov.Info});
+    }
     storeProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Prov, Ordering);
   }
 
@@ -2068,10 +2042,10 @@ private:
     if (NumSlots <= MaxInlineSlots) {
       for (uint64_t I = 0; I < NumSlots; ++I) {
         Value *Idx = ConstantInt::get(BS.IntptrTy, I * SlotSize);
-        TagPtr = ptradd(IRB, TagPtr, Idx);
-        InfoPtr = ptradd(IRB, InfoPtr, Idx);
-        storeProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr,
-                                       Provenance::omnivalid(BS), Ordering);
+        Value *SlotTagPtr = ptradd(IRB, TagPtr, Idx);
+        Value *SlotInfoPtr = ptradd(IRB, InfoPtr, Idx);
+        storeProvenanceWithReferenceCount(IRB, SlotTagPtr, SlotInfoPtr,
+                                          Provenance::omnivalid(BS), Ordering);
       }
     } else {
       IRB.CreateCall(BS.BsanFuncShadowClear, {Base, Size});
