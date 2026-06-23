@@ -24,18 +24,16 @@ impl RefCount {
 
     /// Increments the reference count.
     ///
-    /// The caller must already hold a live reference. Resurrecting a
-    /// reference count from zero is undefined behavior in this design.
-    pub fn increment(&self) {
+    /// Returns `true` if the count transitioned from zero to one.
+    pub fn increment(&self) -> bool {
         let prev = self.0.fetch_add(1, Ordering::Relaxed);
         debug_assert!(prev <= usize::MAX / 2, "RefCount overflow");
+        prev == 0
     }
 
     /// Decrements the reference count.
     ///
-    /// Returns `true` if the count reached zero, indicating the caller is
-    /// responsible for cleanup. Otherwise, returns `false` if the count
-    /// is non-zero.
+    /// Returns `true` if the count reached zero.
     pub fn decrement(&self) -> bool {
         let prev = self.0.fetch_sub(1, Ordering::Release);
         debug_assert!(prev > 0, "RefCount decremented below zero");
@@ -49,12 +47,15 @@ impl RefCount {
         }
     }
 
-    /// Increments the reference count **without** atomic synchronization.
-    pub fn increment_nonatomic(&self) {
+    /// Increments the reference count **without** atomic synchronization,
+    /// returning `true` if the count transitioned from zero to one.
+    pub fn increment_nonatomic(&self) -> bool {
         unsafe {
             let count = self.0.as_ptr();
             debug_assert!(*count <= usize::MAX / 2, "RefCount overflow");
+            let was_zero = *count == 0;
             *count += 1;
+            was_zero
         }
     }
 
