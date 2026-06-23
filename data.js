@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782224973334,
+  "lastUpdate": 1782239472449,
   "repoUrl": "https://github.com/BorrowSanitizer/bsan",
   "entries": {
     "Benchmarks": [
@@ -526,6 +526,174 @@ window.BENCHMARK_DATA = {
             "value": 0.00347235375682635,
             "unit": "Mean Relative Execution Time",
             "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-base\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\", \"max\": 0.00347235375682635, \"min\": 0.00347235375682635}"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "111544848+vnt1c@users.noreply.github.com",
+            "name": "Ryan Hung",
+            "username": "vnt1c"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fae2d2fd66f6e3a3ece478232dfad78f77450d06",
+          "message": "Dead list versions of tree GC functions (#245)\n\n* Implemented `RefCount` struct with appropriate endpoints.\n\nTests delivered in [refcount.rs].\n\n* Single-threaded: new starts at 1, increment/decrement/get work as expected, decrement returns true only when hitting zero.\n* Concurrent: 16 threads do balanced inc/dec ops and the count returns to 1. Exactly one thread observes zero on the final decrement. A Release/Acquire test verifies that writes from all threads are visible to the thread that hits zero (Miri catches ordering violations here). Thread counts scale down under cfg!(miri).\n\nResults.\n\n* `cargo test`: 9/9 pass.\n* `cargo miri test`: 9/9 pass, and the three concurrent tests pass across 16 Miri seeds. No ordering violations found.\n\n* edit comment\n\n* Changed  from a regular struct to a tuple struct.\n\n* Added RefCount's to nodes and adjusted several test cases based on the new size of the tree types.\n\n* Added RefCount support for LazyTree Uninit variant.\n\n* Implemented increment and decrement functions for AllocState types.\n\n* Created increment and decrement functions in BorrowTracker.\n\n* Implemented inc/dec functions in lib.rs\n\n* Rust formatting\n\n* Resolved requested changes\n\n* Added dead list versions of the tree GC functions.\n\n* lib.rs inc/dec functions now return true if ref count went from 0 to 1 or dropped to 0 respectively\n\n* formatting\n\n* main declares these as void in bsan_interface_internal.h; the refcount\nwork changed their definitions to return bool, so align the interface\ndeclarations to match and avoid conflicting-types errors when merged.\n\n* Made inc/dec intrinsics void.\n\n---------\n\nCo-authored-by: Ian McCormack <icmccorm@cs.cmu.edu>",
+          "timestamp": "2026-06-23T14:18:03-04:00",
+          "tree_id": "c935503a800fbb2571d93824345836fa977ac753",
+          "url": "https://github.com/BorrowSanitizer/bsan/commit/fae2d2fd66f6e3a3ece478232dfad78f77450d06"
+        },
+        "date": 1782239471587,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "hashbrown@0.17.0 - aarch64-unknown-linux-gnu",
+            "value": 768.587571465677,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"native\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 768.587571465677, \"min\": 768.587571465677}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - aarch64-unknown-linux-gnu",
+            "value": 0.21881466910158734,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"miri-tb\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 0.21881466910158734, \"min\": 0.21881466910158734}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - aarch64-unknown-linux-gnu",
+            "value": 0.32666699224333784,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"miri-base\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 0.32666699224333784, \"min\": 0.32666699224333784}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - aarch64-unknown-linux-gnu",
+            "value": 5.957270185804911,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"native\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 5.957270185804911, \"min\": 5.957270185804911}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - aarch64-unknown-linux-gnu",
+            "value": 0.001696017673002231,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-tb\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 0.001696017673002231, \"min\": 0.001696017673002231}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - aarch64-unknown-linux-gnu",
+            "value": 0.0025319737214417153,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-base\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 0.0025319737214417153, \"min\": 0.0025319737214417153}"
+          },
+          {
+            "name": "indexmap@2.14.0 - aarch64-unknown-linux-gnu",
+            "value": 893.01380560053,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"native\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\", \"max\": 893.01380560053, \"min\": 893.01380560053}"
+          },
+          {
+            "name": "indexmap@2.14.0 - aarch64-unknown-linux-gnu",
+            "value": 0.22664730048318155,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"miri-tb\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\", \"max\": 0.22664730048318155, \"min\": 0.22664730048318155}"
+          },
+          {
+            "name": "indexmap@2.14.0 - aarch64-unknown-linux-gnu",
+            "value": 0.3308333254282215,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"miri-base\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\", \"max\": 0.3308333254282215, \"min\": 0.3308333254282215}"
+          },
+          {
+            "name": "indexmap@2.14.0 - aarch64-unknown-linux-gnu",
+            "value": 6.064265707512688,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"native\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\", \"max\": 6.064265707512688, \"min\": 6.064265707512688}"
+          },
+          {
+            "name": "indexmap@2.14.0 - aarch64-unknown-linux-gnu",
+            "value": 0.0015391133299402892,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-tb\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\", \"max\": 0.0015391133299402892, \"min\": 0.0015391133299402892}"
+          },
+          {
+            "name": "indexmap@2.14.0 - aarch64-unknown-linux-gnu",
+            "value": 0.0022466183363734084,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-base\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\", \"max\": 0.0022466183363734084, \"min\": 0.0022466183363734084}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - x86_64-unknown-linux-gnu",
+            "value": 801.0488141785141,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"native\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 801.0488141785141, \"min\": 801.0488141785141}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - x86_64-unknown-linux-gnu",
+            "value": 0.24089241855080776,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"miri-tb\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 0.24089241855080776, \"min\": 0.24089241855080776}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - x86_64-unknown-linux-gnu",
+            "value": 0.36942425634770043,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"miri-base\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 0.36942425634770043, \"min\": 0.36942425634770043}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - x86_64-unknown-linux-gnu",
+            "value": 9.01907756456292,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"native\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 9.01907756456292, \"min\": 9.01907756456292}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - x86_64-unknown-linux-gnu",
+            "value": 0.00271222847992472,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-tb\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 0.00271222847992472, \"min\": 0.00271222847992472}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - x86_64-unknown-linux-gnu",
+            "value": 0.0041593795075369495,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-base\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 0.0041593795075369495, \"min\": 0.0041593795075369495}"
+          },
+          {
+            "name": "indexmap@2.14.0 - x86_64-unknown-linux-gnu",
+            "value": 922.9634829117351,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"native\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\", \"max\": 922.9634829117351, \"min\": 922.9634829117351}"
+          },
+          {
+            "name": "indexmap@2.14.0 - x86_64-unknown-linux-gnu",
+            "value": 0.2508664973502227,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"miri-tb\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\", \"max\": 0.2508664973502227, \"min\": 0.2508664973502227}"
+          },
+          {
+            "name": "indexmap@2.14.0 - x86_64-unknown-linux-gnu",
+            "value": 0.3850750780844363,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"miri-base\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\", \"max\": 0.3850750780844363, \"min\": 0.3850750780844363}"
+          },
+          {
+            "name": "indexmap@2.14.0 - x86_64-unknown-linux-gnu",
+            "value": 9.195836870893597,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"native\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\", \"max\": 9.195836870893597, \"min\": 9.195836870893597}"
+          },
+          {
+            "name": "indexmap@2.14.0 - x86_64-unknown-linux-gnu",
+            "value": 0.0024994785045311754,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-tb\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\", \"max\": 0.0024994785045311754, \"min\": 0.0024994785045311754}"
+          },
+          {
+            "name": "indexmap@2.14.0 - x86_64-unknown-linux-gnu",
+            "value": 0.0038366497338982283,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-base\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"2.14.0\", \"crate\": \"indexmap\", \"max\": 0.0038366497338982283, \"min\": 0.0038366497338982283}"
           }
         ]
       }
