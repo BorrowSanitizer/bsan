@@ -48,13 +48,13 @@ MIRI = {
 # Miri with Tree Borrows disabled. This is as close to "just interpret" as
 # we can get. However, the core interpreter will still check for certain forms
 # of UB, like accessese out-of-bounds, use-after-free errors, and uninitialized accesses.
-MIRI_BASE = {
-    "name": "miri-base",
-    "env": {"MIRIFLAGS": f"-Zmiri-disable-stacked-borrows {MIRI_COMMON_FLAGS}"},
-}
+# MIRI_BASE = {
+#     "name": "miri-base",
+#     "env": {"MIRIFLAGS": f"-Zmiri-disable-stacked-borrows {MIRI_COMMON_FLAGS}"},
+# }
 
 # Every Miri configuration.
-MIRI_CONFIGS = [MIRI, MIRI_BASE]
+MIRI_CONFIGS = [MIRI]
 
 # BorrowSanitizer configurations.
 BSAN_CONFIGS = [
