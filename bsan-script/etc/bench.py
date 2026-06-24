@@ -333,12 +333,7 @@ def process_config(
 
     # a raw list of execution times per crate, version, test case, and mode
     raw_results: tuple[str, str, str, str, str, float] = []
-
-    count = 0
     for t in tests:
-        count += 1
-        if count > 1:
-            break
         row_start = (target, crate, version, t)
         print(f"  -> {t}")
         # a mapping from each config to its mean execution time
