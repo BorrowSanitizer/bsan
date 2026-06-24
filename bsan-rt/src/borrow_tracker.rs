@@ -111,6 +111,21 @@ pub struct BorrowTracker<'a> {
 }
 
 impl<'b> BorrowTracker<'b> {
+    /// # Safety
+    /// UNSAFE: Skips provenance checks
+    pub unsafe fn for_alloc_unchecked<T, F>(prov: Provenance, f: F) -> UBResult<T>
+    where
+        F: FnOnce(Self) -> UBResult<T>,
+        T: Default,
+    {
+        let alloc_info: AllocInfoPtr =
+            unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
+        let tree = alloc_info.tree()?;
+        let size = alloc_info.size.get();
+        let range = AllocRange { start: Size::ZERO, size };
+        f(Self { tree, bor_tag: prov.bor_tag, alloc_info, range })
+    }
+
     pub fn for_alloc<T, F>(prov: Provenance, f: F) -> UBResult<T>
     where
         F: FnOnce(Self) -> UBResult<T>,
@@ -154,6 +169,30 @@ impl<'b> BorrowTracker<'b> {
         } else {
             T::default()
         }
+    }
+
+    /// # Safety
+    /// UNSAFE: Directly accesses tree with no provenance checks
+    /// To be used by acccesses that are statically known to be bounded, valid, and live
+    pub fn for_access_unchecked<T, F>(
+        _: &GlobalCtx,
+        prov: Provenance,
+        start: Size,
+        access_size: Option<Size>,
+        f: F,
+    ) -> UBResult<T>
+    where
+        F: FnOnce(Self) -> UBResult<T>,
+        T: Default,
+    {
+        let alloc_info: AllocInfoPtr = unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
+        let alloc_size = alloc_info.size.get();
+        let base_addr = unsafe { alloc_info.base_addr() };
+        let offset = Size::from_bytes(start.bytes().wrapping_sub(base_addr.bytes()));
+        let tree = alloc_info.tree()?;
+
+        let range = AllocRange { start: offset, size: access_size.unwrap_or(alloc_size) };
+        f(Self { tree, bor_tag: prov.bor_tag, alloc_info, range })
     }
 
     /// # Safety

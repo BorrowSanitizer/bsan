@@ -350,6 +350,7 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
     alloc_info: *mut AllocInfo,
     dest: NonNull<Provenance>,
     pc: Span,
+    checked: bool,
 ) {
     debug_bsan!("retag", object_addr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
@@ -365,7 +366,12 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
         pin_layout: opt_slice(pin_data, pin_len),
     };
 
-    let prov = BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(size), |mut bt| {
+    let for_access = match checked {
+        true => BorrowTracker::for_access_unchecked,
+        false => BorrowTracker::for_access,
+    };
+
+    let prov = for_access(ctx, prov, Size::from_addr(ptr), Some(size), |mut bt: BorrowTracker| {
         bt.retag(ctx, retag_info, pc).map(Some)
     })
     .map(|opt| opt.unwrap_or(prov))
@@ -397,11 +403,17 @@ unsafe extern "C-unwind" fn __bsan_read_impl(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
     pc: Span,
+    checked: bool,
 ) {
     debug_bsan!("read", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-    BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(access_size), |mut bt| {
+    let for_access = match checked {
+        true => BorrowTracker::for_access_unchecked,
+        false => BorrowTracker::for_access,
+    };
+
+    for_access(ctx, prov, Size::from_addr(ptr), Some(access_size), |mut bt: BorrowTracker| {
         bt.access(ctx, AccessKind::Read, pc)
     })
     .unwrap_or_else(|err| ctx.handle_error(err, pc));
@@ -415,11 +427,17 @@ unsafe extern "C-unwind" fn __bsan_write_impl(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
     pc: Span,
+    checked: bool,
 ) {
     debug_bsan!("read", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-    BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(access_size), |mut bt| {
+    let for_access = match checked {
+        true => BorrowTracker::for_access_unchecked,
+        false => BorrowTracker::for_access,
+    };
+
+    for_access(ctx, prov, Size::from_addr(ptr), Some(access_size), |mut bt: BorrowTracker| {
         bt.access(ctx, AccessKind::Write, pc)
     })
     .unwrap_or_else(|err| ctx.handle_error(err, pc));
@@ -451,11 +469,18 @@ extern "C" fn __bsan_dealloc(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
     pc: Span,
+    checked: bool,
 ) {
     debug_bsan!("dealloc", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov: Provenance = Provenance { bor_tag, alloc_info };
-    BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), None, |bt| bt.dealloc(ctx, pc))
+
+    let for_access = match checked {
+        true => BorrowTracker::for_access_unchecked,
+        false => BorrowTracker::for_access,
+    };
+
+    for_access(ctx, prov, Size::from_addr(ptr), None, |bt: BorrowTracker| bt.dealloc(ctx, pc))
         .unwrap_or_else(|err| ctx.handle_error(err, pc));
 }
 

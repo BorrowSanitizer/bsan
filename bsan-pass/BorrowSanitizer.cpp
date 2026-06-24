@@ -5,6 +5,7 @@
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/StackLifetime.h"
+#include "llvm/Analysis/StackSafetyAnalysis.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/AttributeMask.h"
 #include "llvm/IR/Attributes.h"
@@ -1044,6 +1045,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   const TargetLibraryInfo *TLI;
   DominatorTree &DT;
   LoopInfo LI;
+  StackSafetyGlobalInfo &SSGI;
 
   // The end of the prologue of the function, where we initialize our
   // instrumentation. This is a call to llvm.donothing.
@@ -1090,7 +1092,8 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 
 public:
   BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
-                         const TargetLibraryInfo &TLI, DominatorTree &DT)
+                         const TargetLibraryInfo &TLI, DominatorTree &DT,
+                         const StackSafetyGlobalInfo &SSGI)
       : F(F), BS(BS), C(BS.C), TLI(&TLI), DT(DT),
         ShadowStack(BS.ProvenanceSize, BS.ProvStackTLS) {}
   bool run() {
@@ -1950,22 +1953,35 @@ private:
     I.eraseFromParent();
   }
 
+  Value *stackSafetyCheck(IRBuilder<> &IRB, Instruction &I) {
+    Value *Checked = IRB.getFalseValue();
+
+    if (SSGI.stackAccessIsSafe(LI))
+      Checked = IRB.getTrueValue();
+
+    return Checked;
+  }
+
   void visitMemCpyInst(MemCpyInst &I) {
     IRBuilder<> IRB(&I);
     Value *Size = IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false);
-    insertReadCheck(IRB, I.getSource(), Size);
-    insertWriteCheck(IRB, I.getDest(), Size);
+
+    Value *Checked = stackSafetyCheck(IRB, I);
+    insertReadCheck(IRB, I.getSource(), Size, Checked);
+    insertWriteCheck(IRB, I.getDest(), Size, Checked);
     IRB.CreateCall(BS.BsanFuncMemCpy, {I.getDest(), I.getSource(), Size});
     I.eraseFromParent();
   }
 
-  void insertReadCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size) {
+  void insertReadCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size,
+                       Value *Checked) {
     if (auto Prov = getProvenance(IRB.GetInsertBlock(), Ptr)) {
       IRB.CreateCall(BS.BsanFuncRead, {Ptr, Size, (*Prov).Tag, (*Prov).Info});
     }
   }
 
-  void insertWriteCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size) {
+  void insertWriteCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size,
+                        Value *Checked) {
     if (auto Prov = getProvenance(IRB.GetInsertBlock(), Ptr)) {
       IRB.CreateCall(BS.BsanFuncWrite, {Ptr, Size, (*Prov).Tag, (*Prov).Info});
     }
@@ -1993,7 +2009,7 @@ private:
                                                  Comp.Elems, LI.getOrdering());
       setProvenance({&LI, Idx}, Prov);
     }
-    insertReadCheck(IRB, Ptr, Size);
+    insertReadCheck(IRB, Ptr, Size, stackSafetyCheck(IRB, LI));
   }
 
   bool shouldClearProvenance(IRBuilder<> &IRB, StoreInst &SI) { return true; }
@@ -2006,7 +2022,14 @@ private:
 
     Value *EntireSize = PrevIRB.CreateTypeSize(
         BS.IntptrTy, BS.DL->getTypeStoreSize(Val->getType()));
-    insertWriteCheck(PrevIRB, Ptr, EntireSize);
+
+    Value *Checked = IRB.getFalseValue();
+
+    if (this.stackAccessIsSafe(LI))
+      Checked = IRB.getTrueValue();
+
+    Value *Ptr = LI.getPointerOperand();
+    insertWriteCheck(PrevIRB, Ptr, EntireSize, Checked);
 
     NextNodeIRBuilder IRB(&SI);
 
@@ -2310,9 +2333,11 @@ bool BorrowSanitizer::instrumentFunction(Function &F,
 
   const TargetLibraryInfo &TLI = FAM.getResult<TargetLibraryAnalysis>(F);
   DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
+  const StackSafetyGlobalInfo &SSGI =
+      FAM.getResult<StackSafetyGlobalAnalysis>(F);
 
   initializeCallbacks(*F.getParent(), TLI);
-  BorrowSanitizerVisitor Visitor(F, *this, TLI, DT);
+  BorrowSanitizerVisitor Visitor(F, *this, TLI, DT, SSGI);
 
   AttributeMask B;
   B.addAttribute(Attribute::Memory).addAttribute(Attribute::Speculatable);
