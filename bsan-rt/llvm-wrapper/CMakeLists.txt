@@ -41,7 +41,7 @@ append_list_if(COMPILER_RT_HAS_FFREESTANDING_FLAG -ffreestanding BSAN_COMMON_CFL
 set(BSAN_DYNAMIC_CFLAGS ${BSAN_COMMON_CFLAGS})
 
 set_source_files_properties(bsan_interceptors.cpp PROPERTIES
-  COMPILE_FLAGS "-Wno-unused -Wno-unneeded-internal-declaration")
+  COMPILE_FLAGS "-Wno-unused -Wno-unneeded-internal-declaration -Wno-maybe-uninitialized")
 
 set(BSAN_COMMON_DEFINITIONS "")
 set(BSAN_DYNAMIC_DEFINITIONS ${BSAN_COMMON_DEFINITIONS} BSAN_DYNAMIC=1)
