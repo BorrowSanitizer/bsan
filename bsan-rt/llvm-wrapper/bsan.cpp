@@ -202,6 +202,8 @@ void __bsan_init() {
   __bsan_internal_init();
   InitializePlatformEarly();
 
+  InitShadowWithReExec();
+  InitializeAllocator();
   InitializeInterceptors();
   InitializeTSD();
 
@@ -254,7 +256,6 @@ void __bsan_validate_params(void *current_fn, Provenance *frame_start,
     for (uptr i = 0; i < len; ++i) {
       frame_start[i] = OMNIVALID;
     }
-
     __bsan_var_arg_ctr = 0;
   }
   __bsan_marker = 0;
@@ -356,26 +357,24 @@ void __bsan_local_init(Provenance **prov) {}
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_local_deinit() {}
 
-SANITIZER_WEAK_ATTRIBUTE
-BorTag __bsan_retag_impl(void *object_addr, uptr access_size, u8 flags,
-                         const uptr im_data[2], uptr im_len,
-                         const uptr pin_data[2], uptr pin_len, BorTag bor_tag,
-                         AllocInfo *alloc_info, Span pc);
+SANITIZER_WEAK_ATTRIBUTE void
+__bsan_retag_impl(void *object_addr, uptr access_size, u8 flags,
+                  const uptr im_data[2], uptr im_len, const uptr pin_data[2],
+                  uptr pin_len, BorTag bor_tag, AllocInfo *alloc_info,
+                  void *dest, Span pc);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-BorTag __bsan_retag(void *object_addr, uptr access_size, u8 flags,
-                    const uptr im_data[2], uptr im_len, const uptr pin_data[2],
-                    uptr pin_len, BorTag bor_tag, AllocInfo *alloc_info) {
-  BorTag new_tag = bor_tag;
+void __bsan_retag(void *object_addr, uptr access_size, u8 flags,
+                  const uptr im_data[2], uptr im_len, const uptr pin_data[2],
+                  uptr pin_len, BorTag bor_tag, AllocInfo *alloc_info,
+                  void *dest) {
   if (__bsan_retag_impl) {
     GET_SPAN;
     InterceptorBarrier Barrier;
-    new_tag =
-        __bsan_retag_impl(object_addr, access_size, flags, im_data, im_len,
-                          pin_data, pin_len, bor_tag, alloc_info, span);
+    __bsan_retag_impl(object_addr, access_size, flags, im_data, im_len,
+                      pin_data, pin_len, bor_tag, alloc_info, dest, span);
     HANDLE_ERROR;
   }
-  return new_tag;
 }
 
 SANITIZER_WEAK_ATTRIBUTE
@@ -408,32 +407,59 @@ void __bsan_write(void *ptr, uptr access_size, BorTag bor_tag,
   }
 }
 
-SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE Provenance *
-__bsan_shadow(void *addr) {
-  return GetSlot(0);
+SANITIZER_WEAK_ATTRIBUTE
+bool __bsan_rc_inc_impl(BorTag Tag, AllocInfo *Info);
+
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_rc_inc(BorTag Tag, AllocInfo *Info) {
+  if (__bsan_rc_inc_impl) {
+    InterceptorBarrier Barrier;
+    __bsan_rc_inc_impl(Tag, Info);
+  }
 }
 
-SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE void
-__bsan_shadow_transfer(void *dest, const void *src, uptr access_size) {}
+SANITIZER_WEAK_ATTRIBUTE
+void __bsan_rc_dec_impl(BorTag Tag, AllocInfo *Info);
 
-SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE void
-__bsan_shadow_clear(void *dest, uptr access_size) {}
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_rc_dec(BorTag Tag, AllocInfo *Info) {
+  if (__bsan_rc_dec_impl) {
+    InterceptorBarrier Barrier;
+    __bsan_rc_dec_impl(Tag, Info);
+  }
+}
 
-SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE void
-__bsan_rc_store(BorTag Tag, AllocInfo *Info, Provenance *Dest) {}
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_shadow_clear(void *dest, uptr size) { ClearShadow(dest, size); }
 
-SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE AllocInfo *
-__bsan_reserve_stack_slot() {
+SANITIZER_WEAK_ATTRIBUTE
+AllocInfo *__bsan_reserve_stack_slot_impl();
+
+SANITIZER_INTERFACE_ATTRIBUTE
+AllocInfo *__bsan_reserve_stack_slot() {
+  if (__bsan_reserve_stack_slot_impl) {
+    InterceptorBarrier Barrier;
+    return __bsan_reserve_stack_slot_impl();
+  }
   return nullptr;
 }
 
-SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE void
-__bsan_destroy_stack_slot(AllocInfo *slot);
+SANITIZER_WEAK_ATTRIBUTE
+void __bsan_destroy_stack_slot_impl(AllocInfo *slot);
+
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_destroy_stack_slot(AllocInfo *slot) {
+  if (__bsan_destroy_stack_slot_impl) {
+    InterceptorBarrier Barrier;
+    __bsan_destroy_stack_slot_impl(slot);
+  }
+}
 
 SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE AllocInfo *
 __bsan_alloc(void *base_addr, uptr size, BorTag bor_tag, Span pc) {
   return nullptr;
 }
+
 SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE void
 __bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info, Span pc) {}
 
@@ -471,6 +497,7 @@ void __bsan_expose_prov_impl(BorTag bor_tag, AllocInfo *alloc_info);
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_expose_prov(BorTag bor_tag, AllocInfo *alloc_info) {
   if (__bsan_expose_prov_impl) {
+    InterceptorBarrier Barrier;
     __bsan_expose_prov_impl(bor_tag, alloc_info);
   }
 }
@@ -481,7 +508,7 @@ void __bsan_protector_end_impl(BorTag bor_tag, AllocInfo *alloc_info, Span pc);
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_pop_frame(const Provenance *frame_start, uptr prot,
                       uptr alloca_vec_size) {
-  if (__bsan_protector_end_impl && __bsan_destroy_stack_slot &&
+  if (__bsan_protector_end_impl && __bsan_destroy_stack_slot_impl &&
       __bsan_dealloc_stack_impl) {
     GET_SPAN;
     InterceptorBarrier Barrier;
@@ -491,7 +518,7 @@ void __bsan_pop_frame(const Provenance *frame_start, uptr prot,
         __bsan_protector_end_impl(Prov.Tag, Prov.Info, span);
       } else {
         __bsan_dealloc_stack_impl(Prov.Tag, Prov.Info, span);
-        __bsan_destroy_stack_slot(Prov.Info);
+        __bsan_destroy_stack_slot_impl(Prov.Info);
       }
     }
   }

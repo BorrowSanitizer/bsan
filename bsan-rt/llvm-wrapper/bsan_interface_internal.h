@@ -25,6 +25,15 @@ SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_memset(void *s, int c, uptr n);
 
 SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_shadow_clear(void *dest, uptr size);
+
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_rc_dec(BorTag Tag, AllocInfo *Info);
+
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_rc_inc(BorTag Tag, AllocInfo *Info);
+
+SANITIZER_INTERFACE_ATTRIBUTE
 u32 __bsan_symbolize_pc(uptr pc, char *file_buf, uptr file_buf_len, u32 *line,
                         u32 *column);
 
@@ -50,12 +59,6 @@ void __bsan_read(void *ptr, uptr access_size, BorTag bor_tag,
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_write(void *ptr, uptr access_size, BorTag bor_tag,
                   AllocInfo *alloc_info);
-
-SANITIZER_WEAK_ATTRIBUTE
-void __bsan_shadow_transfer(void *dest, const void *src, uptr access_size);
-
-SANITIZER_WEAK_ATTRIBUTE
-void __bsan_shadow_clear(void *dest, uptr access_size);
 
 } // extern "C"
 

@@ -59,6 +59,7 @@ static void InitializeDefaultFlags() {
     } else {
       cf.external_symbolizer_path = GetEnv("BSAN_SYMBOLIZER_PATH");
     }
+    cf.allocator_may_return_null = 1;
     cf.exitcode = 1;
     OverrideCommonFlags(cf);
   }

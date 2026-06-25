@@ -1,5 +1,6 @@
 #ifndef BSAN_H
 #define BSAN_H
+#include "bsan_shadow.h"
 #include "sanitizer_common/sanitizer_atomic.h"
 #include "sanitizer_common/sanitizer_internal_defs.h"
 #include "sanitizer_common/sanitizer_stacktrace.h"
@@ -34,6 +35,8 @@ struct Provenance {
 };
 
 const Provenance OMNIVALID = {0, nullptr};
+
+static constexpr uptr kMinProvAlignment = 8;
 
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance
     *__bsan_shadow_stack;

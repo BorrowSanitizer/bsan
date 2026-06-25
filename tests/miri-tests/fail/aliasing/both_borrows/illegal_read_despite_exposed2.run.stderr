@@ -1,0 +1,31 @@
+error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_read_despite_exposed2.rs:LL:CC
+   |
+LL | *root2 = 3; //miri: ~[tree]| ERROR: /write access through .* is forbidden/
+   |
+   = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
+help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_read_despite_exposed2.rs:LL:CC
+   |
+LL | let root2 = &mut *exposed_ptr;
+   |
+help: the accessed tag <TAG>(unprotected) later transitioned to Unique due to a child write access at offsets [0x0..0x4]
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_read_despite_exposed2.rs:LL:CC
+   |
+LL | *root2 = 42;
+   |
+   = help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
+help: the accessed tag <TAG>(unprotected) later transitioned to Frozen due to a foreign read access at offsets [0x0..0x4]
+  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_read_despite_exposed2.rs:LL:CC
+   |
+LL | let _val = *exposed_ptr;
+   |
+   = help: this transition corresponds to a loss of write permissions
+
+stack backtrace:
+0: illegal_read_despite_exposed2::main
+ at bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_read_despite_exposed2.rs:LL:CC
+1: <fn() as core::ops::function::FnOnce<()>>::call_once
+ at RUSTLIB/core/src/ops/function.rs:LL:CC
+2: std::sys::backtrace::__rust_begin_short_backtrace
+ at RUSTLIB/std/src/sys/backtrace.rs:LL:CC

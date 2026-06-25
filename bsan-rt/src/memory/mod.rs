@@ -5,17 +5,14 @@
 //! on a linked list of page-sized "blocks" of memory.
 
 mod heap;
-pub use heap::Heap;
-use heap::Heapable;
-use libc::{pthread_attr_destroy, pthread_attr_init, pthread_attr_t, rlimit, _SC_PAGESIZE};
-
-mod shadow;
 use core::ffi::c_void;
 use core::mem::{self, MaybeUninit};
 use core::num::NonZero;
 use core::ptr::{self, NonNull};
 
-pub use shadow::ShadowHeap;
+pub use heap::Heap;
+use heap::Heapable;
+use libc::{pthread_attr_destroy, pthread_attr_init, pthread_attr_t, rlimit, _SC_PAGESIZE};
 
 use crate::{AllocInfo, BorTag};
 
@@ -104,13 +101,8 @@ unsafe impl WordAligned for BorTag {}
 /// # Safety
 /// Values of type `AllocInfo` can fit within the size of a heap chunk.
 unsafe impl Heapable for AllocInfo {
-    fn next(&mut self) -> *mut Option<NonNull<AllocInfo>> {
-        // we are re-using the space of base_addr to store the free list pointer
-        // SAFETY: this is safe because both union fields are raw pointers
-        #[allow(unused_unsafe)]
-        unsafe {
-            &raw mut self.base_addr.free_list_next
-        }
+    fn next(ptr: *mut AllocInfo) -> *mut Option<NonNull<AllocInfo>> {
+        unsafe { (&raw mut (*((*ptr).free_or_addr).as_ptr()).free_list_next) }
     }
 }
 

@@ -1,6 +1,5 @@
 #![cfg_attr(not(test), no_std)]
 #![cfg_attr(not(test), feature(core_intrinsics))]
-#![cfg_attr(test, feature(test))]
 #![feature(thread_local)]
 #![feature(allocator_api)]
 #![feature(never_type)]
@@ -8,13 +7,16 @@
 
 #[macro_use]
 extern crate alloc;
+use core::cell::Cell;
 use core::ffi::c_void;
 use core::fmt::Debug;
+use core::ops::Deref;
 #[cfg(not(test))]
 use core::panic::PanicInfo;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{fmt, ptr, slice};
+
 mod borrow_tracker;
 use libc_print::std_name::*;
 use spin::Mutex;
@@ -31,7 +33,7 @@ mod local;
 mod errors;
 mod memory;
 
-use crate::helpers::Size;
+use crate::helpers::{AllocRange, Size};
 use crate::local::{deinit_local_ctx, init_local_ctx};
 use crate::sanitizer_common::Span;
 use crate::tree_borrows::perms::AccessKind;
@@ -252,29 +254,13 @@ pub struct Provenance {
 unsafe impl Sync for Provenance {}
 unsafe impl Send for Provenance {}
 
-impl Provenance {
-    /// The default provenance value, which is assigned to dangling or invalid
-    /// pointers.
-    #[allow(unused)]
-    const fn null() -> Self {
-        Provenance { bor_tag: BorTag::invalid(), alloc_info: core::ptr::null_mut() }
-    }
-
-    /// Pointers cast from integers receive a "wildcard" provenance value,
-    /// which permits any access.
-    #[allow(unused)]
-    const fn wildcard() -> Self {
-        Provenance { bor_tag: BorTag::wildcard(), alloc_info: core::ptr::null_mut() }
-    }
-}
-
 #[derive(Clone, Copy)]
-pub(crate) union FreeListAddrUnion {
+pub(crate) union FreeListOrAddr {
     pub base_addr: Size,
     pub free_list_next: Option<NonNull<AllocInfo>>,
 }
 
-impl Debug for FreeListAddrUnion {
+impl Debug for FreeListOrAddr {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{:x}", unsafe { self.base_addr.bytes() })
     }
@@ -287,28 +273,28 @@ impl Debug for FreeListAddrUnion {
 /// the tree for the allocation.
 #[repr(C)]
 pub struct AllocInfo {
-    pub alloc_id: AllocId,
-    pub(crate) base_addr: FreeListAddrUnion,
-    pub size: Size,
-    pub tree_lock: Mutex<Option<AllocStateImpl>>,
+    alloc_id: Cell<AllocId>,
+    free_or_addr: Cell<FreeListOrAddr>,
+    size: Cell<Size>,
+    tree: Mutex<Option<AllocStateImpl>>,
 }
 
 impl AllocInfo {
     fn invalid() -> Self {
         AllocInfo {
-            alloc_id: AllocId::invalid(),
-            base_addr: FreeListAddrUnion { base_addr: Size::ZERO },
-            size: Size::ZERO,
-            tree_lock: Mutex::default(),
+            alloc_id: Cell::new(AllocId::invalid()),
+            free_or_addr: Cell::new(FreeListOrAddr { base_addr: Size::ZERO }),
+            size: Cell::new(Size::ZERO),
+            tree: Mutex::default(),
         }
     }
 
     fn new(base_addr: Size, size: Size, bor_tag: BorTag, span: Span) -> Self {
         Self {
-            alloc_id: AllocId::default(),
-            base_addr: FreeListAddrUnion { base_addr },
-            size,
-            tree_lock: Mutex::new(Some(AllocStateImpl::new(bor_tag, size, span))),
+            alloc_id: Cell::new(AllocId::default()),
+            free_or_addr: Cell::new(FreeListOrAddr { base_addr }),
+            size: Cell::new(size),
+            tree: Mutex::new(Some(AllocStateImpl::new(bor_tag, size, span))),
         }
     }
 
@@ -319,6 +305,44 @@ impl AllocInfo {
             base_addr: self.base_addr,
             size: self.size,
         }
+    }
+}
+
+// A reference to an instance of `AllocInfo`
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[repr(transparent)]
+pub struct AllocInfoPtr(NonNull<AllocInfo>);
+
+// A pointer to an instance of `AllocInfo`.
+impl AllocInfoPtr {
+    /// # Safety
+    /// This instance of `AllocInfo` must represent a valid, non-freed allocation.
+    /// Otherwise, the contents of its base address will be initialized with the next
+    /// pointer in a free list.
+    pub unsafe fn range(&self) -> AllocRange {
+        AllocRange { start: unsafe { self.base_addr() }, size: self.size.get() }
+    }
+
+    /// # Safety
+    /// This instance of `AllocInfo` must represent a valid, non-freed allocation.
+    /// Otherwise, the contents of its base address will be initialized with the next
+    /// pointer in a free list.
+    pub unsafe fn base_addr(&self) -> Size {
+        unsafe { self.free_or_addr.get().base_addr }
+    }
+}
+
+impl Deref for AllocInfoPtr {
+    type Target = AllocInfo;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { self.0.as_ref() }
+    }
+}
+
+impl From<NonNull<AllocInfo>> for AllocInfoPtr {
+    fn from(value: NonNull<AllocInfo>) -> Self {
+        Self(value)
     }
 }
 
@@ -411,12 +435,12 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
     pin_len: usize,
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
+    dest: NonNull<Provenance>,
     pc: Span,
-) -> BorTag {
+) {
     debug_bsan!("retag", object_addr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-
     let opt_slice = |opt_ptr: Option<NonNull<[Size; 2]>>, len| -> Option<_> {
         opt_ptr.map(|ptr| unsafe { slice::from_raw_parts(ptr.as_ptr(), len) })
     };
@@ -428,14 +452,16 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
         pin_layout: opt_slice(pin_data, pin_len),
     };
 
-    BorrowTracker::for_access(prov, Size::from_addr(ptr), Some(size), |bt| {
+    let prov = BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(size), |bt| {
         bt.retag(ctx, retag_info, pc).map(Some)
     })
-    .map(|opt| opt.unwrap_or(bor_tag))
+    .map(|opt| opt.unwrap_or(prov))
     .unwrap_or_else(|err| {
         ctx.handle_error(err, pc);
-        bor_tag
-    })
+        prov
+    });
+
+    unsafe { dest.write(prov) };
 }
 
 #[unsafe(no_mangle)]
@@ -458,7 +484,7 @@ unsafe extern "C-unwind" fn __bsan_read_impl(
     debug_bsan!("read", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-    BorrowTracker::for_access(prov, Size::from_addr(ptr), Some(access_size), |bt| {
+    BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(access_size), |bt| {
         bt.access(ctx, AccessKind::Read, pc)
     })
     .unwrap_or_else(|err| ctx.handle_error(err, pc));
@@ -473,11 +499,10 @@ unsafe extern "C-unwind" fn __bsan_write_impl(
     alloc_info: *mut AllocInfo,
     pc: Span,
 ) {
-    debug_bsan!("write", ptr, bor_tag, alloc_info);
+    debug_bsan!("read", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-
-    BorrowTracker::for_access(prov, Size::from_addr(ptr), Some(access_size), |bt| {
+    BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(access_size), |bt| {
         bt.access(ctx, AccessKind::Write, pc)
     })
     .unwrap_or_else(|err| ctx.handle_error(err, pc));
@@ -510,7 +535,7 @@ extern "C" fn __bsan_dealloc(
     debug_bsan!("dealloc", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov: Provenance = Provenance { bor_tag, alloc_info };
-    BorrowTracker::for_access(prov, Size::from_addr(ptr), None, |bt| bt.dealloc(ctx, pc))
+    BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), None, |bt| bt.dealloc(ctx, pc))
         .unwrap_or_else(|err| ctx.handle_error(err, pc));
     if let Some(alloc_info) = NonNull::new(alloc_info) {
         unsafe { ctx.destroy_alloc_info(alloc_info) };
@@ -532,54 +557,38 @@ unsafe extern "C-unwind" fn __bsan_dealloc_stack_impl(
     }
 }
 
-/// Copies the provenance stored in the range `[src_addr, src_addr + access_size)` within the shadow heap
-/// to the address `dst_addr`. This function will silently fail, so it should only be called in conjunction with
-/// `bsan_read` and `bsan_write` or as part of an interceptor.
+/// Increments the reference count associated with a provenance value.
+///
+/// Returns `true` if the count transitioned from zero to one.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_shadow_transfer(
-    dst: *mut c_void,
-    src: *const c_void,
-    size: usize,
-) {
-    let ctx = unsafe { global_ctx() };
-    let heap = ctx.shadow_heap();
-    heap.memcpy(dst.addr(), src.addr(), size)
-}
-
-/// Clears the provenance stored in the range `[dst_addr, dst_addr + access_size)` within the
-/// shadow heap.
-#[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_shadow_clear(dst: *mut c_void, size: usize) {
-    let ctx = unsafe { global_ctx() };
-    ctx.shadow_heap().clear(dst.addr(), size)
-}
-
-/// Loads the provenance of a given address from shadow memory and stores
-/// the result in the return pointer.
-#[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_shadow(addr: *mut c_void) -> NonNull<Provenance> {
-    unsafe { global_ctx().shadow_heap().get(addr.addr()) }
-}
-
-/// Stores the given provenance value into shadow memory at the location for the given address.
-#[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_rc_store(
+unsafe extern "C-unwind" fn __bsan_rc_inc_impl(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
-    dest: NonNull<Provenance>,
-) {
+) -> bool {
     let prov = Provenance { bor_tag, alloc_info };
-    unsafe { dest.write(prov) };
+    BorrowTracker::for_alloc(prov, |bt| bt.increment()).unwrap_or(false)
+}
+
+/// Decrements the reference count associated with a provenance value.
+///
+/// Returns `true` if the count reached zero.
+#[unsafe(no_mangle)]
+unsafe extern "C-unwind" fn __bsan_rc_dec_impl(
+    bor_tag: BorTag,
+    alloc_info: *mut AllocInfo,
+) -> bool {
+    let prov = Provenance { bor_tag, alloc_info };
+    BorrowTracker::for_alloc(prov, |bt| bt.decrement()).unwrap_or(false)
 }
 
 /// Reserves a stack slot for allocation metadata.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_reserve_stack_slot() -> NonNull<AllocInfo> {
+unsafe extern "C" fn __bsan_reserve_stack_slot_impl() -> NonNull<AllocInfo> {
     unsafe { global_ctx().create_alloc_info(AllocInfo::invalid()) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_destroy_stack_slot(slot: NonNull<AllocInfo>) {
+unsafe extern "C" fn __bsan_destroy_stack_slot_impl(slot: NonNull<AllocInfo>) {
     let ctx = unsafe { global_ctx() };
     unsafe {
         ctx.destroy_alloc_info(slot);

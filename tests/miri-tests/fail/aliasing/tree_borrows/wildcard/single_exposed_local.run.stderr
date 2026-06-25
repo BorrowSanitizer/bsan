@@ -1,0 +1,23 @@
+error: Undefined Behavior: write access through <wildcard> at ALLOC[0x0] is forbidden
+    --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/single_exposed_local.rs:LL:CC
+   |
+LL | unsafe { wild.write(0) }; //miri: ~ ERROR: /write access through <wildcard> at .* is forbidden/
+   |
+note: the origin of the error is in library code, here:
+    --> RUSTLIB/core/src/ptr/mod.rs:LL:CC
+   |
+LL | intrinsics::write_via_move(dst, src)
+   |
+     = help: there are no exposed tags which may perform this access here
+
+stack backtrace:
+0: core::ptr::write
+ at RUSTLIB/core/src/ptr/mod.rs:LL:CC
+1: <*mut u32>::write
+ at RUSTLIB/core/src/ptr/mut_ptr.rs:LL:CC
+2: single_exposed_local::main
+ at bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/single_exposed_local.rs:LL:CC
+3: <fn() as core::ops::function::FnOnce<()>>::call_once
+ at RUSTLIB/core/src/ops/function.rs:LL:CC
+4: std::sys::backtrace::__rust_begin_short_backtrace
+ at RUSTLIB/std/src/sys/backtrace.rs:LL:CC

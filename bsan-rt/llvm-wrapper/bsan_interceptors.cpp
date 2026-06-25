@@ -100,7 +100,7 @@ INTERCEPTOR(void *, malloc, SIZE_T size) {
   GET_SPAN;
   bool already_in_scope = BlockInterception();
   InterceptorBarrier barrier;
-  void *ptr = REAL(malloc)(size);
+  void *ptr = bsan_malloc(size);
   if (!already_in_scope && INST_CALLER(malloc)) {
     Provenance *RetSlot = GetSlot(0);
     BorTag Tag = NewBorTag();
@@ -130,7 +130,7 @@ INTERCEPTOR(void, free, void *ptr) {
     __bsan_dealloc(ptr, Slot->Tag, Slot->Info, span);
     HANDLE_ERROR_PC_BP(pc, bp);
   }
-  return REAL(free)(ptr);
+  return bsan_deallocate(ptr);
 }
 
 INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
@@ -139,7 +139,7 @@ INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
   GET_SPAN;
   bool already_in_scope = BlockInterception();
   InterceptorBarrier barrier;
-  void *ptr = REAL(calloc)(nmemb, size);
+  void *ptr = bsan_calloc(nmemb, size);
   if (!already_in_scope && INST_CALLER(calloc)) {
     Provenance *RetSlot = GetSlot(0);
     BorTag Tag = NewBorTag();
@@ -160,14 +160,110 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
     __bsan_dealloc(ptr, Slot->Tag, Slot->Info, span);
     HANDLE_ERROR_PC_BP(pc, bp);
   }
-  void *nptr = REAL(realloc)(ptr, size);
-  __bsan_shadow_transfer(nptr, ptr, size);
+  void *nptr = bsan_realloc(ptr, size);
   if (is_inst) {
     Provenance *RetSlot = GetSlot(0);
     BorTag Tag = NewBorTag();
     *RetSlot = {Tag, __bsan_alloc(nptr, size, Tag, span)};
   }
   return nptr;
+}
+
+// All remaining allocation functions must also be routed to our allocator:
+// otherwise, they will return pointers from glibc's allocator, and passing
+// them to our deallocation functions (e.g. through the interceptor for
+// `free`) will crash the program. Rust's standard library uses
+// `posix_memalign` for allocations with non-standard alignment.
+
+static void *BsanAlignedAllocate(void *ptr, SIZE_T size, bool is_inst,
+                                 Span span) {
+  if (is_inst) {
+    Provenance *RetSlot = GetSlot(0);
+    BorTag Tag = NewBorTag();
+    *RetSlot = {Tag, __bsan_alloc(ptr, size, Tag, span)};
+  }
+  return ptr;
+}
+
+INTERCEPTOR(void *, aligned_alloc, SIZE_T alignment, SIZE_T size) {
+  GET_SPAN;
+  if (DlsymAlloc::Use())
+    return DlsymAlloc::Allocate(size, alignment);
+  bool already_in_scope = BlockInterception();
+  InterceptorBarrier barrier;
+  void *ptr = bsan_aligned_alloc(alignment, size);
+  bool is_inst = !already_in_scope && INST_CALLER(aligned_alloc);
+  return BsanAlignedAllocate(ptr, size, is_inst, span);
+}
+
+INTERCEPTOR(void *, memalign, SIZE_T alignment, SIZE_T size) {
+  GET_SPAN;
+  if (DlsymAlloc::Use())
+    return DlsymAlloc::Allocate(size, alignment);
+  bool already_in_scope = BlockInterception();
+  InterceptorBarrier barrier;
+  void *ptr = bsan_memalign(alignment, size);
+  bool is_inst = !already_in_scope && INST_CALLER(memalign);
+  return BsanAlignedAllocate(ptr, size, is_inst, span);
+}
+
+INTERCEPTOR(void *, __libc_memalign, SIZE_T alignment, SIZE_T size) {
+  GET_SPAN;
+  if (DlsymAlloc::Use())
+    return DlsymAlloc::Allocate(size, alignment);
+  bool already_in_scope = BlockInterception();
+  InterceptorBarrier barrier;
+  void *ptr = bsan_memalign(alignment, size);
+  bool is_inst = !already_in_scope && INST_CALLER(__libc_memalign);
+  return BsanAlignedAllocate(ptr, size, is_inst, span);
+}
+
+INTERCEPTOR(void *, valloc, SIZE_T size) {
+  GET_SPAN;
+  if (DlsymAlloc::Use())
+    return DlsymAlloc::Allocate(size, GetPageSizeCached());
+  bool already_in_scope = BlockInterception();
+  InterceptorBarrier barrier;
+  void *ptr = bsan_valloc(size);
+  bool is_inst = !already_in_scope && INST_CALLER(valloc);
+  return BsanAlignedAllocate(ptr, size, is_inst, span);
+}
+
+INTERCEPTOR(void *, pvalloc, SIZE_T size) {
+  GET_SPAN;
+  if (DlsymAlloc::Use())
+    return DlsymAlloc::Allocate(RoundUpTo(size, GetPageSizeCached()),
+                                GetPageSizeCached());
+  bool already_in_scope = BlockInterception();
+  InterceptorBarrier barrier;
+  void *ptr = bsan_pvalloc(size);
+  bool is_inst = !already_in_scope && INST_CALLER(pvalloc);
+  return BsanAlignedAllocate(ptr, size, is_inst, span);
+}
+
+INTERCEPTOR(int, posix_memalign, void **memptr, SIZE_T alignment, SIZE_T size) {
+  GET_SPAN;
+  if (DlsymAlloc::Use()) {
+    void *ptr = DlsymAlloc::Allocate(size, alignment);
+    if (UNLIKELY(!ptr))
+      return errno_ENOMEM;
+    *memptr = ptr;
+    return 0;
+  }
+  bool already_in_scope = BlockInterception();
+  InterceptorBarrier barrier;
+  bool is_inst = !already_in_scope && INST_CALLER(posix_memalign);
+  int res = bsan_posix_memalign(memptr, alignment, size);
+  if (!res && is_inst) {
+    // The new pointer is returned through memory instead of the return slot,
+    // so its provenance needs to be written into the shadow of `memptr`.
+    BorTag Tag = NewBorTag();
+    void *Info = __bsan_alloc(*memptr, size, Tag, span);
+    *((BorTag *)MEM_TO_SHADOW(memptr)) = Tag;
+    auto OriginPtr = (void **)(MEM_TO_ORIGIN(memptr));
+    *(OriginPtr) = ((void *)Info);
+  }
+  return res;
 }
 
 extern "C" {
@@ -178,7 +274,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memset(void *dest, int c, uptr n) {
   } else {
     ENSURE_BSAN_INITED();
     internal_memset(dest, c, n);
-    __bsan_shadow_clear(dest, n);
+    ClearShadow(dest, n);
   }
 }
 
@@ -188,9 +284,8 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memmove(void *dest, const void *src,
     internal_memmove(dest, src, n);
   } else {
     ENSURE_BSAN_INITED();
-    InterceptorBarrier barrier;
-    __bsan_shadow_transfer(dest, src, n);
     internal_memmove(dest, src, n);
+    MoveShadow(dest, src, n);
   }
 }
 
@@ -201,8 +296,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memcpy(void *dest, const void *src,
   } else {
     ENSURE_BSAN_INITED();
     internal_memcpy(dest, src, n);
-    InterceptorBarrier barrier;
-    __bsan_shadow_transfer(dest, src, n);
+    CopyShadow(dest, src, n);
   }
 }
 
@@ -313,8 +407,7 @@ static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso) {
   } while (false)
 
 #define COMMON_INTERCEPTOR_WRITE_RANGE(ctx, ptr, size)                         \
-  do {                                                                         \
-  } while (false)
+  __bsan_shadow_clear(ptr, size)
 
 #define COMMON_INTERCEPTOR_READ_RANGE(ctx, ptr, size)                          \
   do {                                                                         \
@@ -408,9 +501,7 @@ static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso) {
 #define COMMON_SYSCALL_POST_READ_RANGE(p, s)                                   \
   do {                                                                         \
   } while (false)
-#define COMMON_SYSCALL_POST_WRITE_RANGE(p, s)                                  \
-  do {                                                                         \
-  } while (false)
+#define COMMON_SYSCALL_POST_WRITE_RANGE(p, s) __bsan_shadow_clear(p, s)
 
 // clang-format off
 #include "sanitizer_common/sanitizer_common_syscalls.inc"
@@ -434,6 +525,12 @@ void InitializeInterceptors() {
   INTERCEPT_FUNCTION(malloc);
   INTERCEPT_FUNCTION(calloc);
   INTERCEPT_FUNCTION(realloc);
+  INTERCEPT_FUNCTION(aligned_alloc);
+  INTERCEPT_FUNCTION(memalign);
+  INTERCEPT_FUNCTION(__libc_memalign);
+  INTERCEPT_FUNCTION(valloc);
+  INTERCEPT_FUNCTION(pvalloc);
+  INTERCEPT_FUNCTION(posix_memalign);
   INTERCEPT_FUNCTION(atexit);
   INTERCEPT_FUNCTION(__cxa_atexit);
 

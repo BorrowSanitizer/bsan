@@ -1,0 +1,27 @@
+error: Undefined Behavior: deallocation through <wildcard> at ALLOC[0x0] is forbidden
+  --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/dealloc.rs:LL:CC
+   |
+LL | unsafe { std::alloc::dealloc(wild as *mut u8, Layout::new::<u32>()) }; //miri: ~ ERROR: /deallocation through <wildcard> .* is forbidden/
+   |
+note: the origin of the error is in library code, here:
+  --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
+   |
+LL | unsafe { libc::free(ptr as *mut libc::c_void) }
+   |
+   = help: there are no exposed tags which may perform this access here
+
+stack backtrace:
+0: <std::alloc::System as core::alloc::global::GlobalAlloc>::dealloc
+ at RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
+1: __rustc::__rdl_dealloc
+ at RUSTLIB/std/src/alloc.rs:LL:CC
+2: alloc::alloc::dealloc_nonnull
+ at RUSTLIB/alloc/src/alloc.rs:LL:CC
+3: alloc::alloc::dealloc
+ at RUSTLIB/alloc/src/alloc.rs:LL:CC
+4: dealloc::main
+ at bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/dealloc.rs:LL:CC
+5: <fn() as core::ops::function::FnOnce<()>>::call_once
+ at RUSTLIB/core/src/ops/function.rs:LL:CC
+6: std::sys::backtrace::__rust_begin_short_backtrace
+ at RUSTLIB/std/src/sys/backtrace.rs:LL:CC
