@@ -1,25 +1,25 @@
 error: Undefined Behavior: read access through <TAG>(unprotected) at ALLOC[0xc] is forbidden
-  --> bsan/tests/fail-dep/mirilli/dec.rs:LL:CC
-   |
-LL | assert_eq!(lhs.cmp(&rhs), expected);
-   |
-note: the origin of the error is in library code, here:
-  --> CARGO_REGISTRY/.../decBasic.rs:LL:CC
+   --> CARGO_REGISTRY/.../decBasic.rs:LL:CC
    |
 LL | if (DFISCCZERO(df)) return result;  // coefficient continuation is 0
    |
-   = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child read access
+    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child read access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-  --> bsan/tests/fail-dep/mirilli/dec.rs:LL:CC
+   --> bsan/tests/fail-dep/mirilli/dec.rs:LL:CC
    |
 LL | assert_eq!(lhs.cmp(&rhs), expected);
    |
+note: the above line calls library code, where the error was detected:
+   --> CARGO_REGISTRY/.../decimal128.rs:LL:CC
+   |
+LL | decnumber_sys::decQuadReduce(&mut n.inner, &n.inner, &mut self.inner);
+   |
 help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0xc..0x10]
-  --> CARGO_REGISTRY/.../decBasic.rs:LL:CC
+   --> CARGO_REGISTRY/.../decBasic.rs:LL:CC
    |
 LL | DFWORD(result, 0)&=~ECONNANMASK;    // clear ECON except selector
    |
-   = help: this transition corresponds to a loss of read permissions
+    = help: this transition corresponds to a loss of read permissions
 
 stack backtrace:
 0: decCanonical
@@ -28,13 +28,5 @@ stack backtrace:
  at CARGO_REGISTRY/.../decBasic.rs:LL:CC
 2: decQuadReduce
  at CARGO_REGISTRY/.../decBasic.rs:LL:CC
-3: <dec::context::Context<dec::decimal128::Decimal128>>::reduce
- at CARGO_REGISTRY/.../decimal128.rs:LL:CC
-4: <dec::ordered::OrderedDecimal<dec::decimal128::Decimal128> as core::cmp::Ord>::cmp
- at CARGO_REGISTRY/.../ordered.rs:LL:CC
-5: dec::main
- at bsan/tests/fail-dep/mirilli/dec.rs:LL:CC
-6: <fn() -> core::result::Result<(), alloc::boxed::Box<dyn core::error::Error>> as core::ops::function::FnOnce<()>>::call_once
- at RUSTLIB/core/src/ops/function.rs:LL:CC
-7: std::sys::backtrace::__rust_begin_short_backtrace
- at RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

@@ -59,7 +59,9 @@ impl ErrorFormatContext {
         match origin {
             Some(origin) => {
                 let mut buffer = String::new();
-                buffer.push_str("note: this bug originates from a call to library code, here:\n");
+                buffer.push_str(
+                    "note: the above line calls library code, where the error was detected:\n",
+                );
                 buffer.push_str(&match max_indent {
                     Some(indent) => self.format_symbol(origin, indent),
                     None => self.format_symbol_standalone(origin),
@@ -79,17 +81,20 @@ impl ErrorFormatContext {
         let mut buffer = String::new();
 
         let mut max_indentation = symbol.line_length();
-        let event_symbols: Vec<(Option<Symbol>, String)> = error
+        let event_symbols: Vec<(Option<Symbol>, Option<Symbol>, String)> = error
             .history
             .events
             .drain(..)
             .map(|evt| {
                 if let Some(span) = evt.0 {
-                    let sym = SanitizerCommon::symbolize(span);
+                    let (sym, origin) = SanitizerCommon::symbolize_with_origin(span);
                     max_indentation = max_indentation.max(sym.line_length());
-                    (Some(sym), evt.1)
+                    if let Some(origin) = &origin {
+                        max_indentation = max_indentation.max(origin.line_length());
+                    }
+                    (Some(sym), origin, evt.1)
                 } else {
-                    (None, evt.1)
+                    (None, None, evt.1)
                 }
             })
             .collect();
@@ -109,10 +114,11 @@ impl ErrorFormatContext {
             buffer.push_str(&format!("{} = help: {}\n", " ".repeat(max_indentation), detail));
         }
 
-        for (symbol, msg) in event_symbols {
+        for (symbol, origin, msg) in event_symbols {
             if let Some(symbol) = symbol {
                 buffer.push_str(&format!("help: {}\n", msg));
                 buffer.push_str(&self.format_symbol(symbol, max_indentation));
+                buffer.push_str(&self.format_origin(origin, Some(max_indentation)));
             } else {
                 buffer.push_str(&format!("{} = help: {}\n", " ".repeat(max_indentation), msg));
             }

@@ -3,7 +3,7 @@ error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x0]
    |
 LL | assert_eq!(0, dec_quad_get_coefficient(&n!(1), &mut bcd_quad(u128::MAX)));
    |
-note: the origin of the error is in library code, here:
+note: the above line calls library code, where the error was detected:
     --> CARGO_REGISTRY/.../decCommon.rs:LL:CC
    |
 LL | GETCOEFF(df, bcdar);           // use macro
@@ -14,6 +14,11 @@ help: the accessed tag <TAG>(unprotected) was created here, in the initial state
    |
 LL | assert_eq!(0, dec_quad_get_coefficient(&n!(1), &mut bcd_quad(u128::MAX)));
    |
+note: the above line calls library code, where the error was detected:
+    --> RUSTLIB/core/src/slice/mod.rs:LL:CC
+   |
+LL | pub const fn as_ptr(&self) -> *const T {
+   |
 
 stack backtrace:
 0: decQuadGetCoefficient
@@ -22,7 +27,5 @@ stack backtrace:
  at CARGO_REGISTRY/.../dec_quad.rs:LL:CC
 2: dec_number_sys::main
  at bsan/tests/fail-dep/mirilli/dec_number_sys.rs:LL:CC
-3: <fn() as core::ops::function::FnOnce<()>>::call_once
- at RUSTLIB/core/src/ops/function.rs:LL:CC
-4: std::sys::backtrace::__rust_begin_short_backtrace
- at RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

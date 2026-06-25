@@ -11,3 +11,5 @@ stack backtrace:
  at RUSTLIB/std/src/alloc.rs:LL:CC
 2: alloc::alloc::realloc_nonnull
  at RUSTLIB/alloc/src/alloc.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

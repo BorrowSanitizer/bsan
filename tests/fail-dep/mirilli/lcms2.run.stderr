@@ -1,9 +1,4 @@
 error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x20] is forbidden
-  --> bsan/tests/fail-dep/mirilli/lcms2.rs:LL:CC
-   |
-LL | assert!(m.set_text("Hello 世界！", Locale::none()));
-   |
-note: the origin of the error is in library code, here:
   --> CARGO_REGISTRY/.../cmsnamed.rs:LL:CC
    |
 LL | mlu ->MemPool  = NewPtr;
@@ -14,6 +9,11 @@ help: the accessed tag <TAG>(unprotected) was created here, in the initial state
    |
 LL | assert!(m.set_text("Hello 世界！", Locale::none()));
    |
+note: the above line calls library code, where the error was detected:
+  --> CARGO_REGISTRY/.../lib.rs:LL:CC
+   |
+LL | fn as_ptr(&self) -> *mut Self::CType {
+   |
 
 stack backtrace:
 0: GrowMLUpool
@@ -22,11 +22,5 @@ stack backtrace:
  at CARGO_REGISTRY/.../cmsnamed.rs:LL:CC
 2: cmsMLUsetWide
  at CARGO_REGISTRY/.../cmsnamed.rs:LL:CC
-3: <lcms2::mlu::MLURef>::set_text
- at CARGO_REGISTRY/.../mlu.rs:LL:CC
-4: lcms2::main
- at bsan/tests/fail-dep/mirilli/lcms2.rs:LL:CC
-5: <fn() as core::ops::function::FnOnce<()>>::call_once
- at RUSTLIB/core/src/ops/function.rs:LL:CC
-6: std::sys::backtrace::__rust_begin_short_backtrace
- at RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

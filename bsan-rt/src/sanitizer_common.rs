@@ -74,11 +74,6 @@ impl SanitizerCommon {
         (Symbol::Unresolved { pc }, false)
     }
 
-    /// Resolves `span` to its primary error location
-    pub fn symbolize(span: Span) -> Symbol {
-        Self::symbolize_with_origin(span).0
-    }
-
     /// Symbolizes `pc`, returning `Some` only when it resolves to user code.
     fn symbolize_user(pc: usize) -> Option<Symbol> {
         match Self::symbolize_pc(pc) {

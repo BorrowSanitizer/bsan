@@ -23,3 +23,5 @@ stack backtrace:
  at bsan/tests/miri-tests/fail/aliasing/both_borrows/aliasing_mut2.rs:LL:CC
 2: <fn() as core::ops::function::FnOnce<()>>::call_once
  at RUSTLIB/core/src/ops/function.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

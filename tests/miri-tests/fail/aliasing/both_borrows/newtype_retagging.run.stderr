@@ -1,27 +1,37 @@
 error: Undefined Behavior: deallocation through <TAG>(WeakProtector) at ALLOC[0x0] is forbidden
-  --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
+    --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
    |
 LL | unsafe { libc::free(ptr as *mut libc::c_void) }
    |
-   = help: the accessed tag <TAG>(WeakProtector) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
-   = help: this deallocation (acting as a foreign write access) would cause the protected tag <TAG>(StrongProtector) (currently Reserved (conflicted)) to become Disabled
-   = help: protected tags must never be Disabled
+     = help: the accessed tag <TAG>(WeakProtector) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
+     = help: this deallocation (acting as a foreign write access) would cause the protected tag <TAG>(StrongProtector) (currently Reserved (conflicted)) to become Disabled
+     = help: protected tags must never be Disabled
 help: the accessed tag <TAG>(WeakProtector) was created here
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/newtype_retagging.rs:LL:CC
+    --> bsan/tests/miri-tests/fail/aliasing/both_borrows/newtype_retagging.rs:LL:CC
    |
 LL | || drop(Box::from_raw(ptr)),
    |
+note: the above line calls library code, where the error was detected:
+    --> RUSTLIB/core/src/mem/mod.rs:LL:CC
+   |
+LL | pub const fn drop<T>(_x: T)
+   |
 help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/newtype_retagging.rs:LL:CC
+    --> bsan/tests/miri-tests/fail/aliasing/both_borrows/newtype_retagging.rs:LL:CC
    |
 LL | fn dealloc_while_running(_n: Newtype<'_>, dealloc: impl FnOnce()) {
    |
 help: the protected tag <TAG>(StrongProtector) later transitioned to Reserved (conflicted) due to a reborrow (acting as a foreign read access) at offsets [0x0..0x4]
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/newtype_retagging.rs:LL:CC
+    --> bsan/tests/miri-tests/fail/aliasing/both_borrows/newtype_retagging.rs:LL:CC
    |
 LL | || drop(Box::from_raw(ptr)),
    |
-   = help: this transition corresponds to a temporary loss of write permissions until function exit
+note: the above line calls library code, where the error was detected:
+    --> RUSTLIB/alloc/src/boxed.rs:LL:CC
+   |
+LL | Box(unsafe { Unique::new_unchecked(raw) }, alloc)
+   |
+     = help: this transition corresponds to a temporary loss of write permissions until function exit
 
 stack backtrace:
 0: <std::alloc::System as core::alloc::global::GlobalAlloc>::dealloc
@@ -30,3 +40,5 @@ stack backtrace:
  at RUSTLIB/std/src/alloc.rs:LL:CC
 2: alloc::alloc::dealloc_nonnull
  at RUSTLIB/alloc/src/alloc.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

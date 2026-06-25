@@ -72,6 +72,17 @@ Provenance *GetSlot(uptr Idx) { return __bsan_shadow_stack - (Idx + 1); }
 // Clears the provenance from the given stack slot.
 void ClearSlot(uptr Idx) { *GetSlot(Idx) = OMNIVALID; }
 
+// Prints a note suggesting users raise stacktrace_max_len when the trace was
+// truncated. The unwind in HANDLE_ERROR is bounded by GetStackTraceLen(), so a
+// trace that fills that buffer was (almost certainly) cut short.
+static void MaybeWarnTruncated(StackTrace &stack) {
+  if (stack.size >= GetStackTraceLen())
+    Printf("\nnote: stack trace was truncated after %zu frames; set "
+           "stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) "
+           "to capture more.\n",
+           (uptr)(stack.size - 1), (uptr)(flags()->stacktrace_max_len * 2));
+}
+
 // Prints a stack trace, using Rust's formatting.
 void PrintStackTrace(StackTrace &stack) {
   Printf("stack backtrace:\n");
@@ -82,6 +93,7 @@ void PrintStackTrace(StackTrace &stack) {
     Printf("\nwarning: Symbolizer not found. Please add llvm-symbolizer"
            " to your PATH or set BSAN_SYMBOLIZER for source code info "
            "(recommended).\n");
+    MaybeWarnTruncated(stack);
     return;
   }
   InternalScopedString frame_desc;
@@ -97,11 +109,9 @@ void PrintStackTrace(StackTrace &stack) {
           common_flags()->strip_path_prefix);
       Printf("%ld: %s\n", (i - 1), frame_desc.data());
       frame_desc.clear();
-      if (frame->info.function &&
-          internal_strstr(frame->info.function, "__rust_begin_short_backtrace"))
-        break;
     }
   }
+  MaybeWarnTruncated(stack);
 }
 
 // Returns true if the file path belongs to a cargo or rustup library

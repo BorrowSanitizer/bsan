@@ -3,7 +3,7 @@ error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x0]
    |
 LL | unsafe { ptr.write(0) }; //miri: ~ERROR: /write access .* forbidden/
    |
-note: this bug originates from a call to library code, here:
+note: the above line calls library code, where the error was detected:
     --> RUSTLIB/core/src/ptr/mod.rs:LL:CC
    |
 LL | intrinsics::write_via_move(dst, src)
@@ -22,3 +22,5 @@ stack backtrace:
  at RUSTLIB/core/src/ptr/mut_ptr.rs:LL:CC
 2: frozen_lazy_write_to_surrounding::main
  at bsan/tests/miri-tests/fail/aliasing/tree_borrows/frozen-lazy-write-to-surrounding.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

@@ -3,7 +3,7 @@ error: Undefined Behavior: write access through <wildcard> at ALLOC[0x0] is forb
    |
 LL | unsafe { wild.write(0) }; //miri: ~ ERROR: /write access through <wildcard> at .* is forbidden/
    |
-note: this bug originates from a call to library code, here:
+note: the above line calls library code, where the error was detected:
     --> RUSTLIB/core/src/ptr/mod.rs:LL:CC
    |
 LL | intrinsics::write_via_move(dst, src)
@@ -20,6 +20,11 @@ help: the conflicting tag <TAG>(unprotected) later transitioned to Unique due to
    |
 LL | unsafe { wild.write(41) };
    |
+note: the above line calls library code, where the error was detected:
+    --> RUSTLIB/core/src/ptr/mod.rs:LL:CC
+   |
+LL | intrinsics::write_via_move(dst, src)
+   |
      = help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
 help: the conflicting tag <TAG>(unprotected) later transitioned to Frozen due to a foreign read access at offsets [0x0..0x4]
     --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/multi_exposed_siblings_local.rs:LL:CC
@@ -35,3 +40,5 @@ stack backtrace:
  at RUSTLIB/core/src/ptr/mut_ptr.rs:LL:CC
 2: multi_exposed_siblings_local::main
  at bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/multi_exposed_siblings_local.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

@@ -1,15 +1,20 @@
 error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x0] is forbidden
-  --> bsan/tests/fail-dep/mirilli/lsmlite_rs.rs:LL:CC
+   --> bsan/tests/fail-dep/mirilli/lsmlite_rs.rs:LL:CC
    |
 LL | db.connect().unwrap();
    |
-note: the origin of the error is in library code, here:
-  --> CARGO_REGISTRY/.../lsm_main.rs:LL:CC
-   = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
+note: the above line calls library code, where the error was detected:
+   --> CARGO_REGISTRY/.../lsm_main.rs:LL:CC
+    = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-  --> bsan/tests/fail-dep/mirilli/lsmlite_rs.rs:LL:CC
+   --> bsan/tests/fail-dep/mirilli/lsmlite_rs.rs:LL:CC
    |
 LL | db.connect().unwrap();
+   |
+note: the above line calls library code, where the error was detected:
+   --> CARGO_REGISTRY/.../lsmdb.rs:LL:CC
+   |
+LL | rc = lsm_new(null_mut(), &db_handle);
    |
 
 stack backtrace:
@@ -19,7 +24,5 @@ stack backtrace:
  at CARGO_REGISTRY/.../lsmdb.rs:LL:CC
 2: lsmlite_rs::main
  at bsan/tests/fail-dep/mirilli/lsmlite_rs.rs:LL:CC
-3: <fn() as core::ops::function::FnOnce<()>>::call_once
- at RUSTLIB/core/src/ops/function.rs:LL:CC
-4: std::sys::backtrace::__rust_begin_short_backtrace
- at RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

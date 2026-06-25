@@ -1,9 +1,4 @@
 error: Undefined Behavior: read access through <TAG>(unprotected) at ALLOC[0x8] is forbidden
-   --> bsan/tests/fail-dep/mirilli/bzip2.rs:LL:CC
-   |
-LL | c.read_to_end(&mut result).unwrap();
-   |
-note: the origin of the error is in library code, here:
    --> CARGO_REGISTRY/.../bzlib.rs:LL:CC
    |
 LL | if (s->avail_in_expect != s->strm->avail_in)
@@ -13,6 +8,11 @@ help: the accessed tag <TAG>(unprotected) was created here, in the initial state
    --> bsan/tests/fail-dep/mirilli/bzip2.rs:LL:CC
    |
 LL | let mut c = BzEncoder::new(&m[..], Compression::default());
+   |
+note: the above line calls library code, where the error was detected:
+   --> CARGO_REGISTRY/.../mem.rs:LL:CC
+   |
+LL | ffi::BZ2_bzCompressInit(&mut *raw, lvl.level() as c_int, 0, work_factor as c_int),
    |
 help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x8..0xc]
    --> CARGO_REGISTRY/.../mem.rs:LL:CC
@@ -28,17 +28,5 @@ stack backtrace:
  at CARGO_REGISTRY/.../mem.rs:LL:CC
 2: <bzip2::bufread::BzEncoder<std::io::buffered::bufreader::BufReader<&[u8]>> as std::io::Read>::read
  at CARGO_REGISTRY/.../bufread.rs:LL:CC
-3: <bzip2::read::BzEncoder<&[u8]> as std::io::Read>::read
- at CARGO_REGISTRY/.../read.rs:LL:CC
-4: std::io::default_read_to_end::small_probe_read
- at RUSTLIB/std/src/io/mod.rs:LL:CC
-5: std::io::default_read_to_end
- at RUSTLIB/std/src/io/mod.rs:LL:CC
-6: <bzip2::read::BzEncoder<&[u8]> as std::io::Read>::read_to_end
- at RUSTLIB/std/src/io/mod.rs:LL:CC
-7: bzip2::main
- at bsan/tests/fail-dep/mirilli/bzip2.rs:LL:CC
-8: <fn() as core::ops::function::FnOnce<()>>::call_once
- at RUSTLIB/core/src/ops/function.rs:LL:CC
-9: std::sys::backtrace::__rust_begin_short_backtrace
- at RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.
