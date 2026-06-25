@@ -13,8 +13,8 @@ using __sanitizer::u8;
 using __sanitizer::uptr;
 
 // Number of raw caller PCs captured per span. Must be deep enough to reach
-// user code through nested stdlib wrappers
-constexpr uptr kSpanMaxFrames = 4;
+// user code through nested stdlib wrappers. Must match `SPAN_MAX_FRAMES`
+constexpr uptr kSpanMaxFrames = 12;
 
 // Raw caller-PC chain captured at a retag/access site, innermost first.
 // pcs[0] is the immediate caller of the runtime hook; deeper entries let

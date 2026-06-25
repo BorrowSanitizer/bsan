@@ -5,7 +5,7 @@ use core::{fmt, ptr, slice};
 
 /// Number of raw caller PCs captured per span. Must match `kSpanMaxFrames`
 /// in `bsan.h`.
-pub const SPAN_MAX_FRAMES: usize = 4;
+pub const SPAN_MAX_FRAMES: usize = 12;
 
 /// Raw caller-PC chain captured by the C++ interceptors, innermost first.
 /// `pcs[0]` is the immediate retag/access site; deeper entries let
