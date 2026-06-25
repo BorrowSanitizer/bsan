@@ -1,5 +1,6 @@
 #include "bsan_global.h"
 #include "bsan.h"
+#include "bsan_interface_internal.h"
 #include "sanitizer_common/sanitizer_allocator_internal.h"
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_placement_new.h"
@@ -64,7 +65,7 @@ void GlobalContext::CollectGarbage(Snapshot &snap) {
   // current minimum generation.
   for (uptr i = 0; i < quarantine_.size(); ++i) {
     RetiredAlloc retired = quarantine_[i];
-    if (__bsan_eject && retired.retire_gen <= snap.min_drained) {
+    if (retired.retire_gen <= snap.min_drained) {
       __bsan_eject(retired.info);
     } else {
       // If we can't eject this object yet, then
@@ -74,9 +75,9 @@ void GlobalContext::CollectGarbage(Snapshot &snap) {
   }
   quarantine_.swap(filtered);
 
-  pending_.drain([&](AllocInfo *info, const ConcreteTagSet &tags) {
-    if (__bsan_prune && __bsan_prune(info, tags.data(), tags.size())) {
-      if (__bsan_eject && snap.min_drained == snap.gen) {
+  pending_.drain([&](AllocInfo *info, const BorTagSet &tags) {
+    if (__bsan_prune(info, tags.data(), tags.size())) {
+      if (snap.min_drained == snap.gen) {
         __bsan_eject(info);
       } else {
         quarantine_.push_back({info, snap.gen});
