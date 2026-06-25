@@ -109,7 +109,7 @@ bool InitShadowWithReExec();
 void CopyShadow(void *dest, const void *src, uptr size);
 void MoveShadow(void *dest, const void *src, uptr size);
 void ClearShadow(void *dest, uptr size);
-void WriteShadow(Provenance prov, void *dest);
+void WriteShadow(void *dest, Provenance prov);
 } // namespace __bsan
 
 #endif

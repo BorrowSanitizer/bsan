@@ -156,18 +156,31 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
   return nptr;
 }
 
-// All remaining allocation functions must also be routed to our allocator:
-// otherwise, they will return pointers from glibc's allocator, and passing
-// them to our deallocation functions (e.g. through the interceptor for
-// `free`) will crash the program. Rust's standard library uses
-// `posix_memalign` for allocations with non-standard alignment.
+static Provenance BsanAllocateMeta(void *ptr, SIZE_T size, uptr span) {
+  BorTag tag = NewBorTag();
+  AllocInfo *info = __bsan_alloc(ptr, size, tag, span);
+  return {tag, info};
+}
 
-static void *BsanAlignedAllocate(void *ptr, SIZE_T size, bool is_inst,
-                                 uptr span) {
+static void *BsanAllocateMetaIntoStack(void *ptr, SIZE_T size, bool is_inst,
+                                       uptr span, uptr slot_idx) {
   if (is_inst) {
-    Provenance *RetSlot = GetSlot(0);
-    BorTag Tag = NewBorTag();
-    *RetSlot = {Tag, __bsan_alloc(ptr, size, Tag, span)};
+    Provenance *slot = GetSlot(slot_idx);
+    Provenance prov = BsanAllocateMeta(ptr, size, span);
+    *slot = BsanAllocateMeta(ptr, size, span);
+    CurrentThread()->AcquireProvenance(prov);
+  } else {
+    ClearSlot(slot_idx);
+  }
+  return ptr;
+}
+
+static void *BsanAllocateMetaIntoHeap(void *ptr, SIZE_T size, bool is_inst,
+                                      uptr span, void *dest) {
+  if (is_inst) {
+    WriteShadow(dest, BsanAllocateMeta(ptr, size, span));
+  } else {
+    ClearShadow(dest, sizeof(void *));
   }
   return ptr;
 }
@@ -180,7 +193,7 @@ INTERCEPTOR(void *, aligned_alloc, SIZE_T alignment, SIZE_T size) {
   InterceptorBarrier barrier;
   void *ptr = bsan_aligned_alloc(alignment, size);
   bool is_inst = !already_in_scope && INST_CALLER(aligned_alloc);
-  return BsanAlignedAllocate(ptr, size, is_inst, span);
+  return BsanAllocateMetaIntoStack(ptr, size, is_inst, span, 0);
 }
 
 INTERCEPTOR(void *, memalign, SIZE_T alignment, SIZE_T size) {
@@ -191,7 +204,7 @@ INTERCEPTOR(void *, memalign, SIZE_T alignment, SIZE_T size) {
   InterceptorBarrier barrier;
   void *ptr = bsan_memalign(alignment, size);
   bool is_inst = !already_in_scope && INST_CALLER(memalign);
-  return BsanAlignedAllocate(ptr, size, is_inst, span);
+  return BsanAllocateMetaIntoStack(ptr, size, is_inst, span, 0);
 }
 
 INTERCEPTOR(void *, __libc_memalign, SIZE_T alignment, SIZE_T size) {
@@ -202,7 +215,7 @@ INTERCEPTOR(void *, __libc_memalign, SIZE_T alignment, SIZE_T size) {
   InterceptorBarrier barrier;
   void *ptr = bsan_memalign(alignment, size);
   bool is_inst = !already_in_scope && INST_CALLER(__libc_memalign);
-  return BsanAlignedAllocate(ptr, size, is_inst, span);
+  return BsanAllocateMetaIntoStack(ptr, size, is_inst, span, 0);
 }
 
 INTERCEPTOR(void *, valloc, SIZE_T size) {
@@ -213,7 +226,7 @@ INTERCEPTOR(void *, valloc, SIZE_T size) {
   InterceptorBarrier barrier;
   void *ptr = bsan_valloc(size);
   bool is_inst = !already_in_scope && INST_CALLER(valloc);
-  return BsanAlignedAllocate(ptr, size, is_inst, span);
+  return BsanAllocateMetaIntoStack(ptr, size, is_inst, span, 0);
 }
 
 INTERCEPTOR(void *, pvalloc, SIZE_T size) {
@@ -225,7 +238,7 @@ INTERCEPTOR(void *, pvalloc, SIZE_T size) {
   InterceptorBarrier barrier;
   void *ptr = bsan_pvalloc(size);
   bool is_inst = !already_in_scope && INST_CALLER(pvalloc);
-  return BsanAlignedAllocate(ptr, size, is_inst, span);
+  return BsanAllocateMetaIntoStack(ptr, size, is_inst, span, 0);
 }
 
 INTERCEPTOR(int, posix_memalign, void **memptr, SIZE_T alignment, SIZE_T size) {
@@ -242,9 +255,7 @@ INTERCEPTOR(int, posix_memalign, void **memptr, SIZE_T alignment, SIZE_T size) {
   bool is_inst = !already_in_scope && INST_CALLER(posix_memalign);
   int res = bsan_posix_memalign(memptr, alignment, size);
   if (!res && is_inst) {
-    BorTag Tag = NewBorTag();
-    AllocInfo *Info = __bsan_alloc(*memptr, size, Tag, span);
-    WriteShadow({Tag, Info}, memptr);
+    BsanAllocateMetaIntoHeap(*memptr, size, is_inst, span, memptr);
   }
   return res;
 }

@@ -330,7 +330,7 @@ void ClearShadow(void *dest, uptr size) {
   }
 }
 
-void WriteShadow(Provenance prov, void *dest) {
+void WriteShadow(void *dest, Provenance prov) {
   if (!MEM_IS_APP(dest))
     return;
   uptr d_aligned, d_size;
