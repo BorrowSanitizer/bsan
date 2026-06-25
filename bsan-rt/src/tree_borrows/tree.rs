@@ -618,10 +618,10 @@ impl EagerTree {
 
     /// Like [`Self::remove_useless_children`], but takes a slice of *dead* tags to remove
     /// instead of a set of *live* tags to keep. See [`AllocState::remove_dead_tags`].
-    /// 
+    ///
     /// This cleanup must be bottom-up; a dead node can only be deleted as a leaf once its
-    /// dead descendants are gone, so we must process a node before its parent. Since 
-    /// borrow tags are distributed with a monotonic global counter, `dead_tags` is guaranteed 
+    /// dead descendants are gone, so we must process a node before its parent. Since
+    /// borrow tags are distributed with a monotonic global counter, `dead_tags` is guaranteed
     /// to be sorted in ascending order. Since a child must be allocated after its parent,
     /// we maintain the following invariant: `child.tag > parent.tag`. Iterating through
     /// `dead_tags` in reverse gives a valid reverse-topological (bottom-up) traversal.
@@ -647,7 +647,7 @@ impl EagerTree {
                 children.remove(pos);
                 self.remove_useless_node(idx);
             }
-            // Node has exactly one child 
+            // Node has exactly one child
             else if let Some(child_idx) = self.can_be_replaced_by_single_child_dead(idx) {
                 let children = &mut self.nodes.get_mut(parent_idx).unwrap().children;
                 let pos = children.iter().position(|&c| c == idx).unwrap();
