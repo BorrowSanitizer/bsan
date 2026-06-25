@@ -8,18 +8,6 @@
 
 using namespace __bsan;
 
-extern "C" {
-// Prunes a list of nodes from a tree that correspond to the tags in the list.
-// Returns true if every tag has been pruned, indicating that the allocation
-// metadata object can also be reclaimed.
-SANITIZER_WEAK_ATTRIBUTE
-bool __bsan_prune(AllocInfo *Info, const BorTag *tags, uptr len);
-// Frees an `AllocInfo` object. The pointer must be nonnull and unreachable
-// in shadow memory.
-SANITIZER_WEAK_ATTRIBUTE
-void __bsan_eject(AllocInfo *Info);
-}
-
 namespace __bsan {
 
 void GlobalContext::CollectProvenance(const uptr, BsanThread *const &thread,

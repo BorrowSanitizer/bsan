@@ -3,7 +3,7 @@
 
 namespace __bsan {
 
-uptr ConcreteTagSet::lowerBound(BorTag Tag) const {
+uptr BorTagSet::lowerBound(BorTag Tag) const {
   // Binary search over the elements of the array
   uptr lo = 0;
   uptr hi = tags_.size();
@@ -18,12 +18,12 @@ uptr ConcreteTagSet::lowerBound(BorTag Tag) const {
   return lo;
 }
 
-bool ConcreteTagSet::contains(BorTag tag) const {
+bool BorTagSet::contains(BorTag tag) const {
   uptr i = lowerBound(tag);
   return i < tags_.size() && tags_[i] == tag;
 }
 
-void ConcreteTagSet::insert(BorTag tag) {
+void BorTagSet::insert(BorTag tag) {
   uptr i = lowerBound(tag);
   if (i < tags_.size() && tags_[i] == tag) {
     return; // Already present.
@@ -35,7 +35,7 @@ void ConcreteTagSet::insert(BorTag tag) {
   tags_[i] = tag;
 }
 
-void ConcreteTagSet::erase(BorTag tag) {
+void BorTagSet::erase(BorTag tag) {
   uptr i = lowerBound(tag);
   if (i >= tags_.size() || tags_[i] != tag) {
     return;
@@ -49,7 +49,7 @@ void ConcreteTagSet::erase(BorTag tag) {
   tags_.pop_back();
 }
 
-void ConcreteTagSet::destroy() {
+void BorTagSet::destroy() {
   if (tags_.data()) {
     tags_.Destroy();
     // Reset to a valid empty state so the set is safe to reuse (e.g. if its
@@ -77,7 +77,7 @@ void ConcreteProvenanceSet::remove(Provenance prov) {
 }
 
 void ConcreteProvenanceSet::clear() {
-  set_.forEach([](DenseMap<AllocInfo *, ConcreteTagSet>::value_type &KV) {
+  set_.forEach([](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
     KV.second.clear();
     return true;
   });
@@ -91,7 +91,7 @@ bool ConcreteProvenanceSet::contains(Provenance prov) {
 }
 
 ConcreteProvenanceSet::~ConcreteProvenanceSet() {
-  set_.forEach([](DenseMap<AllocInfo *, ConcreteTagSet>::value_type &KV) {
+  set_.forEach([](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
     KV.second.destroy();
     return true;
   });

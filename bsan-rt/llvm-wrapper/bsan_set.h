@@ -5,19 +5,31 @@
 #include "sanitizer_common/sanitizer_array_ref.h"
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_dense_map.h"
+
 using __sanitizer::ArrayRef;
 using __sanitizer::DenseMap;
 using __sanitizer::InternalMmapVectorNoCtor;
 
 namespace __bsan {
 
-class ConcreteTagSet {
+// A set of borrow tags, implemented as a sorted array.
+// We need this representation because the contents of the
+// tag set are exposed to the Rust core. We provide a pointer
+// to the list and its length, which becomes a slice. Using a
+// `DenseMap`, or another C++ representation, could be more efficient
+// but it would make the API more cumbersome.
+class BorTagSet {
 public:
   void insert(BorTag Tag);
   void erase(BorTag Tag);
   bool contains(BorTag Tag) const;
 
+  // Removes all elements of the list without freeing
+  // the underlying allocation.
   void clear() { tags_.clear(); }
+
+  // Removes all elements of the list and frees the
+  // underlying allocation. This is idempotent.
   void destroy();
 
   const BorTag *data() const { return tags_.data(); }
@@ -42,6 +54,8 @@ public:
   }
 
 private:
+  // Returns the index where this tag exists, or needs
+  // to be inserted.
   uptr lowerBound(BorTag Tag) const;
   InternalMmapVectorNoCtor<BorTag> tags_{};
 };
@@ -64,7 +78,7 @@ public:
   // Removes all entries from the set, after executing the
   // given callback for each allocation.
   template <typename Fn> void drain(Fn visit) {
-    set_.forEach([&](DenseMap<AllocInfo *, ConcreteTagSet>::value_type &KV) {
+    set_.forEach([&](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
       visit(KV.first, KV.second);
       KV.second.destroy();
       set_.erase(KV.first);
@@ -74,7 +88,7 @@ public:
 
   // Retain only the provenance values that satisfy the given predicate.
   template <typename Fn> void retainIf(Fn retain) {
-    set_.forEach([&](DenseMap<AllocInfo *, ConcreteTagSet>::value_type &KV) {
+    set_.forEach([&](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
       AllocInfo *info = KV.first;
       KV.second.retainIf([&](BorTag tag) { return retain(info, tag); });
       if (KV.second.size() == 0) {
@@ -85,18 +99,18 @@ public:
     });
   }
 
-  ConcreteTagSet *find(AllocInfo *Info) {
+  BorTagSet *find(AllocInfo *Info) {
     auto *KV = set_.find(Info);
     return KV ? &KV->second : nullptr;
   }
 
-  const ConcreteTagSet *find(AllocInfo *Info) const {
+  const BorTagSet *find(AllocInfo *Info) const {
     const auto *KV = set_.find(Info);
     return KV ? &KV->second : nullptr;
   }
 
 private:
-  DenseMap<AllocInfo *, ConcreteTagSet> set_;
+  DenseMap<AllocInfo *, BorTagSet> set_;
 };
 
 } // namespace __bsan
