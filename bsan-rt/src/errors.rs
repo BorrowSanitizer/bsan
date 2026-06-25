@@ -59,7 +59,7 @@ impl ErrorFormatContext {
         match origin {
             Some(origin) => {
                 let mut buffer = String::new();
-                buffer.push_str("note: the origin of the error is in library code, here:\n");
+                buffer.push_str("note: this bug originates from a call to library code, here:\n");
                 buffer.push_str(&match max_indent {
                     Some(indent) => self.format_symbol(origin, indent),
                     None => self.format_symbol_standalone(origin),

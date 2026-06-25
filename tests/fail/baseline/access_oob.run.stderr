@@ -3,7 +3,7 @@ error: Undefined Behavior: an access of size 4b at offset 0x4 is out of bounds f
    |
 LL | unsafe { p.add(1).write(0) }
    |
-note: the origin of the error is in library code, here:
+note: this bug originates from a call to library code, here:
     --> RUSTLIB/core/src/ptr/mod.rs:LL:CC
    |
 LL | intrinsics::write_via_move(dst, src)
@@ -16,9 +16,3 @@ stack backtrace:
  at RUSTLIB/core/src/ptr/mut_ptr.rs:LL:CC
 2: access_oob::foo
  at bsan/tests/fail/baseline/access_oob.rs:LL:CC
-3: access_oob::main
- at bsan/tests/fail/baseline/access_oob.rs:LL:CC
-4: <fn() as core::ops::function::FnOnce<()>>::call_once
- at RUSTLIB/core/src/ops/function.rs:LL:CC
-5: std::sys::backtrace::__rust_begin_short_backtrace
- at RUSTLIB/std/src/sys/backtrace.rs:LL:CC

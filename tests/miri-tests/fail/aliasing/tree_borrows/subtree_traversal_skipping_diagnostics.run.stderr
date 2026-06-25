@@ -23,5 +23,3 @@ stack backtrace:
  at bsan/tests/miri-tests/fail/aliasing/tree_borrows/subtree_traversal_skipping_diagnostics.rs:LL:CC
 2: <fn() as core::ops::function::FnOnce<()>>::call_once
  at RUSTLIB/core/src/ops/function.rs:LL:CC
-3: std::sys::backtrace::__rust_begin_short_backtrace
- at RUSTLIB/std/src/sys/backtrace.rs:LL:CC

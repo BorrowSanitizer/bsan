@@ -23,7 +23,3 @@ stack backtrace:
  at bsan/tests/miri-tests/fail/aliasing/both_borrows/mut_exclusive_violation1.rs:LL:CC
 2: mut_exclusive_violation1::main
  at bsan/tests/miri-tests/fail/aliasing/both_borrows/mut_exclusive_violation1.rs:LL:CC
-3: <fn() as core::ops::function::FnOnce<()>>::call_once
- at RUSTLIB/core/src/ops/function.rs:LL:CC
-4: std::sys::backtrace::__rust_begin_short_backtrace
- at RUSTLIB/std/src/sys/backtrace.rs:LL:CC

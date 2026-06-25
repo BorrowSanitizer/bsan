@@ -1,9 +1,4 @@
 error: Undefined Behavior: trying to access an allocation that has been freed.
- --> bsan/tests/miri-tests/fail/baseline/alloc/deallocate-twice.rs:LL:CC
-   |
-LL | dealloc(x, Layout::from_size_align_unchecked(1, 1)); //miri: ~ERROR: has been freed
-   |
-note: the origin of the error is in library code, here:
   --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
    |
 LL | unsafe { libc::free(ptr as *mut libc::c_void) }
@@ -16,11 +11,3 @@ stack backtrace:
  at RUSTLIB/std/src/alloc.rs:LL:CC
 2: alloc::alloc::dealloc_nonnull
  at RUSTLIB/alloc/src/alloc.rs:LL:CC
-3: alloc::alloc::dealloc
- at RUSTLIB/alloc/src/alloc.rs:LL:CC
-4: deallocate_twice::main
- at bsan/tests/miri-tests/fail/baseline/alloc/deallocate-twice.rs:LL:CC
-5: <fn() as core::ops::function::FnOnce<()>>::call_once
- at RUSTLIB/core/src/ops/function.rs:LL:CC
-6: std::sys::backtrace::__rust_begin_short_backtrace
- at RUSTLIB/std/src/sys/backtrace.rs:LL:CC

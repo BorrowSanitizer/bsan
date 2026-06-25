@@ -18,18 +18,6 @@ pub struct Span {
     pub pcs: [usize; SPAN_MAX_FRAMES],
 }
 
-impl Span {
-    pub const fn dummy() -> Self {
-        Self { pcs: [0; SPAN_MAX_FRAMES] }
-    }
-
-    pub fn new(pc: usize) -> Self {
-        let mut pcs = [0; SPAN_MAX_FRAMES];
-        pcs[0] = pc;
-        Self { pcs }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum Symbol {
     Resolved { file: String, line: u32, col: u32 },
