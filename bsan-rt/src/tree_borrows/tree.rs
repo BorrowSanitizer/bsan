@@ -448,13 +448,6 @@ impl EagerTree {
         node.children.is_empty() && !live.contains(&node.tag)
     }
 
-    /// Like [`Self::is_useless`], but takes a set of *dead* tags instead of
-    /// *live* ones.
-    fn is_useless_dead(&self, idx: UniIndex, dead: &FxHashSet<BorTag>) -> bool {
-        let node = self.nodes.get(idx).unwrap();
-        node.children.is_empty() && dead.contains(&node.tag)
-    }
-
     /// Checks whether a node can be replaced by its only child.
     /// If so, returns the index of said only child.
     /// If not, returns none.
@@ -496,21 +489,16 @@ impl EagerTree {
         Some(child_idx)
     }
 
-    /// Like [`Self::can_be_replaced_by_single_child`], but takes a set of
-    /// *dead* tags instead of *live* ones: the node is a candidate for
-    /// replacement when its tag *is* in the dead set (rather than absent
-    /// from the live set).
-    fn can_be_replaced_by_single_child_dead(
-        &self,
-        idx: UniIndex,
-        dead: &FxHashSet<BorTag>,
-    ) -> Option<UniIndex> {
+    /// Like [`Self::can_be_replaced_by_single_child`], but for the dead-tag GC path.
+    /// The caller iterates the dead tags directly, so `idx` is already known to be dead
+    /// and there is no membership check — only the shape and permission conditions remain.
+    fn can_be_replaced_by_single_child_dead(&self, idx: UniIndex) -> Option<UniIndex> {
         let node = self.nodes.get(idx).unwrap();
 
         let [child_idx] = node.children[..] else { return None };
 
         // We never want to replace the root node, as it is also kept in `root_ptr_tags`.
-        if !dead.contains(&node.tag) || node.parent.is_none() {
+        if node.parent.is_none() {
             return None;
         }
         // Since protected nodes are never GC'd (see `borrow_tracker::FrameExtra::visit_provenance`),
@@ -628,65 +616,46 @@ impl EagerTree {
         }
     }
 
-    /// Like [`Self::remove_useless_children`], but takes a set of *dead* tags
-    /// to remove instead of a set of *live* tags to keep. See [`AllocState::remove_dead_tags`].
-    fn remove_useless_children_dead(&mut self, root: UniIndex, dead: &FxHashSet<BorTag>) {
-        // To avoid stack overflows, we roll our own stack.
-        // Each element in the stack consists of the current tag, and the number of the
-        // next child to be processed.
+    /// Like [`Self::remove_useless_children`], but takes a slice of *dead* tags to remove
+    /// instead of a set of *live* tags to keep. See [`AllocState::remove_dead_tags`].
+    /// 
+    /// This cleanup must be bottom-up; a dead node can only be deleted as a leaf once its
+    /// dead descendants are gone, so we must process a node before its parent. Since 
+    /// borrow tags are distributed with a monotonic global counter, `dead_tags` is guaranteed 
+    /// to be sorted in ascending order. Since a child must be allocated after its parent,
+    /// we maintain the following invariant: `child.tag > parent.tag`. Iterating through
+    /// `dead_tags` in reverse gives a valid reverse-topological (bottom-up) traversal.
+    fn remove_useless_children_dead(&mut self, dead_tags: &[BorTag]) {
+        debug_assert!(
+            dead_tags.is_sorted(),
+            "remove_useless_children_dead requires ascending-sorted tags"
+        );
 
-        // The other functions are written using the `TreeVisitorStack`, but that does not work here
-        // since we need to 1) do a post-traversal and 2) remove nodes from the tree.
-        // Since we do a post-traversal (by deleting nodes only after handling all children),
-        // we also need to be a bit smarter than "pop node, push all children."
-        let mut stack = vec![(root, 0)];
-        while let Some((tag, nth_child)) = stack.last_mut() {
-            let node = self.nodes.get(*tag).unwrap();
-            if *nth_child < node.children.len() {
-                // Visit the child by pushing it to the stack.
-                // Also increase `nth_child` so that when we come back to the `tag` node, we
-                // look at the next child.
-                let next_child = node.children[*nth_child];
-                *nth_child += 1;
-                stack.push((next_child, 0));
-                continue;
-            } else {
-                // We have processed all children of `node`, so now it is time to process `node` itself.
-                // First, get the current children of `node`. To appease the borrow checker,
-                // we have to temporarily move the list out of the node, and then put the
-                // list of remaining children back in.
-                let mut children_of_node =
-                    mem::take(&mut self.nodes.get_mut(*tag).unwrap().children);
-                // Remove all useless children.
-                children_of_node.retain_mut(|idx| {
-                    if self.is_useless_dead(*idx, dead) {
-                        // Delete `idx` node everywhere else.
-                        self.remove_useless_node(*idx);
-                        // And delete it from children_of_node.
-                        false
-                    } else {
-                        if let Some(nextchild) =
-                            self.can_be_replaced_by_single_child_dead(*idx, dead)
-                        {
-                            // `nextchild` is our grandchild, and will become our direct child.
-                            // Delete the in-between node, `idx`.
-                            self.remove_useless_node(*idx);
-                            // Set the new child's parent.
-                            self.nodes.get_mut(nextchild).unwrap().parent = Some(*tag);
-                            // Save the new child in children_of_node.
-                            *idx = nextchild;
-                        }
-                        // retain it
-                        true
-                    }
-                });
-                // Put back the now-filtered vector.
-                self.nodes.get_mut(*tag).unwrap().children = children_of_node;
+        // Iterating through dead_tags in reverse (descending tag order)
+        for &tag in dead_tags.iter().rev() {
+            // Skip tags belonging to other allocations / already-removed nodes.
+            let Some(idx) = self.tag_mapping.get(&tag) else { continue };
+            let node = self.nodes.get(idx).unwrap();
+            // Never remove a root (it is also tracked in `root_ptr_tags`).
+            let Some(parent_idx) = node.parent else { continue };
 
-                // We are done, the parent can continue.
-                stack.pop();
-                continue;
+            // Node is a leaf
+            if node.children.is_empty() {
+                // Drop the leaf from its parent's child list, then delete it everywhere else
+                let children = &mut self.nodes.get_mut(parent_idx).unwrap().children;
+                let pos = children.iter().position(|&c| c == idx).unwrap();
+                children.remove(pos);
+                self.remove_useless_node(idx);
             }
+            // Node has exactly one child 
+            else if let Some(child_idx) = self.can_be_replaced_by_single_child_dead(idx) {
+                let children = &mut self.nodes.get_mut(parent_idx).unwrap().children;
+                let pos = children.iter().position(|&c| c == idx).unwrap();
+                children[pos] = child_idx;
+                self.nodes.get_mut(child_idx).unwrap().parent = Some(parent_idx);
+                self.remove_useless_node(idx);
+            }
+            // Otherwise, the dead node has more than one reachable child and we retain it
         }
     }
 }
@@ -1495,9 +1464,14 @@ impl AllocState for EagerTree {
         self.locations.merge_adjacent_thorough();
     }
     fn remove_dead_tags(&mut self, dead_tags: &FxHashSet<BorTag>) {
-        for i in 0..(self.roots.len()) {
-            self.remove_useless_children_dead(self.roots[i], dead_tags);
-        }
+        // `remove_useless_children_dead` consumes the dead tags in ascending order
+        // Note: This is temporary sort until we are able to properly pass the ordered `dead_tags` list of type
+        // &[BorTag] from the `__bsan_prune` function in `lib.rs` (this is currently in the GC branch).
+        // To-do: update this function to take `dead_tags` as type `&[BorTag]`.
+        let mut sorted = dead_tags.iter().copied().collect::<alloc::vec::Vec<BorTag>>();
+        sorted.sort_unstable();
+        // Passes the SORTED list of dead tags into remove-useless_children_dead
+        self.remove_useless_children_dead(&sorted);
         self.locations.merge_adjacent_thorough();
     }
     fn increment(&self, tag: BorTag) -> bool {
