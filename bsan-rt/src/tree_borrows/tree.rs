@@ -498,9 +498,7 @@ impl EagerTree {
         let [child_idx] = node.children[..] else { return None };
 
         // We never want to replace the root node, as it is also kept in `root_ptr_tags`.
-        if node.parent.is_none() {
-            return None;
-        }
+        node.parent?;
         // Since protected nodes are never GC'd (see `borrow_tracker::FrameExtra::visit_provenance`),
         // they are never added to the dead set, so reaching this point (where `node.tag` is
         // in `dead`) guarantees that `node` is not protected.
