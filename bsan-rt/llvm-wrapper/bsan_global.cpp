@@ -47,14 +47,24 @@ void GlobalContext::MergeZeroCounts(const uptr, BsanThread *const &thread,
     thread->drained_gen_ = snap->gen;
   }
 
+  // The default value of `min_drained` is the current
+  // generation. Its final value will be equal to the
+  // minimum generation for any thread, after updating
+  // the ZCT (if we were able to access it this time).
   if (thread->drained_gen_ < snap->min_drained) {
     snap->min_drained = thread->drained_gen_;
   }
 }
 
 void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
+  // The `arg` here is a pointer to a `SnapShot` object.
   ThreadManager &threads = global_ctx()->Threads();
+  // For each thread, add all live provenance values to the snapshot.
   threads.ForEachThread(CollectProvenance, arg);
+  // For each thread, if a provenance value in the ZCT is not present
+  // in the set of live provenance values in the `SnapShot`, then remove
+  // it from the ZCT and add it to the global "pending" set of provenance
+  // values that need pruning.
   threads.ForEachThread(MergeZeroCounts, arg);
 }
 
