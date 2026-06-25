@@ -9,9 +9,8 @@ pub const SPAN_MAX_FRAMES: usize = 4;
 
 /// Raw caller-PC chain captured by the C++ interceptors, innermost first.
 /// `pcs[0]` is the immediate retag/access site; deeper entries let
-/// display-time symbolization skip stdlib/bsan-rt wrappers (e.g.
-/// `core::ptr::write` for `x.write(0)`) and report the user call site
-/// instead. Unused entries are 0.
+/// display-time symbolization skip library code and report the user call
+/// site instead. Unused entries are 0.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct Span {
@@ -80,23 +79,6 @@ impl SanitizerCommon {
             (sym @ Symbol::Resolved { .. }, false) => Some(sym),
             _ => None,
         }
-    }
-
-    /// Symbolizes the immediate access site `pc` as an origin note.
-    fn library_origin(pc: usize) -> Option<Symbol> {
-        let (sym, internal) = Self::symbolize_pc(pc);
-        internal.then_some(sym)
-    }
-
-    /// Resolves the primary error location and an optional origin note.
-    pub fn resolve_error_location(
-        user_frame_pc: usize,
-        captured: Span,
-    ) -> (Symbol, Option<Symbol>) {
-        if user_frame_pc == 0 {
-            return Self::symbolize_with_origin(captured);
-        }
-        (Self::symbolize_pc(user_frame_pc).0, Self::library_origin(captured.pcs[0]))
     }
 
     /// Resolves `span` to its primary location and an optional origin note.

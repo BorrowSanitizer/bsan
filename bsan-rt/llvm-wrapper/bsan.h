@@ -13,15 +13,13 @@ using __sanitizer::u8;
 using __sanitizer::uptr;
 
 // Number of raw caller PCs captured per span. Must be deep enough to reach
-// user code through nested stdlib wrappers (e.g. alloc::dealloc ->
-// dealloc_nonnull -> __rdl_dealloc -> System::dealloc is four frames).
+// user code through nested stdlib wrappers
 constexpr uptr kSpanMaxFrames = 4;
 
 // Raw caller-PC chain captured at a retag/access site, innermost first.
 // pcs[0] is the immediate caller of the runtime hook; deeper entries let
-// display-time symbolization skip stdlib/bsan-rt wrappers (e.g. ptr::write
-// for `x.write(0)`) and report the user call site instead. Unused entries
-// are 0. No symbolization happens at capture time.
+// display-time symbolization skip library code and report the user call
+// site instead. Unused entries are 0.
 struct Span {
   uptr pcs[kSpanMaxFrames];
 };
@@ -77,22 +75,10 @@ void InitializeInterceptors();
 
 u32 GetStackTraceLen();
 void PrintStackTrace(StackTrace &stack);
-uptr FindUserFramePc(StackTrace &stack);
 
 Provenance *GetSlot(uptr Idx);
 void ClearSlot(uptr Idx);
 bool CallerIsInstrumented(void *sym);
-
-} // namespace __bsan
-
-extern "C" {
-// Formats and prints the pending UB error stored by handle_error, using
-// user_frame_pc as the primary source location (0 = fall back to the original
-// trigger span).
-void __bsan_format_pending_ub(uptr user_frame_pc);
-}
-
-namespace __bsan {
 
 // Capture the raw caller-PC chain with one fast (frame-pointer) unwind.
 // trace[0] is the hook itself, so store trace[1..] into the span. Falls back
@@ -120,7 +106,6 @@ namespace __bsan {
     uptr bp = GET_CURRENT_FRAME();                                             \
     UNINITIALIZED BufferedStackTrace stack;                                    \
     stack.Unwind(pc, bp, nullptr, true, __bsan::GetStackTraceLen());           \
-    __bsan_format_pending_ub(__bsan::FindUserFramePc(stack));                  \
     PrintStackTrace(stack);                                                    \
     Die();                                                                     \
   }
@@ -129,7 +114,6 @@ namespace __bsan {
   if (UNLIKELY(__bsan_had_error)) {                                            \
     UNINITIALIZED BufferedStackTrace stack;                                    \
     stack.Unwind(pc, bp, nullptr, true, __bsan::GetStackTraceLen());           \
-    __bsan_format_pending_ub(__bsan::FindUserFramePc(stack));                  \
     PrintStackTrace(stack);                                                    \
     Die();                                                                     \
   }
