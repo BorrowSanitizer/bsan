@@ -497,8 +497,6 @@ impl EagerTree {
 
         let [child_idx] = node.children[..] else { return None };
 
-        // We never want to replace the root node, as it is also kept in `root_ptr_tags`.
-        node.parent?;
         // Since protected nodes are never GC'd (see `borrow_tracker::FrameExtra::visit_provenance`),
         // they are never added to the dead set, so reaching this point (where `node.tag` is
         // in `dead`) guarantees that `node` is not protected.
@@ -631,26 +629,53 @@ impl EagerTree {
 
         // Iterating through dead_tags in reverse (descending tag order)
         for &tag in dead_tags.iter().rev() {
-            // Skip tags belonging to other allocations / already-removed nodes.
+            // A missing entry means the node was already removed earlier in this pass.
             let Some(idx) = self.tag_mapping.get(&tag) else { continue };
             let node = self.nodes.get(idx).unwrap();
-            // Never remove a root (it is also tracked in `root_ptr_tags`).
-            let Some(parent_idx) = node.parent else { continue };
+
+            // The ZCT may contain tags with a non-zero reference count. Since this is
+            // possible, we skip these tags
+            if node.refcount.get() != 0 {
+                continue;
+            }
+
+            // `parent` is an Option<UniIndex>: if it is None, then `node` is a root,
+            // otherwise it is a child of some parent
+            let parent = node.parent;
 
             // Node is a leaf
             if node.children.is_empty() {
                 // Drop the leaf from its parent's child list, then delete it everywhere else
-                let children = &mut self.nodes.get_mut(parent_idx).unwrap().children;
-                let pos = children.iter().position(|&c| c == idx).unwrap();
-                children.remove(pos);
+                // If it is a root, remove it from `self.roots`
+                match parent {
+                    Some(parent_idx) => {
+                        let children = &mut self.nodes.get_mut(parent_idx).unwrap().children;
+                        let pos = children.iter().position(|&c| c == idx).unwrap();
+                        children.remove(pos);
+                    }
+                    None => {
+                        let pos = self.roots.iter().position(|&r| r == idx).unwrap();
+                        self.roots.remove(pos);
+                    }
+                }
                 self.remove_useless_node(idx);
             }
             // Node has exactly one child
             else if let Some(child_idx) = self.can_be_replaced_by_single_child_dead(idx) {
-                let children = &mut self.nodes.get_mut(parent_idx).unwrap().children;
-                let pos = children.iter().position(|&c| c == idx).unwrap();
-                children[pos] = child_idx;
-                self.nodes.get_mut(child_idx).unwrap().parent = Some(parent_idx);
+                // Replace a node with its only child, if it is a root then we promote the child
+                // to a root
+                match parent {
+                    Some(parent_idx) => {
+                        let children = &mut self.nodes.get_mut(parent_idx).unwrap().children;
+                        let pos = children.iter().position(|&c| c == idx).unwrap();
+                        children[pos] = child_idx;
+                    }
+                    None => {
+                        let pos = self.roots.iter().position(|&r| r == idx).unwrap();
+                        self.roots[pos] = child_idx;
+                    }
+                }
+                self.nodes.get_mut(child_idx).unwrap().parent = parent;
                 self.remove_useless_node(idx);
             }
             // Otherwise, the dead node has more than one reachable child and we retain it
@@ -1071,7 +1096,7 @@ pub trait AllocState: Clone {
     #[allow(dead_code)]
     fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>);
     #[allow(dead_code)]
-    fn remove_dead_tags(&mut self, dead_tags: &FxHashSet<BorTag>);
+    fn remove_dead_tags(&mut self, dead_tags: &[BorTag]);
 }
 
 impl AllocState for LazyTree {
@@ -1168,7 +1193,7 @@ impl AllocState for LazyTree {
             tree.remove_unreachable_tags(live_tags);
         }
     }
-    fn remove_dead_tags(&mut self, dead_tags: &FxHashSet<BorTag>) {
+    fn remove_dead_tags(&mut self, dead_tags: &[BorTag]) {
         if let LazyTree::Init(tree) = self {
             tree.remove_dead_tags(dead_tags);
         }
@@ -1461,15 +1486,8 @@ impl AllocState for EagerTree {
         }
         self.locations.merge_adjacent_thorough();
     }
-    fn remove_dead_tags(&mut self, dead_tags: &FxHashSet<BorTag>) {
-        // `remove_useless_children_dead` consumes the dead tags in ascending order
-        // Note: This is temporary sort until we are able to properly pass the ordered `dead_tags` list of type
-        // &[BorTag] from the `__bsan_prune` function in `lib.rs` (this is currently in the GC branch).
-        // To-do: update this function to take `dead_tags` as type `&[BorTag]`.
-        let mut sorted = dead_tags.iter().copied().collect::<alloc::vec::Vec<BorTag>>();
-        sorted.sort_unstable();
-        // Passes the SORTED list of dead tags into remove-useless_children_dead
-        self.remove_useless_children_dead(&sorted);
+    fn remove_dead_tags(&mut self, dead_tags: &[BorTag]) {
+        self.remove_useless_children_dead(dead_tags);
         self.locations.merge_adjacent_thorough();
     }
     fn increment(&self, tag: BorTag) -> bool {
