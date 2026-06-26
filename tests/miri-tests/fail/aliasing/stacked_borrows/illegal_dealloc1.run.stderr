@@ -1,4 +1,9 @@
 error: Undefined Behavior: deallocation through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+    --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/illegal_deALLOC.rs:LL:CC
+   |
+LL | dealloc(ptr2, Layout::from_size_align_unchecked(1, 1));
+   |
+     = note: the above line calls library code, where the error was detected:
     --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
    |
 LL | unsafe { libc::free(ptr as *mut libc::c_void) }
@@ -14,7 +19,7 @@ help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to 
    |
 LL | ptr1.write(0);
    |
-note: the above line calls library code, where the error was detected:
+     = note: the above line calls library code, where the error was detected:
     --> RUSTLIB/core/src/ptr/mod.rs:LL:CC
    |
 LL | intrinsics::write_via_move(dst, src)

@@ -3,7 +3,7 @@ error: Undefined Behavior: write access through <TAG>(StrongProtector) at ALLOC[
    |
 LL | y.set(1);
    |
-note: the above line calls library code, where the error was detected:
+    = note: the above line calls library code, where the error was detected:
    --> RUSTLIB/core/src/mem/mod.rs:LL:CC
    |
 LL | crate::intrinsics::write_via_move(dest, src);
@@ -16,7 +16,7 @@ help: the accessed tag <TAG>(StrongProtector) was created here
    |
 LL | y.set(1);
    |
-note: the above line calls library code, where the error was detected:
+    = note: the above line calls library code, where the error was detected:
    --> RUSTLIB/core/src/mem/mod.rs:LL:CC
    |
 LL | pub const fn replace<T>(dest: &mut T, src: T) -> T {

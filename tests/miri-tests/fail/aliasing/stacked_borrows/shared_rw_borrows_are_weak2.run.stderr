@@ -14,7 +14,7 @@ help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to 
    |
 LL | shr_rw.replace(1);
    |
-note: the above line calls library code, where the error was detected:
+    = note: the above line calls library code, where the error was detected:
    --> RUSTLIB/core/src/mem/mod.rs:LL:CC
    |
 LL | crate::intrinsics::write_via_move(dest, src);

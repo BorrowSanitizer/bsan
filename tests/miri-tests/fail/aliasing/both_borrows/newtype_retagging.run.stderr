@@ -1,4 +1,9 @@
 error: Undefined Behavior: deallocation through <TAG>(WeakProtector) at ALLOC[0x0] is forbidden
+    --> bsan/tests/miri-tests/fail/aliasing/both_borrows/newtype_retagging.rs:LL:CC
+   |
+LL | || drop(Box::from_raw(ptr)),
+   |
+     = note: the above line calls library code, where the error was detected:
     --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
    |
 LL | unsafe { libc::free(ptr as *mut libc::c_void) }
@@ -11,7 +16,7 @@ help: the accessed tag <TAG>(WeakProtector) was created here
    |
 LL | || drop(Box::from_raw(ptr)),
    |
-note: the above line calls library code, where the error was detected:
+     = note: the above line calls library code, where the error was detected:
     --> RUSTLIB/core/src/mem/mod.rs:LL:CC
    |
 LL | pub const fn drop<T>(_x: T)
@@ -26,7 +31,7 @@ help: the protected tag <TAG>(StrongProtector) later transitioned to Reserved (c
    |
 LL | || drop(Box::from_raw(ptr)),
    |
-note: the above line calls library code, where the error was detected:
+     = note: the above line calls library code, where the error was detected:
     --> RUSTLIB/alloc/src/boxed.rs:LL:CC
    |
 LL | Box(unsafe { Unique::new_unchecked(raw) }, alloc)

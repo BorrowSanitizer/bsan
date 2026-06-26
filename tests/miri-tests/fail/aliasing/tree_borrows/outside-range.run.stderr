@@ -11,7 +11,7 @@ help: the accessed tag <TAG>(unprotected) was created here
    |
 LL | let raw = data.as_mut_ptr();
    |
-note: the above line calls library code, where the error was detected:
+    = note: the above line calls library code, where the error was detected:
    --> RUSTLIB/core/src/slice/mod.rs:LL:CC
    |
 LL | pub const fn as_mut_ptr(&mut self) -> *mut T {

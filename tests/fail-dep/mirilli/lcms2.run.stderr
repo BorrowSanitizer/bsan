@@ -1,4 +1,9 @@
 error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x20] is forbidden
+  --> bsan/tests/fail-dep/mirilli/lcms2.rs:LL:CC
+   |
+LL | assert!(m.set_text("Hello 世界！", Locale::none()));
+   |
+   = note: the above line calls library code, where the error was detected:
   --> CARGO_REGISTRY/.../cmsnamed.rs:LL:CC
    |
 LL | mlu ->MemPool  = NewPtr;
@@ -9,7 +14,7 @@ help: the accessed tag <TAG>(unprotected) was created here, in the initial state
    |
 LL | assert!(m.set_text("Hello 世界！", Locale::none()));
    |
-note: the above line calls library code, where the error was detected:
+   = note: the above line calls library code, where the error was detected:
   --> CARGO_REGISTRY/.../lib.rs:LL:CC
    |
 LL | fn as_ptr(&self) -> *mut Self::CType {

@@ -5,11 +5,21 @@ LL | if (s->strm->avail_in == 0) break;
    |
     = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child read access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
+   --> bsan/tests/fail-dep/mirilli/flate2.rs:LL:CC
+   |
+LL | let mut c = read::DeflateEncoder::new(&m[..], Compression::default());
+   |
+    = note: the above line calls library code, where the error was detected:
    --> CARGO_REGISTRY/.../c.rs:LL:CC
    |
 LL | &mut *state,
    |
 help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x8..0xc]
+   --> bsan/tests/fail-dep/mirilli/flate2.rs:LL:CC
+   |
+LL | c.read_to_end(&mut result).unwrap();
+   |
+    = note: the above line calls library code, where the error was detected:
    --> CARGO_REGISTRY/.../c.rs:LL:CC
    |
 LL | raw.avail_in = cmp::min(input.len(), c_uint::MAX as usize) as c_uint;

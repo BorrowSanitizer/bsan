@@ -1,4 +1,9 @@
 error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x4] is forbidden
+   --> bsan/tests/fail-dep/mirilli/blitsort-sys.rs:LL:CC
+   |
+LL | blitsort(
+   |
+    = note: the above line calls library code, where the error was detected:
    --> CARGO_REGISTRY/.../blitsort.rs:LL:CC
    |
 LL | parity_merge_two(swap, array, x, y, ptl, ptr, pts, cmp);
@@ -9,7 +14,7 @@ help: the accessed tag <TAG>(unprotected) was created here, in the initial state
    |
 LL | self.as_ptr() as *mut c_void,
    |
-note: the above line calls library code, where the error was detected:
+    = note: the above line calls library code, where the error was detected:
    --> RUSTLIB/core/src/slice/mod.rs:LL:CC
    |
 LL | pub const fn as_ptr(&self) -> *const T {

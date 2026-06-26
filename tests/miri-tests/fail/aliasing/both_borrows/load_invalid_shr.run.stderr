@@ -9,7 +9,7 @@ help: the accessed tag <TAG>(unprotected) was created here, in the initial state
    |
 LL | let xref_in_mem = Box::new(xref);
    |
-note: the above line calls library code, where the error was detected:
+    = note: the above line calls library code, where the error was detected:
    --> RUSTLIB/alloc/src/boxed.rs:LL:CC
    |
 LL | unsafe { core::intrinsics::write_via_move(ptr, x) };

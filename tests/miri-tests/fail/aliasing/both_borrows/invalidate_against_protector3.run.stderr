@@ -11,7 +11,7 @@ help: the accessed tag <TAG>(unprotected) was created here
    |
 LL | let ptr = alloc(Layout::for_value(&0i32)) as *mut i32;
    |
-note: the above line calls library code, where the error was detected:
+   = note: the above line calls library code, where the error was detected:
   --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
    |
 LL | unsafe { libc::malloc(layout.size()) as *mut u8 }

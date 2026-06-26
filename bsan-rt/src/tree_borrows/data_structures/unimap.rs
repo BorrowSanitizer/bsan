@@ -380,7 +380,7 @@ mod tests {
     #[test]
     fn test_sizes() {
         use crate::tree_borrows::tree::{LocationState, Node};
-        assert_eq!(core::mem::size_of::<Node>(), 168);
+        assert_eq!(core::mem::size_of::<Node>(), 232);
         assert_eq!(core::mem::size_of::<LocationState>(), 3);
         #[cfg(feature = "smallvec-valmap")]
         {

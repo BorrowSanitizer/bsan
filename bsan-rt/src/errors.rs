@@ -30,46 +30,38 @@ pub struct ErrorFormatContext {
 
 impl ErrorFormatContext {
     pub fn display_ub(&mut self, info: UBInfo, symbol: Symbol, origin: Option<Symbol>) -> String {
-        let mut result = String::new();
-        result.push_str("Undefined Behavior: ");
-        match info {
+        let mut result = String::from("Undefined Behavior: ");
+        let message = match info {
             UBInfo::UseAfterFree => {
-                result.push_str("trying to access an allocation that has been freed.\n");
-                result.push_str(&self.format_symbol_standalone(symbol));
-                result.push_str(&self.format_origin(origin, None));
-                result.push('\n');
+                "trying to access an allocation that has been freed.\n".to_string()
             }
-            UBInfo::AccessOutOfBounds { alloc_id, access_size, alloc_size, offset } => {
-                result.push_str(&format!(
-                    "an access of size {access_size:x}b at offset 0x{offset:x} is out of bounds for {alloc_id:?} of size {alloc_size:x}b.\n"
-                ));
-                result.push_str(&self.format_symbol_standalone(symbol));
-                result.push_str(&self.format_origin(origin, None));
-                result.push('\n');
-            }
+            UBInfo::AccessOutOfBounds { alloc_id, access_size, alloc_size, offset } => format!(
+                "an access of size {access_size:x}b at offset 0x{offset:x} is out of bounds for {alloc_id:?} of size {alloc_size:x}b.\n"
+            ),
             UBInfo::AliasingViolation(error) => {
-                result.push_str(&self.display_tree_error(error, symbol, origin))
+                result.push_str(&self.display_tree_error(error, symbol, origin));
+                return result;
             }
-        }
+        };
+        result.push_str(&message);
+        result.push_str(&self.format_symbol_standalone(symbol));
+        result.push_str(&self.format_origin(origin, None));
+        result.push('\n');
         result
     }
 
     /// Renders the origin note pointing at the immediate library site
     fn format_origin(&mut self, origin: Option<Symbol>, max_indent: Option<usize>) -> String {
-        match origin {
-            Some(origin) => {
-                let mut buffer = String::new();
-                buffer.push_str(
-                    "note: the above line calls library code, where the error was detected:\n",
-                );
-                buffer.push_str(&match max_indent {
-                    Some(indent) => self.format_symbol(origin, indent),
-                    None => self.format_symbol_standalone(origin),
-                });
-                buffer
-            }
-            None => String::new(),
-        }
+        let Some(origin) = origin else {
+            return String::new();
+        };
+        let indent = max_indent.unwrap_or_else(|| origin.line_length());
+        let mut buffer = format!(
+            "{} = note: the above line calls library code, where the error was detected:\n",
+            " ".repeat(indent)
+        );
+        buffer.push_str(&self.format_symbol(origin, indent));
+        buffer
     }
 
     fn display_tree_error(

@@ -3,7 +3,7 @@ error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x0] is 
    |
 LL | unsafe { (*ptr).set(20) }; //miri: ~ ERROR: does not exist in the borrow stack
    |
-note: the above line calls library code, where the error was detected:
+     = note: the above line calls library code, where the error was detected:
     --> RUSTLIB/core/src/cell.rs:LL:CC
    |
 LL | mem::replace(unsafe { &mut *self.value.get() }, val)
@@ -16,7 +16,7 @@ help: the accessed tag <TAG>(unprotected) was created here
    |
 LL | unsafe { (*ptr).set(20) }; //miri: ~ ERROR: does not exist in the borrow stack
    |
-note: the above line calls library code, where the error was detected:
+     = note: the above line calls library code, where the error was detected:
     --> RUSTLIB/core/src/cell.rs:LL:CC
    |
 LL | pub const fn get(&self) -> *mut T {
@@ -31,7 +31,7 @@ help: the protected tag <TAG>(WeakProtector) later transitioned to Unique due to
    |
 LL | val.set(10);
    |
-note: the above line calls library code, where the error was detected:
+     = note: the above line calls library code, where the error was detected:
     --> RUSTLIB/core/src/mem/mod.rs:LL:CC
    |
 LL | crate::intrinsics::write_via_move(dest, src);

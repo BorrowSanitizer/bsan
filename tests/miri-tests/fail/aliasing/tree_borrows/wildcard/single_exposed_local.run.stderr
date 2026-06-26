@@ -3,7 +3,7 @@ error: Undefined Behavior: write access through <wildcard> at ALLOC[0x0] is forb
    |
 LL | unsafe { wild.write(0) }; //miri: ~ ERROR: /write access through <wildcard> at .* is forbidden/
    |
-note: the above line calls library code, where the error was detected:
+     = note: the above line calls library code, where the error was detected:
     --> RUSTLIB/core/src/ptr/mod.rs:LL:CC
    |
 LL | intrinsics::write_via_move(dst, src)
