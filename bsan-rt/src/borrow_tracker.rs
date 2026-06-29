@@ -384,7 +384,6 @@ impl<'b> BorrowTracker<'b> {
         let alloc_info: AllocInfoPtr = unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
         if let Some(mut tree) = alloc_info.tree_opt() {
             let range = AllocRange { start: Size::ZERO, size: alloc_info.size.get() };
-
             tree.take().dealloc(
                 prov.bor_tag,
                 range,
