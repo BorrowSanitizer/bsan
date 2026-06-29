@@ -218,7 +218,8 @@ public:
     ProvenanceSize = ConstantInt::get(IntptrTy, 16);
   }
   bool instrumentModule(Module &M);
-  bool instrumentFunction(Function &F, FunctionAnalysisManager &FAM);
+  bool instrumentFunction(Function &F, FunctionAnalysisManager &FAM,
+                          const StackSafetyGlobalInfo &SSGI);
 
 private:
   friend struct Provenance;
@@ -529,21 +530,23 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   Type *Int32Ty = Type::getInt32Ty(*C);
   Type *Int8Ty = Type::getInt8Ty(*C);
+  Type *BoolTy = Type::getInt1Ty(*C);
 
   AL = AL.addFnAttribute(*C, Attribute::NoUnwind);
 
   BsanFuncRetag = M.getOrInsertFunction(
       BSAN("retag"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, Int8Ty, PtrTy,
-      IntptrTy, PtrTy, IntptrTy, IntptrTy, PtrTy, PtrTy);
+      IntptrTy, PtrTy, IntptrTy, IntptrTy, PtrTy, PtrTy, BoolTy);
 
   BsanFuncPopFrame = M.getOrInsertFunction(
       BSAN("pop_frame"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, IntptrTy);
 
   BsanFuncRead = M.getOrInsertFunction(BSAN("read"), AL, IRB.getVoidTy(), PtrTy,
-                                       IntptrTy, IntptrTy, PtrTy);
+                                       IntptrTy, IntptrTy, PtrTy, BoolTy);
 
-  BsanFuncWrite = M.getOrInsertFunction(BSAN("write"), AL, IRB.getVoidTy(),
-                                        PtrTy, IntptrTy, IntptrTy, PtrTy);
+  BsanFuncWrite =
+      M.getOrInsertFunction(BSAN("write"), AL, IRB.getVoidTy(), PtrTy, IntptrTy,
+                            IntptrTy, PtrTy, BoolTy);
 
   BsanFuncAllocStack =
       M.getOrInsertFunction(BSAN("alloc_stack"), AL, IRB.getVoidTy(), PtrTy,
@@ -721,9 +724,11 @@ PreservedAnalyses BorrowSanitizerPass::run(Module &M,
   bool Modified = false;
 
   auto &FAM = MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+  const StackSafetyGlobalInfo &SSGI =
+      MAM.getResult<StackSafetyGlobalAnalysis>(M);
 
   for (Function &F : M) {
-    Modified |= ModuleSanitizer.instrumentFunction(F, FAM);
+    Modified |= ModuleSanitizer.instrumentFunction(F, FAM, SSGI);
   }
   if (!Modified)
     return PreservedAnalyses::all();
@@ -1045,7 +1050,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   const TargetLibraryInfo *TLI;
   DominatorTree &DT;
   LoopInfo LI;
-  StackSafetyGlobalInfo &SSGI;
+  const StackSafetyGlobalInfo &SSGI;
 
   // The end of the prologue of the function, where we initialize our
   // instrumentation. This is a call to llvm.donothing.
@@ -1094,7 +1099,7 @@ public:
   BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
                          const TargetLibraryInfo &TLI, DominatorTree &DT,
                          const StackSafetyGlobalInfo &SSGI)
-      : F(F), BS(BS), C(BS.C), TLI(&TLI), DT(DT),
+      : F(F), BS(BS), C(BS.C), TLI(&TLI), DT(DT), SSGI(SSGI),
         ShadowStack(BS.ProvenanceSize, BS.ProvStackTLS) {}
   bool run() {
     DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Lazy);
@@ -1564,7 +1569,8 @@ private:
     Value *Slot = allocStackSlot(IRB, RI.isProtected());
     IRB.CreateCall(BS.BsanFuncRetag,
                    {SrcAddr, RI.Size, RI.Perms, RI.ImArray, ImArrayLen,
-                    RI.PinArray, PinArrayLen, SrcProv.Tag, SrcProv.Info, Slot});
+                    RI.PinArray, PinArrayLen, SrcProv.Tag, SrcProv.Info, Slot,
+                    IRB.getInt1(false)});
     Provenance RetaggedProv = loadProvenance(IRB, Slot);
     storeProvenanceToShadow(IRB, Operand, RetaggedProv);
   }
@@ -1579,7 +1585,8 @@ private:
       Value *Dest = allocStackSlot(IRB, RI.isProtected());
       IRB.CreateCall(BS.BsanFuncRetag,
                      {Ptr, RI.Size, RI.Perms, RI.ImArray, ImArrayLen,
-                      RI.PinArray, PinArrayLen, Prov->Tag, Prov->Info, Dest});
+                      RI.PinArray, PinArrayLen, Prov->Tag, Prov->Info, Dest,
+                      IRB.getInt1(false)});
       setProvenance(&CB, loadProvenance(IRB, Dest));
     }
   }
@@ -1939,7 +1946,7 @@ private:
     IRBuilder<> IRB(&I);
     Value *Val = IRB.CreateIntCast(I.getValue(), IRB.getInt32Ty(), false);
     Value *Size = IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false);
-    insertWriteCheck(IRB, I.getDest(), Size);
+    insertWriteCheck(IRB, I.getDest(), Size, stackSafeFlag(IRB, I.getDest()));
     IRB.CreateCall(BS.BsanFuncMemSet, {I.getDest(), Val, Size});
     I.eraseFromParent();
   }
@@ -1947,28 +1954,26 @@ private:
   void visitMemMoveInst(MemMoveInst &I) {
     IRBuilder<> IRB(&I);
     Value *Size = IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false);
-    insertReadCheck(IRB, I.getSource(), Size);
-    insertWriteCheck(IRB, I.getDest(), Size);
+    insertReadCheck(IRB, I.getSource(), Size,
+                    stackSafeFlag(IRB, I.getSource()));
+    insertWriteCheck(IRB, I.getDest(), Size, stackSafeFlag(IRB, I.getDest()));
     IRB.CreateCall(BS.BsanFuncMemMove, {I.getDest(), I.getSource(), Size});
     I.eraseFromParent();
   }
 
-  Value *stackSafetyCheck(IRBuilder<> &IRB, Instruction &I) {
-    Value *Checked = IRB.getFalseValue();
-
-    if (SSGI.stackAccessIsSafe(LI))
-      Checked = IRB.getTrueValue();
-
-    return Checked;
+  Value *stackSafeFlag(IRBuilder<> &IRB, Value *Ptr) {
+    AllocaInst *AI = findAllocaForValue(Ptr, true);
+    bool Safe = AI && BS.shouldInstrumentAlloca(*AI) && SSGI.isSafe(*AI);
+    return IRB.getInt1(Safe);
   }
 
   void visitMemCpyInst(MemCpyInst &I) {
     IRBuilder<> IRB(&I);
     Value *Size = IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false);
 
-    Value *Checked = stackSafetyCheck(IRB, I);
-    insertReadCheck(IRB, I.getSource(), Size, Checked);
-    insertWriteCheck(IRB, I.getDest(), Size, Checked);
+    insertReadCheck(IRB, I.getSource(), Size,
+                    stackSafeFlag(IRB, I.getSource()));
+    insertWriteCheck(IRB, I.getDest(), Size, stackSafeFlag(IRB, I.getDest()));
     IRB.CreateCall(BS.BsanFuncMemCpy, {I.getDest(), I.getSource(), Size});
     I.eraseFromParent();
   }
@@ -1976,14 +1981,16 @@ private:
   void insertReadCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size,
                        Value *Checked) {
     if (auto Prov = getProvenance(IRB.GetInsertBlock(), Ptr)) {
-      IRB.CreateCall(BS.BsanFuncRead, {Ptr, Size, (*Prov).Tag, (*Prov).Info});
+      IRB.CreateCall(BS.BsanFuncRead,
+                     {Ptr, Size, (*Prov).Tag, (*Prov).Info, Checked});
     }
   }
 
   void insertWriteCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size,
                         Value *Checked) {
     if (auto Prov = getProvenance(IRB.GetInsertBlock(), Ptr)) {
-      IRB.CreateCall(BS.BsanFuncWrite, {Ptr, Size, (*Prov).Tag, (*Prov).Info});
+      IRB.CreateCall(BS.BsanFuncWrite,
+                     {Ptr, Size, (*Prov).Tag, (*Prov).Info, Checked});
     }
   }
 
@@ -2009,7 +2016,7 @@ private:
                                                  Comp.Elems, LI.getOrdering());
       setProvenance({&LI, Idx}, Prov);
     }
-    insertReadCheck(IRB, Ptr, Size, stackSafetyCheck(IRB, LI));
+    insertReadCheck(IRB, Ptr, Size, stackSafeFlag(IRB, Ptr));
   }
 
   bool shouldClearProvenance(IRBuilder<> &IRB, StoreInst &SI) { return true; }
@@ -2023,13 +2030,7 @@ private:
     Value *EntireSize = PrevIRB.CreateTypeSize(
         BS.IntptrTy, BS.DL->getTypeStoreSize(Val->getType()));
 
-    Value *Checked = IRB.getFalseValue();
-
-    if (this.stackAccessIsSafe(LI))
-      Checked = IRB.getTrueValue();
-
-    Value *Ptr = LI.getPointerOperand();
-    insertWriteCheck(PrevIRB, Ptr, EntireSize, Checked);
+    insertWriteCheck(PrevIRB, Ptr, EntireSize, stackSafeFlag(PrevIRB, Ptr));
 
     NextNodeIRBuilder IRB(&SI);
 
@@ -2306,7 +2307,8 @@ private:
 } // end anonymous namespace
 
 bool BorrowSanitizer::instrumentFunction(Function &F,
-                                         FunctionAnalysisManager &FAM) {
+                                         FunctionAnalysisManager &FAM,
+                                         const StackSafetyGlobalInfo &SSGI) {
   if (F.empty()) {
     return false;
   }
@@ -2333,8 +2335,6 @@ bool BorrowSanitizer::instrumentFunction(Function &F,
 
   const TargetLibraryInfo &TLI = FAM.getResult<TargetLibraryAnalysis>(F);
   DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
-  const StackSafetyGlobalInfo &SSGI =
-      FAM.getResult<StackSafetyGlobalAnalysis>(F);
 
   initializeCallbacks(*F.getParent(), TLI);
   BorrowSanitizerVisitor Visitor(F, *this, TLI, DT, SSGI);

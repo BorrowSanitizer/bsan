@@ -41,15 +41,16 @@ SANITIZER_WEAK_ATTRIBUTE
 AllocInfo *__bsan_alloc(void *base_addr, uptr size, BorTag bor_tag, Span pc);
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info, Span pc);
+void __bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info, Span pc,
+                    bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_read(void *ptr, uptr access_size, BorTag bor_tag,
-                 AllocInfo *alloc_info);
+                 AllocInfo *alloc_info, bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_write(void *ptr, uptr access_size, BorTag bor_tag,
-                  AllocInfo *alloc_info);
+                  AllocInfo *alloc_info, bool checked);
 
 // Records a zero-count (alloc_info, bor_tag) pair in the zero-count table.
 // Called by the Rust core when a node's reference count reaches zero.

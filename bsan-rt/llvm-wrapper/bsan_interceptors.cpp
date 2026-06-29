@@ -114,7 +114,7 @@ INTERCEPTOR(void, free, void *ptr) {
   InterceptorBarrier barrier;
   if (!already_in_scope && INST_CALLER(free)) {
     Provenance *slot = GetParamSlot(0);
-    __bsan_dealloc(ptr, slot->tag, slot->info, span);
+    __bsan_dealloc(ptr, slot->tag, slot->info, span, false);
     HANDLE_ERROR_PC_BP(pc, bp);
   }
   return bsan_deallocate(ptr);
@@ -144,7 +144,7 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
   bool is_inst = !already_in_scope && INST_CALLER(realloc);
   if (is_inst) {
     Provenance *slot = GetParamSlot(0);
-    __bsan_dealloc(ptr, slot->tag, slot->info, span);
+    __bsan_dealloc(ptr, slot->tag, slot->info, span, false);
     HANDLE_ERROR_PC_BP(pc, bp);
   }
   void *nptr = bsan_realloc(ptr, size);

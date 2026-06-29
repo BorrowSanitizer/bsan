@@ -112,12 +112,15 @@ pub struct BorrowTracker<'a> {
 
 impl<'b> BorrowTracker<'b> {
     /// # Safety
-    /// UNSAFE: Skips provenance checks
+    /// The caller must provide concrete provenance whose allocation metadata is
+    /// valid and live.
+    #[allow(dead_code)]
     pub unsafe fn for_alloc_unchecked<T, F>(prov: Provenance, f: F) -> UBResult<T>
     where
         F: FnOnce(Self) -> UBResult<T>,
         T: Default,
     {
+        debug_assert!(!prov.alloc_info.is_null());
         let alloc_info: AllocInfoPtr =
             unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
         let tree = alloc_info.tree()?;
@@ -172,9 +175,9 @@ impl<'b> BorrowTracker<'b> {
     }
 
     /// # Safety
-    /// UNSAFE: Directly accesses tree with no provenance checks
-    /// To be used by acccesses that are statically known to be bounded, valid, and live
-    pub fn for_access_unchecked<T, F>(
+    /// The caller must provide concrete provenance whose allocation metadata is
+    /// valid and live, and `start..start + access_size` must be in-bounds.
+    pub unsafe fn for_access_unchecked<T, F>(
         _: &GlobalCtx,
         prov: Provenance,
         start: Size,
