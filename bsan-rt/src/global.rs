@@ -168,26 +168,28 @@ impl GlobalCtx {
     }
 
     pub fn remove_exposed_provenance(&self, range: AllocRange, strict: bool) {
-        self.removing_exposed_provenance(range, strict, |_| {});
+        self.removing_exposed_provenance(range, strict, || {});
     }
     /// Removes a provenance value that has been exposed for the given range.
     /// If `strict`, then exposed provenance will only be removed if is matches
     /// Otherwise, all exposed provenance values will be removed within the given
-    /// range.
+    /// range. Calls the provided closure while the lock is held, which is useful
+    /// for ensuring that certain events happen "atomically" along with clearing
+    /// exposed provenance from the given range.
     pub fn removing_exposed_provenance<T, F>(&self, range: AllocRange, strict: bool, f: F) -> T
     where
-        F: Fn(&Self) -> T,
+        F: Fn() -> T,
     {
         // Zero-sized allocations are never inserted into the mapping.
         if range.size == Size::ZERO {
-            return f(self);
+            return f();
         }
 
         let read = self.exposed_provenance.upgradeable_read();
         // Most programs never expose any provenance, so we check with a read
         // lock first to keep deallocation cheap in the common case.
         if matches!(read.access_type(range), AccessType::Empty(_)) {
-            return f(self);
+            return f();
         }
 
         let mut write = read.upgrade();
@@ -201,7 +203,7 @@ impl GlobalCtx {
             AccessType::Empty(_) | AccessType::ImperfectlyOverlapping(_) => {}
         }
 
-        let res = f(&self);
+        let res = f();
         drop(write);
         res
     }
