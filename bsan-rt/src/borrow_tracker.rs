@@ -214,7 +214,7 @@ impl<'b> BorrowTracker<'b> {
             }
 
             let range = AllocRange { start: offset, size: access_size };
-            f(Self { tree: tree.into(), bor_tag: prov.bor_tag, alloc_info, range })
+            f(Self { tree, bor_tag: prov.bor_tag, alloc_info, range })
         }
     }
 
