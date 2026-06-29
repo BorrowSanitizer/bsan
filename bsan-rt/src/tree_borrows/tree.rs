@@ -679,6 +679,9 @@ impl EagerTree {
                 self.remove_useless_node(idx);
             }
             // Otherwise, the dead node has more than one reachable child and we retain it
+
+            // To-do: Consider cases where there are multiple descendants of a parent
+            // node with varying permissions
         }
     }
 }
