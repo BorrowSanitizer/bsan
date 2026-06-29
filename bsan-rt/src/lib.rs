@@ -481,6 +481,7 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     pc: Span,
 ) -> NonNull<AllocInfo> {
     let ctx = unsafe { global_ctx() };
+    ctx.remove_exposed_provenance(AllocRange { start: Size::from_addr(base_addr), size }, false);
     #[allow(clippy::let_and_return)]
     let alloc_info =
         ctx.create_alloc_info(AllocInfo::new(Size::from_addr(base_addr), size, bor_tag, pc));
@@ -562,15 +563,18 @@ unsafe extern "C" fn __bsan_destroy_stack_slot_impl(slot: NonNull<AllocInfo>) {
 /// Initializes stack allocation metadata in-place.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_alloc_stack_impl(
-    ptr: *mut c_void,
+    base_addr: *mut c_void,
     size: Size,
     bor_tag: BorTag,
     alloc_info: NonNull<AllocInfo>,
     pc: Span,
 ) {
-    debug_bsan!("alloc_stack", ptr, bor_tag, alloc_info.as_ptr().cast::<AllocInfo>());
+    debug_bsan!("alloc_stack", base_addr, bor_tag, alloc_info.as_ptr());
+    let global_ctx = unsafe { global_ctx() };
+    global_ctx
+        .remove_exposed_provenance(AllocRange { start: Size::from_addr(base_addr), size }, false);
     unsafe {
-        alloc_info.write(AllocInfo::new(Size::from_addr(ptr), size, bor_tag, pc));
+        alloc_info.write(AllocInfo::new(Size::from_addr(base_addr), size, bor_tag, pc));
     }
 }
 
