@@ -456,9 +456,6 @@ extern "C" fn __bsan_dealloc(
     let prov: Provenance = Provenance { bor_tag, alloc_info };
     BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), None, |bt| bt.dealloc(ctx, pc))
         .unwrap_or_else(|err| ctx.handle_error(err, pc));
-    if let Some(alloc_info) = NonNull::new(alloc_info) {
-        unsafe { ctx.destroy_alloc_info(alloc_info) };
-    }
 }
 
 // Registers a heap allocation of size `size`, storing its provenance in the return pointer.
