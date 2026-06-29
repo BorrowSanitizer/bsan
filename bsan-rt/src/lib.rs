@@ -481,12 +481,14 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     pc: Span,
 ) -> NonNull<AllocInfo> {
     let ctx = unsafe { global_ctx() };
-    ctx.remove_exposed_provenance(AllocRange { start: Size::from_addr(base_addr), size }, false);
-    #[allow(clippy::let_and_return)]
-    let alloc_info =
-        ctx.create_alloc_info(AllocInfo::new(Size::from_addr(base_addr), size, bor_tag, pc));
-    debug_bsan!("alloc", base_addr, bor_tag, alloc_info.as_ptr());
-    alloc_info
+    let range = AllocRange { start: Size::from_addr(base_addr), size };
+    ctx.removing_exposed_provenance(range, false, || {
+        #[allow(clippy::let_and_return)]
+        let alloc_info =
+            ctx.create_alloc_info(AllocInfo::new(Size::from_addr(base_addr), size, bor_tag, pc));
+        debug_bsan!("alloc", base_addr, bor_tag, alloc_info.as_ptr());
+        alloc_info
+    })
 }
 
 /// Deregisters a heap allocation
@@ -571,11 +573,11 @@ unsafe extern "C" fn __bsan_alloc_stack_impl(
 ) {
     debug_bsan!("alloc_stack", base_addr, bor_tag, alloc_info.as_ptr());
     let global_ctx = unsafe { global_ctx() };
-    global_ctx
-        .remove_exposed_provenance(AllocRange { start: Size::from_addr(base_addr), size }, false);
-    unsafe {
-        alloc_info.write(AllocInfo::new(Size::from_addr(base_addr), size, bor_tag, pc));
-    }
+    let start = Size::from_addr(base_addr);
+    let range = AllocRange { start, size };
+    global_ctx.removing_exposed_provenance(range, false, || unsafe {
+        alloc_info.write(AllocInfo::new(start, size, bor_tag, pc));
+    });
 }
 
 /// Records that a pointer's provenance has been exposed (e.g. via a
