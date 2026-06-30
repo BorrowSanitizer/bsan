@@ -11,3 +11,5 @@ CMakeFiles
 .toolchain
 .vscode
 .nix-rust
+*.patch
+.idea
