@@ -156,7 +156,11 @@ void __bsan_init() {
   __bsan_internal_init();
   InitializePlatformEarly();
 
-  InitShadowWithReExec();
+  if (!InitShadowWithReExec()) {
+    Printf("FATAL: BorrowSanitizer can not mmap the shadow memory.\n");
+    DumpProcessMap();
+    Die();
+  }
   InitializeAllocator();
   InitializeInterceptors();
   InitializeTSD();
