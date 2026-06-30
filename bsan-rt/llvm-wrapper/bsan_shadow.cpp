@@ -41,13 +41,15 @@ static void CheckMemoryLayout() {
 
 // TODO: CheckMemoryRangeAvailability is based on msan.
 // Consider refactoring these into a shared implementation.
-static bool CheckMemoryRangeAvailability(uptr beg, uptr size, bool verbose) {
+static bool CheckMemoryRangeAvailability(uptr beg, uptr size, bool verbose,
+                                         const char *name) {
   if (size > 0) {
     uptr end = beg + size - 1;
     if (!MemoryRangeIsAvailable(beg, end)) {
       if (verbose)
-        Printf("FATAL: Memory range %p - %p is not available.\n", (void *)beg,
-               (void *)end);
+        Printf("FATAL: BorrowSanitizer: memory range %p - %p is not available "
+               "(%s).\n",
+               (void *)beg, (void *)end, name);
       return false;
     }
   }
@@ -67,8 +69,9 @@ static bool ProtectMemoryRange(uptr beg, uptr size, const char *name) {
     }
     if ((uptr)addr != beg) {
       uptr end = beg + size - 1;
-      Printf("FATAL: Cannot protect memory range %p - %p (%s).\n", (void *)beg,
-             (void *)end, name);
+      Printf("FATAL: BorrowSanitizer: cannot protect memory range %p - %p "
+             "(%s).\n",
+             (void *)beg, (void *)end, name);
       return false;
     }
   }
@@ -88,7 +91,8 @@ static bool InitShadow(bool init_origins, bool dry_run) {
 
   if (!MEM_IS_APP(&__bsan_init)) {
     if (!dry_run)
-      Printf("FATAL: Code %p is out of application range. Non-PIE build?\n",
+      Printf("FATAL: BorrowSanitizer: code %p is out of application range. "
+             "Non-PIE build?\n",
              (void *)&__bsan_init);
     return false;
   }
@@ -114,20 +118,27 @@ static bool InitShadow(bool init_origins, bool dry_run) {
       CHECK(type == MappingDesc::APP || type == MappingDesc::ALLOCATOR);
 
       if (dry_run && type == MappingDesc::ALLOCATOR &&
-          !CheckMemoryRangeAvailability(start, size, !dry_run))
+          !CheckMemoryRangeAvailability(start, size, !dry_run,
+                                        kMemoryLayout[i].name))
         return false;
     }
     if (map) {
-      if (dry_run && !CheckMemoryRangeAvailability(start, size, !dry_run))
+      if (dry_run && !CheckMemoryRangeAvailability(start, size, !dry_run,
+                                                   kMemoryLayout[i].name))
         return false;
       if (!dry_run &&
-          !MmapFixedSuperNoReserve(start, size, kMemoryLayout[i].name))
+          !MmapFixedSuperNoReserve(start, size, kMemoryLayout[i].name)) {
+        Printf("FATAL: BorrowSanitizer: failed to map memory range %p - %p "
+               "(%s).\n",
+               (void *)start, (void *)(end - 1), kMemoryLayout[i].name);
         return false;
+      }
       if (!dry_run && common_flags()->use_madv_dontdump)
         DontDumpShadowMemory(start, size);
     }
     if (protect) {
-      if (dry_run && !CheckMemoryRangeAvailability(start, size, !dry_run))
+      if (dry_run && !CheckMemoryRangeAvailability(start, size, !dry_run,
+                                                   kMemoryLayout[i].name))
         return false;
       if (!dry_run && !ProtectMemoryRange(start, size, kMemoryLayout[i].name))
         return false;
@@ -135,6 +146,30 @@ static bool InitShadow(bool init_origins, bool dry_run) {
   }
 
   return true;
+}
+
+static void ReportUnavailableMemoryRegions(bool init_origins) {
+  const uptr maxVirtualAddress = GetMaxUserVirtualAddress();
+  for (unsigned i = 0; i < kMemoryLayoutSize; ++i) {
+    uptr start = kMemoryLayout[i].start;
+    uptr end = kMemoryLayout[i].end;
+    uptr size = end - start;
+    MappingDesc::Type type = kMemoryLayout[i].type;
+
+    if (start >= maxVirtualAddress)
+      continue;
+
+    bool map = type == MappingDesc::SHADOW ||
+               (init_origins && type == MappingDesc::ORIGIN);
+    bool protect = type == MappingDesc::INVALID ||
+                   (!init_origins && type == MappingDesc::ORIGIN);
+    if (!map && !protect) {
+      if (type == MappingDesc::ALLOCATOR)
+        CheckMemoryRangeAvailability(start, size, true, kMemoryLayout[i].name);
+      continue;
+    }
+    CheckMemoryRangeAvailability(start, size, true, kMemoryLayout[i].name);
+  }
 }
 
 namespace __bsan {
@@ -152,7 +187,7 @@ bool InitShadowWithReExec() {
         (old_personality != -1) && ((old_personality & ADDR_NO_RANDOMIZE) == 0);
 
     if (aslr_on) {
-      VReport(1, "WARNING: DataflowSanitizer: memory layout is incompatible, "
+      VReport(1, "WARNING: BorrowSanitizer: memory layout is incompatible, "
                  "possibly due to high-entropy ASLR.\n"
                  "Re-execing with fixed virtual address space.\n"
                  "N.B. reducing ASLR entropy is preferable.\n");
@@ -160,11 +195,13 @@ bool InitShadowWithReExec() {
       ReExec();
     }
 #endif
+    ReportUnavailableMemoryRegions(init_origins);
+    return false;
   }
 
   // The earlier dry run didn't actually map or protect anything. Run again in
   // non-dry run mode.
-  return success && InitShadow(init_origins, false);
+  return InitShadow(init_origins, false);
 }
 
 static void AlignPtr8(uptr addr, uptr &aligned_addr) {
