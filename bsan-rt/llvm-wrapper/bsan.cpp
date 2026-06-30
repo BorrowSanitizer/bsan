@@ -118,7 +118,8 @@ void PrintStackTrace(StackTrace &stack) {
 static bool IsLibraryFile(const char *file) {
   if (!file || *file == '\0')
     return true;
-  return internal_strstr(file, ".cargo") || internal_strstr(file, ".rustup");
+  return internal_strstr(file, ".cargo") || internal_strstr(file, ".rustup") ||
+         internal_strstr(file, "cargo") || internal_strstr(file, "rustup");
 }
 
 // Returns true if any frame at this PC resolves to a user code file.
