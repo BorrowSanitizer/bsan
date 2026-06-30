@@ -468,8 +468,11 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
 extern "C" fn __bsan_protector_end_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo, pc: Span) {
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-    let _ = BorrowTracker::for_alloc(prov, |bt| bt.protector_end(ctx, pc));
-    ctx.protected_tags_mut().remove_protector(prov.bor_tag);
+    let _ = BorrowTracker::for_alloc(prov, |bt| {
+        let res = bt.protector_end(ctx, pc);
+        ctx.protected_tags_mut().remove_protector(prov.bor_tag);
+        res
+    });
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
