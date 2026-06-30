@@ -12,3 +12,4 @@ CMakeFiles
 .vscode
 .nix-rust
 *.patch
+.idea
