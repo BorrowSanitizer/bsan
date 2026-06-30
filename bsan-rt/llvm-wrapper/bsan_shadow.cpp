@@ -124,7 +124,7 @@ static bool InitShadow(bool init_origins, bool dry_run) {
     }
     if (map) {
       if (dry_run && !CheckMemoryRangeAvailability(start, size, !dry_run,
-                                                    kMemoryLayout[i].name))
+                                                   kMemoryLayout[i].name))
         return false;
       if (!dry_run &&
           !MmapFixedSuperNoReserve(start, size, kMemoryLayout[i].name)) {
@@ -138,7 +138,7 @@ static bool InitShadow(bool init_origins, bool dry_run) {
     }
     if (protect) {
       if (dry_run && !CheckMemoryRangeAvailability(start, size, !dry_run,
-                                                    kMemoryLayout[i].name))
+                                                   kMemoryLayout[i].name))
         return false;
       if (!dry_run && !ProtectMemoryRange(start, size, kMemoryLayout[i].name))
         return false;
