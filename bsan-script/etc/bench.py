@@ -48,13 +48,13 @@ MIRI = {
 # Miri with Tree Borrows disabled. This is as close to "just interpret" as
 # we can get. However, the core interpreter will still check for certain forms
 # of UB, like accessese out-of-bounds, use-after-free errors, and uninitialized accesses.
-MIRI_BASE = {
-    "name": "miri-base",
-    "env": {"MIRIFLAGS": f"-Zmiri-disable-stacked-borrows {MIRI_COMMON_FLAGS}"},
-}
+# MIRI_BASE = {
+#     "name": "miri-base",
+#     "env": {"MIRIFLAGS": f"-Zmiri-disable-stacked-borrows {MIRI_COMMON_FLAGS}"},
+# }
 
 # Every Miri configuration.
-MIRI_CONFIGS = [MIRI, MIRI_BASE]
+MIRI_CONFIGS = [MIRI]
 
 # BorrowSanitizer configurations.
 BSAN_CONFIGS = [
@@ -333,12 +333,7 @@ def process_config(
 
     # a raw list of execution times per crate, version, test case, and mode
     raw_results: tuple[str, str, str, str, str, float] = []
-
-    count = 0
     for t in tests:
-        count += 1
-        if count > 1:
-            break
         row_start = (target, crate, version, t)
         print(f"  -> {t}")
         # a mapping from each config to its mean execution time
