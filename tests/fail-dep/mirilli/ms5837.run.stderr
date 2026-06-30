@@ -10,11 +10,6 @@ LL | n_prom[0] = ((n_prom[0]) & $HEX);  // CRC byte is replaced by 0
    |
     = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-   --> bsan/tests/fail-dep/mirilli/ms5837.rs:LL:CC
-   |
-LL | c_implementation::crc4(c_input_buffer.as_ptr());
-   |
-    = note: the above line calls library code, where the error was detected:
    --> RUSTLIB/core/src/slice/mod.rs:LL:CC
    |
 LL | pub const fn as_ptr(&self) -> *const T {

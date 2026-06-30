@@ -7,11 +7,6 @@ LL | unsafe { *x = 0 };
    = help: this foreign write access would cause the protected tag <TAG>(StrongProtector) (currently Frozen) to become Disabled
    = help: protected tags must never be Disabled
 help: the accessed tag <TAG>(unprotected) was created here
-  --> bsan/tests/miri-tests/fail/aliasing/both_borrows/invalidate_against_protector3.rs:LL:CC
-   |
-LL | let ptr = alloc(Layout::for_value(&0i32)) as *mut i32;
-   |
-   = note: the above line calls library code, where the error was detected:
   --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
    |
 LL | unsafe { libc::malloc(layout.size()) as *mut u8 }

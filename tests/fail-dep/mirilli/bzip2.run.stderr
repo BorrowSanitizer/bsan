@@ -10,21 +10,11 @@ LL | if (s->avail_in_expect != s->strm->avail_in)
    |
     = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child read access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
-   --> bsan/tests/fail-dep/mirilli/bzip2.rs:LL:CC
-   |
-LL | let mut c = BzEncoder::new(&m[..], Compression::default());
-   |
-    = note: the above line calls library code, where the error was detected:
    --> CARGO_REGISTRY/.../mem.rs:LL:CC
    |
 LL | ffi::BZ2_bzCompressInit(&mut *raw, lvl.level() as c_int, 0, work_factor as c_int),
    |
 help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x8..0xc]
-   --> bsan/tests/fail-dep/mirilli/bzip2.rs:LL:CC
-   |
-LL | c.read_to_end(&mut result).unwrap();
-   |
-    = note: the above line calls library code, where the error was detected:
    --> CARGO_REGISTRY/.../mem.rs:LL:CC
    |
 LL | self.inner.raw.avail_in = input.len().min(c_uint::MAX as usize) as c_uint;

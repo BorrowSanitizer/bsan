@@ -10,11 +10,6 @@ LL | Common->status = KLU_OK ;
    |
     = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-   --> bsan/tests/fail-dep/mirilli/klu-rs.rs:LL:CC
-   |
-LL | builder.finish(KluSettings::new())
-   |
-    = note: the above line calls library code, where the error was detected:
    --> CARGO_REGISTRY/.../lib.rs:LL:CC
    |
 LL | self.data.as_ref() as *const I::KluCommon as *mut I::KluCommon

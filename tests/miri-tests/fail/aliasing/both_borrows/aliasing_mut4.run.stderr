@@ -12,11 +12,6 @@ LL | crate::intrinsics::write_via_move(dest, src);
     = help: this foreign write access would cause the protected tag <TAG>(StrongProtector) (currently Frozen) to become Disabled
     = help: protected tags must never be Disabled
 help: the accessed tag <TAG>(StrongProtector) was created here
-   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/aliasing_mut4.rs:LL:CC
-   |
-LL | y.set(1);
-   |
-    = note: the above line calls library code, where the error was detected:
    --> RUSTLIB/core/src/mem/mod.rs:LL:CC
    |
 LL | pub const fn replace<T>(dest: &mut T, src: T) -> T {

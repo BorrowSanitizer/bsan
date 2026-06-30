@@ -7,11 +7,6 @@ LL | *y.add(3) = 42; //miri: ~ ERROR: /write access through .* is forbidden/
     = help: this foreign write access would cause the protected tag <TAG>(StrongProtector) (currently Reserved) to become Disabled
     = help: protected tags must never be Disabled
 help: the accessed tag <TAG>(unprotected) was created here
-   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/outside-range.rs:LL:CC
-   |
-LL | let raw = data.as_mut_ptr();
-   |
-    = note: the above line calls library code, where the error was detected:
    --> RUSTLIB/core/src/slice/mod.rs:LL:CC
    |
 LL | pub const fn as_mut_ptr(&mut self) -> *mut T {

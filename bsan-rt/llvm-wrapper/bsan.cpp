@@ -121,6 +121,38 @@ static bool IsLibraryFile(const char *file) {
   return internal_strstr(file, ".cargo") || internal_strstr(file, ".rustup");
 }
 
+// Returns true if any frame at this PC resolves to a user code file.
+static bool HasUserInlineFrame(const SymbolizedStack *frame) {
+  for (const SymbolizedStack *cur = frame; cur; cur = cur->next) {
+    if (!IsLibraryFile(cur->info.file))
+      return true;
+  }
+  return false;
+}
+
+// Locates the first user-code frame for the primary error location.
+// Bounded above by __rust_begin_short_backtrace.
+// Returns 0 when the symbolizer is unavailable or no user frame is found.
+uptr FindUserFramePc(uptr pc, uptr bp) {
+  if (GetEnv("BSAN_SYMBOLIZER") == nullptr)
+    return 0;
+  UNINITIALIZED BufferedStackTrace stack;
+  stack.Unwind(pc, bp, nullptr, true, kStackTraceMax);
+  for (uptr i = 1; i < stack.size; ++i) {
+    SymbolizedStackHolder sym(
+        Symbolizer::GetOrInit()->SymbolizePC(stack.trace[i]));
+    const SymbolizedStack *frame = sym.get();
+    if (!frame)
+      continue;
+    if (frame->info.function &&
+        internal_strstr(frame->info.function, "__rust_begin_short_backtrace"))
+      break;
+    if (HasUserInlineFrame(frame))
+      return stack.trace[i];
+  }
+  return 0;
+}
+
 bool CallerIsInstrumented(void *sym) {
   if (__bsan_shadow_stack == nullptr) {
     return false;
@@ -137,6 +169,9 @@ bool CallerIsInstrumented(void *sym) {
 }
 
 } // namespace __bsan
+
+SANITIZER_WEAK_ATTRIBUTE
+void __bsan_format_pending_ub(uptr) {}
 
 void __sanitizer::BufferedStackTrace::UnwindImpl(uptr pc, uptr bp,
                                                  void *context,

@@ -3,19 +3,13 @@ use alloc::string::{String, ToString};
 use core::ffi::c_char;
 use core::{fmt, ptr, slice};
 
-/// Number of raw caller PCs captured per span. Must match `kSpanMaxFrames`
-/// in `bsan.h`.
-pub const SPAN_MAX_FRAMES: usize = 12;
-
-/// Raw caller-PC chain captured by the C++ interceptors, innermost first.
-/// `pcs[0]` is the immediate retag/access site; deeper entries let
-/// display-time symbolization skip library code and report the user call
-/// site instead. Unused entries are 0.
-#[repr(C)]
+/// The immediate caller PC of a runtime hook, captured at the retag/access
+/// site by the C++ interceptors. Symbolized lazily at display time as the
+/// error's origin note; the primary error location comes from the live unwind
+/// in the `HANDLE_ERROR` macro. Must match `Span` in `bsan.h`.
+#[repr(transparent)]
 #[derive(Clone, Copy, Debug)]
-pub struct Span {
-    pub pcs: [usize; SPAN_MAX_FRAMES],
-}
+pub struct Span(pub usize);
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Symbol {
@@ -73,36 +67,37 @@ impl SanitizerCommon {
         (Symbol::Unresolved { pc }, false)
     }
 
-    /// Symbolizes `pc`, returning `Some` only when it resolves to user code.
-    fn symbolize_user(pc: usize) -> Option<Symbol> {
-        match Self::symbolize_pc(pc) {
-            (sym @ Symbol::Resolved { .. }, false) => Some(sym),
-            _ => None,
-        }
+    /// Symbolizes the immediate access site `pc` as an origin note, returning
+    /// `Some` only when it lies in library code.
+    fn library_origin(pc: usize) -> Option<Symbol> {
+        let (sym, internal) = Self::symbolize_pc(pc);
+        internal.then_some(sym)
     }
 
-    /// Resolves `span` to its primary location and an optional origin note.
+    /// Resolves the primary error location and an optional origin note.
     ///
-    /// When the immediate access site is library code, the primary location
-    /// becomes the nearest user-code caller and the access site is returned as
-    /// the origin. The origin is `None` when the access site is already user
-    /// code, or when no caller resolves to user code.
+    /// `user_frame_pc` is the first user-code frame located by the live unwind
+    /// in `HANDLE_ERROR`; when present it is the primary location and the
+    /// captured access site becomes the origin (only if it is library code).
+    /// When the unwind found no user frame (`0`), we fall back to symbolizing
+    /// the captured span directly.
+    pub fn resolve_error_location(
+        user_frame_pc: usize,
+        captured: Span,
+    ) -> (Symbol, Option<Symbol>) {
+        if user_frame_pc == 0 {
+            return Self::symbolize_with_origin(captured);
+        }
+        (Self::symbolize_pc(user_frame_pc).0, Self::library_origin(captured.0))
+    }
+
+    /// Symbolizes `span`'s single captured PC. The origin is always `None`
+    /// here: with only one frame there is no caller to attribute it to.
     pub fn symbolize_with_origin(span: Span) -> (Symbol, Option<Symbol>) {
-        if span.pcs[0] == 0 {
+        if span.0 == 0 {
             return (Symbol::Unused, None);
         }
-        let (immediate, internal) = Self::symbolize_pc(span.pcs[0]);
-
-        if !internal && matches!(immediate, Symbol::Resolved { .. }) {
-            return (immediate, None);
-        }
-
-        let user_caller =
-            span.pcs[1..].iter().copied().take_while(|&pc| pc != 0).find_map(Self::symbolize_user);
-        match user_caller {
-            Some(caller) => (caller, internal.then_some(immediate)),
-            None => (immediate, None),
-        }
+        (Self::symbolize_pc(span.0).0, None)
     }
 
     /// Read entire file into a String

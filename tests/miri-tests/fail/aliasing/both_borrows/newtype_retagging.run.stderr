@@ -12,11 +12,6 @@ LL | unsafe { libc::free(ptr as *mut libc::c_void) }
      = help: this deallocation (acting as a foreign write access) would cause the protected tag <TAG>(StrongProtector) (currently Reserved (conflicted)) to become Disabled
      = help: protected tags must never be Disabled
 help: the accessed tag <TAG>(WeakProtector) was created here
-    --> bsan/tests/miri-tests/fail/aliasing/both_borrows/newtype_retagging.rs:LL:CC
-   |
-LL | || drop(Box::from_raw(ptr)),
-   |
-     = note: the above line calls library code, where the error was detected:
     --> RUSTLIB/core/src/mem/mod.rs:LL:CC
    |
 LL | pub const fn drop<T>(_x: T)
@@ -27,11 +22,6 @@ help: the protected tag <TAG>(StrongProtector) was created here, in the initial 
 LL | fn dealloc_while_running(_n: Newtype<'_>, dealloc: impl FnOnce()) {
    |
 help: the protected tag <TAG>(StrongProtector) later transitioned to Reserved (conflicted) due to a reborrow (acting as a foreign read access) at offsets [0x0..0x4]
-    --> bsan/tests/miri-tests/fail/aliasing/both_borrows/newtype_retagging.rs:LL:CC
-   |
-LL | || drop(Box::from_raw(ptr)),
-   |
-     = note: the above line calls library code, where the error was detected:
     --> RUSTLIB/alloc/src/boxed.rs:LL:CC
    |
 LL | Box(unsafe { Unique::new_unchecked(raw) }, alloc)

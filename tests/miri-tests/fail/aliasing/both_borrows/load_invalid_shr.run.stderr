@@ -5,11 +5,6 @@ LL | let _val = *xref_in_mem; //miri: ~[tree]| ERROR: /reborrow through .* is fo
    |
     = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow (acting as a child read access)
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
-   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/load_invalid_shr.rs:LL:CC
-   |
-LL | let xref_in_mem = Box::new(xref);
-   |
-    = note: the above line calls library code, where the error was detected:
    --> RUSTLIB/alloc/src/boxed.rs:LL:CC
    |
 LL | unsafe { core::intrinsics::write_via_move(ptr, x) };

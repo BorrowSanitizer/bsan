@@ -11,11 +11,6 @@ LL | unsafe { libc::free(ptr as *mut libc::c_void) }
      = help: the allocation of the accessed tag <TAG>(WeakProtector) also contains the strongly protected tag <TAG>(StrongProtector)
      = help: the strongly protected tag <TAG>(StrongProtector) disallows deallocations
 help: the accessed tag <TAG>(WeakProtector) was created here
-    --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/strongly-protected.rs:LL:CC
-   |
-LL | drop(unsafe { Box::from_raw(raw) });
-   |
-     = note: the above line calls library code, where the error was detected:
     --> RUSTLIB/core/src/mem/mod.rs:LL:CC
    |
 LL | pub const fn drop<T>(_x: T)

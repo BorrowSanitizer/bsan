@@ -16,11 +16,6 @@ help: the conflicting tag <TAG>(unprotected) was created here, in the initial st
 LL | let ptr_base = &mut x as *mut u32;
    |
 help: the conflicting tag <TAG>(unprotected) later transitioned to Unique due to a child write access at offsets [0x0..0x4]
-    --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/multi_exposed_siblings_local.rs:LL:CC
-   |
-LL | unsafe { wild.write(41) };
-   |
-     = note: the above line calls library code, where the error was detected:
     --> RUSTLIB/core/src/ptr/mod.rs:LL:CC
    |
 LL | intrinsics::write_via_move(dst, src)

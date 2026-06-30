@@ -12,17 +12,10 @@ using __sanitizer::u64;
 using __sanitizer::u8;
 using __sanitizer::uptr;
 
-// Number of raw caller PCs captured per span. Must be deep enough to reach
-// user code through nested stdlib wrappers. Must match `SPAN_MAX_FRAMES`
-constexpr uptr kSpanMaxFrames = 12;
-
-// Raw caller-PC chain captured at a retag/access site, innermost first.
-// pcs[0] is the immediate caller of the runtime hook; deeper entries let
-// display-time symbolization skip library code and report the user call
-// site instead. Unused entries are 0.
-struct Span {
-  uptr pcs[kSpanMaxFrames];
-};
+// The immediate caller PC of a runtime hook, captured at the retag/access
+// site. Symbolized lazily at display time as the error's origin note; the
+// primary error location comes from the live unwind in `HANDLE_ERROR`.
+typedef uptr Span;
 typedef uptr BorTag;
 typedef uptr ThreadId;
 
@@ -75,26 +68,25 @@ void InitializeInterceptors();
 
 u32 GetStackTraceLen();
 void PrintStackTrace(StackTrace &stack);
+uptr FindUserFramePc(uptr pc, uptr bp);
 
 Provenance *GetSlot(uptr Idx);
 void ClearSlot(uptr Idx);
 bool CallerIsInstrumented(void *sym);
 
-// Capture the raw caller-PC chain with one fast (frame-pointer) unwind.
-// trace[0] is the hook itself, so store trace[1..] into the span. Falls back
-// to GET_CALLER_PC() alone if the unwind produced nothing.
-#define GET_SPAN                                                               \
-  Span span = {};                                                              \
-  {                                                                            \
-    uptr __pc = StackTrace::GetCurrentPc();                                    \
-    uptr __bp = GET_CURRENT_FRAME();                                           \
-    UNINITIALIZED BufferedStackTrace __mini;                                   \
-    __mini.Unwind(__pc, __bp, nullptr, true, kSpanMaxFrames + 1);              \
-    for (uptr __i = 1; __i < __mini.size && __i <= kSpanMaxFrames; ++__i)      \
-      span.pcs[__i - 1] = __mini.trace[__i];                                   \
-    if (!span.pcs[0])                                                          \
-      span.pcs[0] = GET_CALLER_PC();                                           \
-  }
+} // namespace __bsan
+
+extern "C" {
+// Formats and prints the pending UB error stored by handle_error, using
+// user_frame_pc as the primary source location (0 = fall back to the original
+// trigger span).
+void __bsan_format_pending_ub(uptr user_frame_pc);
+}
+
+namespace __bsan {
+
+// Capture the immediate caller PC of the runtime hook as the span.
+#define GET_SPAN uptr span = GET_CALLER_PC();
 
 #define GET_SPAN_PC_BP                                                         \
   GET_SPAN;                                                                    \
@@ -104,6 +96,7 @@ bool CallerIsInstrumented(void *sym);
   if (UNLIKELY(__bsan_had_error)) {                                            \
     uptr pc = StackTrace::GetCurrentPc();                                      \
     uptr bp = GET_CURRENT_FRAME();                                             \
+    __bsan_format_pending_ub(__bsan::FindUserFramePc(pc, bp));                 \
     UNINITIALIZED BufferedStackTrace stack;                                    \
     stack.Unwind(pc, bp, nullptr, true, __bsan::GetStackTraceLen());           \
     PrintStackTrace(stack);                                                    \
@@ -112,6 +105,7 @@ bool CallerIsInstrumented(void *sym);
 
 #define HANDLE_ERROR_PC_BP(pc, bp)                                             \
   if (UNLIKELY(__bsan_had_error)) {                                            \
+    __bsan_format_pending_ub(__bsan::FindUserFramePc(pc, bp));                 \
     UNINITIALIZED BufferedStackTrace stack;                                    \
     stack.Unwind(pc, bp, nullptr, true, __bsan::GetStackTraceLen());           \
     PrintStackTrace(stack);                                                    \

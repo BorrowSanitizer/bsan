@@ -11,11 +11,6 @@ LL | unsafe { libc::free(ptr as *mut libc::c_void) }
      = help: the accessed tag <TAG>(WeakProtector) is a child of the conflicting tag <TAG>(unprotected)
      = help: the conflicting tag <TAG>(unprotected) has state Frozen which forbids this deallocation (acting as a child write access)
 help: the accessed tag <TAG>(WeakProtector) was created here
-    --> bsan/tests/fail/aliasing/bsan-ptr-craft.rs:LL:CC
-   |
-LL | drop(b2);
-   |
-     = note: the above line calls library code, where the error was detected:
     --> RUSTLIB/core/src/mem/mod.rs:LL:CC
    |
 LL | pub const fn drop<T>(_x: T)
