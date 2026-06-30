@@ -559,7 +559,7 @@ unsafe extern "C" fn __bsan_prune(
 ) -> bool {
     let alloc: AllocInfoPtr = alloc_info.into();
     let dead_tags = unsafe { slice::from_raw_parts(bor_tags, len) };
-    alloc.tree.lock().as_mut().map(|tree| tree.remove_dead_tags(&dead_tags)).unwrap_or(false)
+    alloc.tree.lock().as_mut().map(|tree| tree.remove_dead_tags(dead_tags)).unwrap_or(false)
 }
 
 /// Deallocates an instance of [AllocInfo]. This instance must
