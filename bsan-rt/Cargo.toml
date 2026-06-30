@@ -10,8 +10,8 @@ rustc-hash = { version = "2.1.2", default-features = false }
 libc-print = { version = "0.1.23" }
 spin = "0.10.0"
 bytemuck = { version = "1.25", default-features = false }
-smallvec = "1.15.1"
-bitflags = "2.11.1"
+smallvec = "1.15.2"
+bitflags = "2.13.0"
 
 [lib]
 name = "bsan_rt"
