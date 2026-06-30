@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782855216863,
+  "lastUpdate": 1782859998618,
   "repoUrl": "https://github.com/BorrowSanitizer/bsan",
   "entries": {
     "Benchmarks": [
@@ -710,6 +710,78 @@ window.BENCHMARK_DATA = {
             "value": 0.00276278297822519,
             "unit": "Mean Relative Execution Time",
             "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-tb\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 0.003630332336454176, \"min\": 0.0006520843865250158}"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "icmccorm@cs.cmu.edu",
+            "name": "Ian McCormack",
+            "username": "icmccorm"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d4069ed0979986aaaed2490e524412447c36b18c",
+          "message": "Allocate slots for protected tags from a dedicated region. (#258)\n\n* Allocate slots for protected tags from a dedicated region.\n\n* Only remove protectors for concrete / resolved tags.",
+          "timestamp": "2026-06-30T16:28:41-04:00",
+          "tree_id": "37703817e67321dad3f1e27a9d9f356dc2b2f6aa",
+          "url": "https://github.com/BorrowSanitizer/bsan/commit/d4069ed0979986aaaed2490e524412447c36b18c"
+        },
+        "date": 1782859997322,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "hashbrown@0.17.0 - aarch64-unknown-linux-gnu",
+            "value": 1554.7740095072406,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"native\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 33185.97867954374, \"min\": 642.9125926849639}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - aarch64-unknown-linux-gnu",
+            "value": 0.2378254756723489,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"miri-tb\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 0.8746494818116494, \"min\": 0.0644291663216578}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - aarch64-unknown-linux-gnu",
+            "value": 7.428380858703074,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"native\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 15.712830711371376, \"min\": 5.2386136954590485}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - aarch64-unknown-linux-gnu",
+            "value": 0.0017222317641492273,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-tb\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 0.002258409873496311, \"min\": 0.00023890967450238796}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - x86_64-unknown-linux-gnu",
+            "value": 1476.8489005812949,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"native\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 29570.554001561468, \"min\": 366.73579262051794}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - x86_64-unknown-linux-gnu",
+            "value": 0.2597236028465949,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"miri-tb\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 0.904663308197074, \"min\": 0.06871045077167004}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - x86_64-unknown-linux-gnu",
+            "value": 10.796770968217686,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"native\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 37.91575481833938, \"min\": 4.613052616112737}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - x86_64-unknown-linux-gnu",
+            "value": 0.002736433607650338,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-tb\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 0.0036150925362765877, \"min\": 0.0006495487872232586}"
           }
         ]
       }
