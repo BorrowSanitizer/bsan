@@ -10,7 +10,6 @@ extern crate alloc;
 use core::cell::Cell;
 use core::ffi::c_void;
 use core::fmt::Debug;
-use core::ops::Deref;
 #[cfg(not(test))]
 use core::panic::PanicInfo;
 use core::ptr::NonNull;
@@ -308,44 +307,6 @@ impl AllocInfo {
     }
 }
 
-// A reference to an instance of `AllocInfo`
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-#[repr(transparent)]
-pub struct AllocInfoPtr(NonNull<AllocInfo>);
-
-// A pointer to an instance of `AllocInfo`.
-impl AllocInfoPtr {
-    /// # Safety
-    /// This instance of `AllocInfo` must represent a valid, non-freed allocation.
-    /// Otherwise, the contents of its base address will be initialized with the next
-    /// pointer in a free list.
-    pub unsafe fn range(&self) -> AllocRange {
-        AllocRange { start: unsafe { self.base_addr() }, size: self.size.get() }
-    }
-
-    /// # Safety
-    /// This instance of `AllocInfo` must represent a valid, non-freed allocation.
-    /// Otherwise, the contents of its base address will be initialized with the next
-    /// pointer in a free list.
-    pub unsafe fn base_addr(&self) -> Size {
-        unsafe { self.free_or_addr.get().base_addr }
-    }
-}
-
-impl Deref for AllocInfoPtr {
-    type Target = AllocInfo;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { self.0.as_ref() }
-    }
-}
-
-impl From<NonNull<AllocInfo>> for AllocInfoPtr {
-    fn from(value: NonNull<AllocInfo>) -> Self {
-        Self(value)
-    }
-}
-
 /// A shallow version of `AllocInfo`, for use in debug logging.
 #[cfg(feature = "debug")]
 #[derive(Debug)]
@@ -452,7 +413,7 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
         pin_layout: opt_slice(pin_data, pin_len),
     };
 
-    let prov = BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(size), |bt| {
+    let prov = BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(size), |mut bt| {
         bt.retag(ctx, retag_info, pc).map(Some)
     })
     .map(|opt| opt.unwrap_or(prov))
@@ -468,7 +429,7 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
 extern "C" fn __bsan_protector_end_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo, pc: Span) {
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-    let _ = BorrowTracker::for_alloc(prov, |bt| bt.protector_end(ctx, pc));
+    let _ = BorrowTracker::for_alloc(prov, |mut bt| bt.protector_end(ctx, pc));
     ctx.protected_tags_mut().remove_protector(prov.bor_tag);
 }
 
@@ -484,7 +445,7 @@ unsafe extern "C-unwind" fn __bsan_read_impl(
     debug_bsan!("read", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-    BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(access_size), |bt| {
+    BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(access_size), |mut bt| {
         bt.access(ctx, AccessKind::Read, pc)
     })
     .unwrap_or_else(|err| ctx.handle_error(err, pc));
@@ -502,7 +463,7 @@ unsafe extern "C-unwind" fn __bsan_write_impl(
     debug_bsan!("read", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-    BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(access_size), |bt| {
+    BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(access_size), |mut bt| {
         bt.access(ctx, AccessKind::Write, pc)
     })
     .unwrap_or_else(|err| ctx.handle_error(err, pc));
@@ -517,11 +478,14 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     pc: Span,
 ) -> NonNull<AllocInfo> {
     let ctx = unsafe { global_ctx() };
-    #[allow(clippy::let_and_return)]
-    let alloc_info =
-        ctx.create_alloc_info(AllocInfo::new(Size::from_addr(base_addr), size, bor_tag, pc));
-    debug_bsan!("alloc", base_addr, bor_tag, alloc_info.as_ptr());
-    alloc_info
+    let range = AllocRange { start: Size::from_addr(base_addr), size };
+    ctx.removing_exposed_provenance(range, false, || {
+        #[allow(clippy::let_and_return)]
+        let alloc_info =
+            ctx.create_alloc_info(AllocInfo::new(Size::from_addr(base_addr), size, bor_tag, pc));
+        debug_bsan!("alloc", base_addr, bor_tag, alloc_info.as_ptr());
+        alloc_info
+    })
 }
 
 /// Deregisters a heap allocation
@@ -598,16 +562,19 @@ unsafe extern "C" fn __bsan_destroy_stack_slot_impl(slot: NonNull<AllocInfo>) {
 /// Initializes stack allocation metadata in-place.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_alloc_stack_impl(
-    ptr: *mut c_void,
+    base_addr: *mut c_void,
     size: Size,
     bor_tag: BorTag,
     alloc_info: NonNull<AllocInfo>,
     pc: Span,
 ) {
-    debug_bsan!("alloc_stack", ptr, bor_tag, alloc_info.as_ptr().cast::<AllocInfo>());
-    unsafe {
-        alloc_info.write(AllocInfo::new(Size::from_addr(ptr), size, bor_tag, pc));
-    }
+    debug_bsan!("alloc_stack", base_addr, bor_tag, alloc_info.as_ptr());
+    let global_ctx = unsafe { global_ctx() };
+    let start = Size::from_addr(base_addr);
+    let range = AllocRange { start, size };
+    global_ctx.removing_exposed_provenance(range, false, || unsafe {
+        alloc_info.write(AllocInfo::new(start, size, bor_tag, pc));
+    });
 }
 
 /// Records that a pointer's provenance has been exposed (e.g. via a

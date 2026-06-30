@@ -192,22 +192,45 @@ impl GlobalCtx {
         }
     }
 
-    /// Removes an exposed allocation from the global mapping when it is
-    /// deallocated, so that wildcard accesses can no longer resolve to it.
-    pub fn remove_exposed_provenance(&self, range: AllocRange) {
+    pub fn remove_exposed_provenance(&self, range: AllocRange, strict: bool) {
+        self.removing_exposed_provenance(range, strict, || {});
+    }
+    /// Removes a provenance value that has been exposed for the given range.
+    /// If `strict`, then exposed provenance will only be removed if is matches
+    /// Otherwise, all exposed provenance values will be removed within the given
+    /// range. Calls the provided closure while the lock is held, which is useful
+    /// for ensuring that certain events happen "atomically" along with clearing
+    /// exposed provenance from the given range.
+    pub fn removing_exposed_provenance<T, F>(&self, range: AllocRange, strict: bool, f: F) -> T
+    where
+        F: Fn() -> T,
+    {
         // Zero-sized allocations are never inserted into the mapping.
         if range.size == Size::ZERO {
-            return;
+            return f();
         }
+
+        let read = self.exposed_provenance.upgradeable_read();
         // Most programs never expose any provenance, so we check with a read
         // lock first to keep deallocation cheap in the common case.
-        if matches!(self.exposed_provenance.read().access_type(range), AccessType::Empty(_)) {
-            return;
+        if matches!(read.access_type(range), AccessType::Empty(_)) {
+            return f();
         }
-        let mut exposed = self.exposed_provenance.write();
-        if let AccessType::PerfectlyOverlapping(pos) = exposed.access_type(range) {
-            exposed.remove_from_pos(pos);
+
+        let mut write = read.upgrade();
+        match write.access_type(range) {
+            AccessType::PerfectlyOverlapping(pos) => {
+                write.remove_from_pos(pos);
+            }
+            AccessType::ImperfectlyOverlapping(range) if !strict => {
+                write.remove_pos_range(range);
+            }
+            AccessType::Empty(_) | AccessType::ImperfectlyOverlapping(_) => {}
         }
+
+        let res = f();
+        drop(write);
+        res
     }
 
     pub fn handle_error(&self, ub_info: UBInfo, pc: Span) {
