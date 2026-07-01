@@ -8,7 +8,6 @@ use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::errors::{ErrorFormatContext, UBInfo};
 use crate::helpers::FxHashMap;
-use crate::local::LocalCtx;
 use crate::memory::Heap;
 use crate::tree_borrows::data_structures::{AccessType, RangeObjectMap};
 use crate::tree_borrows::{AllocStateImpl, ProtectorKind};
@@ -103,7 +102,6 @@ pub struct GlobalCtx {
     protected_tags: RwLock<ProtectedTags>,
     alloc_metadata_map: Heap<AllocInfo>,
     snapshots: RwLock<FxHashMap<AllocId, AllocStateImpl>>,
-    threads: RwLock<FxHashMap<ThreadId, NonNull<LocalCtx>>>,
     exposed_provenance: RwLock<RangeObjectMap<AllocInfoPtr>>,
 }
 
@@ -113,7 +111,6 @@ impl GlobalCtx {
             protected_tags: RwLock::new(ProtectedTags::default()),
             alloc_metadata_map: Heap::new(),
             snapshots: RwLock::new(FxHashMap::default()),
-            threads: RwLock::new(FxHashMap::default()),
             exposed_provenance: RwLock::new(RangeObjectMap::new()),
         }
     }
@@ -124,14 +121,6 @@ impl GlobalCtx {
 
     pub(crate) unsafe fn destroy_alloc_info(&self, ptr: NonNull<AllocInfo>) {
         unsafe { self.alloc_metadata_map.dealloc(ptr) }
-    }
-
-    pub(crate) fn register_thread(&self, thread_id: ThreadId, local_ctx_ptr: NonNull<LocalCtx>) {
-        self.threads.write().insert(thread_id, local_ctx_ptr);
-    }
-
-    pub(crate) fn deregister_thread(&self, thread: ThreadId) {
-        self.threads.write().remove(&thread);
     }
 
     pub fn protected_tags<'a>(&'a self) -> ProtectedTagsRef<'a> {
@@ -167,22 +156,45 @@ impl GlobalCtx {
         }
     }
 
-    /// Removes an exposed allocation from the global mapping when it is
-    /// deallocated, so that wildcard accesses can no longer resolve to it.
-    pub fn remove_exposed_provenance(&self, range: AllocRange) {
+    pub fn remove_exposed_provenance(&self, range: AllocRange, strict: bool) {
+        self.removing_exposed_provenance(range, strict, || {});
+    }
+    /// Removes a provenance value that has been exposed for the given range.
+    /// If `strict`, then exposed provenance will only be removed if is matches
+    /// Otherwise, all exposed provenance values will be removed within the given
+    /// range. Calls the provided closure while the lock is held, which is useful
+    /// for ensuring that certain events happen "atomically" along with clearing
+    /// exposed provenance from the given range.
+    pub fn removing_exposed_provenance<T, F>(&self, range: AllocRange, strict: bool, f: F) -> T
+    where
+        F: Fn() -> T,
+    {
         // Zero-sized allocations are never inserted into the mapping.
         if range.size == Size::ZERO {
-            return;
+            return f();
         }
+
+        let read = self.exposed_provenance.upgradeable_read();
         // Most programs never expose any provenance, so we check with a read
         // lock first to keep deallocation cheap in the common case.
-        if matches!(self.exposed_provenance.read().access_type(range), AccessType::Empty(_)) {
-            return;
+        if matches!(read.access_type(range), AccessType::Empty(_)) {
+            return f();
         }
-        let mut exposed = self.exposed_provenance.write();
-        if let AccessType::PerfectlyOverlapping(pos) = exposed.access_type(range) {
-            exposed.remove_from_pos(pos);
+
+        let mut write = read.upgrade();
+        match write.access_type(range) {
+            AccessType::PerfectlyOverlapping(pos) => {
+                write.remove_from_pos(pos);
+            }
+            AccessType::ImperfectlyOverlapping(range) if !strict => {
+                write.remove_pos_range(range);
+            }
+            AccessType::Empty(_) | AccessType::ImperfectlyOverlapping(_) => {}
         }
+
+        let res = f();
+        drop(write);
+        res
     }
 
     pub fn handle_error(&self, ub_info: UBInfo, pc: Span) {

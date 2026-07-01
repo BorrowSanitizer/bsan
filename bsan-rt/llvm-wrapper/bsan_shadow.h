@@ -4,6 +4,8 @@
 
 using namespace __sanitizer;
 
+struct Provenance;
+
 struct MappingDesc {
   uptr start;
   uptr end;
@@ -107,6 +109,7 @@ bool InitShadowWithReExec();
 void CopyShadow(void *dest, const void *src, uptr size);
 void MoveShadow(void *dest, const void *src, uptr size);
 void ClearShadow(void *dest, uptr size);
+void WriteShadow(void *dest, Provenance prov);
 } // namespace __bsan
 
 #endif

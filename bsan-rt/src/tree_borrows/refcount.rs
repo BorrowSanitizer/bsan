@@ -17,9 +17,15 @@ impl Clone for RefCount {
 
 #[allow(dead_code)]
 impl RefCount {
-    /// Creates a new `RefCount` initialized to 1.
+    /// Creates a new `RefCount` initialized to 0.
+    ///
+    /// A freshly minted tag has no references yet: it is reachable only as a
+    /// root (live on a shadow stack) until a reference to it is written into
+    /// shadow *memory*, at which point [`Self::increment`] raises the count.
+    /// The runtime records every fresh tag in its thread's zero-count table as
+    /// a collection candidate (see `__bsan_retag`/`__bsan_alloc`).
     pub fn new() -> Self {
-        Self(AtomicUsize::new(1))
+        Self(AtomicUsize::new(0))
     }
 
     /// Increments the reference count.
@@ -77,7 +83,7 @@ impl RefCount {
 
     /// Creates a new `RefCount` with the given initial value.
     ///
-    /// Test-only: the runtime always starts a count at 1 via [`RefCount::new`].
+    /// Test-only: the runtime always starts a count at 0 via [`RefCount::new`].
     #[cfg(test)]
     fn with_count(n: usize) -> Self {
         Self(AtomicUsize::new(n))
@@ -104,9 +110,10 @@ mod tests {
     // ---- single-threaded API smoke checks ----
 
     #[test]
-    fn new_starts_at_one() {
+    fn new_starts_at_zero() {
         let rc = RefCount::new();
-        assert_eq!(rc.get(), 1);
+        assert_eq!(rc.get(), 0);
+        assert!(rc.increment(), "first increment is the zero-to-one transition");
         assert!(rc.is_unique());
     }
 
@@ -121,9 +128,9 @@ mod tests {
     fn increment_raises_count() {
         let rc = RefCount::new();
         rc.increment();
-        assert_eq!(rc.get(), 2);
+        assert_eq!(rc.get(), 1);
         rc.increment();
-        assert_eq!(rc.get(), 3);
+        assert_eq!(rc.get(), 2);
         assert!(!rc.is_unique());
     }
 
@@ -139,7 +146,7 @@ mod tests {
 
     #[test]
     fn decrement_returns_true_at_zero() {
-        let rc = RefCount::new();
+        let rc = RefCount::with_count(1);
         assert!(rc.decrement());
         assert_eq!(rc.get(), 0);
     }
@@ -147,11 +154,11 @@ mod tests {
     #[test]
     fn inc_dec_roundtrip() {
         let rc = RefCount::new();
+        assert!(rc.increment()); // 0 -> 1 (zero transition)
         rc.increment(); // 2
-        rc.increment(); // 3
-        assert!(!rc.decrement()); // 2
         assert!(!rc.decrement()); // 1
         assert!(rc.decrement()); // 0
+        assert_eq!(rc.get(), 0);
     }
 
     const THREADS: usize = if cfg!(miri) { 4 } else { 16 };
