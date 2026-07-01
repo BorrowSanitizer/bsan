@@ -381,11 +381,12 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
 extern "C" fn __bsan_protector_end_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo, pc: Span) {
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-    let _ = BorrowTracker::for_alloc(prov, |mut bt| {
-        let res = bt.protector_end(ctx, pc);
-        ctx.protected_tags_mut().remove_protector(prov.bor_tag);
-        res
+    BorrowTracker::for_alloc_weak(prov, |mut bt| {
+        let _ = bt.protector_end(ctx, pc);
     });
+    // We need to remove the protector as a separate action from deallocation,
+    // because you can deallocate something through a protected tag.
+    ctx.protected_tags_mut().remove_protector(bor_tag);
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -458,19 +459,18 @@ extern "C" fn __bsan_dealloc(
         .unwrap_or_else(|err| ctx.handle_error(err, pc));
 }
 
-// Registers a heap allocation of size `size`, storing its provenance in the return pointer.
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_dealloc_stack_impl(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
-    pc: Span,
+    span: Span,
 ) {
     debug_bsan!("dealloc", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov: Provenance = Provenance { bor_tag, alloc_info };
-    if let Err(err) = BorrowTracker::dealloc_weak(ctx, prov, pc) {
-        ctx.handle_error(err, pc);
-    }
+    BorrowTracker::for_alloc_weak(prov, |bt| {
+        let _ = bt.dealloc(ctx, span);
+    });
 }
 
 /// Increments the reference count associated with a provenance value.
@@ -545,9 +545,11 @@ unsafe extern "C" fn __bsan_alloc_stack_impl(
 /// integer is cast back to a pointer with wildcard provenance.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_expose_prov_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
-    let global_ctx = unsafe { global_ctx() };
+    let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-    BorrowTracker::expose(global_ctx, prov);
+    BorrowTracker::for_alloc_weak(prov, |mut bt| {
+        let _ = bt.expose_tag(ctx);
+    });
 }
 
 /// Prunes a series of nodes that are identified by the list of borrow tags.
@@ -589,18 +591,16 @@ extern "C" fn __bsan_print(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
 extern "C" fn __bsan_print_borrow_state(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-    let _ = BorrowTracker::for_alloc(prov, |bt| {
+    BorrowTracker::for_alloc_weak(prov, |bt| {
         bt.debug_print_tree(ctx, false);
-        Ok(())
     });
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_tree_size(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
     let prov = Provenance { bor_tag, alloc_info };
-    let _ = BorrowTracker::for_alloc(prov, |bt| {
+    BorrowTracker::for_alloc_weak(prov, |bt| {
         crate::println!("Tree size: {}", bt.debug_tree_size());
-        Ok(())
     });
 }
 
@@ -608,9 +608,8 @@ extern "C" fn __bsan_tree_size(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
 extern "C" fn __bsan_snapshot(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-    let _ = BorrowTracker::for_alloc(prov, |bt| {
+    BorrowTracker::for_alloc_weak(prov, |bt| {
         bt.debug_take_snapshot(ctx);
-        Ok(())
     });
 }
 
@@ -618,10 +617,7 @@ extern "C" fn __bsan_snapshot(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
 extern "C" fn __bsan_print_diff(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-    let _ = BorrowTracker::for_alloc(prov, |bt| {
-        bt.debug_print_diff(ctx);
-        Ok(())
-    });
+    BorrowTracker::for_alloc_weak(prov, |bt| bt.debug_print_diff(ctx));
 }
 
 #[cfg(not(test))]
