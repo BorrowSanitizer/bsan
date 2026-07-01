@@ -26,6 +26,15 @@ using namespace __sanitizer;
 SANITIZER_INTERFACE_ATTRIBUTE
 THREADLOCAL void *__bsan_marker = nullptr;
 
+// When we call one of Rust's allocator shims, we need to
+// mark the underlying function as being trusted by our runtime,
+// so that the return provenace does not get clobbered by boundary
+// validation. In these situations, we set the boundary marker to
+// dedicated "trusted" marker, indicating that we can unconditionally
+// trust that our caller was instrumented, even if we do not have
+// access to its function pointer.
+static void *kTrustedMarker = (void *)1;
+
 // The number of provenance values corresponding to variadic
 // arguments being passed to the current function
 SANITIZER_INTERFACE_ATTRIBUTE
@@ -92,10 +101,19 @@ u32 GetStackTraceLen() {
 // Returns a pointer to the slot on the shadow stack at the given index.
 // The shadow stack grows downward, so we subtract by the given index
 // plus one to adjust the for the the zero-th slot.
-Provenance *GetSlot(uptr Idx) { return __bsan_shadow_stack - (Idx + 1); }
+Provenance *GetParamSlot(uptr idx) { return __bsan_shadow_stack - (idx + 1); }
+
+// Returns a pointer to the slot on the shadow stack at the given index.
+// The shadow stack grows downward, so we subtract by the given index
+// plus one to adjust the for the the zero-th slot.
+Provenance *GetRetValSlot(uptr idx) {
+  Provenance *slot = GetParamSlot(idx);
+  __bsan_shadow_stack = slot;
+  return slot;
+}
 
 // Clears the provenance from the given stack slot.
-void ClearSlot(uptr Idx) { *GetSlot(Idx) = OMNIVALID; }
+void ClearSlot(uptr Idx) { *GetParamSlot(Idx) = OMNIVALID; }
 
 // Prints a stack trace, using Rust's formatting.
 void PrintStackTrace(StackTrace &stack) {
@@ -129,6 +147,10 @@ void PrintStackTrace(StackTrace &stack) {
 bool CallerIsInstrumented(void *sym) {
   if (__bsan_shadow_stack == nullptr) {
     return false;
+  }
+  if (__bsan_marker == kTrustedMarker) {
+    __bsan_marker = 0;
+    return true;
   }
   if (__bsan_marker) {
     bool cond = __bsan_marker == sym;
@@ -222,7 +244,9 @@ void *__bsan_mark(void *callee) {
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_validate_params(void *current_fn, Provenance *frame_start,
                             uptr len) {
-  if (__bsan_marker && current_fn != __bsan_marker) {
+  bool trusted =
+      (__bsan_marker == current_fn || __bsan_marker == kTrustedMarker);
+  if (!trusted) {
     for (uptr i = 0; i < len; ++i) {
       frame_start[i] = OMNIVALID;
     }
@@ -495,7 +519,7 @@ SANITIZER_WEAK_ATTRIBUTE
 void __bsan_print(BorTag bor_tag, AllocInfo *alloc_info) {}
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_print(void *ptr) {
-  Provenance *slot = GetSlot(0);
+  Provenance *slot = GetParamSlot(0);
   InterceptorBarrier barrier;
   __bsan_print(slot->tag, slot->info);
 }
@@ -504,7 +528,7 @@ SANITIZER_WEAK_ATTRIBUTE
 void __bsan_print_borrow_state(BorTag bor_tag, AllocInfo *alloc_info) {}
 
 void __bsan_debug_print_borrow_state(void *ptr) {
-  Provenance *slot = GetSlot(0);
+  Provenance *slot = GetParamSlot(0);
   InterceptorBarrier barrier;
   __bsan_print_borrow_state(slot->tag, slot->info);
 }
@@ -513,7 +537,7 @@ SANITIZER_WEAK_ATTRIBUTE
 void __bsan_tree_size(BorTag bor_tag, AllocInfo *alloc_info) {}
 
 void __bsan_debug_tree_size(void *ptr) {
-  Provenance *slot = GetSlot(0);
+  Provenance *slot = GetParamSlot(0);
   InterceptorBarrier barrier;
   __bsan_tree_size(slot->tag, slot->info);
 }
@@ -522,7 +546,7 @@ SANITIZER_WEAK_ATTRIBUTE
 void __bsan_snapshot(BorTag bor_tag, AllocInfo *alloc_info) {}
 
 void __bsan_debug_snapshot(void *ptr) {
-  Provenance *slot = GetSlot(0);
+  Provenance *slot = GetParamSlot(0);
   InterceptorBarrier barrier;
   __bsan_snapshot(slot->tag, slot->info);
 }
@@ -531,7 +555,7 @@ SANITIZER_WEAK_ATTRIBUTE void __bsan_print_diff(BorTag bor_tag,
                                                 AllocInfo *alloc_info) {}
 
 void __bsan_debug_print_diff(void *ptr) {
-  Provenance *slot = GetSlot(0);
+  Provenance *slot = GetParamSlot(0);
   InterceptorBarrier barrier;
   __bsan_print_diff(slot->tag, slot->info);
 }

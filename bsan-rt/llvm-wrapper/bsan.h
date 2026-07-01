@@ -96,7 +96,8 @@ void InitializeInterceptors();
 u32 GetStackTraceLen();
 void PrintStackTrace(StackTrace &stack);
 
-Provenance *GetSlot(uptr Idx);
+Provenance *GetParamSlot(uptr Idx);
+Provenance *GetRetValSlot(uptr Idx);
 void ClearSlot(uptr Idx);
 bool CallerIsInstrumented(void *sym);
 

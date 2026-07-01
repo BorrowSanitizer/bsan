@@ -903,7 +903,7 @@ public:
       : SlotSize(SlotSize), FramePtrSrc(FramePtrSrc),
         RegularSlots(SlotSize->getType()), FnEntrySlots(SlotSize->getType()) {}
 
-  bool hasFrameHeader() {
+  bool wasUsed() {
     return FrameHeaderBottom && (FrameHeaderBottom != FrameHeaderTop);
   }
 
@@ -965,9 +965,9 @@ public:
   }
 
   // Allocates one or more shadow stack slots from the requested section.
-  Value *allocStackSlot(DominatorTree &DT, LoopInfo &LI, IRBuilder<> &IRB,
-                        bool IsFnEntry,
-                        ElementCount Elems = ElementCount::getFixed(1)) {
+  Value *bumpStackSlot(DominatorTree &DT, LoopInfo &LI, IRBuilder<> &IRB,
+                       bool IsFnEntry,
+                       ElementCount Elems = ElementCount::getFixed(1)) {
     Value *SlotOffset = slotsFor(IsFnEntry).alloc(
         DT, LI, IRB, Elems, SlotSize->getType(), IsFnEntry);
     Value *ProvOffset = IRB.CreateMul(SlotOffset, SlotSize);
@@ -975,16 +975,26 @@ public:
       assert(FnEntryTop && "No function-entry slots available");
       return ptrsub(IRB, FnEntryTop, ProvOffset);
     }
+    Value *Header = getOrInitFrameHeaderBottom(IRB);
+    return ptrsub(IRB, Header, ProvOffset);
+  }
 
-    Value *FramePtr = ptrsub(IRB, getOrInitFrameHeaderBottom(IRB), ProvOffset);
-    // We need to update the bottom of the frame every time we allocate a
-    // slot, because arbitrary instructions can be lowered into calls to
-    // instrumented compiler-rt runtimes (e.g. __multi3, __udivti3,
-    // __floatuntidf) that will use the shadow stack. We do not do this for
-    // function-entry retags because they are a part of the frame header,
-    // which is eagerly initialized on function entry.
-    IRB.CreateStore(FramePtr, FramePtrSrc);
-    return FramePtr;
+  // Allocates one or more shadow stack slots from the requested section.
+  Value *allocStackSlot(DominatorTree &DT, LoopInfo &LI, IRBuilder<> &IRB,
+                        bool IsFnEntry,
+                        ElementCount Elems = ElementCount::getFixed(1)) {
+
+    Value *Slot = bumpStackSlot(DT, LI, IRB, IsFnEntry, Elems);
+    if (!IsFnEntry) {
+      // We need to update the bottom of the frame every time we allocate a
+      // slot, because arbitrary instructions can be lowered into calls to
+      // instrumented compiler-rt runtimes (e.g. __multi3, __udivti3,
+      // __floatuntidf) that will use the shadow stack. We do not do this for
+      // function-entry retags because they are a part of the frame header,
+      // which is eagerly initialized on function entry.
+      IRB.CreateStore(Slot, FramePtrSrc);
+    }
+    return Slot;
   }
 
   // Returns a pointer to the bottom of the specified section of the
@@ -1571,6 +1581,11 @@ private:
     }
   }
 
+  Value *bumpStackSlot(IRBuilder<> &IRB, bool IsFnEntry,
+                       ElementCount Elems = ElementCount::getFixed(1)) {
+    return ShadowStack.bumpStackSlot(DT, LI, IRB, IsFnEntry, Elems);
+  }
+
   Value *allocStackSlot(IRBuilder<> &IRB, bool IsFnEntry,
                         ElementCount Elems = ElementCount::getFixed(1)) {
     return ShadowStack.allocStackSlot(DT, LI, IRB, IsFnEntry, Elems);
@@ -1653,6 +1668,8 @@ private:
       popFrame(Before, CB, nullptr);
     }
 
+    // If we have parameter provenance, then store it to the shadow stack
+    // below the value of the current frame pointer.
     if (!ParamOffsets.empty() || ShadowStack.getFrameHeaderTop().has_value()) {
       Value *StackOffset;
       if (CB.isMustTailCall()) {
@@ -1660,17 +1677,17 @@ private:
         // can clobber the current frame header.
         StackOffset = ShadowStack.getOrInitFrameHeaderTop(Before);
       } else {
-        // Always update ProvStack before any non-musttail call so the callee
-        // loads a valid frame top, even when there are no pointer args.
+        // Always update the provenance stack before any non-musttail call,
+        // so the callee loads a valid frame top, even when there are
+        // no pointer args.
         StackOffset = getStackOffset(Before, false);
       }
+      Before.CreateStore(StackOffset, BS.ProvStackTLS);
 
       for (auto [ByteOffset, Prov] : ParamOffsets) {
         Value *Slot = ptrsub(Before, StackOffset, ByteOffset);
         storeProvenance(Before, Prov, Slot);
       }
-
-      Before.CreateStore(StackOffset, BS.ProvStackTLS);
     }
 
     if (IsVarArg) {
@@ -1707,17 +1724,16 @@ private:
     SmallVector<ProvenanceDesc> ReturnDesc =
         BS.getProvenanceDesc(Before, CB.getType());
 
+    // Unsized return types do not have provenance, so we can
+    // skip handling the return array.
     if (CB.getType()->isSized()) {
-      // Unsized return types do not have provenance, so we can
-      // skip handling the return array.
-
-      // Load each provenance component for the return type from the
-      // thread-local return value array. Also, compute the byte-width of the
-      // provenance components that we expect to be here. If the function that
-      // we are calling is uninstrumented, then we need ensure that the return
-      // array is populated with default values.
+      // Our return provenance is stored above the value of the frame
+      // pointer by the callee so that it remains in view of the
+      // garbage collector.
       for (const auto &[Idx, Desc] : llvm::enumerate(ReturnDesc)) {
-        Value *Slot = allocStackSlot(After, false, Desc.Elems);
+        // Adjust our view of the shadow stack to include the slots
+        // for this value.
+        Value *Slot = bumpStackSlot(After, false, Desc.Elems);
         ReturnProvPtrs.push_back(Slot);
         Value *NumProv = After.CreateElementCount(BS.IntptrTy, Desc.Elems);
         NumReturnProv = After.CreateAdd(NumReturnProv, NumProv);
@@ -1731,10 +1747,18 @@ private:
       Value *Marker;
       Value *NullPtr = ConstantPointerNull::get(BS.PtrTy);
       // If this is a function that we can trust (e.g. an allocator)
-      // then we write null into the boundary marker and trust the content
-      // of the shadow stack.
+      // then we write 1 into the boundary marker. This "magic value"
+      // indicates to subsequent callees that they can trust that their
+      // caller was instrumented. This is necessary for Rust's allocator
+      // shims (e.g. __rust_alloc) which are thin wrappers around the
+      // `__rdl_alloc` family of functions. The wrapper shims are left
+      // uninstrumented when we run this pass through Rust's LLVM plugin
+      // hooks, so they will clear provenance unless we override the default
+      // behavior here.
       if (BS.shouldTrustFunction(TLI, &CB)) {
-        Marker = Before.CreateCall(BS.BsanFuncMark, {NullPtr});
+        Value *TrustedMarker = ConstantExpr::getIntToPtr(
+            ConstantInt::get(BS.IntptrTy, 1), BS.PtrTy);
+        Marker = Before.CreateCall(BS.BsanFuncMark, {TrustedMarker});
         After.CreateStore(Marker, BS.MarkerTLS);
       } else {
         // Otherwise, we need to initialize the marker with the function
@@ -1744,11 +1768,18 @@ private:
         // If we do not have any return provenance, then
         // we do not need to validate any part of the shadow stack
         // on return.
-        if (!match(NumReturnProv, m_Zero())) {
-          Value *Slot = getStackOffset(After, false);
+        Value *Slot = getStackOffset(After, false);
+        if (!ReturnProvPtrs.empty()) {
           After.CreateCall(BS.BsanFuncValidateRetval,
                            {Marker, Slot, NumReturnProv});
         }
+        // We always need to store the expected value of our stack pointer,
+        // which should sit below the return provenance. If our caller is
+        // instrumented then we can guarantee that the stack pointer is in the
+        // correct spot, but if it is uninstrumented then it might be far below
+        // where we expect it to be, if we crossed back into instrumented code
+        // at some point.
+        After.CreateStore(Slot, BS.ProvStackTLS);
       }
       // We always need to restore our boundary
       // marker to the value that it had before.
@@ -2190,15 +2221,11 @@ private:
 
   void popFrame(IRBuilder<> &IRB, Instruction &I, Value *RetVal) {
     BasicBlock *BB = IRB.GetInsertBlock();
-    if (StaticAllocaVec.size() > 0 || ByValArgs.size() > 0 ||
-        NumFnEntryRetags) {
-
+    if (ShadowStack.wasUsed()) {
       Value *NumStackAllocs = ConstantInt::get(
           BS.IntptrTy, StaticAllocaVec.size() + ByValArgs.size());
-
       Value *NumProtectors =
           ShadowStack.getOutgoingOffset(DT, LI, IRB, BS.IntptrTy, true);
-
       Value *MaxNumProtectors = ConstantInt::get(BS.IntptrTy, NumFnEntryRetags);
 
       Value *FrameHeaderBottom = ShadowStack.getOrInitFrameHeaderBottom(IRB);
@@ -2210,28 +2237,31 @@ private:
                      {Start, NumProtectors, NumStackAllocs});
     }
 
-    if (auto FrameTop = ShadowStack.getFrameHeaderTop()) {
-      IRB.CreateStore(FrameTop.value(), BS.ProvStackTLS);
-    }
-
     if (RetVal) {
+      SmallVector<Value *> ReturnProvPtrs;
       SmallVector<ProvenanceDesc> ProvDesc =
           BS.getProvenanceDesc(IRB, RetVal->getType());
-
       if (!ProvDesc.empty()) {
-        Value *NumReturnProv = ConstantInt::get(BS.IntptrTy, 0);
         Value *FrameTop = ShadowStack.getOrInitFrameHeaderTop(IRB);
+        Value *NumReturnProv = ConstantInt::get(BS.IntptrTy, 0);
         for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
-          Value *NumProv = IRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
-          NumReturnProv = IRB.CreateAdd(NumReturnProv, NumProv);
-
+          NumReturnProv = IRB.CreateAdd(
+              NumReturnProv, IRB.CreateElementCount(BS.IntptrTy, Desc.Elems));
           Value *ByteWidth = IRB.CreateMul(NumReturnProv, BS.ProvenanceSize);
-          Value *Slot = ptrsub(IRB, FrameTop, ByteWidth);
-
-          Provenance Prov = assertProvenance(IRB, Desc.Elems, {RetVal, Idx});
-          storeProvenance(IRB, Prov, Slot);
+          ReturnProvPtrs.push_back(ptrsub(IRB, FrameTop, ByteWidth));
         }
+        IRB.CreateStore(ReturnProvPtrs.back(), BS.ProvStackTLS);
+        for (const auto &[Idx, Ptr] : llvm::enumerate(ReturnProvPtrs)) {
+          Provenance Prov =
+              assertProvenance(IRB, ProvDesc[Idx].Elems, {RetVal, Idx});
+          storeProvenance(IRB, Prov, Ptr);
+        }
+        return;
       }
+    }
+
+    if (auto FrameTop = ShadowStack.getFrameHeaderTop()) {
+      IRB.CreateStore(FrameTop.value(), BS.ProvStackTLS);
     }
   }
 

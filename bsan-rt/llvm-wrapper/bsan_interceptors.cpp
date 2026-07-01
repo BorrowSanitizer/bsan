@@ -89,7 +89,7 @@ INTERCEPTOR(void *, malloc, SIZE_T size) {
   InterceptorBarrier barrier;
   void *ptr = bsan_malloc(size);
   if (!already_in_scope && INST_CALLER(malloc)) {
-    Provenance *RetSlot = GetSlot(0);
+    Provenance *RetSlot = GetRetValSlot(0);
     BorTag Tag = NewBorTag();
     *RetSlot = {Tag, __bsan_alloc(ptr, size, Tag, span)};
   }
@@ -113,7 +113,7 @@ INTERCEPTOR(void, free, void *ptr) {
   bool already_in_scope = BlockInterception();
   InterceptorBarrier barrier;
   if (!already_in_scope && INST_CALLER(free)) {
-    Provenance *slot = GetSlot(0);
+    Provenance *slot = GetParamSlot(0);
     __bsan_dealloc(ptr, slot->tag, slot->info, span);
     HANDLE_ERROR_PC_BP(pc, bp);
   }
@@ -128,7 +128,7 @@ INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
   InterceptorBarrier barrier;
   void *ptr = bsan_calloc(nmemb, size);
   if (!already_in_scope && INST_CALLER(calloc)) {
-    Provenance *RetSlot = GetSlot(0);
+    Provenance *RetSlot = GetRetValSlot(0);
     BorTag Tag = NewBorTag();
     *RetSlot = {Tag, __bsan_alloc(ptr, nmemb * size, Tag, span)};
   }
@@ -143,13 +143,13 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
   InterceptorBarrier barrier;
   bool is_inst = !already_in_scope && INST_CALLER(realloc);
   if (is_inst) {
-    Provenance *slot = GetSlot(0);
+    Provenance *slot = GetParamSlot(0);
     __bsan_dealloc(ptr, slot->tag, slot->info, span);
     HANDLE_ERROR_PC_BP(pc, bp);
   }
   void *nptr = bsan_realloc(ptr, size);
   if (is_inst) {
-    Provenance *RetSlot = GetSlot(0);
+    Provenance *RetSlot = GetRetValSlot(0);
     BorTag Tag = NewBorTag();
     *RetSlot = {Tag, __bsan_alloc(nptr, size, Tag, span)};
   }
@@ -165,7 +165,7 @@ static Provenance BsanAllocateMeta(void *ptr, SIZE_T size, uptr span) {
 static void *BsanAllocateMetaIntoStack(void *ptr, SIZE_T size, bool is_inst,
                                        uptr span, uptr slot_idx) {
   if (is_inst) {
-    Provenance *slot = GetSlot(slot_idx);
+    Provenance *slot = GetRetValSlot(slot_idx);
     Provenance prov = BsanAllocateMeta(ptr, size, span);
     *slot = BsanAllocateMeta(ptr, size, span);
     CurrentThread()->AcquireProvenance(prov);
