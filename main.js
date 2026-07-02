@@ -307,8 +307,14 @@ function renderAllCharts(dataSets) {
                 fill: '-1',
             });
         }
+
         const data = {
-            labels: dataset.map(d => d.commit.id.slice(0, 7)),
+            labels: dataset.map(d => {
+                const date = new Date(d.date);
+                const day = String(date.getDate())
+                const month = String(date.getMonth() + 1)
+                return `${month}/${day}`;
+            }),
             datasets,
         };
 
@@ -318,13 +324,13 @@ function renderAllCharts(dataSets) {
                 xAxes: [{
                     scaleLabel: {
                         display: true,
-                        labelString: 'Commit',
+                        labelString: 'Date',
                     },
                 }],
                 yAxes: [{
                     scaleLabel: {
                         display: true,
-                        labelString: 'Median',
+                        labelString: 'Mean Ratio',
                     },
                     ticks: {
                         beginAtZero: true,
