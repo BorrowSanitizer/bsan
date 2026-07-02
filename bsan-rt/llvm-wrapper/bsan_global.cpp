@@ -85,15 +85,30 @@ void GlobalContext::CollectGarbage(Snapshot &snap) {
   }
   quarantine_.swap(filtered);
 
-  pending_.drain([&](AllocInfo *info, const BorTagSet &tags) {
+  // A pending set of unpruned tags
+  ConcreteProvenanceSet still_pending;
+  pending_.drain([&](AllocInfo *info, BorTagSet &tags) {
+    // If `__bsan_prune` returns true, then the allocation's tree is empty;
+    // every single tag was pruned.
     if (__bsan_prune(info, tags.data(), tags.size())) {
       if (snap.min_drained == snap.gen) {
         __bsan_eject(info);
       } else {
         quarantine_.push_back({info, snap.gen});
       }
+    } else {
+      // The Rust core zeroes out every tag that no longer needs tracking.
+      // The remaining nonzero tags are dead nodes that could not be pruned
+      // yet; collect them for a future GC pass.
+      const BorTag *retained = tags.data();
+      for (uptr i = 0; i < tags.size(); ++i) {
+        if (retained[i] != 0) {
+          still_pending.insert({retained[i], info});
+        }
+      }
     }
   });
+  pending_.swap(still_pending);
 }
 
 void GlobalContext::RequestGC() {

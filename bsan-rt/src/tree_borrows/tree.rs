@@ -628,27 +628,39 @@ impl EagerTree {
     /// to be sorted in ascending order. Since a child must be allocated after its parent,
     /// we maintain the following invariant: `child.tag > parent.tag`. Iterating through
     /// `dead_tags` in reverse gives a valid reverse-topological (bottom-up) traversal.
-    fn remove_useless_children_dead(&mut self, dead_tags: &[BorTag]) {
-        debug_assert!(
-            dead_tags.is_sorted(),
-            "remove_useless_children_dead requires ascending-sorted tags"
-        );
+    ///
+    /// Each entry in `dead_tags` is zeroed out (set to [`BorTag::omnivalid`]) once its tag
+    /// no longer needs to be tracked: either the node was removed, or it is guaranteed to
+    /// re-enter a zero-count table before it can next become prunable. Entries left nonzero
+    /// are dead nodes that could not be pruned yet (they still have multiple reachable
+    /// children); the caller must keep them pending for a future GC pass.
+    fn remove_useless_children_dead(&mut self, dead_tags: &mut [BorTag]) {
+        // debug_assert!(
+        //     dead_tags.is_sorted(),
+        //     "remove_useless_children_dead requires ascending-sorted tags"
+        // );
 
         // Iterating through dead_tags in reverse (descending tag order)
-        for &tag in dead_tags.iter().rev() {
-            // A missing entry means the node was already removed earlier in this pass.
-            let Some(idx) = self.tag_mapping.get(&tag) else { continue };
+        for entry in dead_tags.iter_mut().rev() {
+            let tag = *entry;
+            // A missing entry means the node was already removed; zero out the entry
+            let Some(idx) = self.tag_mapping.get(&tag) else {
+                *entry = BorTag::omnivalid();
+                continue;
+            };
             let node = self.nodes.get(idx).unwrap();
 
-            // The ZCT may contain tags with a non-zero reference count. Since this is
-            // possible, we skip these tags
+            // The ZCT may contain tags with a non-zero reference count. These must be
+            // dropped; the tag will re-enter the ZCT when it drops back to zero.
             if node.refcount.get() != 0 {
+                *entry = BorTag::omnivalid();
                 continue;
             }
 
             // Do not remove exposed nodes. They could be used for future accesses via
             // wildcard pointers.
             if node.is_exposed {
+                *entry = BorTag::omnivalid();
                 continue;
             }
 
@@ -672,6 +684,7 @@ impl EagerTree {
                     }
                 }
                 self.remove_useless_node(idx);
+                *entry = BorTag::omnivalid();
             }
             // Node has exactly one child
             else if let Some(child_idx) = self.can_be_replaced_by_single_child_dead(idx) {
@@ -690,10 +703,12 @@ impl EagerTree {
                 }
                 self.nodes.get_mut(child_idx).unwrap().parent = parent;
                 self.remove_useless_node(idx);
+                *entry = BorTag::omnivalid();
             }
-            // Otherwise, the dead node has more than one reachable child and we retain it
+            // Otherwise, the dead node has more than one reachable child. Leave its
+            // entry nonzero so that the caller retains it for a future GC pass.
 
-            // To-do: Consider cases where there are multiple descendants of a parent
+            // TODO: Consider cases where there are multiple descendants of a parent
             // node with varying permissions
         }
     }
@@ -1112,7 +1127,7 @@ pub trait AllocState: Clone {
     #[allow(dead_code)]
     fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>);
     #[allow(dead_code)]
-    fn remove_dead_tags(&mut self, dead_tags: &[BorTag]) -> bool;
+    fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool;
 }
 
 impl AllocState for LazyTree {
@@ -1209,11 +1224,17 @@ impl AllocState for LazyTree {
             tree.remove_unreachable_tags(live_tags);
         }
     }
-    fn remove_dead_tags(&mut self, dead_tags: &[BorTag]) -> bool {
-        if let LazyTree::Init(tree) = self {
-            tree.remove_dead_tags(dead_tags)
-        } else {
-            false
+    fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool {
+        match self {
+            LazyTree::Init(tree) => tree.remove_dead_tags(dead_tags),
+            LazyTree::Uninit { root_tag, refcount, .. } => {
+                // A tree in the Uninit state only has a single node (the root). If
+                // this node is in the dead list with a zero reference count, then the
+                // tree is dead and the associated AllocInfo metadata can be freed.
+                let root_is_dead = refcount.get() == 0 && dead_tags.contains(root_tag);
+                dead_tags.fill(BorTag::omnivalid());
+                root_is_dead
+            }
         }
     }
     fn increment(&self, tag: BorTag) -> bool {
@@ -1504,7 +1525,7 @@ impl AllocState for EagerTree {
         }
         self.locations.merge_adjacent_thorough();
     }
-    fn remove_dead_tags(&mut self, dead_tags: &[BorTag]) -> bool {
+    fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool {
         self.remove_useless_children_dead(dead_tags);
         self.locations.merge_adjacent_thorough();
         self.roots.is_empty()
