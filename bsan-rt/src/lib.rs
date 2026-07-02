@@ -556,12 +556,19 @@ unsafe extern "C" fn __bsan_expose_prov_impl(bor_tag: BorTag, alloc_info: *mut A
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_prune(
     alloc_info: NonNull<AllocInfo>,
-    bor_tags: *const BorTag,
+    bor_tags: *mut BorTag,
     len: usize,
 ) -> bool {
     let alloc: AllocInfoPtr = alloc_info.into();
-    let dead_tags = unsafe { slice::from_raw_parts(bor_tags, len) };
-    alloc.tree.lock().as_mut().map(|tree| tree.remove_dead_tags(dead_tags)).unwrap_or(false)
+    let dead_tags = unsafe { slice::from_raw_parts_mut(bor_tags, len) };
+    match alloc.tree.lock().as_mut() {
+        Some(tree) => tree.remove_dead_tags(dead_tags),
+        None => {
+            // The tree is already deallocated, so we can zero out dead_tags
+            dead_tags.fill(BorTag::omnivalid());
+            false
+        }
+    }
 }
 
 /// Deallocates an instance of [AllocInfo]. This instance must
