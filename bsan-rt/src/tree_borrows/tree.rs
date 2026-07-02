@@ -25,7 +25,7 @@ use super::foreign_access_skipping::IdempotentForeignAccess;
 use super::perms::{AccessKind, PermTransition, Permission};
 use super::refcount::RefCount;
 use super::tree_visitor::{ChildrenVisitMode, ContinueTraversal, NodeAppArgs, TreeVisitor};
-use super::wildcard::{ExposedCache};
+use super::wildcard::ExposedCache;
 use crate::errors::UBResult;
 use crate::helpers::{AllocRange, FxHashMap, FxHashSet, Size};
 use crate::sanitizer_common::Span;
@@ -351,7 +351,6 @@ pub struct Node {
     pub debug_info: NodeDebugInfo,
 }
 
-
 impl EagerTree {
     pub(super) fn node(&self, tag: BorTag) -> &Node {
         node_from_map(&self.nodes, tag)
@@ -594,8 +593,7 @@ impl EagerTree {
                 // First, get the current children of `node`. To appease the borrow checker,
                 // we have to temporarily move the list out of the node, and then put the
                 // list of remaining children back in.
-                let mut children_of_node =
-                    mem::take(&mut self.node_mut(*tag).children);
+                let mut children_of_node = mem::take(&mut self.node_mut(*tag).children);
                 // Remove all useless children.
                 children_of_node.retain_mut(|idx| {
                     if self.is_useless(*idx, live) {
@@ -1295,11 +1293,7 @@ impl AllocState for EagerTree {
         protected: bool,
         span: Span,
     ) -> UBResult<()> {
-        let parent = if parent_tag.is_wildcard() {
-            None
-        } else {
-            Some(parent_tag)
-        };
+        let parent = if parent_tag.is_wildcard() { None } else { Some(parent_tag) };
         assert!(outside_perm.is_initial());
 
         let default_strongest_idempotent =
@@ -1363,8 +1357,7 @@ impl AllocState for EagerTree {
             self.verify_wildcard_consistency(global);
         }
 
-        let source_tag =
-            if tag.is_wildcard() { None } else { Some(tag) };
+        let source_tag = if tag.is_wildcard() { None } else { Some(tag) };
 
         for (loc_range, loc) in self.locations.iter_mut(access_range.start, access_range.size) {
             let diagnostics = DiagnosticInfo {
@@ -1405,8 +1398,7 @@ impl AllocState for EagerTree {
             span,
         )?;
 
-        let start_tag =
-            if tag.is_wildcard() { None } else { Some(tag) };
+        let start_tag = if tag.is_wildcard() { None } else { Some(tag) };
 
         for (loc_range, loc) in self.locations.iter_mut(access_range.start, access_range.size) {
             let diagnostics = DiagnosticInfo {
@@ -1528,15 +1520,9 @@ impl AllocState for EagerTree {
         self.roots.is_empty()
     }
     fn increment(&self, tag: BorTag) -> bool {
-        self.nodes
-            .get(&tag)
-            .map(|node| node.refcount.increment_nonatomic())
-            .unwrap_or(false)
+        self.nodes.get(&tag).map(|node| node.refcount.increment_nonatomic()).unwrap_or(false)
     }
     fn decrement(&self, tag: BorTag) -> bool {
-        self.nodes
-            .get(&tag)
-            .map(|node| node.refcount.decrement_nonatomic())
-            .unwrap_or(false)
+        self.nodes.get(&tag).map(|node| node.refcount.decrement_nonatomic()).unwrap_or(false)
     }
 }

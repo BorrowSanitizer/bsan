@@ -2,10 +2,10 @@
 use core::fmt::Debug;
 
 use super::perms::AccessKind;
-use crate::helpers::FxHashMap;
 use super::tree::{node_from_map, node_from_map_mut, AccessRelatedness, EagerTree, NodeMap};
 #[cfg(feature = "expensive-consistency-checks")]
 use crate::borrow_tracker::GlobalState;
+use crate::helpers::FxHashMap;
 use crate::BorTag;
 
 /// Represents the maximum access level that is possible.
@@ -200,11 +200,9 @@ impl EagerTree {
         node_from_map_mut(&mut self.nodes, tag).is_exposed = true;
 
         for (_, loc) in self.locations.iter_mut_all() {
-            let perm = loc
-                .perms
-                .get(&tag)
-                .map(|p| p.permission())
-                .unwrap_or_else(|| node_from_map(&self.nodes, tag).default_location_state().permission());
+            let perm = loc.perms.get(&tag).map(|p| p.permission()).unwrap_or_else(|| {
+                node_from_map(&self.nodes, tag).default_location_state().permission()
+            });
 
             let access_level = perm.strongest_allowed_local_access(protected);
             // An unexposed node gets treated as access level `None`. Therefore,
@@ -226,22 +224,13 @@ impl EagerTree {
             return;
         }
         for (_, loc) in self.locations.iter_mut_all() {
-            let perm = loc
-                .perms
-                .get(&tag)
-                .map(|p| p.permission())
-                .unwrap_or_else(|| {
-                    node_from_map(&self.nodes, tag).default_location_state().permission()
-                });
+            let perm = loc.perms.get(&tag).map(|p| p.permission()).unwrap_or_else(|| {
+                node_from_map(&self.nodes, tag).default_location_state().permission()
+            });
             // We are transitioning from protected to unprotected.
             let old_access_type = perm.strongest_allowed_local_access(/*protected*/ true);
             let access_type = perm.strongest_allowed_local_access(/*protected*/ false);
-            loc.exposed_cache.update_exposure(
-                &self.nodes,
-                tag,
-                old_access_type,
-                access_type,
-            );
+            loc.exposed_cache.update_exposure(&self.nodes, tag, old_access_type, access_type);
         }
     }
 }

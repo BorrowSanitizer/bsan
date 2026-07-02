@@ -4,7 +4,6 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::ops::Range;
 
-
 use super::perms::{AccessKind, PermTransition, Permission, ProtectorKind};
 use super::tree::{EagerTree, LocationState};
 use crate::helpers::AllocRange;
