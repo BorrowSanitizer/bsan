@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782878260784,
+  "lastUpdate": 1782951275129,
   "repoUrl": "https://github.com/BorrowSanitizer/bsan",
   "entries": {
     "Benchmarks": [
@@ -924,6 +924,78 @@ window.BENCHMARK_DATA = {
             "value": 0.0027179485704663655,
             "unit": "Mean Relative Execution Time",
             "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-tb\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 0.00365980724696321, \"min\": 0.0006598147145345953}"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "icmccorm@cs.cmu.edu",
+            "name": "Ian McCormack",
+            "username": "icmccorm"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1f571b0c8520274506de5383d0252113186439ac",
+          "message": "Implement deferred reference counting (#252)\n\n* Allocate slots for protected tags from a dedicated region.\n\n* Only remove protectors for concrete / resolved tags.\n\n* Lock the tree once.\n\n* Clippy.\n\n* New allocations should evict exposed provenance.\n\n* Ensure that allocations happen under the global exposed provenance lock.\n\n* fmt\n\n* Add support for deferred reference counting.\n\n* Enable garbage collection in Miri for benchmarks.\n\n* Silence false positive warnings for interceptors.\n\n* Patch tests for GC nondeterminism.\n\n* ConcreteTagSet -> BorTagSet, + docs.\n\n* Added missing header.\n\n* Update docs.\n\n* Ensure that we acquire the provenance of heap allocations.\n\n* Only add stack allocation metadata objects to the free list immediately on deallocation.\n\n* clippy\n\n* Ensure that protectors are removed, even for failing protector end accesses.\n\n* Ensure that provenance values on the shadow stack remain above the frame pointer.",
+          "timestamp": "2026-07-01T19:34:49-04:00",
+          "tree_id": "59f17a8df2db8d857fd9e6b0ad1a76aabda9d255",
+          "url": "https://github.com/BorrowSanitizer/bsan/commit/1f571b0c8520274506de5383d0252113186439ac"
+        },
+        "date": 1782951274305,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "hashbrown@0.17.0 - aarch64-unknown-linux-gnu",
+            "value": 371.4940724138803,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"native\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 1647.2587311452821, \"min\": 261.78819141052725}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - aarch64-unknown-linux-gnu",
+            "value": 0.11120414043455648,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"miri-tb\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 0.3522042563102754, \"min\": 0.08947653715941588}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - aarch64-unknown-linux-gnu",
+            "value": 7.759235926003882,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"native\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 17.813958704663474, \"min\": 6.279569571780867}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - aarch64-unknown-linux-gnu",
+            "value": 0.0023791742189882017,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-tb\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 0.0035355212713537292, \"min\": 0.002024292285588117}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - x86_64-unknown-linux-gnu",
+            "value": 486.6734975057014,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"native\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 2212.306389115194, \"min\": 317.7000967959427}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - x86_64-unknown-linux-gnu",
+            "value": 0.14926807750748355,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"miri-tb\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 0.43460863600021793, \"min\": 0.12105486142044736}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - x86_64-unknown-linux-gnu",
+            "value": 9.767848265432628,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"native\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 29.238134064898723, \"min\": 7.213906874247668}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - x86_64-unknown-linux-gnu",
+            "value": 0.003089806352487643,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-tb\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 0.005743845259254225, \"min\": 0.002682745109556124}"
           }
         ]
       }
