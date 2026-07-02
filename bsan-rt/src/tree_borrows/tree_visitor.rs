@@ -2,17 +2,17 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use super::data_structures::{UniIndex, UniValMap};
-use super::tree::{AccessRelatedness, Node};
+use super::tree::{node_from_map, AccessRelatedness, NodeMap};
+use crate::BorTag;
 
 /// Data given to the transition function
 pub struct NodeAppArgs<'visit, T> {
     /// The index of the current node.
-    pub idx: UniIndex,
+    pub tag: BorTag,
     /// Relative position of the access.
     pub rel_pos: AccessRelatedness,
     /// The node map of this tree.
-    pub nodes: &'visit mut UniValMap<Node>,
+    pub nodes: &'visit mut NodeMap,
     /// Additional data we want to be able to modify in f_propagate and read in f_continue.
     pub data: &'visit mut T,
 }
@@ -20,7 +20,7 @@ pub struct NodeAppArgs<'visit, T> {
 /// For soundness do not modify the children or parent indexes of nodes
 /// during traversal.
 pub struct TreeVisitor<'tree, T> {
-    pub nodes: &'tree mut UniValMap<Node>,
+    pub nodes: &'tree mut NodeMap,
     pub data: &'tree mut T,
 }
 
@@ -59,7 +59,7 @@ struct TreeVisitorStack<NodeContinue, NodeApp, T> {
     /// The last element indicates this.
     /// This is just an artifact of how you hand-roll recursion,
     /// it does not have a deeper meaning otherwise.
-    stack: Vec<(UniIndex, AccessRelatedness, RecursionState)>,
+    stack: Vec<(BorTag, AccessRelatedness, RecursionState)>,
     phantom: PhantomData<T>,
 }
 
@@ -71,29 +71,29 @@ where
     fn should_continue_at(
         &self,
         this: &mut TreeVisitor<'_, T>,
-        idx: UniIndex,
+        tag: BorTag,
         rel_pos: AccessRelatedness,
     ) -> ContinueTraversal {
-        let args = NodeAppArgs { idx, rel_pos, nodes: this.nodes, data: this.data };
+        let args = NodeAppArgs { tag, rel_pos, nodes: this.nodes, data: this.data };
         (self.f_continue)(&args)
     }
 
     fn propagate_at(
         &mut self,
         this: &mut TreeVisitor<'_, T>,
-        idx: UniIndex,
+        tag: BorTag,
         rel_pos: AccessRelatedness,
     ) -> Result<(), Err> {
-        (self.f_propagate)(NodeAppArgs { idx, rel_pos, nodes: this.nodes, data: this.data })
+        (self.f_propagate)(NodeAppArgs { tag, rel_pos, nodes: this.nodes, data: this.data })
     }
 
     /// Returns the root of this tree.
     fn go_upwards_from_accessed(
         &mut self,
         this: &mut TreeVisitor<'_, T>,
-        accessed_node: UniIndex,
+        accessed_node: BorTag,
         visit_children: ChildrenVisitMode,
-    ) -> Result<UniIndex, Err> {
+    ) -> Result<BorTag, Err> {
         // We want to visit the accessed node's children first.
         // However, we will below walk up our parents and push their children (our cousins)
         // onto the stack. To ensure correct iteration order, this method thus finishes
@@ -105,7 +105,7 @@ where
         {
             self.propagate_at(this, accessed_node, AccessRelatedness::LocalAccess)?;
             if matches!(visit_children, ChildrenVisitMode::VisitChildrenOfAccessed) {
-                let accessed_node = this.nodes.get(accessed_node).unwrap();
+                let accessed_node = node_from_map(this.nodes, accessed_node);
                 // We `rev()` here because we reverse the entire stack later.
                 for &child in accessed_node.children.iter().rev() {
                     self.stack.push((
@@ -120,9 +120,9 @@ where
         // make sure we only mark the "cousin" subtrees for later visitation,
         // not the subtree that contains the accessed node.
         let mut last_node = accessed_node;
-        while let Some(current) = this.nodes.get(last_node).unwrap().parent {
+        while let Some(current) = node_from_map(this.nodes, last_node).parent {
             self.propagate_at(this, current, AccessRelatedness::LocalAccess)?;
-            let node = this.nodes.get(current).unwrap();
+            let node = node_from_map(this.nodes, current);
             // We `rev()` here because we reverse the entire stack later.
             for &child in node.children.iter().rev() {
                 if last_node == child {
@@ -155,7 +155,7 @@ where
                     let handle_children = self.should_continue_at(this, idx, rel_pos);
                     match handle_children {
                         ContinueTraversal::Recurse => {
-                            let node = this.nodes.get(idx).unwrap();
+                            let node = node_from_map(this.nodes, idx);
                             for &child in node.children.iter() {
                                 self.stack.push((child, rel_pos, RecursionState::BeforeChildren));
                             }
@@ -223,10 +223,10 @@ impl<'tree, T> TreeVisitor<'tree, T> {
     /// Returns the index of the root of the accessed tree.
     pub fn traverse_this_parents_children_other<Err>(
         mut self,
-        start_idx: UniIndex,
+        start_idx: BorTag,
         f_continue: impl Fn(&NodeAppArgs<'_, T>) -> ContinueTraversal,
         f_propagate: impl FnMut(NodeAppArgs<'_, T>) -> Result<(), Err>,
-    ) -> Result<UniIndex, Err> {
+    ) -> Result<BorTag, Err> {
         let mut stack = TreeVisitorStack::new(f_continue, f_propagate);
         // Visits the accessed node itself, and all its parents, i.e. all nodes
         // undergoing a child access. Also pushes the children and the other
@@ -249,10 +249,10 @@ impl<'tree, T> TreeVisitor<'tree, T> {
     /// Returns the index of the root of the accessed tree.
     pub fn traverse_nonchildren<Err>(
         mut self,
-        start_idx: UniIndex,
+        start_idx: BorTag,
         f_continue: impl Fn(&NodeAppArgs<'_, T>) -> ContinueTraversal,
         f_propagate: impl FnMut(NodeAppArgs<'_, T>) -> Result<(), Err>,
-    ) -> Result<UniIndex, Err> {
+    ) -> Result<BorTag, Err> {
         let mut stack = TreeVisitorStack::new(f_continue, f_propagate);
         // Visits the accessed node itself, and all its parents, i.e. all nodes
         // undergoing a child access. Also pushes the other cousin nodes to the
@@ -275,7 +275,7 @@ impl<'tree, T> TreeVisitor<'tree, T> {
     /// parents.
     pub fn traverse_children_this<Err>(
         mut self,
-        start_idx: UniIndex,
+        start_idx: BorTag,
         f_continue: impl Fn(&NodeAppArgs<'_, T>) -> ContinueTraversal,
         f_propagate: impl FnMut(NodeAppArgs<'_, T>) -> Result<(), Err>,
     ) -> Result<(), Err> {

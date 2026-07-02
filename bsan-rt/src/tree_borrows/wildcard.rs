@@ -1,10 +1,9 @@
 // Ported from Miri (commit:072a9fa)
 use core::fmt::Debug;
 
-use super::data_structures::{UniIndex, UniValMap};
 use super::perms::AccessKind;
-use super::tree::{AccessRelatedness, Node};
-use super::EagerTree;
+use crate::helpers::FxHashMap;
+use super::tree::{node_from_map, node_from_map_mut, AccessRelatedness, EagerTree, NodeMap};
 #[cfg(feature = "expensive-consistency-checks")]
 use crate::borrow_tracker::GlobalState;
 use crate::BorTag;
@@ -60,7 +59,7 @@ impl WildcardAccessRelatedness {
 /// In particular, this map remains empty (and thus consumes no memory) until the first
 /// node in the tree gets exposed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ExposedCache(UniValMap<ExposedCacheNode>);
+pub struct ExposedCache(FxHashMap<BorTag, ExposedCacheNode>);
 
 /// State per location per node keeping track of where relative to this
 /// node exposed nodes are and what access permissions they have.
@@ -86,16 +85,16 @@ impl ExposedCache {
     /// * `only_foreign`: Assume the access cannot come from a local node.
     pub fn access_relatedness(
         &self,
-        root: UniIndex,
-        id: UniIndex,
+        root: BorTag,
+        id: BorTag,
         kind: AccessKind,
         is_wildcard_tree: bool,
         only_foreign: bool,
     ) -> Option<WildcardAccessRelatedness> {
         // All nodes in the tree are local to the root, so we can use the root to get the total
         // number of valid exposed nodes in the tree.
-        let root = self.0.get(root).cloned().unwrap_or_default();
-        let node = self.0.get(id).cloned().unwrap_or_default();
+        let root = self.0.get(&root).cloned().unwrap_or_default();
+        let node = self.0.get(&id).cloned().unwrap_or_default();
 
         let (total_num, local_num) = match kind {
             AccessKind::Read => (root.local_reads, node.local_reads),
@@ -151,8 +150,8 @@ impl ExposedCache {
     /// * `to`: The new access level.
     pub fn update_exposure(
         &mut self,
-        nodes: &UniValMap<Node>,
-        id: UniIndex,
+        nodes: &NodeMap,
+        tag: BorTag,
         from: WildcardAccessLevel,
         to: WildcardAccessLevel,
     ) {
@@ -162,10 +161,10 @@ impl ExposedCache {
         }
 
         // Update the counts of this node and all its ancestors.
-        let mut next_id = Some(id);
-        while let Some(id) = next_id {
-            let node = nodes.get(id).unwrap();
-            let mut state = self.0.entry(id);
+        let mut next_tag = Some(tag);
+        while let Some(tag) = next_tag {
+            let node = node_from_map(nodes, tag);
+            let state = self.0.entry(tag);
             let state = state.or_insert(Default::default());
 
             use WildcardAccessLevel::*;
@@ -179,14 +178,14 @@ impl ExposedCache {
                 (Read | Write, None) => state.local_reads -= 1,
                 _ => {}
             }
-            next_id = node.parent;
+            next_tag = node.parent;
         }
     }
     /// Removes a node from the datastructure.
     ///
     /// The caller needs to ensure that the node does not have any children.
-    pub fn remove(&mut self, idx: UniIndex) {
-        self.0.remove(idx);
+    pub fn remove(&mut self, tag: BorTag) {
+        self.0.remove(&tag);
     }
 }
 
@@ -195,51 +194,54 @@ impl EagerTree {
     /// to represent its access level.
     /// Also takes as an argument whether the tag is protected or not.
     pub fn expose_tag(&mut self, tag: BorTag, protected: bool) {
-        let id = self.tag_mapping.get(&tag).unwrap();
-        let node = self.nodes.get_mut(id).unwrap();
-        if !node.is_exposed {
-            node.is_exposed = true;
-            let node = self.nodes.get(id).unwrap();
+        if node_from_map(&self.nodes, tag).is_exposed {
+            return;
+        }
+        node_from_map_mut(&mut self.nodes, tag).is_exposed = true;
 
-            for (_, loc) in self.locations.iter_mut_all() {
-                let perm = loc
-                    .perms
-                    .get(id)
-                    .map(|p| p.permission())
-                    .unwrap_or_else(|| node.default_location_state().permission());
+        for (_, loc) in self.locations.iter_mut_all() {
+            let perm = loc
+                .perms
+                .get(&tag)
+                .map(|p| p.permission())
+                .unwrap_or_else(|| node_from_map(&self.nodes, tag).default_location_state().permission());
 
-                let access_level = perm.strongest_allowed_local_access(protected);
-                // An unexposed node gets treated as access level `None`. Therefore,
-                // the initial exposure transitions from `None` to the node's actual
-                // `access_level`.
-                loc.exposed_cache.update_exposure(
-                    &self.nodes,
-                    id,
-                    WildcardAccessLevel::None,
-                    access_level,
-                );
-            }
+            let access_level = perm.strongest_allowed_local_access(protected);
+            // An unexposed node gets treated as access level `None`. Therefore,
+            // the initial exposure transitions from `None` to the node's actual
+            // `access_level`.
+            loc.exposed_cache.update_exposure(
+                &self.nodes,
+                tag,
+                WildcardAccessLevel::None,
+                access_level,
+            );
         }
     }
 
     pub(super) fn update_exposure_for_protector_release(&mut self, tag: BorTag) {
-        let idx = self.tag_mapping.get(&tag).unwrap();
-
         // We check if the node is already exposed, as we don't want to expose any
         // nodes which aren't already exposed.
-        let node = self.nodes.get(idx).unwrap();
-        if node.is_exposed {
-            for (_, loc) in self.locations.iter_mut_all() {
-                let perm = loc
-                    .perms
-                    .get(idx)
-                    .map(|p| p.permission())
-                    .unwrap_or_else(|| node.default_location_state().permission());
-                // We are transitioning from protected to unprotected.
-                let old_access_type = perm.strongest_allowed_local_access(/*protected*/ true);
-                let access_type = perm.strongest_allowed_local_access(/*protected*/ false);
-                loc.exposed_cache.update_exposure(&self.nodes, idx, old_access_type, access_type);
-            }
+        if !node_from_map(&self.nodes, tag).is_exposed {
+            return;
+        }
+        for (_, loc) in self.locations.iter_mut_all() {
+            let perm = loc
+                .perms
+                .get(&tag)
+                .map(|p| p.permission())
+                .unwrap_or_else(|| {
+                    node_from_map(&self.nodes, tag).default_location_state().permission()
+                });
+            // We are transitioning from protected to unprotected.
+            let old_access_type = perm.strongest_allowed_local_access(/*protected*/ true);
+            let access_type = perm.strongest_allowed_local_access(/*protected*/ false);
+            loc.exposed_cache.update_exposure(
+                &self.nodes,
+                tag,
+                old_access_type,
+                access_type,
+            );
         }
     }
 }
@@ -250,18 +252,20 @@ impl EagerTree {
     /// has the correct `exposed_as` values.
     pub fn verify_wildcard_consistency(&self, global: &GlobalState) {
         // We rely on the fact that `roots` is ordered according to tag from low to high.
-        assert!(self.roots.is_sorted_by_key(|idx| self.nodes.get(*idx).unwrap().tag));
+        assert!(self.roots.is_sorted_by_key(|root_tag| self.node(*root_tag).tag));
 
         let protected_tags = &global.borrow().protected_tags;
         for (_, loc) in self.locations.iter_all() {
             let exposed_cache = &loc.exposed_cache;
             let perms = &loc.perms;
-            for (id, node) in self.nodes.iter() {
-                let state = exposed_cache.0.get(id).cloned().unwrap_or_default();
+            for (&node_tag, node) in self.nodes.iter() {
+                let state = exposed_cache.0.get(&node_tag).cloned().unwrap_or_default();
 
                 let exposed_as = if node.is_exposed {
-                    let perm =
-                        perms.get(id).copied().unwrap_or_else(|| node.default_location_state());
+                    let perm = perms
+                        .get(&node_tag)
+                        .copied()
+                        .unwrap_or_else(|| node.default_location_state());
 
                     perm.permission()
                         .strongest_allowed_local_access(protected_tags.contains_key(&node.tag))
@@ -273,7 +277,7 @@ impl EagerTree {
                     .children
                     .iter()
                     .copied()
-                    .map(|id| exposed_cache.0.get(id).cloned().unwrap_or_default())
+                    .map(|child_tag| exposed_cache.0.get(&child_tag).cloned().unwrap_or_default())
                     .fold((0, 0), |acc, wc| (acc.0 + wc.local_reads, acc.1 + wc.local_writes));
                 let expected_reads =
                     child_reads + u16::from(exposed_as >= WildcardAccessLevel::Read);
@@ -281,12 +285,12 @@ impl EagerTree {
                     child_writes + u16::from(exposed_as >= WildcardAccessLevel::Write);
                 assert_eq!(
                     state.local_reads, expected_reads,
-                    "expected {:?}'s (id:{id:?}) local_reads to be {expected_reads:?} instead of {:?} (child_reads: {child_reads:?}, exposed_as: {exposed_as:?})",
+                    "expected {:?}'s (tag:{node_tag:?}) local_reads to be {expected_reads:?} instead of {:?} (child_reads: {child_reads:?}, exposed_as: {exposed_as:?})",
                     node.tag, state.local_reads
                 );
                 assert_eq!(
                     state.local_writes, expected_writes,
-                    "expected {:?}'s (id:{id:?}) local_writes to be {expected_writes:?} instead of {:?} (child_writes: {child_writes:?}, exposed_as: {exposed_as:?})",
+                    "expected {:?}'s (tag:{node_tag:?}) local_writes to be {expected_writes:?} instead of {:?} (child_writes: {child_writes:?}, exposed_as: {exposed_as:?})",
                     node.tag, state.local_writes
                 );
             }

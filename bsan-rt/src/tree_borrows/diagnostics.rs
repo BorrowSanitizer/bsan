@@ -4,11 +4,11 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::ops::Range;
 
-use super::data_structures::UniIndex;
+
 use super::perms::{AccessKind, PermTransition, Permission, ProtectorKind};
-use super::tree::LocationState;
+use super::tree::{EagerTree, LocationState};
 use crate::helpers::AllocRange;
-use crate::tree_borrows::{EagerTree, LazyTree};
+use crate::tree_borrows::LazyTree;
 use crate::{eprintln, *};
 
 /// Cause of an access: either a real access or one
@@ -230,20 +230,18 @@ impl EagerTree {
     /// but still exist in the tree. Not guaranteed to perform consistently
     /// if `provenance-gc=1`.
     fn nth_parent(&self, tag: BorTag, nth_parent: u8) -> Option<BorTag> {
-        let mut idx = self.tag_mapping.get(&tag).unwrap();
+        let mut current = tag;
         for _ in 0..nth_parent {
-            let node = self.nodes.get(idx).unwrap();
-            idx = node.parent?;
+            current = self.node(current).parent?;
         }
-        Some(self.nodes.get(idx).unwrap().tag)
+        Some(current)
     }
 
     /// Debug helper: assign name to tag.
     pub fn give_pointer_debug_name(&mut self, tag: BorTag, nth_parent: u8, name: &str) {
         let tag = self.nth_parent(tag, nth_parent).unwrap();
-        let idx = self.tag_mapping.get(&tag).unwrap();
-        if let Some(node) = self.nodes.get_mut(idx) {
-            node.debug_info.add_name(name);
+        if self.nodes.contains_key(&tag) {
+            self.node_mut(tag).debug_info.add_name(name);
         } else {
             eprintln!("Tag {tag:?} (to be named '{name}') not found!");
         }
@@ -251,7 +249,7 @@ impl EagerTree {
 
     /// Debug helper: determines if the tree contains a tag.
     pub fn is_allocation_of(&self, tag: BorTag) -> bool {
-        self.tag_mapping.contains_key(&tag)
+        self.nodes.contains_key(&tag)
     }
 }
 
@@ -644,7 +642,7 @@ struct DisplayRepr {
 }
 
 impl DisplayRepr {
-    fn from(tree: &EagerTree, root: UniIndex, show_unnamed: bool) -> Option<Self> {
+    fn from(tree: &EagerTree, root: BorTag, show_unnamed: bool) -> Option<Self> {
         let mut v = Vec::new();
         extraction_aux(tree, root, show_unnamed, &mut v);
         let Some(root) = v.pop() else {
@@ -660,16 +658,16 @@ impl DisplayRepr {
 
         fn extraction_aux(
             tree: &EagerTree,
-            idx: UniIndex,
+            idx: BorTag,
             show_unnamed: bool,
             acc: &mut Vec<DisplayRepr>,
         ) {
-            let node = tree.nodes.get(idx).unwrap();
+            let node = tree.node(idx);
             let name = node.debug_info.name.clone();
             let exposed = node.is_exposed;
             let children_sorted = {
                 let mut children = node.children.iter().cloned().collect::<Vec<_>>();
-                children.sort_by_key(|idx| tree.nodes.get(*idx).unwrap().tag);
+                children.sort_by_key(|idx| tree.node(*idx).tag);
                 children
             };
             if !show_unnamed && name.is_none() {
@@ -683,7 +681,7 @@ impl DisplayRepr {
                     .locations
                     .iter_all()
                     .map(move |(_offset, loc)| {
-                        let perm = loc.perms.get(idx);
+                        let perm = loc.perms.get(&idx);
                         perm.cloned()
                     })
                     .collect::<Vec<_>>();
@@ -911,16 +909,14 @@ impl EagerTree {
         let mut new_tags = Vec::new();
         let mut changed_tags = Vec::new();
 
-        let mut all_tags: Vec<BorTag> = self.tag_mapping.mapping.keys().copied().collect();
+        let mut all_tags: Vec<BorTag> = self.nodes.keys().copied().collect();
         all_tags.sort();
 
         for tag in all_tags {
-            let new_idx = self.tag_mapping.get(&tag).unwrap();
-
-            if let Some(old_idx) = old_tree.tag_mapping.get(&tag) {
+            if old_tree.nodes.contains_key(&tag) {
                 let mut diffs = Vec::new();
                 for (range, loc) in self.locations.iter_all() {
-                    let new_perm = loc.perms.get(new_idx).copied();
+                    let new_perm = loc.perms.get(&tag).copied();
 
                     // Find permission in old_tree for this range (sampling at start)
                     let old_perm_at_start = if let Some((_, old_loc)) = old_tree
@@ -928,7 +924,7 @@ impl EagerTree {
                         .iter(Size::from_bytes(range.start), Size::from_bytes(1))
                         .next()
                     {
-                        old_loc.perms.get(old_idx).copied()
+                        old_loc.perms.get(&tag).copied()
                     } else {
                         None
                     };
