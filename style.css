@@ -43,7 +43,6 @@ button {
   border-color: transparent;
   cursor: pointer;
   text-align: center;
-  border-radius: 4px;
   padding: 8px 12px;
   font-size: 14px;
 }
@@ -57,7 +56,6 @@ select {
   color: #20232a;
   background-color: #fff;
   border: 1px solid #c9d1dc;
-  border-radius: 4px;
   padding: 8px;
   font-size: 14px;
   min-width: 190px;
@@ -103,7 +101,6 @@ footer {
 .dashboard-meta {
   border: 1px solid #cfd6df;
   background: #fff;
-  border-radius: 5px;
   padding: 16px 20px;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -114,7 +111,6 @@ footer {
 #explanation-container, #controls-container {
   border: 1px solid #cfd6df;
   background: #fff;
-  border-radius: 5px;
   margin: 0 auto 20px;
   max-width: 1200px;
   width: 100%;
@@ -143,10 +139,32 @@ footer {
   text-transform: uppercase;
 }
 
+/* An accessible checkbox styled as a sliding on/off switch. */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+  margin: 4px 0;
+}
+
+.toggle-switch input {
+  position: absolute;
+  display: inline;
+  top: 50%;
+  left: 50%;
+  margin: 0;
+  transform: translate(-50%, -50%)
+}
+
 .dashboard-explanation {
   color: #20232a;
   line-height: 1.5;
   margin: 0;
+}
+.control-field--toggle {
+  align-items: center;
+  text-align: center;
 }
 
 .dashboard-explanation p:first-child {
@@ -178,7 +196,6 @@ footer {
   display: flex;
   flex-direction: column;
   border: 1px solid #cfd6df;
-  border-radius: 5px;
   background-color: #fff;
   box-shadow: 0 2px 8px rgb(32 35 42 / 6%);
 }
@@ -214,7 +231,6 @@ footer {
 
 .chart-panel {
   border: 1px solid #d9dee7;
-  border-radius: 5px;
   background: #fff;
   min-width: 0;
   max-width: 1000px;
@@ -249,7 +265,6 @@ footer {
 
 .empty-state {
   border: 1px solid #cfd6df;
-  border-radius: 5px;
   background: #fff;
   color: #6b7280;
   padding: 24px;

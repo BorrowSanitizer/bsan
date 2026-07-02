@@ -63,15 +63,17 @@ function initDatasets() {
                 tool,
                 benches
             } = entry;
-            
+
             for (const bench of benches) {
                 const result = {
                     commit,
                     date,
                     tool,
-                    bench: { ...bench } 
+                    bench: {
+                        ...bench
+                    }
                 };
-                
+
                 result.bench.extra = parseExtra(result.bench.extra);
                 const extra = result.bench.extra;
                 const key = [
@@ -104,14 +106,16 @@ function initDatasets() {
         // Render footer
         dl_button.onclick = () => {
             const jsonString = JSON.stringify(data, null, 2);
-            const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8' });
+            const blob = new Blob([jsonString], {
+                type: 'application/json;charset=utf-8'
+            });
             const dataUrl = URL.createObjectURL(blob);
-            
+
             const a = document.createElement('a');
             a.href = dataUrl;
             a.download = 'data.json';
             a.click();
-            
+
             URL.revokeObjectURL(dataUrl);
         };
 
@@ -137,7 +141,9 @@ function sortedUnique(values) {
 // of the dataset.
 function populateControls(dataSets, render) {
 
-    function populateSelect(select, values, allLabel, { allowAll = true } = {}) {
+    function populateSelect(select, values, allLabel, {
+        allowAll = true
+    } = {}) {
         select.innerHTML = '';
         // Only add the "all" option if there's more than
         // one to choose from.
@@ -162,7 +168,10 @@ function populateControls(dataSets, render) {
     const baselineSelect = document.getElementById('baseline-select');
 
     const parsedDataSets = [];
-    for (const { dataSet } of dataSets) {
+    for (const {
+            dataSet
+        }
+        of dataSets) {
         for (const benches of dataSet.values()) {
             const parsed = benches
                 .map(d => d.bench.extra)
@@ -170,7 +179,7 @@ function populateControls(dataSets, render) {
             parsedDataSets.push(...parsed);
         }
     }
-    
+
     if (parsedDataSets.length > 0) {
         populateSelect(crateSelect, sortedUnique(parsedDataSets.map(d => d.crate)), 'All crates');
         populateSelect(targetSelect, sortedUnique(parsedDataSets.map(d => d.target)), 'All targets');
@@ -178,14 +187,16 @@ function populateControls(dataSets, render) {
         populateSelect(
             baselineSelect,
             sortedUnique(parsedDataSets.map(d => d.baseline)),
-            'All baselines',
-            { allowAll: false }
+            'All baselines', {
+                allowAll: false
+            }
         );
 
         crateSelect.addEventListener('change', render);
         targetSelect.addEventListener('change', render);
         modeSelect.addEventListener('change', render);
         baselineSelect.addEventListener('change', render);
+        document.getElementById('band-toggle').addEventListener('change', render);
     } else {
         const missing = 'No data';
         populateSelect(crateSelect, [], missing);
@@ -203,12 +214,12 @@ function populateControls(dataSets, render) {
 }
 
 function filterDataset(dataset, filters) {
-   return dataset.filter((d) => {
-        return (!filters.crate    || d.bench.extra?.crate === filters.crate)  &&
-               (!filters.target   || d.bench.extra?.target === filters.target) &&
-               (!filters.mode     || d.bench.extra?.mode === filters.mode) &&
-               (!filters.baseline || d.bench.extra?.baseline === filters.baseline);
-   });
+    return dataset.filter((d) => {
+        return (!filters.crate || d.bench.extra?.crate === filters.crate) &&
+            (!filters.target || d.bench.extra?.target === filters.target) &&
+            (!filters.mode || d.bench.extra?.mode === filters.mode) &&
+            (!filters.baseline || d.bench.extra?.baseline === filters.baseline);
+    });
 }
 
 function formatBenchExtra(bench) {
@@ -224,7 +235,9 @@ function formatBenchExtra(bench) {
         'baseline: ' + metadata.baseline,
     ];
     if (metadata.min !== undefined && metadata.max !== undefined) {
-        const fmt = v => Number(v).toLocaleString(undefined, { maximumFractionDigits: 3 });
+        const fmt = v => Number(v).toLocaleString(undefined, {
+            maximumFractionDigits: 3
+        });
         lines.push('range: ' + fmt(metadata.min) + ' – ' + fmt(metadata.max));
     }
     return lines;
@@ -240,12 +253,10 @@ function renderAllCharts(dataSets) {
         const latestMetadata = dataset[dataset.length - 1]?.bench.extra ?? null;
         const benchName = dataset[dataset.length - 1]?.bench.name ?? '';
 
-        // Each chart represents one configuration. The title fully describes
-        // it; the subtitle carries the target architecture.
-        const titleText = latestMetadata
-            ? 'Mean execution time in "' + latestMetadata.mode + '" mode as a multiple of "' +
-              latestMetadata.baseline + '," for ' + latestMetadata.crate
-            : benchName;
+        const titleText = latestMetadata ?
+            'Mean execution time in "' + latestMetadata.mode + '" mode as a multiple of "' +
+            latestMetadata.baseline + '," for ' + latestMetadata.crate :
+            benchName;
 
         const title = document.createElement('h2');
         title.className = 'chart-title';
@@ -267,40 +278,38 @@ function renderAllCharts(dataSets) {
         canvas.className = 'benchmark-chart';
         canvasWrap.appendChild(canvas);
 
-        // Three lines per chart: the mean, the max, and the min.
-        // The min line fills up to the max line (fill: '-1') so that the band
-        // between them is shaded.
+        const showBand = document.getElementById('band-toggle')?.checked ?? true;
+        const datasets = [{
+            label: titleText,
+            data: dataset.map(d => d.bench.value),
+            borderColor: COLOR,
+            backgroundColor: COLOR,
+            fill: false,
+        }, ];
+        if (showBand) {
+            +datasets.push({
+                label: 'max',
+                data: dataset.map(d => d.bench.extra?.max ?? d.bench.value),
+                borderColor: BAND_LINE_COLOR,
+                backgroundColor: BG_COLOR,
+                borderWidth: 1,
+                pointRadius: 0,
+                pointHoverRadius: 0,
+                fill: false,
+            }, {
+                label: 'min',
+                data: dataset.map(d => d.bench.extra?.min ?? d.bench.value),
+                borderColor: BAND_LINE_COLOR,
+                backgroundColor: BG_COLOR,
+                borderWidth: 1,
+                pointRadius: 0,
+                pointHoverRadius: 0,
+                fill: '-1',
+            });
+        }
         const data = {
             labels: dataset.map(d => d.commit.id.slice(0, 7)),
-            datasets: [
-                {
-                    label: titleText,
-                    data: dataset.map(d => d.bench.value),
-                    borderColor: COLOR,
-                    backgroundColor: COLOR,
-                    fill: false,
-                },
-                {
-                    label: 'max',
-                    data: dataset.map(d => d.bench.extra?.max ?? d.bench.value),
-                    borderColor: BAND_LINE_COLOR,
-                    backgroundColor: BG_COLOR,
-                    borderWidth: 1,
-                    pointRadius: 0,
-                    pointHoverRadius: 0,
-                    fill: false,
-                },
-                {
-                    label: 'min',
-                    data: dataset.map(d => d.bench.extra?.min ?? d.bench.value),
-                    borderColor: BAND_LINE_COLOR,
-                    backgroundColor: BG_COLOR,
-                    borderWidth: 1,
-                    pointRadius: 0,
-                    pointHoverRadius: 0,
-                    fill: '-1',
-                },
-            ],
+            datasets,
         };
 
         const options = {
@@ -331,17 +340,22 @@ function renderAllCharts(dataSets) {
                 filter: item => item.datasetIndex === 0,
                 callbacks: {
                     afterTitle: items => {
-                        const { index } = items[0];
+                        const {
+                            index
+                        } = items[0];
                         const data = dataset[index];
-                        return '\n' + data.commit.message 
-                            + '\n\n' + data.commit.timestamp 
-                            + ' committed by @' 
-                            + data.commit.committer.username 
-                            + '\n';
+                        return '\n' + data.commit.message +
+                            '\n\n' + data.commit.timestamp +
+                            ' committed by @' +
+                            data.commit.committer.username +
+                            '\n';
                     },
                     label: item => {
                         let label = item.value;
-                        const { range, unit } = dataset[item.index].bench;
+                        const {
+                            range,
+                            unit
+                        } = dataset[item.index].bench;
                         label += ' ' + unit;
                         if (range) {
                             label += ' (' + range + ')';
@@ -362,7 +376,7 @@ function renderAllCharts(dataSets) {
                 window.open(url, '_blank');
             },
         };
-        
+
         new Chart(canvas, {
             type: 'line',
             data,
@@ -417,10 +431,14 @@ function renderAllCharts(dataSets) {
     };
 
     let rendered = 0;
-    for (const { name, dataSet } of dataSets) {
+    for (const {
+            name,
+            dataSet
+        }
+        of dataSets) {
         rendered += renderBenchSet(name, dataSet, main, filters) ? 1 : 0;
     }
-    
+
     if (rendered === 0) {
         const empty = document.createElement('div');
         empty.className = 'empty-state';
