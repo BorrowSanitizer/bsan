@@ -31,7 +31,6 @@ pub enum RustcPhase {
     Rustdoc,
 }
 
-
 pub fn show_error_cmd_(cmd: Command, msg: &impl std::fmt::Display) -> ! {
     eprintln!("{msg}\n - using: {cmd:?}");
     std::process::exit(1)
@@ -49,7 +48,6 @@ macro_rules! show_error_cmd {
 }
 
 pub(crate) use show_error_cmd;
-
 
 macro_rules! show_error {
     ($($tt:tt)*) => { crate::util::show_error_(&format_args!($($tt)*)) };

@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 use rustc_version::{LlvmVersion, VersionMeta};
 
-use crate::util::{assert_host_bin, expect_env_path, show_error_cmd, show_error, Sysroot};
+use crate::util::{assert_host_bin, expect_env_path, show_error, show_error_cmd, Sysroot};
 
 fn rustc_lld(sysroot_target_bindir: &Path) -> PathBuf {
     let lld_binary = |prefix: &str| format!("{}.lld", prefix);
@@ -60,7 +60,6 @@ impl LlvmTools {
         // to be set so that it uses our clang to parse headers.
         cmd.env("LIBCLANG_PATH", self.llvm_libdir());
         cmd.env("CLANG_PATH", &self.clang);
-
     }
 
     pub fn from_env() -> Self {
@@ -74,13 +73,17 @@ impl LlvmTools {
     pub fn llvm_libdir(&self) -> PathBuf {
         let mut cmd = Command::new(&self.llvm_config);
         cmd.arg("--libdir");
-  
+
         let Some(path) = command_output(&mut cmd) else {
             show_error_cmd!(cmd, "Unable to resolve the LLVM `lib` directory using `llvm-config`.");
         };
         let path = PathBuf::from(path);
         if !path.try_exists().unwrap() {
-            show_error_cmd!(cmd, "The `lib` directory returned by `llvm-config` does not exist: {}", path.display());
+            show_error_cmd!(
+                cmd,
+                "The `lib` directory returned by `llvm-config` does not exist: {}",
+                path.display()
+            );
         }
         path
     }
