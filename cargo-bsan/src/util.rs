@@ -31,10 +31,25 @@ pub enum RustcPhase {
     Rustdoc,
 }
 
+
+pub fn show_error_cmd_(cmd: Command, msg: &impl std::fmt::Display) -> ! {
+    eprintln!("{msg}\n - using: {cmd:?}");
+    std::process::exit(1)
+}
+
 pub fn show_error_(msg: &impl std::fmt::Display) -> ! {
     eprintln!("{msg}");
     std::process::exit(1)
 }
+
+macro_rules! show_error_cmd {
+    ($cmd:ident, $($tt:tt)*) => {
+        crate::util::show_error_cmd_($cmd, &format_args!($($tt)*))
+    };
+}
+
+pub(crate) use show_error_cmd;
+
 
 macro_rules! show_error {
     ($($tt:tt)*) => { crate::util::show_error_(&format_args!($($tt)*)) };
@@ -211,7 +226,7 @@ pub fn try_get_host_binary(sysroot: &Sysroot, binary: &str) -> Option<PathBuf> {
     sysroot.binary(binary).or_else(|| which::which(binary).ok())
 }
 
-pub fn assert_host_binary(sysroot: &Sysroot, binary: &str) -> PathBuf {
+pub fn assert_host_bin(sysroot: &Sysroot, binary: &str) -> PathBuf {
     try_get_host_binary(sysroot, binary)
         .unwrap_or_else(|| show_error!("failed to find `{}`", binary))
 }
