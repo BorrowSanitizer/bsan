@@ -5,5 +5,13 @@
         "exclude": [
             "map::test_map::test_lots_of_insertions"
         ]
+    },
+    {
+        "name": "rand",
+        "version": "0.10.1"
+    },
+    {
+        "name": "matchers",
+        "version": "0.2.0"
     }
 ]
