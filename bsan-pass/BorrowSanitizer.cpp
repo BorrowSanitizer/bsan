@@ -1012,8 +1012,7 @@ public:
   // provenance associated with a stack allocation. This includes allocas and
   // byval arguments.
   Value *getStackAllocSlot(IRBuilder<> &IRB) {
-    Value *FrameHeaderBottom = getOrInitFrameHeaderBottom(IRB);
-    FrameHeaderBottom = ptrsub(IRB, FrameHeaderBottom, SlotSize);
+    FrameHeaderBottom = ptrsub(IRB, getOrInitFrameHeaderBottom(IRB), SlotSize);
     NumStackAllocSlots += 1;
     return FrameHeaderBottom;
   }
@@ -1523,6 +1522,7 @@ private:
       VarArgProvCount = EntryIRB.CreateLoad(BS.IntptrTy, BS.VarArgCounterTLS);
     }
 
+    bool DiffABI = BS.needsBoundaryValidation(&F);
     // Iterate over each argument to compute how many provenance slots
     // we need.
     SmallVector<ByValArgInfo> ByValArgs;
@@ -1551,7 +1551,8 @@ private:
         MaybeAlign ParamAlign = Arg.getParamAlign();
         Info.Alignment = ParamAlign.value_or(BS.DL->getABITypeAlign(Ty));
 
-        for (auto &Desc : BS.getProvenanceDesc(EntryIRB, Ty)) {
+        for (auto &Desc :
+             BS.getProvenanceDesc(EntryIRB, Ty, /*ClearGaps=*/DiffABI)) {
           Value *NumProv = EntryIRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
           NumParamProv = EntryIRB.CreateAdd(NumParamProv, NumProv);
           Info.Fields.push_back({NumParamProv, Desc});
@@ -1559,8 +1560,9 @@ private:
         ByValArgs.push_back(Info);
         ByValAllocs.push_back(Prov);
       } else {
-        SmallVector<ProvenanceField> ProvDesc =
-            BS.getProvenanceDesc(EntryIRB, Arg.getType());
+
+        SmallVector<ProvenanceField> ProvDesc = BS.getProvenanceDesc(
+            EntryIRB, Arg.getType(), /*ClearGaps=*/DiffABI);
         for (auto &Desc : ProvDesc) {
           Value *NumProv = EntryIRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
           NumParamProv = EntryIRB.CreateAdd(NumParamProv, NumProv);
@@ -1771,16 +1773,14 @@ private:
     bool IsVarArg = CB.getFunctionType()->isVarArg();
     unsigned NumFixedParams = CB.getFunctionType()->getNumParams();
 
-    bool DiffABI = BS.mayHaveDifferentABI(Callee);
+    bool DiffABI = BS.needsBoundaryValidation(Callee);
     SmallVector<std::pair<Value *, Provenance>> ParamOffsets;
     for (const auto &[i, Arg] : llvm::enumerate(CB.args())) {
       bool IsByVal = CB.paramHasAttr(i, Attribute::ByVal);
       Type *ArgTy = IsByVal ? CB.getParamByValType(i) : Arg->getType();
 
-      bool ShouldClearGaps = !IsByVal && DiffABI;
-
       SmallVector<ProvenanceField> ProvDesc =
-          BS.getProvenanceDesc(Before, ArgTy, /*ClearGaps=*/ShouldClearGaps);
+          BS.getProvenanceDesc(Before, ArgTy, /*ClearGaps=*/DiffABI);
 
       for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
         Value *NumProv = Before.CreateElementCount(BS.IntptrTy, Desc.Elems);
@@ -2189,7 +2189,7 @@ private:
 
       // If our cursor is less than this field's offset, then there's a gap to
       // clear.
-      if (Cursor < Desc.ByteOffset) {
+      if (Cursor != Desc.ByteOffset) {
         GapSize = IRB.CreateSub(Desc.ByteOffset, Cursor);
         if (FieldAlign < kMinProvAlignment) {
           // Round down so we don't clear a slot that we are about to overwrite
