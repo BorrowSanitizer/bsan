@@ -362,7 +362,7 @@ BorrowSanitizer::getProvenanceDesc(IRBuilder<> &IRB, Type *Ty, bool ClearGaps) {
   SmallVector<ProvenanceField> Desc;
   if (Ty->isSized()) {
     Value *Zero = ConstantInt::get(IRB.getIntPtrTy(*DL), 0);
-    getProvenanceDesc(IRB, Desc, Ty, Zero);
+    getProvenanceDesc(IRB, Desc, Ty, Zero, ClearGaps);
   }
   return Desc;
 }
@@ -425,7 +425,7 @@ Value *BorrowSanitizer::getProvenanceDesc(
           IRB.CreateTypeSize(IntptrTy, SL->getElementOffset(Idx));
       Value *CurrByteOffset = IRB.CreateAdd(ByteOffset, ElemOffset);
       auto *ProvOffset =
-          getProvenanceDesc(IRB, ProvDesc, ElemTy, CurrByteOffset);
+          getProvenanceDesc(IRB, ProvDesc, ElemTy, CurrByteOffset, ClearGaps);
       CurrProvOffset = IRB.CreateAdd(CurrProvOffset, ProvOffset);
     }
     return CurrProvOffset;
@@ -440,7 +440,7 @@ Value *BorrowSanitizer::getProvenanceDesc(
           IRB.CreateMul(ConstantInt::get(IntptrTy, Idx), ElemSize);
       CurrByteOffset = IRB.CreateAdd(ByteOffset, CurrByteOffset);
       auto *ProvOffset = getProvenanceDesc(IRB, ProvDesc, AT->getElementType(),
-                                           CurrByteOffset);
+                                           CurrByteOffset, ClearGaps);
       CurrProvOffset = IRB.CreateAdd(CurrProvOffset, ProvOffset);
     }
     return CurrProvOffset;
@@ -1628,8 +1628,10 @@ private:
     for (auto [Idx, AI] : llvm::enumerate(StaticAllocaVec)) {
       Provenance Prov = createAllocaMetadata(EntryIRB);
       NextNodeIRBuilder IRB(AI);
-      Value *AllocaSize = BS.getAllocaSizeBytes(IRB, AI);
-      initAllocaMetadata(IRB, AI, AllocaSize, Prov);
+      if (!HasLifetimeStart.contains(AI)) {
+        Value *AllocaSize = BS.getAllocaSizeBytes(IRB, AI);
+        initAllocaMetadata(IRB, AI, AllocaSize, Prov);
+      }
       setProvenance(AI, Prov);
       Value *Slot = ShadowStack.getStackAllocSlot(EntryIRB);
       storeProvenance(EntryIRB, Prov, Slot);
