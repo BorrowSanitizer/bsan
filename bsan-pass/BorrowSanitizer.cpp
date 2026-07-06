@@ -893,7 +893,7 @@ private:
 // | parameter provenance  |
 // |_______________________|
 // |                       |
-// | static allocas        |
+// | static/byval allocas  |
 // |_______________________|
 // |                       |  <-- FnEntryTop
 // | function entry retags |
@@ -915,6 +915,11 @@ private:
 class ShadowStackAllocator {
   // The size of a slot within the shadow stack.
   Value *SlotSize;
+
+  // The number of stack slots allocated to store the provenance
+  // of allocations that live for the duration of the stack frame,
+  // and will be deallocated before the function returns.
+  unsigned NumStackAllocSlots = 0;
 
   // A pointer to where the frame pointer is stored.
   Value *FramePtrSrc;
@@ -1003,10 +1008,18 @@ public:
     return FrameHeaderBottom;
   }
 
-  // Extends the frame header down by one provenance slot
-  Value *pushFrameHeaderSlot(IRBuilder<> &IRB) {
-    FrameHeaderBottom = ptrsub(IRB, getOrInitFrameHeaderBottom(IRB), SlotSize);
+  // Extends the frame header down by one provenance slot to store the
+  // provenance associated with a stack allocation. This includes allocas and
+  // byval arguments.
+  Value *getStackAllocSlot(IRBuilder<> &IRB) {
+    Value *FrameHeaderBottom = getOrInitFrameHeaderBottom(IRB);
+    FrameHeaderBottom = ptrsub(IRB, FrameHeaderBottom, SlotSize);
+    NumStackAllocSlots += 1;
     return FrameHeaderBottom;
+  }
+
+  Value *getNumStackAllocSlots(IRBuilder<> &IRB, Type *Ty) {
+    return ConstantInt::get(Ty, NumStackAllocSlots);
   }
 
   // Allocates one or more shadow stack slots from the requested section.
@@ -1604,7 +1617,7 @@ private:
       }
       copyProvenance(EntryIRB, Info.Arg, Fields, Info.Size, Info.Alignment,
                      AtomicOrdering::NotAtomic);
-      Value *Slot = ShadowStack.pushFrameHeaderSlot(EntryIRB);
+      Value *Slot = ShadowStack.getStackAllocSlot(EntryIRB);
       storeProvenance(EntryIRB, Info.AllocProv, Slot);
     }
 
@@ -1616,7 +1629,7 @@ private:
       Value *AllocaSize = BS.getAllocaSizeBytes(IRB, AI);
       initAllocaMetadata(IRB, AI, AllocaSize, Prov);
       setProvenance(AI, Prov);
-      Value *Slot = ShadowStack.pushFrameHeaderSlot(EntryIRB);
+      Value *Slot = ShadowStack.getStackAllocSlot(EntryIRB);
       storeProvenance(EntryIRB, Prov, Slot);
     }
 
@@ -1761,21 +1774,14 @@ private:
     bool DiffABI = BS.mayHaveDifferentABI(Callee);
     SmallVector<std::pair<Value *, Provenance>> ParamOffsets;
     for (const auto &[i, Arg] : llvm::enumerate(CB.args())) {
-      // byval arguments are passed by pointer, but semantically by value: the
-      // callee receives a private copy. We forward the provenance of the
-      // pointee's contents (not of the pointer itself) so the callee can
-      // reconstruct the shadow memory of its copy. Because the pointee type is
-      // explicit in the IR on both sides, its ABI lowering is unambiguous, so
-      // we never need to clear gaps for it.
       bool IsByVal = CB.paramHasAttr(i, Attribute::ByVal);
       Type *ArgTy = IsByVal ? CB.getParamByValType(i) : Arg->getType();
-      Align ByValAlign;
-      if (IsByVal)
-        ByValAlign =
-            CB.getParamAlign(i).value_or(BS.DL->getABITypeAlign(ArgTy));
 
-      SmallVector<ProvenanceField> ProvDesc = BS.getProvenanceDesc(
-          Before, ArgTy, /*ClearGaps=*/IsByVal ? false : DiffABI);
+      bool ShouldClearGaps = !IsByVal && DiffABI;
+
+      SmallVector<ProvenanceField> ProvDesc =
+          BS.getProvenanceDesc(Before, ArgTy, /*ClearGaps=*/ShouldClearGaps);
+
       for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
         Value *NumProv = Before.CreateElementCount(BS.IntptrTy, Desc.Elems);
         NumParamProv = Before.CreateAdd(NumParamProv, NumProv);
@@ -1787,6 +1793,8 @@ private:
         Value *ByteOffset = Before.CreateMul(NumParamProv, BS.ProvenanceSize);
         Provenance ProvSrc;
         if (IsByVal) {
+          Align ByValAlign =
+              CB.getParamAlign(i).value_or(BS.DL->getABITypeAlign(ArgTy));
           // Read the field's provenance from the caller's copy of the byval
           // memory so that we can forward it to the callee.
           Value *ObjAddr = ptradd(Before, Arg, Desc.ByteOffset);
@@ -2388,8 +2396,8 @@ private:
   void popFrame(IRBuilder<> &IRB, Instruction &I, Value *RetVal) {
     BasicBlock *BB = IRB.GetInsertBlock();
     if (ShadowStack.wasUsed()) {
-      Value *NumStackAllocs = ConstantInt::get(
-          BS.IntptrTy, StaticAllocaVec.size() + ByValAllocs.size());
+      Value *NumStackAllocs =
+          ShadowStack.getNumStackAllocSlots(IRB, BS.IntptrTy);
       Value *NumProtectors =
           ShadowStack.getOutgoingOffset(DT, LI, IRB, BS.IntptrTy, true);
       Value *MaxNumProtectors = ConstantInt::get(BS.IntptrTy, NumFnEntryRetags);
