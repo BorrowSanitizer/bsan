@@ -64,7 +64,7 @@ void __bsan_request_gc();
 // Returns true if every tag has been pruned, indicating that the allocation
 // metadata object can also be reclaimed.
 SANITIZER_WEAK_ATTRIBUTE
-bool __bsan_prune(AllocInfo *Info, const BorTag *tags, uptr len);
+bool __bsan_prune(AllocInfo *Info, BorTag *tags, uptr len);
 
 // Frees an `AllocInfo` object. The pointer must be nonnull and unreachable
 // in shadow memory.

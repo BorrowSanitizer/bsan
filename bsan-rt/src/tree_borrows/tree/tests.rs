@@ -769,3 +769,89 @@ mod spurious_read {
         }
     }
 }
+
+// The tests below are for BSAN's GC pruning that are not a part of Miri's GC.
+
+const ALLOC_BYTES: usize = 8;
+
+fn t(n: usize) -> BorTag {
+    assert!(BorTag(n).is_concrete());
+    BorTag(n)
+}
+
+fn new_tree(root: BorTag) -> EagerTree {
+    EagerTree::new(root, Size::from_bytes(ALLOC_BYTES), Span::dummy())
+}
+
+fn add_child(tree: &mut EagerTree, parent: BorTag, child: BorTag) {
+    let perm = Permission::new_frozen();
+    let sifa = perm.strongest_idempotent_foreign_access(false);
+    let inside_perms = DedupRangeMap::new(
+        Size::from_bytes(ALLOC_BYTES),
+        LocationState::new_non_accessed(perm, sifa),
+    );
+    let result =
+        tree.new_child(Size::ZERO, parent, child, inside_perms, perm, false, Span::dummy());
+    assert!(result.is_ok());
+}
+
+#[test]
+fn dead_leaf_is_removed_and_zeroed() {
+    let mut tree = new_tree(t(10));
+    add_child(&mut tree, t(10), t(11));
+
+    let mut dead = [t(11)];
+    let empty = tree.remove_dead_tags(&mut dead);
+
+    assert!(!empty, "the root is still in the tree");
+    assert_eq!(dead, [BorTag::omnivalid()]);
+    assert!(!tree.contains_tag(t(11)));
+    assert_eq!(tree.node_count(), 1);
+}
+
+#[test]
+fn dead_node_with_multiple_children_is_retained() {
+    let mut tree = new_tree(t(10));
+    add_child(&mut tree, t(10), t(11));
+    add_child(&mut tree, t(11), t(12));
+    add_child(&mut tree, t(11), t(13));
+    tree.increment(t(12));
+    tree.increment(t(13));
+
+    let mut dead = [t(11)];
+    let empty = tree.remove_dead_tags(&mut dead);
+
+    assert!(!empty);
+    // The dead node has two live children, so it cannot be pruned yet. Its
+    // slot must stay nonzero so that the caller keeps it pending.
+    assert_eq!(dead, [t(11)]);
+    assert!(tree.contains_tag(t(11)));
+    assert_eq!(tree.node_count(), 4);
+}
+
+#[test]
+fn retained_tag_is_pruned_once_children_die() {
+    let mut tree = new_tree(t(10));
+    add_child(&mut tree, t(10), t(11));
+    add_child(&mut tree, t(11), t(12));
+    add_child(&mut tree, t(11), t(13));
+    tree.increment(t(12));
+    tree.increment(t(13));
+
+    // First GC pass: the dead parent is blocked by its two live children.
+    let mut dead = [t(11)];
+    assert!(!tree.remove_dead_tags(&mut dead));
+    assert_eq!(dead, [t(11)]);
+
+    // The children die, re-entering a ZCT. The next pass merges them with
+    // the retained tag (the pending set keeps tags in ascending order).
+    tree.decrement(t(12));
+    tree.decrement(t(13));
+    let mut dead = [t(11), t(12), t(13)];
+    let empty = tree.remove_dead_tags(&mut dead);
+
+    assert!(!empty, "the root is still in the tree");
+    assert_eq!(dead, [BorTag::omnivalid(); 3]);
+    assert_eq!(tree.node_count(), 1);
+    assert!(tree.contains_tag(t(10)));
+}

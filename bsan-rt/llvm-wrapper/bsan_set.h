@@ -33,6 +33,8 @@ public:
   void destroy();
 
   const BorTag *data() const { return tags_.data(); }
+  // Mutable access to the underlying array.
+  BorTag *data() { return tags_.data(); }
   uptr size() const { return tags_.size(); }
 
   template <typename Fn> void forEach(Fn fn) const {
@@ -74,6 +76,8 @@ public:
 
   void clear();
   bool contains(Provenance prov);
+
+  void swap(ConcreteProvenanceSet &other) { set_.swap(other.set_); }
 
   // Removes all entries from the set, after executing the
   // given callback for each allocation.
