@@ -1119,7 +1119,12 @@ public:
           continue;
         if (I.getOpcode() == Instruction::Alloca) {
           auto &AI = static_cast<AllocaInst &>(I);
-          if (BS.shouldInstrumentAlloca(AI) && AI.isStaticAlloca())
+          // SafeStack marks an alloca as safe when it is never exposed to an
+          // unknown source of memory effects. Such allocas cannot be subject
+          // to the aliasing violations our retags would detect, so we ignore
+          // them entirely instead of tracking and checking their accesses.
+          if (BS.shouldInstrumentAlloca(AI) && AI.isStaticAlloca() &&
+              !SSGI.isSafe(AI))
             StaticAllocaVec.push_back(&AI);
           continue;
         }
@@ -1131,7 +1136,7 @@ public:
           }
           if (auto *LI = dyn_cast<LifetimeIntrinsic>(CB)) {
             AllocaInst *AI = findAllocaForValue(LI->getArgOperand(0), true);
-            if (AI && BS.shouldInstrumentAlloca(*AI)) {
+            if (AI && BS.shouldInstrumentAlloca(*AI) && !SSGI.isSafe(*AI)) {
               if (CB->getIntrinsicID() == Intrinsic::lifetime_start) {
                 HasLifetimeStart.insert(AI);
               }
@@ -1946,7 +1951,7 @@ private:
     IRBuilder<> IRB(&I);
     Value *Val = IRB.CreateIntCast(I.getValue(), IRB.getInt32Ty(), false);
     Value *Size = IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false);
-    insertWriteCheck(IRB, I.getDest(), Size, stackSafeFlag(IRB, I.getDest()));
+    insertWriteCheck(IRB, I.getDest(), Size);
     IRB.CreateCall(BS.BsanFuncMemSet, {I.getDest(), Val, Size});
     I.eraseFromParent();
   }
@@ -1954,43 +1959,35 @@ private:
   void visitMemMoveInst(MemMoveInst &I) {
     IRBuilder<> IRB(&I);
     Value *Size = IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false);
-    insertReadCheck(IRB, I.getSource(), Size,
-                    stackSafeFlag(IRB, I.getSource()));
-    insertWriteCheck(IRB, I.getDest(), Size, stackSafeFlag(IRB, I.getDest()));
+    insertReadCheck(IRB, I.getSource(), Size);
+    insertWriteCheck(IRB, I.getDest(), Size);
     IRB.CreateCall(BS.BsanFuncMemMove, {I.getDest(), I.getSource(), Size});
     I.eraseFromParent();
-  }
-
-  Value *stackSafeFlag(IRBuilder<> &IRB, Value *Ptr) {
-    AllocaInst *AI = findAllocaForValue(Ptr, true);
-    bool Safe = AI && BS.shouldInstrumentAlloca(*AI) && SSGI.isSafe(*AI);
-    return IRB.getInt1(Safe);
   }
 
   void visitMemCpyInst(MemCpyInst &I) {
     IRBuilder<> IRB(&I);
     Value *Size = IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false);
-
-    insertReadCheck(IRB, I.getSource(), Size,
-                    stackSafeFlag(IRB, I.getSource()));
-    insertWriteCheck(IRB, I.getDest(), Size, stackSafeFlag(IRB, I.getDest()));
+    insertReadCheck(IRB, I.getSource(), Size);
+    insertWriteCheck(IRB, I.getDest(), Size);
     IRB.CreateCall(BS.BsanFuncMemCpy, {I.getDest(), I.getSource(), Size});
     I.eraseFromParent();
   }
 
-  void insertReadCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size,
-                       Value *Checked) {
+  void insertReadCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size) {
     if (auto Prov = getProvenance(IRB.GetInsertBlock(), Ptr)) {
-      IRB.CreateCall(BS.BsanFuncRead,
-                     {Ptr, Size, (*Prov).Tag, (*Prov).Info, Checked});
+      // SafeStack-safe allocas are never instrumented, so any access that
+      // reaches here needs the full borrow-tracking check (`checked = false`).
+      // The runtime retains the unchecked fast path for future use.
+      IRB.CreateCall(BS.BsanFuncRead, {Ptr, Size, (*Prov).Tag, (*Prov).Info,
+                                       IRB.getInt1(false)});
     }
   }
 
-  void insertWriteCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size,
-                        Value *Checked) {
+  void insertWriteCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size) {
     if (auto Prov = getProvenance(IRB.GetInsertBlock(), Ptr)) {
-      IRB.CreateCall(BS.BsanFuncWrite,
-                     {Ptr, Size, (*Prov).Tag, (*Prov).Info, Checked});
+      IRB.CreateCall(BS.BsanFuncWrite, {Ptr, Size, (*Prov).Tag, (*Prov).Info,
+                                        IRB.getInt1(false)});
     }
   }
 
@@ -2016,7 +2013,7 @@ private:
                                                  Comp.Elems, LI.getOrdering());
       setProvenance({&LI, Idx}, Prov);
     }
-    insertReadCheck(IRB, Ptr, Size, stackSafeFlag(IRB, Ptr));
+    insertReadCheck(IRB, Ptr, Size);
   }
 
   bool shouldClearProvenance(IRBuilder<> &IRB, StoreInst &SI) { return true; }
@@ -2029,8 +2026,7 @@ private:
 
     Value *EntireSize = PrevIRB.CreateTypeSize(
         BS.IntptrTy, BS.DL->getTypeStoreSize(Val->getType()));
-
-    insertWriteCheck(PrevIRB, Ptr, EntireSize, stackSafeFlag(PrevIRB, Ptr));
+    insertWriteCheck(PrevIRB, Ptr, EntireSize);
 
     NextNodeIRBuilder IRB(&SI);
 
