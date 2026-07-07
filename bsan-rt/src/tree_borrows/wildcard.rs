@@ -2,7 +2,7 @@
 use core::fmt::Debug;
 
 use super::perms::AccessKind;
-use super::tree::{node_from_map, node_from_map_mut, AccessRelatedness, EagerTree, NodeMap};
+use super::tree::{node_from_map, node_from_map_mut, node_tag, AccessRelatedness, EagerTree, NodeMap};
 #[cfg(feature = "expensive-consistency-checks")]
 use crate::borrow_tracker::GlobalState;
 use crate::helpers::FxHashMap;
@@ -178,7 +178,7 @@ impl ExposedCache {
                 (Read | Write, None) => state.local_reads -= 1,
                 _ => {}
             }
-            next_tag = node.parent;
+            next_tag = node.parent.map(node_tag);
         }
     }
     /// Removes a node from the datastructure.
@@ -247,12 +247,13 @@ impl EagerTree {
         for (_, loc) in self.locations.iter_all() {
             let exposed_cache = &loc.exposed_cache;
             let perms = &loc.perms;
-            for (&node_tag, node) in self.nodes.iter() {
-                let state = exposed_cache.0.get(&node_tag).cloned().unwrap_or_default();
+            for (&tag, node_ptr) in self.nodes.iter() {
+                let node = unsafe { node_ptr.as_ref() };
+                let state = exposed_cache.0.get(&tag).cloned().unwrap_or_default();
 
                 let exposed_as = if node.is_exposed {
                     let perm = perms
-                        .get(&node_tag)
+                        .get(&tag)
                         .copied()
                         .unwrap_or_else(|| node.default_location_state());
 
@@ -266,7 +267,7 @@ impl EagerTree {
                     .children
                     .iter()
                     .copied()
-                    .map(|child_tag| exposed_cache.0.get(&child_tag).cloned().unwrap_or_default())
+                    .map(|child_ptr| exposed_cache.0.get(&node_tag(*child_ptr)).cloned().unwrap_or_default())
                     .fold((0, 0), |acc, wc| (acc.0 + wc.local_reads, acc.1 + wc.local_writes));
                 let expected_reads =
                     child_reads + u16::from(exposed_as >= WildcardAccessLevel::Read);
@@ -274,12 +275,12 @@ impl EagerTree {
                     child_writes + u16::from(exposed_as >= WildcardAccessLevel::Write);
                 assert_eq!(
                     state.local_reads, expected_reads,
-                    "expected {:?}'s (tag:{node_tag:?}) local_reads to be {expected_reads:?} instead of {:?} (child_reads: {child_reads:?}, exposed_as: {exposed_as:?})",
+                    "expected {:?}'s (tag:{tag:?}) local_reads to be {expected_reads:?} instead of {:?} (child_reads: {child_reads:?}, exposed_as: {exposed_as:?})",
                     node.tag, state.local_reads
                 );
                 assert_eq!(
                     state.local_writes, expected_writes,
-                    "expected {:?}'s (tag:{node_tag:?}) local_writes to be {expected_writes:?} instead of {:?} (child_writes: {child_writes:?}, exposed_as: {exposed_as:?})",
+                    "expected {:?}'s (tag:{tag:?}) local_writes to be {expected_writes:?} instead of {:?} (child_writes: {child_writes:?}, exposed_as: {exposed_as:?})",
                     node.tag, state.local_writes
                 );
             }

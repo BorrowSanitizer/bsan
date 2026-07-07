@@ -5,7 +5,7 @@ use core::fmt;
 use core::ops::Range;
 
 use super::perms::{AccessKind, PermTransition, Permission, ProtectorKind};
-use super::tree::{EagerTree, LocationState};
+use super::tree::{node_tag, EagerTree, LocationState};
 use crate::helpers::AllocRange;
 use crate::tree_borrows::LazyTree;
 use crate::{eprintln, *};
@@ -231,7 +231,7 @@ impl EagerTree {
     fn nth_parent(&self, tag: BorTag, nth_parent: u8) -> Option<BorTag> {
         let mut current = tag;
         for _ in 0..nth_parent {
-            current = self.node(current).parent?;
+            current = node_tag(self.node(current).parent?);
         }
         Some(current)
     }
@@ -665,7 +665,7 @@ impl DisplayRepr {
             let name = node.debug_info.name.clone();
             let exposed = node.is_exposed;
             let children_sorted = {
-                let mut children = node.children.iter().cloned().collect::<Vec<_>>();
+                let mut children = node.children.iter().map(|child| node_tag(*child)).collect::<Vec<_>>();
                 children.sort_by_key(|idx| tree.node(*idx).tag);
                 children
             };

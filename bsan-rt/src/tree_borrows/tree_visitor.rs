@@ -2,7 +2,7 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use super::tree::{node_from_map, AccessRelatedness, NodeMap};
+use super::tree::{node_from_map, node_tag, AccessRelatedness, NodeMap};
 use crate::BorTag;
 
 /// Data given to the transition function
@@ -107,9 +107,9 @@ where
             if matches!(visit_children, ChildrenVisitMode::VisitChildrenOfAccessed) {
                 let accessed_node = node_from_map(this.nodes, accessed_node);
                 // We `rev()` here because we reverse the entire stack later.
-                for &child in accessed_node.children.iter().rev() {
+                for child in accessed_node.children.iter().rev() {
                     self.stack.push((
-                        child,
+                        node_tag(*child),
                         AccessRelatedness::ForeignAccess,
                         RecursionState::BeforeChildren,
                     ));
@@ -120,16 +120,17 @@ where
         // make sure we only mark the "cousin" subtrees for later visitation,
         // not the subtree that contains the accessed node.
         let mut last_node = accessed_node;
-        while let Some(current) = node_from_map(this.nodes, last_node).parent {
+        while let Some(parent_ptr) = node_from_map(this.nodes, last_node).parent {
+            let current = node_tag(parent_ptr);
             self.propagate_at(this, current, AccessRelatedness::LocalAccess)?;
             let node = node_from_map(this.nodes, current);
             // We `rev()` here because we reverse the entire stack later.
-            for &child in node.children.iter().rev() {
-                if last_node == child {
+            for child in node.children.iter().rev() {
+                if last_node == node_tag(*child) {
                     continue;
                 }
                 self.stack.push((
-                    child,
+                    node_tag(*child),
                     AccessRelatedness::ForeignAccess,
                     RecursionState::BeforeChildren,
                 ));
@@ -156,8 +157,8 @@ where
                     match handle_children {
                         ContinueTraversal::Recurse => {
                             let node = node_from_map(this.nodes, idx);
-                            for &child in node.children.iter() {
-                                self.stack.push((child, rel_pos, RecursionState::BeforeChildren));
+                            for child in node.children.iter() {
+                                self.stack.push((node_tag(*child), rel_pos, RecursionState::BeforeChildren));
                             }
                         }
                         ContinueTraversal::SkipSelfAndChildren => {

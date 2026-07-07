@@ -11,7 +11,10 @@
 //!   and the relative position of the access;
 //! - idempotency properties asserted in `perms.rs` (for optimizations)
 
+use alloc::boxed::Box;
+
 use core::ops::Range;
+use core::ptr::NonNull;
 use core::{cmp, fmt, mem};
 
 use smallvec::SmallVec;
@@ -278,26 +281,47 @@ pub struct LocationTree {
     pub exposed_cache: ExposedCache,
 }
 
-pub type NodeMap = FxHashMap<BorTag, Node>;
+pub type NodeMap = FxHashMap<BorTag, NonNull<Node>>;
 
-/// Looks up a node that is already registered in `nodes`.
+/// Looks up a node pointer that is already registered in `nodes`.
 ///
 /// Callers must ensure `tag` is present (tree traversal, `new_child`, etc.).
 /// A missing tag indicates internal corruption and panics.
 #[inline]
+pub(super) fn node_ptr_from_map(nodes: &NodeMap, tag: BorTag) -> NonNull<Node> {
+    *nodes.get(&tag).unwrap_or_else(|| panic!("tag {tag:?} missing from tree"))
+}
+
+/// Looks up a node that is already registered in `nodes`.
+#[inline]
 pub(super) fn node_from_map(nodes: &NodeMap, tag: BorTag) -> &Node {
-    nodes.get(&tag).unwrap_or_else(|| panic!("tag {tag:?} missing from tree"))
+    unsafe { node_ptr_from_map(nodes, tag).as_ref() }
 }
 
 /// Mutable [`node_from_map`].
 #[inline]
 pub(super) fn node_from_map_mut(nodes: &mut NodeMap, tag: BorTag) -> &mut Node {
-    nodes.get_mut(&tag).unwrap_or_else(|| panic!("tag {tag:?} missing from tree"))
+    unsafe { node_ptr_from_map(nodes, tag).as_ptr().as_mut().unwrap() }
+}
+
+#[inline]
+pub(super) fn node_tag(ptr: NonNull<Node>) -> BorTag {
+    unsafe { ptr.as_ref().tag }
+}
+
+fn alloc_node(node: Node) -> NonNull<Node> {
+    NonNull::new(Box::into_raw(Box::new(node))).expect("Node allocation failed")
+}
+
+fn dealloc_node(ptr: NonNull<Node>) {
+    unsafe {
+        drop(Box::from_raw(ptr.as_ptr()));
+    }
 }
 
 /// Tree structure with both parents and children since we want to be
 /// able to traverse the tree efficiently in both directions.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct EagerTree {
     /// All nodes of this tree.
     pub(super) nodes: NodeMap,
@@ -323,15 +347,15 @@ pub struct EagerTree {
 
 /// A node in the borrow tree. Each node is uniquely identified by a tag via
 /// the `nodes` map of `Tree`.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Node {
     /// The tag of this node.
     pub tag: BorTag,
-    /// All tags except the root have a parent tag.
-    pub parent: Option<BorTag>,
+    /// All nodes except the root have a parent node.
+    pub parent: Option<NonNull<Node>>,
     /// If the pointer was reborrowed, it has children.
     // FIXME: bench to compare this to FxHashSet and to other SmallVec sizes
-    pub children: SmallVec<[BorTag; 4]>,
+    pub children: SmallVec<[NonNull<Node>; 4]>,
     /// Either `Reserved`,  `Frozen`, or `Disabled`, it is the permission this tag will
     /// lazily be initialized to on the first access.
     /// It is only ever `Disabled` for a tree root, since the root is initialized to `Unique` by
@@ -400,8 +424,49 @@ impl EagerTree {
             DedupRangeMap::new(size, LocationTree { perms, exposed_cache })
         };
         let mut nodes = NodeMap::default();
-        nodes.insert(root_tag, root_node);
+        nodes.insert(root_tag, alloc_node(root_node));
         Self { roots: SmallVec::from_slice(&[root_tag]), nodes, locations }
+    }
+}
+
+
+impl Drop for EagerTree {
+    fn drop(&mut self) {
+        for (_, ptr) in self.nodes.drain() {
+            dealloc_node(ptr);
+        }
+    }
+}
+
+impl Clone for EagerTree {
+    fn clone(&self) -> Self {
+        let mut nodes = NodeMap::default();
+        for (&tag, &old_ptr) in &self.nodes {
+            let old = unsafe { old_ptr.as_ref() };
+            let new_ptr = alloc_node(Node {
+                tag: old.tag,
+                parent: None,
+                children: SmallVec::default(),
+                default_initial_perm: old.default_initial_perm,
+                default_initial_idempotent_foreign_access: old.default_initial_idempotent_foreign_access,
+                is_exposed: old.is_exposed,
+                refcount: old.refcount.clone(),
+                debug_info: old.debug_info.clone(),
+            });
+            nodes.insert(tag, new_ptr);
+        }
+        for (&tag, &old_ptr) in &self.nodes {
+            let old = unsafe { old_ptr.as_ref() };
+            let new_ptr = nodes.get(&tag).copied().unwrap();
+            let new = unsafe { new_ptr.as_ptr().as_mut().unwrap() };
+            new.parent = old.parent.map(|parent| node_ptr_from_map(&nodes, node_tag(parent)));
+            new.children = old
+                .children
+                .iter()
+                .map(|child| node_ptr_from_map(&nodes, node_tag(*child)))
+                .collect();
+        }
+        Self { nodes, locations: self.locations.clone(), roots: self.roots.clone() }
     }
 }
 
@@ -438,11 +503,11 @@ impl EagerTree {
                 .ensure_no_stronger_than(strongest_allowed);
 
             if any_change {
-                let Some(next) = node_from_map(&self.nodes, current).parent else {
+                let Some(next_ptr) = node_from_map(&self.nodes, current).parent else {
                     // We have arrived at the root.
                     break;
                 };
-                current = next;
+                current = node_tag(next_ptr);
                 continue;
             } else {
                 break;
@@ -478,7 +543,8 @@ impl EagerTree {
     ) -> Option<BorTag> {
         let node = self.node(idx);
 
-        let [child_idx] = node.children[..] else { return None };
+        let [child_ptr] = node.children[..] else { return None };
+        let child_idx = node_tag(child_ptr);
 
         // We never want to replace the root node, as it is also kept in `root_ptr_tags`.
         if live.contains(&node.tag) || node.parent.is_none() {
@@ -515,7 +581,8 @@ impl EagerTree {
     fn can_be_replaced_by_single_child_dead(&self, idx: BorTag) -> Option<BorTag> {
         let node = self.node(idx);
 
-        let [child_idx] = node.children[..] else { return None };
+        let [child_ptr] = node.children[..] else { return None };
+        let child_idx = node_tag(child_ptr);
 
         // Since protected nodes are never GC'd (see `borrow_tracker::FrameExtra::visit_provenance`),
         // they are never added to the dead set, so reaching this point (where `node.tag` is
@@ -552,7 +619,9 @@ impl EagerTree {
             loc.perms.remove(&tag);
             loc.exposed_cache.remove(tag);
         }
-        self.nodes.remove(&tag).unwrap();
+        if let Some(ptr) = self.nodes.remove(&tag) {
+            dealloc_node(ptr);
+        }
     }
 
     /// Traverses the entire tree looking for useless tags.
@@ -584,7 +653,7 @@ impl EagerTree {
                 // Visit the child by pushing it to the stack.
                 // Also increase `nth_child` so that when we come back to the `tag` node, we
                 // look at the next child.
-                let next_child = node.children[*nth_child];
+                let next_child = node_tag(node.children[*nth_child]);
                 *nth_child += 1;
                 stack.push((next_child, 0));
                 continue;
@@ -595,21 +664,22 @@ impl EagerTree {
                 // list of remaining children back in.
                 let mut children_of_node = mem::take(&mut self.node_mut(*tag).children);
                 // Remove all useless children.
-                children_of_node.retain_mut(|idx| {
-                    if self.is_useless(*idx, live) {
-                        // Delete `idx` node everywhere else.
-                        self.remove_useless_node(*idx);
+                children_of_node.retain_mut(|child_ptr| {
+                    let child_tag = node_tag(*child_ptr);
+                    if self.is_useless(child_tag, live) {
+                        // Delete `child_tag` node everywhere else.
+                        self.remove_useless_node(child_tag);
                         // And delete it from children_of_node.
                         false
                     } else {
-                        if let Some(nextchild) = self.can_be_replaced_by_single_child(*idx, live) {
+                        if let Some(nextchild) = self.can_be_replaced_by_single_child(child_tag, live) {
                             // `nextchild` is our grandchild, and will become our direct child.
-                            // Delete the in-between node, `idx`.
-                            self.remove_useless_node(*idx);
+                            // Delete the in-between node, `child_tag`.
+                            self.remove_useless_node(child_tag);
                             // Set the new child's parent.
-                            self.node_mut(nextchild).parent = Some(*tag);
+                            self.node_mut(nextchild).parent = Some(node_ptr_from_map(&self.nodes, *tag));
                             // Save the new child in children_of_node.
-                            *idx = nextchild;
+                            *child_ptr = node_ptr_from_map(&self.nodes, nextchild);
                         }
                         // retain it
                         true
@@ -670,7 +740,7 @@ impl EagerTree {
                 continue;
             }
 
-            // `parent` is an Option<BorTag>: if it is None, then `node` is a root,
+            // `parent` is an Option<NonNull<Node>>: if it is None, then `node` is a root,
             // otherwise it is a child of some parent
             let parent = node.parent;
 
@@ -679,9 +749,10 @@ impl EagerTree {
                 // Drop the leaf from its parent's child list, then delete it everywhere else
                 // If it is a root, remove it from `self.roots`
                 match parent {
-                    Some(parent_idx) => {
-                        let children = &mut self.node_mut(parent_idx).children;
-                        let pos = children.iter().position(|&c| c == tag).unwrap();
+                    Some(parent_ptr) => {
+                        let parent_tag = node_tag(parent_ptr);
+                        let children = &mut self.node_mut(parent_tag).children;
+                        let pos = children.iter().position(|c| node_tag(*c) == tag).unwrap();
                         children.remove(pos);
                     }
                     None => {
@@ -696,11 +767,13 @@ impl EagerTree {
             else if let Some(child_tag) = self.can_be_replaced_by_single_child_dead(tag) {
                 // Replace a node with its only child, if it is a root then we promote the child
                 // to a root
+                let child_ptr = node_ptr_from_map(&self.nodes, child_tag);
                 match parent {
-                    Some(parent_idx) => {
-                        let children = &mut self.node_mut(parent_idx).children;
-                        let pos = children.iter().position(|&c| c == tag).unwrap();
-                        children[pos] = child_tag;
+                    Some(parent_ptr) => {
+                        let parent_tag = node_tag(parent_ptr);
+                        let children = &mut self.node_mut(parent_tag).children;
+                        let pos = children.iter().position(|c| node_tag(*c) == tag).unwrap();
+                        children[pos] = child_ptr;
                     }
                     None => {
                         let pos = self.roots.iter().position(|&r| r == tag).unwrap();
@@ -734,7 +807,7 @@ impl LocationTree {
                 // also bigger than all its children, so we can skip this subtree.
                 continue;
             }
-            stack.extend_from_slice(node.children.as_slice());
+            stack.extend(node.children.iter().map(|child| node_tag(*child)));
             if node.is_exposed {
                 min_tag = match min_tag {
                     Some(prev) if prev < node.tag => Some(prev),
@@ -1293,26 +1366,28 @@ impl AllocState for EagerTree {
         protected: bool,
         span: Span,
     ) -> UBResult<()> {
-        let parent = if parent_tag.is_wildcard() { None } else { Some(parent_tag) };
+        let parent_ptr = if parent_tag.is_wildcard() {
+            None
+        } else {
+            Some(node_ptr_from_map(&self.nodes, parent_tag))
+        };
         assert!(outside_perm.is_initial());
 
         let default_strongest_idempotent =
             outside_perm.strongest_idempotent_foreign_access(protected);
-        self.nodes.insert(
-            new_tag,
-            Node {
-                tag: new_tag,
-                parent,
-                children: SmallVec::default(),
-                default_initial_perm: outside_perm,
-                default_initial_idempotent_foreign_access: default_strongest_idempotent,
-                is_exposed: false,
-                refcount: RefCount::new(),
-                debug_info: NodeDebugInfo::new(new_tag, outside_perm, span),
-            },
-        );
-        if let Some(parent_tag) = parent {
-            self.node_mut(parent_tag).children.push(new_tag);
+        let new_ptr = alloc_node(Node {
+            tag: new_tag,
+            parent: parent_ptr,
+            children: SmallVec::default(),
+            default_initial_perm: outside_perm,
+            default_initial_idempotent_foreign_access: default_strongest_idempotent,
+            is_exposed: false,
+            refcount: RefCount::new(),
+            debug_info: NodeDebugInfo::new(new_tag, outside_perm, span),
+        });
+        self.nodes.insert(new_tag, new_ptr);
+        if let Some(parent_tag) = parent_ptr.map(node_tag) {
+            self.node_mut(parent_tag).children.push(new_ptr);
         } else {
             self.roots.push(new_tag);
         }
@@ -1336,7 +1411,7 @@ impl AllocState for EagerTree {
             }
         }
 
-        if let Some(parent_tag) = parent {
+        if let Some(parent_tag) = parent_ptr.map(node_tag) {
             self.update_idempotent_foreign_access_after_retag(parent_tag, min_sifa);
         }
 
@@ -1520,9 +1595,15 @@ impl AllocState for EagerTree {
         self.roots.is_empty()
     }
     fn increment(&self, tag: BorTag) -> bool {
-        self.nodes.get(&tag).map(|node| node.refcount.increment_nonatomic()).unwrap_or(false)
+        self.nodes
+            .get(&tag)
+            .map(|ptr| unsafe { ptr.as_ref().refcount.increment_nonatomic() })
+            .unwrap_or(false)
     }
     fn decrement(&self, tag: BorTag) -> bool {
-        self.nodes.get(&tag).map(|node| node.refcount.decrement_nonatomic()).unwrap_or(false)
+        self.nodes
+            .get(&tag)
+            .map(|ptr| unsafe { ptr.as_ref().refcount.decrement_nonatomic() })
+            .unwrap_or(false)
     }
 }
