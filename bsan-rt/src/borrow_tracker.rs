@@ -121,8 +121,7 @@ impl<'b> BorrowTracker<'b> {
         T: Default,
     {
         debug_assert!(!prov.alloc_info.is_null());
-        let alloc_info: AllocInfoPtr =
-            unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
+        let alloc_info: AllocInfoPtr = unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
         let tree = alloc_info.tree()?;
         let size = alloc_info.size.get();
         let range = AllocRange { start: Size::ZERO, size };
