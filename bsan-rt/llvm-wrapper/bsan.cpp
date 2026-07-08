@@ -72,8 +72,7 @@ bool bsan_init_running = false;
 
 // Path substrings that identify a file as belonging to a dependency/toolchain
 static const char *const kLibraryPathMarkers[] = {".cargo/", ".rustup/",
-                                                  "cargo/"
-                                                  "rustup/"};
+                                                  "cargo/", "rustup/"};
 // Allocates a new borrow tag.
 BorTag NewBorTag() {
   return atomic_fetch_add(&__bsan_bor_tag_ctr, 1, memory_order_relaxed);
