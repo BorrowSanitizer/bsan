@@ -529,6 +529,42 @@ impl EagerTree {
         Some(child_idx)
     }
 
+    /// Like [`Self::can_be_replaced_by_single_child_dead`], but for a node with more than one
+    /// child. This requires the stronger [`Permission::can_be_replaced_by_children`] check, and 
+    /// it must hold for every child at every location
+    fn can_be_replaced_by_children_dead(&self, idx: UniIndex) -> bool {
+        let node = self.nodes.get(idx).unwrap();
+        
+        if node.children.is_empty() {
+            return false;
+        }
+
+        // With several children, each sees the others' accesses as foreign, so the stricter
+        // `can_be_replaced_by_children` applies. Cache each child's index and fallback permission
+        // once, and iterate locations on the outside, so we look up neither the child node nor the
+        // parent's permission once per (child, location).
+        let mut children: SmallVec<[(UniIndex, Permission); 4]> =
+            SmallVec::with_capacity(node.children.len());
+        for i in 0..node.children.len() {
+            let child_idx = node.children[i];
+            children.push((child_idx, self.nodes.get(child_idx).unwrap().default_initial_perm));
+        }
+        
+        for (_range, loc) in self.locations.iter_all() {
+            let parent_perm =
+                loc.perms.get(idx).map(|x| x.permission).unwrap_or(node.default_initial_perm);
+            for i in 0..children.len() {
+                let (child_idx, child_default) = children[i];
+                let child_perm =
+                    loc.perms.get(child_idx).map(|x| x.permission).unwrap_or(child_default);
+                if !parent_perm.can_be_replaced_by_children(child_perm) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     /// Properly removes a node.
     /// The node to be removed should not otherwise be usable. It also
     /// should have no children, but this is not checked, so that nodes
@@ -676,7 +712,7 @@ impl EagerTree {
                     Some(parent_idx) => {
                         let children = &mut self.nodes.get_mut(parent_idx).unwrap().children;
                         let pos = children.iter().position(|&c| c == idx).unwrap();
-                        children.remove(pos);
+                        children.swap_remove(pos);
                     }
                     None => {
                         let pos = self.roots.iter().position(|&r| r == idx).unwrap();
@@ -705,11 +741,29 @@ impl EagerTree {
                 self.remove_useless_node(idx);
                 *entry = BorTag::omnivalid();
             }
-            // Otherwise, the dead node has more than one reachable child. Leave its
-            // entry nonzero so that the caller retains it for a future GC pass.
-
-            // TODO: Consider cases where there are multiple descendants of a parent
-            // node with varying permissions
+            // Node has more than one child. If it has a (surviving) grandparent and every child
+            // can soundly replace it, compact it by reparenting all of its children onto that
+            // grandparent.
+            else if let Some(parent_idx) = parent
+                && self.can_be_replaced_by_children_dead(idx)
+            {
+                // Move `idx`'s children out so we can reparent them
+                let children = mem::take(&mut self.nodes.get_mut(idx).unwrap().children);
+                // Point every grandchild at the grandparent.
+                for i in 0..children.len() {
+                    self.nodes.get_mut(children[i]).unwrap().parent = Some(parent_idx);
+                }
+                // Replace `idx` in the grandparent's child list with all of its children.
+                let siblings = &mut self.nodes.get_mut(parent_idx).unwrap().children;
+                let pos = siblings.iter().position(|&c| c == idx).unwrap();
+                siblings.swap_remove(pos);
+                for i in 0..children.len() {
+                    siblings.push(children[i]);
+                }
+                self.remove_useless_node(idx);
+                *entry = BorTag::omnivalid();
+            }
+            // Otherwise, the dead node could not be pruned this pass.
         }
     }
 }

@@ -415,6 +415,24 @@ impl Permission {
         }
     }
 
+    /// Like [`Self::can_be_replaced_by_child`], but sound even when `child` has *siblings* under
+    /// `self`, i.e. when compacting a node that has more than one child (and reparenting all of
+    /// them onto the grandparent).
+    ///
+    /// On top of `can_be_replaced_by_child` we must additionally forbid replacing a `ReservedIM`
+    /// parent by a `ReservedIM` child. With siblings present, a local write through *another*
+    /// child advances the parent to `Unique` (and later `Frozen`) while this `ReservedIM` child,
+    /// which sees that write as foreign, stays `ReservedIM` and writable. The parent then gates
+    /// later writes through this child; removing it would erase that UB. (`Cell` children survive
+    /// foreign writes too, but a `ReservedIM` parent can never be replaced by `Cell` in the first
+    /// place.)
+    ///
+    /// This is enforced by the `tree_multi_child_compacting_is_sound` test.
+    pub fn can_be_replaced_by_children(self, child: Self) -> bool {
+        self.can_be_replaced_by_child(child)
+            && !(self.inner == ReservedIM && child.inner == ReservedIM)
+    }
+
     /// Returns the strongest foreign action this node survives (without change),
     /// where `prot` indicates if it is protected.
     /// See `foreign_access_skipping`
