@@ -167,7 +167,7 @@ impl ExposedCache {
         while let Some(tag) = next_tag {
             let node = node_from_map(nodes, tag);
             let state = self.0.entry(tag);
-            let state = state.or_insert(Default::default());
+            let state = state.or_default();
 
             use WildcardAccessLevel::*;
             match (from, to) {
