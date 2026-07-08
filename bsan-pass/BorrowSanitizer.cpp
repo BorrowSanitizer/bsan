@@ -5,6 +5,7 @@
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/StackLifetime.h"
+#include "llvm/Analysis/StackSafetyAnalysis.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/AttributeMask.h"
 #include "llvm/IR/Attributes.h"
@@ -217,7 +218,8 @@ public:
     ProvenanceSize = ConstantInt::get(IntptrTy, 16);
   }
   bool instrumentModule(Module &M);
-  bool instrumentFunction(Function &F, FunctionAnalysisManager &FAM);
+  bool instrumentFunction(Function &F, FunctionAnalysisManager &FAM,
+                          const StackSafetyGlobalInfo &SSGI);
 
 private:
   friend struct Provenance;
@@ -528,21 +530,23 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   Type *Int32Ty = Type::getInt32Ty(*C);
   Type *Int8Ty = Type::getInt8Ty(*C);
+  Type *BoolTy = Type::getInt1Ty(*C);
 
   AL = AL.addFnAttribute(*C, Attribute::NoUnwind);
 
   BsanFuncRetag = M.getOrInsertFunction(
       BSAN("retag"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, Int8Ty, PtrTy,
-      IntptrTy, PtrTy, IntptrTy, IntptrTy, PtrTy, PtrTy);
+      IntptrTy, PtrTy, IntptrTy, IntptrTy, PtrTy, PtrTy, BoolTy);
 
   BsanFuncPopFrame = M.getOrInsertFunction(
       BSAN("pop_frame"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, IntptrTy);
 
   BsanFuncRead = M.getOrInsertFunction(BSAN("read"), AL, IRB.getVoidTy(), PtrTy,
-                                       IntptrTy, IntptrTy, PtrTy);
+                                       IntptrTy, IntptrTy, PtrTy, BoolTy);
 
-  BsanFuncWrite = M.getOrInsertFunction(BSAN("write"), AL, IRB.getVoidTy(),
-                                        PtrTy, IntptrTy, IntptrTy, PtrTy);
+  BsanFuncWrite =
+      M.getOrInsertFunction(BSAN("write"), AL, IRB.getVoidTy(), PtrTy, IntptrTy,
+                            IntptrTy, PtrTy, BoolTy);
 
   BsanFuncAllocStack =
       M.getOrInsertFunction(BSAN("alloc_stack"), AL, IRB.getVoidTy(), PtrTy,
@@ -720,9 +724,11 @@ PreservedAnalyses BorrowSanitizerPass::run(Module &M,
   bool Modified = false;
 
   auto &FAM = MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+  const StackSafetyGlobalInfo &SSGI =
+      MAM.getResult<StackSafetyGlobalAnalysis>(M);
 
   for (Function &F : M) {
-    Modified |= ModuleSanitizer.instrumentFunction(F, FAM);
+    Modified |= ModuleSanitizer.instrumentFunction(F, FAM, SSGI);
   }
   if (!Modified)
     return PreservedAnalyses::all();
@@ -1044,6 +1050,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   const TargetLibraryInfo *TLI;
   DominatorTree &DT;
   LoopInfo LI;
+  const StackSafetyGlobalInfo &SSGI;
 
   // The end of the prologue of the function, where we initialize our
   // instrumentation. This is a call to llvm.donothing.
@@ -1090,8 +1097,9 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 
 public:
   BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
-                         const TargetLibraryInfo &TLI, DominatorTree &DT)
-      : F(F), BS(BS), C(BS.C), TLI(&TLI), DT(DT),
+                         const TargetLibraryInfo &TLI, DominatorTree &DT,
+                         const StackSafetyGlobalInfo &SSGI)
+      : F(F), BS(BS), C(BS.C), TLI(&TLI), DT(DT), SSGI(SSGI),
         ShadowStack(BS.ProvenanceSize, BS.ProvStackTLS) {}
   bool run() {
     DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Lazy);
@@ -1111,7 +1119,12 @@ public:
           continue;
         if (I.getOpcode() == Instruction::Alloca) {
           auto &AI = static_cast<AllocaInst &>(I);
-          if (BS.shouldInstrumentAlloca(AI) && AI.isStaticAlloca())
+          // SafeStack marks an alloca as safe when it is never exposed to an
+          // unknown source of memory effects. Such allocas cannot be subject
+          // to the aliasing violations our retags would detect, so we ignore
+          // them entirely instead of tracking and checking their accesses.
+          if (BS.shouldInstrumentAlloca(AI) && AI.isStaticAlloca() &&
+              !SSGI.isSafe(AI))
             StaticAllocaVec.push_back(&AI);
           continue;
         }
@@ -1123,7 +1136,7 @@ public:
           }
           if (auto *LI = dyn_cast<LifetimeIntrinsic>(CB)) {
             AllocaInst *AI = findAllocaForValue(LI->getArgOperand(0), true);
-            if (AI && BS.shouldInstrumentAlloca(*AI)) {
+            if (AI && BS.shouldInstrumentAlloca(*AI) && !SSGI.isSafe(*AI)) {
               if (CB->getIntrinsicID() == Intrinsic::lifetime_start) {
                 HasLifetimeStart.insert(AI);
               }
@@ -1561,7 +1574,8 @@ private:
     Value *Slot = allocStackSlot(IRB, RI.isProtected());
     IRB.CreateCall(BS.BsanFuncRetag,
                    {SrcAddr, RI.Size, RI.Perms, RI.ImArray, ImArrayLen,
-                    RI.PinArray, PinArrayLen, SrcProv.Tag, SrcProv.Info, Slot});
+                    RI.PinArray, PinArrayLen, SrcProv.Tag, SrcProv.Info, Slot,
+                    IRB.getInt1(false)});
     Provenance RetaggedProv = loadProvenance(IRB, Slot);
     storeProvenanceToShadow(IRB, Operand, RetaggedProv);
   }
@@ -1576,7 +1590,8 @@ private:
       Value *Dest = allocStackSlot(IRB, RI.isProtected());
       IRB.CreateCall(BS.BsanFuncRetag,
                      {Ptr, RI.Size, RI.Perms, RI.ImArray, ImArrayLen,
-                      RI.PinArray, PinArrayLen, Prov->Tag, Prov->Info, Dest});
+                      RI.PinArray, PinArrayLen, Prov->Tag, Prov->Info, Dest,
+                      IRB.getInt1(false)});
       setProvenance(&CB, loadProvenance(IRB, Dest));
     }
   }
@@ -1961,13 +1976,18 @@ private:
 
   void insertReadCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size) {
     if (auto Prov = getProvenance(IRB.GetInsertBlock(), Ptr)) {
-      IRB.CreateCall(BS.BsanFuncRead, {Ptr, Size, (*Prov).Tag, (*Prov).Info});
+      // SafeStack-safe allocas are never instrumented, so any access that
+      // reaches here needs the full borrow-tracking check (`checked = false`).
+      // The runtime retains the unchecked fast path for future use.
+      IRB.CreateCall(BS.BsanFuncRead, {Ptr, Size, (*Prov).Tag, (*Prov).Info,
+                                       IRB.getInt1(false)});
     }
   }
 
   void insertWriteCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size) {
     if (auto Prov = getProvenance(IRB.GetInsertBlock(), Ptr)) {
-      IRB.CreateCall(BS.BsanFuncWrite, {Ptr, Size, (*Prov).Tag, (*Prov).Info});
+      IRB.CreateCall(BS.BsanFuncWrite, {Ptr, Size, (*Prov).Tag, (*Prov).Info,
+                                        IRB.getInt1(false)});
     }
   }
 
@@ -2283,7 +2303,8 @@ private:
 } // end anonymous namespace
 
 bool BorrowSanitizer::instrumentFunction(Function &F,
-                                         FunctionAnalysisManager &FAM) {
+                                         FunctionAnalysisManager &FAM,
+                                         const StackSafetyGlobalInfo &SSGI) {
   if (F.empty()) {
     return false;
   }
@@ -2312,7 +2333,7 @@ bool BorrowSanitizer::instrumentFunction(Function &F,
   DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
 
   initializeCallbacks(*F.getParent(), TLI);
-  BorrowSanitizerVisitor Visitor(F, *this, TLI, DT);
+  BorrowSanitizerVisitor Visitor(F, *this, TLI, DT, SSGI);
 
   AttributeMask B;
   B.addAttribute(Attribute::Memory).addAttribute(Attribute::Speculatable);

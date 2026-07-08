@@ -333,19 +333,21 @@ SANITIZER_WEAK_ATTRIBUTE
 void __bsan_retag_impl(void *object_addr, uptr access_size, u8 flags,
                        const uptr im_data[2], uptr im_len,
                        const uptr pin_data[2], uptr pin_len, BorTag bor_tag,
-                       AllocInfo *alloc_info, void *dest, Span pc);
+                       AllocInfo *alloc_info, void *dest, Span pc,
+                       bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_retag(void *object_addr, uptr access_size, u8 flags,
                   const uptr im_data[2], uptr im_len, const uptr pin_data[2],
                   uptr pin_len, BorTag bor_tag, AllocInfo *alloc_info,
-                  void *dest) {
+                  void *dest, bool checked) {
   if (__bsan_retag_impl) {
     GET_SPAN;
     InterceptorBarrier Barrier;
     Provenance prov;
     __bsan_retag_impl(object_addr, access_size, flags, im_data, im_len,
-                      pin_data, pin_len, bor_tag, alloc_info, &prov, span);
+                      pin_data, pin_len, bor_tag, alloc_info, &prov, span,
+                      checked);
     HANDLE_ERROR;
     *(Provenance *)(dest) = prov;
     // A retag mints a fresh provenance value with no references yet; record it
@@ -357,30 +359,30 @@ void __bsan_retag(void *object_addr, uptr access_size, u8 flags,
 
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_read_impl(void *ptr, uptr access_size, BorTag bor_tag,
-                      AllocInfo *alloc_info, Span pc);
+                      AllocInfo *alloc_info, Span pc, bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_read(void *ptr, uptr access_size, BorTag bor_tag,
-                 AllocInfo *alloc_info) {
+                 AllocInfo *alloc_info, bool checked) {
   if (__bsan_read_impl) {
     GET_SPAN;
     InterceptorBarrier Barrier;
-    __bsan_read_impl(ptr, access_size, bor_tag, alloc_info, span);
+    __bsan_read_impl(ptr, access_size, bor_tag, alloc_info, span, checked);
     HANDLE_ERROR;
   }
 }
 
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_write_impl(void *ptr, uptr access_size, BorTag bor_tag,
-                       AllocInfo *alloc_info, Span pc);
+                       AllocInfo *alloc_info, Span pc, bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_write(void *ptr, uptr access_size, BorTag bor_tag,
-                  AllocInfo *alloc_info) {
+                  AllocInfo *alloc_info, bool checked) {
   if (__bsan_write_impl) {
     GET_SPAN;
     InterceptorBarrier Barrier;
-    __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, span);
+    __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, span, checked);
     HANDLE_ERROR;
   }
 }
@@ -452,7 +454,8 @@ AllocInfo *__bsan_alloc(void *base_addr, uptr size, BorTag bor_tag, Span pc) {
 }
 
 SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE void
-__bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info, Span pc) {}
+__bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info, Span pc,
+               bool checked) {}
 
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_alloc_stack_impl(void *base_addr, uptr size, BorTag bor_tag,
