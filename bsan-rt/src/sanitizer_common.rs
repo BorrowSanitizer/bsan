@@ -11,6 +11,7 @@ use core::{fmt, ptr, slice};
 #[derive(Clone, Copy, Debug)]
 pub struct Span(pub usize);
 
+#[allow(dead_code)]
 impl Span {
     pub const fn dummy() -> Self {
         Self(0)
