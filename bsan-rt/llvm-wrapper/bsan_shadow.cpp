@@ -330,4 +330,26 @@ void ClearShadow(void *dest, uptr size) {
   }
 }
 
+void WriteShadow(void *dest, Provenance prov) {
+  if (!MEM_IS_APP(dest))
+    return;
+  uptr d_aligned, d_size;
+  AlignRange8((uptr)dest, 8, d_aligned, d_size);
+  uptr shadow_start = MEM_TO_SHADOW(d_aligned);
+  uptr origin_start = MEM_TO_ORIGIN(d_aligned);
+
+  BorTag *tag_ptr = reinterpret_cast<BorTag *>(shadow_start);
+  AllocInfo **info_ptr = reinterpret_cast<AllocInfo **>(origin_start);
+  if (*info_ptr != nullptr) {
+    __bsan_rc_dec(*tag_ptr, *info_ptr);
+  }
+
+  *info_ptr = prov.info;
+  *tag_ptr = prov.tag;
+
+  // The written provenance now holds a reference from this shadow slot.
+  if (prov.info != nullptr) {
+    __bsan_rc_inc(prov.tag, prov.info);
+  }
+}
 } // namespace __bsan

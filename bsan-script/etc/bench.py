@@ -33,7 +33,7 @@ NATIVE = {
 # Flags shared by every Miri configuration. These disable most forms of
 # checking, and ensure deterministic execution.
 MIRI_COMMON_FLAGS = (
-    "-Zmiri-provenance-gc=0 -Zmiri-mute-stdout-stderr "
+    "-Zmiri-mute-stdout-stderr "
     "-Zmiri-disable-data-race-detector -Zmiri-deterministic-concurrency "
     "-Zmiri-disable-alignment-check -Zmiri-ignore-leaks"
 )

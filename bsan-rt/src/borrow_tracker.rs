@@ -111,17 +111,21 @@ pub struct BorrowTracker<'a> {
 }
 
 impl<'b> BorrowTracker<'b> {
-    unsafe fn for_alloc_inner(prov: Provenance) -> UBResult<Self> {
-        // Safety:
-        // Our instrumentation pass guarantees that if a pointer's
-        // provenance is non-null and not omnivalid, then it will contain
-        // valid allocation info pointer.
+    /// # Safety
+    /// The caller must provide concrete provenance whose allocation metadata is
+    /// valid and live.
+    #[allow(dead_code)]
+    pub unsafe fn for_alloc_unchecked<T, F>(prov: Provenance, f: F) -> UBResult<T>
+    where
+        F: FnOnce(Self) -> UBResult<T>,
+        T: Default,
+    {
         debug_assert!(!prov.alloc_info.is_null());
         let alloc_info: AllocInfoPtr = unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
         let tree = alloc_info.tree()?;
         let size = alloc_info.size.get();
         let range = AllocRange { start: Size::ZERO, size };
-        Ok(Self { tree, bor_tag: prov.bor_tag, alloc_info, range })
+        f(Self { tree, bor_tag: prov.bor_tag, alloc_info, range })
     }
 
     pub fn for_alloc<T, F>(prov: Provenance, f: F) -> UBResult<T>
@@ -137,8 +141,60 @@ impl<'b> BorrowTracker<'b> {
         } else if prov.bor_tag == BorTag::invalid() {
             Err(UBInfo::UseAfterFree)
         } else {
-            unsafe { BorrowTracker::for_alloc_inner(prov) }.and_then(f)
+            // Safety:
+            // Our instrumentation pass guarantees that if a pointer's
+            // provenance is non-null and not omnivalid, then it will contain
+            // valid allocation info pointer.
+            debug_assert!(!prov.alloc_info.is_null());
+            let alloc_info: AllocInfoPtr =
+                unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
+            let tree = alloc_info.tree()?;
+            let size = alloc_info.size.get();
+            let range = AllocRange { start: Size::ZERO, size };
+            f(Self { tree, bor_tag: prov.bor_tag, alloc_info, range })
         }
+    }
+
+    pub fn for_alloc_weak<T, F>(prov: Provenance, f: F) -> T
+    where
+        F: FnOnce(Self) -> T,
+        T: Default,
+    {
+        if !prov.bor_tag.is_concrete() {
+            return T::default();
+        }
+        let alloc_info: AllocInfoPtr = unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
+        if let Some(tree) = alloc_info.tree_opt() {
+            let size = alloc_info.size.get();
+            let range = AllocRange { start: Size::ZERO, size };
+            f(Self { tree, bor_tag: prov.bor_tag, alloc_info, range })
+        } else {
+            T::default()
+        }
+    }
+
+    /// # Safety
+    /// The caller must provide concrete provenance whose allocation metadata is
+    /// valid and live, and `start..start + access_size` must be in-bounds.
+    pub unsafe fn for_access_unchecked<T, F>(
+        _: &GlobalCtx,
+        prov: Provenance,
+        start: Size,
+        access_size: Option<Size>,
+        f: F,
+    ) -> UBResult<T>
+    where
+        F: FnOnce(Self) -> UBResult<T>,
+        T: Default,
+    {
+        let alloc_info: AllocInfoPtr = unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
+        let alloc_size = alloc_info.size.get();
+        let base_addr = unsafe { alloc_info.base_addr() };
+        let offset = Size::from_bytes(start.bytes().wrapping_sub(base_addr.bytes()));
+        let tree = alloc_info.tree()?;
+
+        let range = AllocRange { start: offset, size: access_size.unwrap_or(alloc_size) };
+        f(Self { tree, bor_tag: prov.bor_tag, alloc_info, range })
     }
 
     /// # Safety
@@ -375,28 +431,6 @@ impl<'b> BorrowTracker<'b> {
         Ok(())
     }
 
-    /// Ensure that the allocation is invalidated without triggering UB for a use-after-free.
-    /// This is specific to stack deallocation.
-    pub fn dealloc_weak(ctx: &GlobalCtx, prov: Provenance, span: Span) -> UBResult<()> {
-        if !prov.bor_tag.is_concrete() {
-            return Ok(());
-        }
-        let alloc_info: AllocInfoPtr = unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
-        if let Some(mut tree) = alloc_info.tree_opt() {
-            let range = AllocRange { start: Size::ZERO, size: alloc_info.size.get() };
-            tree.take().dealloc(
-                prov.bor_tag,
-                range,
-                &ctx.protected_tags(),
-                alloc_info.alloc_id.get(),
-                span,
-            )?;
-            let range = unsafe { alloc_info.range() };
-            ctx.remove_exposed_provenance(range, true);
-        }
-        Ok(())
-    }
-
     pub fn expose_tag(&mut self, global_ctx: &GlobalCtx) -> UBResult<()> {
         let tag = self.bor_tag;
         let range = unsafe { self.alloc_info.range() };
@@ -415,14 +449,6 @@ impl<'b> BorrowTracker<'b> {
             self.tree.expose_tag(tag, protected);
         }
         Ok(())
-    }
-
-    pub fn expose(ctx: &GlobalCtx, prov: Provenance) {
-        // Only concrete tags have valid `AllocInfo` to expose.
-        if prov.bor_tag.is_concrete() {
-            let _ = unsafe { BorrowTracker::for_alloc_inner(prov) }
-                .and_then(|mut bt| bt.expose_tag(ctx));
-        }
     }
 
     pub fn debug_take_snapshot(&self, ctx: &GlobalCtx) {

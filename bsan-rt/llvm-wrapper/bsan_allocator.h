@@ -16,6 +16,8 @@ private:
 };
 
 void InitializeAllocator();
+void LockAllocator();
+void UnlockAllocator();
 
 void *bsan_malloc(uptr size);
 void bsan_deallocate(void *ptr);

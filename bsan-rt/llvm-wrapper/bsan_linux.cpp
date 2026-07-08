@@ -9,18 +9,18 @@ static pthread_key_t TSD_KEY;
 static bool TSD_KEY_INITED = false;
 THREADLOCAL void *bsan_thread = nullptr;
 
-BsanThread *GetCurrentThread() { return (BsanThread *)bsan_thread; }
+BsanThread *CurrentThread() { return (BsanThread *)bsan_thread; }
 
 void SetCurrentThread(BsanThread *t) {
   // Make sure we do not reset the current BsanThread.
   CHECK_EQ(0, bsan_thread);
   bsan_thread = t;
-  // Make sure that BsanTSDDtor gets called at the end.
+  // Make sure that `Destroy` gets called at the end.
   CHECK(TSD_KEY_INITED);
   pthread_setspecific(TSD_KEY, (void *)t);
 }
 
-void BsanTSDDtor(void *tsd) {
+void DestroyTSD(void *tsd) {
   BsanThread *t = (BsanThread *)tsd;
   if (t->destructor_iterations_ > 1) {
     t->destructor_iterations_--;
@@ -31,13 +31,13 @@ void BsanTSDDtor(void *tsd) {
   bsan_thread = nullptr;
   // Make sure that signal handler can not see a stale current thread pointer.
   atomic_signal_fence(memory_order_seq_cst);
-  BsanThread::TSDDtor(tsd);
+  BsanThread::Destroy(tsd);
 }
 
 void InitializeTSD() {
   CHECK(!TSD_KEY_INITED);
   TSD_KEY_INITED = true;
-  CHECK_EQ(0, pthread_key_create(&TSD_KEY, BsanTSDDtor));
+  CHECK_EQ(0, pthread_key_create(&TSD_KEY, DestroyTSD));
 }
 
 } // namespace __bsan

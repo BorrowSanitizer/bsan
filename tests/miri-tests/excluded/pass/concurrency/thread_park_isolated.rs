@@ -1,4 +1,5 @@
 //@run:0
+//@rustc-env:RUST_BACKTRACE=0
 //miri: @ignore-target: apple # park_timeout on macOS uses the system clock
 use std::thread;
 use std::time::{Duration, Instant};

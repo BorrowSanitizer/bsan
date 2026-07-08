@@ -1,4 +1,3 @@
-use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -6,7 +5,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 use rustc_version::{LlvmVersion, VersionMeta};
 
-use crate::util::{assert_host_binary, expect_env_path, show_error, Sysroot};
+use crate::util::{assert_host_bin, expect_env_path, show_error, show_error_cmd, Sysroot};
 
 fn rustc_lld(sysroot_target_bindir: &Path) -> PathBuf {
     let lld_binary = |prefix: &str| format!("{}.lld", prefix);
@@ -24,6 +23,7 @@ pub struct LlvmTools {
     pub clang: PathBuf,
     pub llvm_symbolizer: PathBuf,
     pub lld: PathBuf,
+    pub llvm_config: PathBuf,
 }
 
 impl LlvmTools {
@@ -32,37 +32,22 @@ impl LlvmTools {
             show_error!("Unable to resolve the LLVM version for the current `rustc`.")
         });
 
-        let clang =
-            assert_host_binary(host_sysroot, &format!("clang-{}", rustc_llvm_version.major));
-        let llvm_symbolizer = assert_host_binary(host_sysroot, "llvm-symbolizer");
+        let llvm_config = assert_host_bin(host_sysroot, "llvm-config");
+        assert_rustc_llvm_version(&llvm_config, &rustc_llvm_version);
 
-        let clang_llvm_version = assert_llvm_version(&clang);
-
-        if rustc_llvm_version != clang_llvm_version {
-            show_error!(
-                "Mismatched LLVM versions between `rustc` ({}) and `clang` ({})",
-                rustc_llvm_version,
-                clang_llvm_version
-            );
-        }
+        let clang = assert_host_bin(host_sysroot, &format!("clang-{}", rustc_llvm_version.major));
+        assert_rustc_llvm_version(&clang, &rustc_llvm_version);
 
         let sysroot_target_dir = host_sysroot.target_dir(rustc_version);
-
         let sysroot_target_bindir = sysroot_target_dir.join("bin");
 
         let lld = rustc_lld(&sysroot_target_bindir);
+        assert_rustc_llvm_version(&lld, &rustc_llvm_version);
 
-        let lld_llvm_version = assert_llvm_version(&lld);
+        // llvm-symbolizer is versioned independent to LLVM
+        let llvm_symbolizer = assert_host_bin(host_sysroot, "llvm-symbolizer");
 
-        if rustc_llvm_version != lld_llvm_version {
-            show_error!(
-                "Mismatched LLVM versions between `rustc` ({}) and `lld` ({})",
-                rustc_llvm_version,
-                lld_llvm_version
-            );
-        }
-
-        LlvmTools { clang, llvm_symbolizer, lld }
+        LlvmTools { clang, llvm_symbolizer, lld, llvm_config }
     }
 
     pub fn populate_env(&self, cmd: &mut Command) {
@@ -70,37 +55,70 @@ impl LlvmTools {
         cmd.env("CXX", &self.clang);
         cmd.env("LLVM_SYMBOLIZER", &self.clang);
         cmd.env("LLD", &self.lld);
+        cmd.env("LLVM_CONFIG", &self.lld);
+        // bindgen's clang-sys dependency requires these variables
+        // to be set so that it uses our clang to parse headers.
+        cmd.env("LIBCLANG_PATH", self.llvm_libdir());
+        cmd.env("CLANG_PATH", &self.clang);
     }
 
     pub fn from_env() -> Self {
         let clang = expect_env_path("CC");
         let llvm_symbolizer = expect_env_path("LLVM_SYMBOLIZER");
         let lld = expect_env_path("LLD");
-        Self { clang, llvm_symbolizer, lld }
+        let llvm_config = expect_env_path("LLVM_CONFIG");
+        Self { clang, llvm_symbolizer, lld, llvm_config }
     }
 
-    #[allow(unused)]
-    pub fn carry_env(cmd: &mut Command) {
-        for env in ["LLD", "CC", "CXX", "CFLAGS", "CXXFLAGS", "CPPFLAGS"] {
-            if let Some(val) = env::var_os(env) {
-                cmd.env(env, val);
-            }
+    pub fn llvm_libdir(&self) -> PathBuf {
+        let mut cmd = Command::new(&self.llvm_config);
+        cmd.arg("--libdir");
+
+        let Some(path) = command_output(&mut cmd) else {
+            show_error_cmd!(cmd, "Unable to resolve the LLVM `lib` directory using `llvm-config`.");
+        };
+        let path = PathBuf::from(path);
+        if !path.try_exists().unwrap() {
+            show_error_cmd!(
+                cmd,
+                "The `lib` directory returned by `llvm-config` does not exist: {}",
+                path.display()
+            );
         }
+        path
     }
 }
 
-fn assert_llvm_version(binary: &PathBuf) -> LlvmVersion {
-    let output = command_output(Command::new(binary).arg("--version")).unwrap_or_else(|| {
-        show_error!("Unable to obtain the LLVM version for `{}`", binary.display());
+fn assert_rustc_llvm_version(binary: &PathBuf, expected: &LlvmVersion) -> LlvmVersion {
+    let mut cmd = Command::new(binary);
+    cmd.arg("--version");
+    let output = command_output(&mut cmd).unwrap_or_else(|| {
+        show_error_cmd!(cmd, "Unable to obtain the LLVM version.");
     });
 
-    try_parse_llvm_version(&output).unwrap_or_else(|| {
+    // If the command above executed successfully, then we have a
+    // valid path to a binary_file.
+    let binary_name = binary.file_name().unwrap();
+
+    let version = try_parse_llvm_version(&output).unwrap_or_else(|| {
         show_error!("Unable to parse LLVM version for `{}`, found:\n{output}", binary.display());
-    })
+    });
+
+    if version != *expected {
+        show_error!(
+            "Mismatched LLVM versions between `rustc` ({}) and `{}` ({})",
+            expected,
+            binary_name.display(),
+            version
+        );
+    }
+    version
 }
 
 fn command_output(cmd: &mut Command) -> Option<String> {
-    cmd.output().ok().and_then(|output| String::from_utf8(output.stdout).ok())
+    let output = cmd.output().ok()?;
+    let output = String::from_utf8(output.stdout).ok()?;
+    Some(String::from(output.trim()))
 }
 
 fn try_parse_llvm_version(version_string: &str) -> Option<LlvmVersion> {

@@ -1,7 +1,9 @@
 #define SANITIZER_COMMON_NO_REDEFINE_BUILTINS
 
 #include "bsan.h"
+#include "bsan_global.h"
 #include "bsan_interface_internal.h"
+#include "bsan_shadow.h"
 #include "bsan_thread.h"
 #include "interception/interception.h"
 #include "sanitizer_common/sanitizer_allocator.h"
@@ -42,7 +44,7 @@ struct DlsymAlloc : public DlSymAllocator<DlsymAlloc> {
 #define ENSURE_BSAN_INITED()                                                   \
   do {                                                                         \
     CHECK(!bsan_init_running);                                                 \
-    if (!bsan_inited && !bsan_deinited) {                                      \
+    if (!bsan_inited) {                                                        \
       __bsan_init();                                                           \
     }                                                                          \
   } while (0)
@@ -50,25 +52,6 @@ struct DlsymAlloc : public DlSymAllocator<DlsymAlloc> {
 struct LocalInterceptorContext {
   bool block_interception;
 };
-
-struct GlobalInterceptorContext {
-  Mutex AtExitLock;
-  Vector<struct BSanAtExitRecord *> AtExitStack;
-  GlobalInterceptorContext() : AtExitStack() {}
-};
-
-alignas(64) static char ictx[sizeof(GlobalInterceptorContext)];
-GlobalInterceptorContext *global_interceptor_ctx() {
-  return reinterpret_cast<GlobalInterceptorContext *>(&ictx[0]);
-}
-
-static void *BsanThreadStartFunc(void *arg) {
-  BsanThread *t = (BsanThread *)arg;
-  SetCurrentThread(t);
-  t->Init();
-  SetSigProcMask(&t->starting_sigset_, nullptr);
-  return t->ThreadStart();
-}
 
 INTERCEPTOR(int, pthread_create, void *th, void *attr,
             void *(*callback)(void *), void *param) {
@@ -80,12 +63,16 @@ INTERCEPTOR(int, pthread_create, void *th, void *attr,
   }
   BsanThread *t = BsanThread::Create(callback, param);
   ScopedBlockSignals block(&t->starting_sigset_);
-  int res = REAL(pthread_create)(th, attr, BsanThreadStartFunc, t);
+  int res = REAL(pthread_create)(th, attr, BsanThread::StartCallback, t);
 
   if (attr == &myattr) {
     pthread_attr_destroy(&myattr);
   }
   return res;
+}
+
+INTERCEPTOR(int, pthread_join, void *thread, void **retval) {
+  return REAL(pthread_join)(thread, retval);
 }
 
 extern "C" void *__bsan_crt_malloc(SIZE_T size) {
@@ -102,7 +89,7 @@ INTERCEPTOR(void *, malloc, SIZE_T size) {
   InterceptorBarrier barrier;
   void *ptr = bsan_malloc(size);
   if (!already_in_scope && INST_CALLER(malloc)) {
-    Provenance *RetSlot = GetSlot(0);
+    Provenance *RetSlot = GetRetValSlot(0);
     BorTag Tag = NewBorTag();
     *RetSlot = {Tag, __bsan_alloc(ptr, size, Tag, span)};
   }
@@ -126,8 +113,8 @@ INTERCEPTOR(void, free, void *ptr) {
   bool already_in_scope = BlockInterception();
   InterceptorBarrier barrier;
   if (!already_in_scope && INST_CALLER(free)) {
-    Provenance *Slot = GetSlot(0);
-    __bsan_dealloc(ptr, Slot->Tag, Slot->Info, span);
+    Provenance *slot = GetParamSlot(0);
+    __bsan_dealloc(ptr, slot->tag, slot->info, span, false);
     HANDLE_ERROR_PC_BP(pc, bp);
   }
   return bsan_deallocate(ptr);
@@ -141,7 +128,7 @@ INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
   InterceptorBarrier barrier;
   void *ptr = bsan_calloc(nmemb, size);
   if (!already_in_scope && INST_CALLER(calloc)) {
-    Provenance *RetSlot = GetSlot(0);
+    Provenance *RetSlot = GetRetValSlot(0);
     BorTag Tag = NewBorTag();
     *RetSlot = {Tag, __bsan_alloc(ptr, nmemb * size, Tag, span)};
   }
@@ -156,31 +143,44 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
   InterceptorBarrier barrier;
   bool is_inst = !already_in_scope && INST_CALLER(realloc);
   if (is_inst) {
-    Provenance *Slot = GetSlot(0);
-    __bsan_dealloc(ptr, Slot->Tag, Slot->Info, span);
+    Provenance *slot = GetParamSlot(0);
+    __bsan_dealloc(ptr, slot->tag, slot->info, span, false);
     HANDLE_ERROR_PC_BP(pc, bp);
   }
   void *nptr = bsan_realloc(ptr, size);
   if (is_inst) {
-    Provenance *RetSlot = GetSlot(0);
+    Provenance *RetSlot = GetRetValSlot(0);
     BorTag Tag = NewBorTag();
     *RetSlot = {Tag, __bsan_alloc(nptr, size, Tag, span)};
   }
   return nptr;
 }
 
-// All remaining allocation functions must also be routed to our allocator:
-// otherwise, they will return pointers from glibc's allocator, and passing
-// them to our deallocation functions (e.g. through the interceptor for
-// `free`) will crash the program. Rust's standard library uses
-// `posix_memalign` for allocations with non-standard alignment.
+static Provenance BsanAllocateMeta(void *ptr, SIZE_T size, uptr span) {
+  BorTag tag = NewBorTag();
+  AllocInfo *info = __bsan_alloc(ptr, size, tag, span);
+  return {tag, info};
+}
 
-static void *BsanAlignedAllocate(void *ptr, SIZE_T size, bool is_inst,
-                                 Span span) {
+static void *BsanAllocateMetaIntoStack(void *ptr, SIZE_T size, bool is_inst,
+                                       uptr span, uptr slot_idx) {
   if (is_inst) {
-    Provenance *RetSlot = GetSlot(0);
-    BorTag Tag = NewBorTag();
-    *RetSlot = {Tag, __bsan_alloc(ptr, size, Tag, span)};
+    Provenance *slot = GetRetValSlot(slot_idx);
+    Provenance prov = BsanAllocateMeta(ptr, size, span);
+    *slot = BsanAllocateMeta(ptr, size, span);
+    CurrentThread()->AcquireProvenance(prov);
+  } else {
+    ClearSlot(slot_idx);
+  }
+  return ptr;
+}
+
+static void *BsanAllocateMetaIntoHeap(void *ptr, SIZE_T size, bool is_inst,
+                                      uptr span, void *dest) {
+  if (is_inst) {
+    WriteShadow(dest, BsanAllocateMeta(ptr, size, span));
+  } else {
+    ClearShadow(dest, sizeof(void *));
   }
   return ptr;
 }
@@ -193,7 +193,7 @@ INTERCEPTOR(void *, aligned_alloc, SIZE_T alignment, SIZE_T size) {
   InterceptorBarrier barrier;
   void *ptr = bsan_aligned_alloc(alignment, size);
   bool is_inst = !already_in_scope && INST_CALLER(aligned_alloc);
-  return BsanAlignedAllocate(ptr, size, is_inst, span);
+  return BsanAllocateMetaIntoStack(ptr, size, is_inst, span, 0);
 }
 
 INTERCEPTOR(void *, memalign, SIZE_T alignment, SIZE_T size) {
@@ -204,7 +204,7 @@ INTERCEPTOR(void *, memalign, SIZE_T alignment, SIZE_T size) {
   InterceptorBarrier barrier;
   void *ptr = bsan_memalign(alignment, size);
   bool is_inst = !already_in_scope && INST_CALLER(memalign);
-  return BsanAlignedAllocate(ptr, size, is_inst, span);
+  return BsanAllocateMetaIntoStack(ptr, size, is_inst, span, 0);
 }
 
 INTERCEPTOR(void *, __libc_memalign, SIZE_T alignment, SIZE_T size) {
@@ -215,7 +215,7 @@ INTERCEPTOR(void *, __libc_memalign, SIZE_T alignment, SIZE_T size) {
   InterceptorBarrier barrier;
   void *ptr = bsan_memalign(alignment, size);
   bool is_inst = !already_in_scope && INST_CALLER(__libc_memalign);
-  return BsanAlignedAllocate(ptr, size, is_inst, span);
+  return BsanAllocateMetaIntoStack(ptr, size, is_inst, span, 0);
 }
 
 INTERCEPTOR(void *, valloc, SIZE_T size) {
@@ -226,7 +226,7 @@ INTERCEPTOR(void *, valloc, SIZE_T size) {
   InterceptorBarrier barrier;
   void *ptr = bsan_valloc(size);
   bool is_inst = !already_in_scope && INST_CALLER(valloc);
-  return BsanAlignedAllocate(ptr, size, is_inst, span);
+  return BsanAllocateMetaIntoStack(ptr, size, is_inst, span, 0);
 }
 
 INTERCEPTOR(void *, pvalloc, SIZE_T size) {
@@ -238,7 +238,7 @@ INTERCEPTOR(void *, pvalloc, SIZE_T size) {
   InterceptorBarrier barrier;
   void *ptr = bsan_pvalloc(size);
   bool is_inst = !already_in_scope && INST_CALLER(pvalloc);
-  return BsanAlignedAllocate(ptr, size, is_inst, span);
+  return BsanAllocateMetaIntoStack(ptr, size, is_inst, span, 0);
 }
 
 INTERCEPTOR(int, posix_memalign, void **memptr, SIZE_T alignment, SIZE_T size) {
@@ -255,13 +255,7 @@ INTERCEPTOR(int, posix_memalign, void **memptr, SIZE_T alignment, SIZE_T size) {
   bool is_inst = !already_in_scope && INST_CALLER(posix_memalign);
   int res = bsan_posix_memalign(memptr, alignment, size);
   if (!res && is_inst) {
-    // The new pointer is returned through memory instead of the return slot,
-    // so its provenance needs to be written into the shadow of `memptr`.
-    BorTag Tag = NewBorTag();
-    void *Info = __bsan_alloc(*memptr, size, Tag, span);
-    *((BorTag *)MEM_TO_SHADOW(memptr)) = Tag;
-    auto OriginPtr = (void **)(MEM_TO_ORIGIN(memptr));
-    *(OriginPtr) = ((void *)Info);
+    BsanAllocateMetaIntoHeap(*memptr, size, is_inst, span, memptr);
   }
   return res;
 }
@@ -302,19 +296,15 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memcpy(void *dest, const void *src,
 
 } // extern "C"
 
-struct BSanAtExitRecord {
-  void (*func)(void *arg);
-  void *arg;
-};
-
 void BSanAtExitWrapper() {
-  BSanAtExitRecord *r;
+  AtExitRecord *r;
   {
-    Lock l(&global_interceptor_ctx()->AtExitLock);
+    Lock l(&global_ctx()->AtExitMutex());
 
-    uptr element = global_interceptor_ctx()->AtExitStack.Size() - 1;
-    r = global_interceptor_ctx()->AtExitStack[element];
-    global_interceptor_ctx()->AtExitStack.PopBack();
+    Vector<AtExitRecord *> &stack = global_ctx()->AtExitStack();
+    uptr element = stack.Size() - 1;
+    r = stack[element];
+    stack.PopBack();
   }
 
   ClearSlot(0);
@@ -324,7 +314,7 @@ void BSanAtExitWrapper() {
 
 void BSanCxaAtExitWrapper(void *arg) {
   ClearSlot(0);
-  BSanAtExitRecord *r = (BSanAtExitRecord *)arg;
+  AtExitRecord *r = (AtExitRecord *)arg;
   // libc before 2.27 had race which caused occasional double handler execution
   // https://sourceware.org/ml/libc-alpha/2017-08/msg01204.html
   if (!r->func)
@@ -353,8 +343,7 @@ INTERCEPTOR(int, atexit, void (*func)()) {
 
 static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso) {
   ENSURE_BSAN_INITED();
-  BSanAtExitRecord *r =
-      (BSanAtExitRecord *)InternalAlloc(sizeof(BSanAtExitRecord));
+  auto *r = (AtExitRecord *)InternalAlloc(sizeof(AtExitRecord));
   r->func = (void (*)(void *a))f;
   r->arg = arg;
   int res;
@@ -362,11 +351,11 @@ static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso) {
     // NetBSD does not preserve the 2nd argument if dso is equal to 0
     // Store ctx in a local stack-like structure
 
-    Lock l(&global_interceptor_ctx()->AtExitLock);
+    Lock l(&global_ctx()->AtExitMutex());
 
     res = REAL(__cxa_atexit)((void (*)(void *a))BSanAtExitWrapper, 0, 0);
     if (!res) {
-      global_interceptor_ctx()->AtExitStack.PushBack(r);
+      global_ctx()->AtExitStack().PushBack(r);
     }
   } else {
     res = REAL(__cxa_atexit)(BSanCxaAtExitWrapper, r, dso);
@@ -515,12 +504,11 @@ void InitializeInterceptors() {
   CHECK_EQ(inited, 0);
   __interception::DoesNotSupportStaticLinking();
 
-  new (global_interceptor_ctx()) GlobalInterceptorContext();
-
   InitializeCommonInterceptors();
   InitializeSignalInterceptors();
 
   INTERCEPT_FUNCTION(pthread_create);
+  INTERCEPT_FUNCTION(pthread_join);
   INTERCEPT_FUNCTION(free);
   INTERCEPT_FUNCTION(malloc);
   INTERCEPT_FUNCTION(calloc);
@@ -538,3 +526,16 @@ void InitializeInterceptors() {
 }
 
 } // namespace __bsan
+
+// DEFINE_INTERNAL_PTHREAD_FUNCTIONS.
+namespace __sanitizer {
+int internal_pthread_create(void *th, void *attr, void *(*callback)(void *),
+                            void *param) {
+  InterceptorBarrier barrier;
+  return REAL(pthread_create)(th, attr, callback, param);
+}
+int internal_pthread_join(void *th, void **ret) {
+  InterceptorBarrier barrier;
+  return REAL(pthread_join)(th, ret);
+}
+} // namespace __sanitizer

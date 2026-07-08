@@ -60,6 +60,10 @@ void __bsan::InitializeAllocator() {
     max_malloc_size = kMaxAllowedMallocSize;
 }
 
+void __bsan::LockAllocator() { allocator.ForceLock(); }
+
+void __bsan::UnlockAllocator() { allocator.ForceUnlock(); }
+
 static AllocatorCache *GetAllocatorCache(BsanThreadLocalMallocStorage *ms) {
   CHECK(ms);
   CHECK_LE(sizeof(AllocatorCache), sizeof(ms->allocator_cache));
@@ -85,7 +89,7 @@ static void *BsanAllocate(uptr size, uptr alignment, bool zeroise) {
     UNINITIALIZED BufferedStackTrace stack;
     ReportRssLimitExceeded(&stack);
   }
-  BsanThread *t = GetCurrentThread();
+  BsanThread *t = CurrentThread();
   void *allocated;
   if (t) {
     AllocatorCache *cache = GetAllocatorCache(&t->malloc_storage());
@@ -115,7 +119,7 @@ void __bsan::bsan_deallocate(void *p) {
   CHECK(p);
   Metadata *meta = reinterpret_cast<Metadata *>(allocator.GetMetaData(p));
   meta->requested_size = 0;
-  BsanThread *t = GetCurrentThread();
+  BsanThread *t = CurrentThread();
   if (t) {
     AllocatorCache *cache = GetAllocatorCache(&t->malloc_storage());
     allocator.Deallocate(cache, p);
@@ -183,15 +187,17 @@ static uptr AllocationSizeFast(const void *p) {
   return reinterpret_cast<Metadata *>(allocator.GetMetaData(p))->requested_size;
 }
 
-void *__bsan::bsan_malloc(uptr size) {
+namespace __bsan {
+
+void *bsan_malloc(uptr size) {
   return SetErrnoOnNull(BsanAllocate(size, sizeof(u64), false /*zeroise*/));
 }
 
-void *__bsan::bsan_calloc(uptr nmemb, uptr size) {
+void *bsan_calloc(uptr nmemb, uptr size) {
   return SetErrnoOnNull(BsanCalloc(nmemb, size));
 }
 
-void *__bsan::bsan_realloc(void *ptr, uptr size) {
+void *bsan_realloc(void *ptr, uptr size) {
   if (!ptr)
     return SetErrnoOnNull(BsanAllocate(size, sizeof(u64), false /*zeroise*/));
   if (size == 0) {
@@ -201,7 +207,7 @@ void *__bsan::bsan_realloc(void *ptr, uptr size) {
   return SetErrnoOnNull(BsanReallocate(ptr, size, sizeof(u64)));
 }
 
-void *__bsan::bsan_reallocarray(void *ptr, uptr nmemb, uptr size) {
+void *bsan_reallocarray(void *ptr, uptr nmemb, uptr size) {
   if (UNLIKELY(CheckForCallocOverflow(size, nmemb))) {
     errno = errno_ENOMEM;
     if (AllocatorMayReturnNull())
@@ -212,12 +218,12 @@ void *__bsan::bsan_reallocarray(void *ptr, uptr nmemb, uptr size) {
   return bsan_realloc(ptr, nmemb * size);
 }
 
-void *__bsan::bsan_valloc(uptr size) {
+void *bsan_valloc(uptr size) {
   return SetErrnoOnNull(
       BsanAllocate(size, GetPageSizeCached(), false /*zeroise*/));
 }
 
-void *__bsan::bsan_pvalloc(uptr size) {
+void *bsan_pvalloc(uptr size) {
   uptr PageSize = GetPageSizeCached();
   if (UNLIKELY(CheckForPvallocOverflow(size, PageSize))) {
     errno = errno_ENOMEM;
@@ -231,7 +237,7 @@ void *__bsan::bsan_pvalloc(uptr size) {
   return SetErrnoOnNull(BsanAllocate(size, PageSize, false /*zeroise*/));
 }
 
-void *__bsan::bsan_aligned_alloc(uptr alignment, uptr size) {
+void *bsan_aligned_alloc(uptr alignment, uptr size) {
   if (UNLIKELY(!CheckAlignedAllocAlignmentAndSize(alignment, size))) {
     errno = errno_EINVAL;
     if (AllocatorMayReturnNull())
@@ -242,7 +248,7 @@ void *__bsan::bsan_aligned_alloc(uptr alignment, uptr size) {
   return SetErrnoOnNull(BsanAllocate(size, alignment, false /*zeroise*/));
 }
 
-void *__bsan::bsan_memalign(uptr alignment, uptr size) {
+void *bsan_memalign(uptr alignment, uptr size) {
   if (UNLIKELY(!IsPowerOfTwo(alignment))) {
     errno = errno_EINVAL;
     if (AllocatorMayReturnNull())
@@ -253,7 +259,7 @@ void *__bsan::bsan_memalign(uptr alignment, uptr size) {
   return SetErrnoOnNull(BsanAllocate(size, alignment, false /*zeroise*/));
 }
 
-int __bsan::bsan_posix_memalign(void **memptr, uptr alignment, uptr size) {
+int bsan_posix_memalign(void **memptr, uptr alignment, uptr size) {
   if (UNLIKELY(!CheckPosixMemalignAlignment(alignment))) {
     if (AllocatorMayReturnNull())
       return errno_EINVAL;
@@ -268,6 +274,8 @@ int __bsan::bsan_posix_memalign(void **memptr, uptr alignment, uptr size) {
   *memptr = ptr;
   return 0;
 }
+
+} // end namespace __bsan
 
 extern "C" {
 uptr __sanitizer_get_current_allocated_bytes() {

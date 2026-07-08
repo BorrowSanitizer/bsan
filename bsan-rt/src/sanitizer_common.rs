@@ -11,6 +11,12 @@ use core::{fmt, ptr, slice};
 #[derive(Clone, Copy, Debug)]
 pub struct Span(pub usize);
 
+impl Span {
+    pub const fn dummy() -> Self {
+        Self(0)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Symbol {
     Resolved { file: String, line: u32, col: u32 },
