@@ -18,7 +18,6 @@ fn looks_like_rustdoc() -> bool {
 }
 
 fn main() {
-    env_logger::init();
     let mut args = env::args();
 
     // Skip binary name.
