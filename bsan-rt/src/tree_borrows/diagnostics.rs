@@ -665,7 +665,8 @@ impl DisplayRepr {
             let name = node.debug_info.name.clone();
             let exposed = node.is_exposed;
             let children_sorted = {
-                let mut children = node.children.iter().map(|child| node_tag(*child)).collect::<Vec<_>>();
+                let mut children =
+                    node.children.iter().map(|child| node_tag(*child)).collect::<Vec<_>>();
                 children.sort_by_key(|idx| tree.node(*idx).tag);
                 children
             };

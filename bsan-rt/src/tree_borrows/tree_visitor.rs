@@ -158,7 +158,11 @@ where
                         ContinueTraversal::Recurse => {
                             let node = node_from_map(this.nodes, idx);
                             for child in node.children.iter() {
-                                self.stack.push((node_tag(*child), rel_pos, RecursionState::BeforeChildren));
+                                self.stack.push((
+                                    node_tag(*child),
+                                    rel_pos,
+                                    RecursionState::BeforeChildren,
+                                ));
                             }
                         }
                         ContinueTraversal::SkipSelfAndChildren => {

@@ -12,7 +12,6 @@
 //! - idempotency properties asserted in `perms.rs` (for optimizations)
 
 use alloc::boxed::Box;
-
 use core::ops::Range;
 use core::ptr::NonNull;
 use core::{cmp, fmt, mem};
@@ -429,7 +428,6 @@ impl EagerTree {
     }
 }
 
-
 impl Drop for EagerTree {
     fn drop(&mut self) {
         for (_, ptr) in self.nodes.drain() {
@@ -448,7 +446,8 @@ impl Clone for EagerTree {
                 parent: None,
                 children: SmallVec::default(),
                 default_initial_perm: old.default_initial_perm,
-                default_initial_idempotent_foreign_access: old.default_initial_idempotent_foreign_access,
+                default_initial_idempotent_foreign_access: old
+                    .default_initial_idempotent_foreign_access,
                 is_exposed: old.is_exposed,
                 refcount: old.refcount.clone(),
                 debug_info: old.debug_info.clone(),
@@ -672,12 +671,15 @@ impl EagerTree {
                         // And delete it from children_of_node.
                         false
                     } else {
-                        if let Some(nextchild) = self.can_be_replaced_by_single_child(child_tag, live) {
+                        if let Some(nextchild) =
+                            self.can_be_replaced_by_single_child(child_tag, live)
+                        {
                             // `nextchild` is our grandchild, and will become our direct child.
                             // Delete the in-between node, `child_tag`.
                             self.remove_useless_node(child_tag);
                             // Set the new child's parent.
-                            self.node_mut(nextchild).parent = Some(node_ptr_from_map(&self.nodes, *tag));
+                            self.node_mut(nextchild).parent =
+                                Some(node_ptr_from_map(&self.nodes, *tag));
                             // Save the new child in children_of_node.
                             *child_ptr = node_ptr_from_map(&self.nodes, nextchild);
                         }

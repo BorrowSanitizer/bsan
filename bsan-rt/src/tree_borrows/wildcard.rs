@@ -2,7 +2,9 @@
 use core::fmt::Debug;
 
 use super::perms::AccessKind;
-use super::tree::{node_from_map, node_from_map_mut, node_tag, AccessRelatedness, EagerTree, NodeMap};
+use super::tree::{
+    node_from_map, node_from_map_mut, node_tag, AccessRelatedness, EagerTree, NodeMap,
+};
 #[cfg(feature = "expensive-consistency-checks")]
 use crate::borrow_tracker::GlobalState;
 use crate::helpers::FxHashMap;
@@ -252,10 +254,8 @@ impl EagerTree {
                 let state = exposed_cache.0.get(&tag).cloned().unwrap_or_default();
 
                 let exposed_as = if node.is_exposed {
-                    let perm = perms
-                        .get(&tag)
-                        .copied()
-                        .unwrap_or_else(|| node.default_location_state());
+                    let perm =
+                        perms.get(&tag).copied().unwrap_or_else(|| node.default_location_state());
 
                     perm.permission()
                         .strongest_allowed_local_access(protected_tags.contains_key(&node.tag))
@@ -267,7 +267,9 @@ impl EagerTree {
                     .children
                     .iter()
                     .copied()
-                    .map(|child_ptr| exposed_cache.0.get(&node_tag(*child_ptr)).cloned().unwrap_or_default())
+                    .map(|child_ptr| {
+                        exposed_cache.0.get(&node_tag(*child_ptr)).cloned().unwrap_or_default()
+                    })
                     .fold((0, 0), |acc, wc| (acc.0 + wc.local_reads, acc.1 + wc.local_writes));
                 let expected_reads =
                     child_reads + u16::from(exposed_as >= WildcardAccessLevel::Read);
