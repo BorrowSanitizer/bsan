@@ -528,8 +528,8 @@ impl EagerTree {
 
     /// Like [`Self::is_useless`], but takes a set of *dead* tags instead of
     /// *live* ones.
-    fn is_useless_dead(&self, idx: UniIndex, dead: &FxHashSet<BorTag>) -> bool {
-        let node = self.nodes.get(idx).unwrap();
+    fn is_useless_dead(&self, tag: BorTag, dead: &FxHashSet<BorTag>) -> bool {
+        let node = self.node(tag);
         node.refcount.get() == 0 && node.children.is_empty() && dead.contains(&node.tag)
     }
 
