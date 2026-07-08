@@ -53,6 +53,11 @@ bool bsan_deinited = false;
 // Every thread has a unique ID
 atomic_uintptr_t thread_id{0};
 
+// Path substrings that identify a file as belonging to a dependency/toolchain
+static const char *const kLibraryPathMarkers[] = {".cargo/", ".rustup/",
+                                                  "cargo/"
+                                                  "rustup/"};
+
 BorTag NewBorTag() {
   return atomic_fetch_add(&__bsan_bor_tag_ctr, 1, memory_order_relaxed);
 }
@@ -114,12 +119,15 @@ void PrintStackTrace(StackTrace &stack) {
   MaybeWarnTruncated(stack);
 }
 
-// Returns true if the file path belongs to a cargo or rustup library.
+// Returns true if the file path belongs to a dependency or toolchain library.
 static bool IsLibraryFile(const char *file) {
   if (!file || *file == '\0')
     return true;
-  return internal_strstr(file, ".cargo") || internal_strstr(file, ".rustup") ||
-         internal_strstr(file, "cargo") || internal_strstr(file, "rustup");
+  for (const char *marker : kLibraryPathMarkers) {
+    if (internal_strstr(file, marker))
+      return true;
+  }
+  return false;
 }
 
 // Returns true if any frame at this PC resolves to a user code file.
