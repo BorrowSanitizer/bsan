@@ -20,11 +20,17 @@ Subcommands:
     setup                    Only perform automatic setup, but without asking questions (for getting a proper libstd)
     clean                    Clean the BorrowSanitizer cache & target directory
 
+BorrowSanitizer options (before `--`):
+    --nop                    Link the no-op runtime (instrumentation present, checks disabled)
+    --skip-harness           Build libtest/getopts without retags (separate sysroot; LLVM pass kept)
+    --lto                    Use the LTO sysroot / pass pipeline
+
 The cargo options are exactly the same as for `cargo run` and `cargo test`, respectively.
 
 Examples:
     cargo bsan run
     cargo bsan test -- test-suite-filter
+    cargo bsan test --skip-harness --lib
 
     cargo bsan setup --print-sysroot
         This will print the path to the generated sysroot (and nothing else) on stdout.
@@ -120,7 +126,7 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
         BsanCommand::Clean => unreachable!(),
         BsanCommand::Setup => {
             if has_arg_flag("--print-rustflags") {
-                println!("{}", bsan_rustflags(&env, &deps, &llvm_tools).join(" "))
+                println!("{}", bsan_rustflags(&env, &deps, &llvm_tools, false).join(" "))
             }
             return;
         }
@@ -153,11 +159,12 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     cmd.arg("--target-dir").arg(target_dir);
 
     // *After* we set all the flags that need setting, forward everything else. Make sure to skip
-    // `--target-dir` (which would otherwise be set twice).
+    // `--target-dir` (which would otherwise be set twice). Also strip cargo-bsan-only flags
+    // that must not reach cargo itself.
     for arg in
         ArgSplitFlagValue::from_string_iter(&mut args, "--target-dir").filter_map(Result::err)
     {
-        if arg != "--nop" {
+        if arg != "--nop" && arg != "--skip-harness" && arg != "--lto" {
             cmd.arg(arg);
         }
     }
@@ -259,7 +266,14 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
     let in_rustdoc = phase == RustcPhase::Rustdoc;
 
     if target_crate {
-        cmd.args(bsan_rustflags(&env, &deps, &llvm_tools));
+        // `--skip-harness` still runs the LLVM pass on `test`/`getopts` so
+        // shadow-stack / boundary validation stay consistent with instrumented
+        // `std`, but omits `-Zcodegen-emit-retag` so the harness does not mint
+        // borrow tags (the dominant cost in short tests).
+        let crate_name = get_arg_flag_value("--crate-name");
+        let skip_retags = env.skip_harness
+            && matches!(crate_name.as_deref(), Some("test") | Some("getopts"));
+        cmd.args(bsan_rustflags(&env, &deps, &llvm_tools, skip_retags));
     }
 
     // Forward everything else.
@@ -293,9 +307,20 @@ fn links_executable() -> bool {
     types.iter().flat_map(|t| t.split(',')).any(|t| matches!(t, "bin" | "cdylib"))
 }
 
-fn bsan_rustflags(env: &EnvConfig, deps: &Dependencies, llvm_tools: &LlvmTools) -> Vec<String> {
+fn bsan_rustflags(
+    env: &EnvConfig,
+    deps: &Dependencies,
+    llvm_tools: &LlvmTools,
+    skip_retags: bool,
+) -> Vec<String> {
     let mut additional_args =
         BSAN_DEFAULT_RUSTFLAGS.iter().map(ToString::to_string).collect::<Vec<_>>();
+
+    if skip_retags {
+        // Keep the LLVM pass / shadow stack, but do not emit retag intrinsics
+        // for this crate. Used for libtest/getopts under `--skip-harness`.
+        additional_args.retain(|f| f != "-Zcodegen-emit-retag");
+    }
 
     let (llvm_include, llvm_lib) = deps.llvm_runtime();
     additional_args.push(format!("-L{}", llvm_include.display()));

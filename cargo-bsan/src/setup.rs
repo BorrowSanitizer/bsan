@@ -22,6 +22,12 @@ pub struct EnvConfig {
     pub quiet: bool,
     pub lto: bool,
     pub nop: bool,
+    /// When set, the `test` / `getopts` crates in the BSan sysroot are built
+    /// without retag emission (`-Zcodegen-emit-retag` omitted). The LLVM pass
+    /// still runs so shadow-stack / boundary validation stay consistent with
+    /// instrumented `std`. Useful for benchmarks where harness retags dominate
+    /// short tests.
+    pub skip_harness: bool,
 }
 
 impl EnvConfig {
@@ -30,7 +36,8 @@ impl EnvConfig {
         let quiet = has_arg_flag("-q") || has_arg_flag("--quiet");
         let lto = has_arg_flag("--lto");
         let nop = has_arg_flag("--nop");
-        Self { verbose, quiet, lto, nop }
+        let skip_harness = has_arg_flag("--skip-harness");
+        Self { verbose, quiet, lto, nop, skip_harness }
     }
 
     pub fn from_env() -> Self {
@@ -38,7 +45,8 @@ impl EnvConfig {
         let quiet = env::var_os("BSAN_QUIET").is_some();
         let lto = env::var_os("BSAN_LTO").is_some();
         let nop: bool = env::var_os("BSAN_NOP").is_some();
-        Self { verbose, quiet, lto, nop }
+        let skip_harness = env::var_os("BSAN_SKIP_HARNESS").is_some();
+        Self { verbose, quiet, lto, nop, skip_harness }
     }
 
     pub fn populate_env(&self, cmd: &mut Command) {
@@ -53,6 +61,9 @@ impl EnvConfig {
         }
         if self.nop {
             cmd.env("BSAN_NOP", "1");
+        }
+        if self.skip_harness {
+            cmd.env("BSAN_SKIP_HARNESS", "1");
         }
     }
 }

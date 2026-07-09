@@ -246,7 +246,14 @@ impl Sysroot {
         let root = match std::env::var_os("BSAN_SYSROOT") {
             Some(dir) => PathBuf::from(dir),
             None => {
-                let target_prefix = if config.lto { "bsan-lto" } else { "bsan" };
+                // Separate cache dirs so instrumented and uninstrumented
+                // libtest sysroots never share artifacts.
+                let target_prefix = match (config.lto, config.skip_harness) {
+                    (true, true) => "bsan-lto-skip-harness",
+                    (true, false) => "bsan-lto",
+                    (false, true) => "bsan-skip-harness",
+                    (false, false) => "bsan",
+                };
                 let user_dirs =
                     directories::ProjectDirs::from("org", "borrowsanitizer", target_prefix)
                         .unwrap();

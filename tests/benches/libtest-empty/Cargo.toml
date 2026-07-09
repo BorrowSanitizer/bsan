@@ -1,0 +1,12 @@
+[package]
+name = "libtest-empty"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone bench fixture; not part of the bsan workspace.
+[workspace]
+
+[lib]
+path = "src/lib.rs"
+test = true
