@@ -530,11 +530,11 @@ impl EagerTree {
     }
 
     /// Like [`Self::can_be_replaced_by_single_child_dead`], but for a node with more than one
-    /// child. This requires the stronger [`Permission::can_be_replaced_by_children`] check, and 
+    /// child. This requires the stronger [`Permission::can_be_replaced_by_children`] check, and
     /// it must hold for every child at every location
     fn can_be_replaced_by_children_dead(&self, idx: UniIndex) -> bool {
         let node = self.nodes.get(idx).unwrap();
-        
+
         if node.children.is_empty() {
             return false;
         }
@@ -549,7 +549,7 @@ impl EagerTree {
             let child_idx = node.children[i];
             children.push((child_idx, self.nodes.get(child_idx).unwrap().default_initial_perm));
         }
-        
+
         for (_range, loc) in self.locations.iter_all() {
             let parent_perm =
                 loc.perms.get(idx).map(|x| x.permission).unwrap_or(node.default_initial_perm);
