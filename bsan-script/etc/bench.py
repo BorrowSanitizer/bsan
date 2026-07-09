@@ -7,17 +7,8 @@
 # * A CSV file listing the mean execution times of each mode, including
 #   both the baselines and tested configurations.
 #
-# Methodology:
-# * Per-test BSan full/no-op runs use `--skip-harness` so libtest/getopts do
-#   not emit retags (LLVM pass still runs). vs-native ratios use those wall
-#   times directly.
-# * A bare `libtest` benchmark builds the empty fixture crate
-#   `tests/benches/libtest-empty` *without* `--skip-harness` and times a
-#   zero-test launch once per bench run (true harness-only cost).
-# * A per-crate `libtest-crate` row does the same on that crate's fully
-#   instrumented test binary (harness + discovering that crate's tests).
-# * vs-Miri ratios use wall-clock times as-is. Miri always interprets the
-#   harness, so skip-harness does not apply there.
+# Per-test BSan runs use `--skip-harness`. A separate bare `libtest`
+# benchmark times the empty fixture crate without `--skip-harness`.
 import argparse
 import statistics
 import json
@@ -36,14 +27,10 @@ RUNS = 3
 WARMUP = 1
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-# Empty crate used for the bare libtest-only benchmark (no #[test] items).
 LIBTEST_EMPTY_DIR = REPO_ROOT / "tests" / "benches" / "libtest-empty"
-LIBTEST_BARE_NAME = "libtest"
-LIBTEST_BARE_CRATE = "libtest-empty"
-LIBTEST_BARE_VERSION = "0.1.0"
-# Per-crate fully instrumented harness floor (crate test binary, zero matches).
-LIBTEST_CRATE_NAME = "libtest-crate"
-LIBTEST_FLOOR_FILTER = "__bsan_libtest_floor_nonexistent__"
+LIBTEST_NAME = "libtest"
+LIBTEST_CRATE = "libtest-empty"
+LIBTEST_VERSION = "0.1.0"
 
 # Uninstrumented native execution.
 NATIVE = {
@@ -67,11 +54,18 @@ MIRI = {
     "env": {"MIRIFLAGS": f"-Zmiri-tree-borrows {MIRI_COMMON_FLAGS}"},
 }
 
+# Miri with Tree Borrows disabled. This is as close to "just interpret" as
+# we can get. However, the core interpreter will still check for certain forms
+# of UB, like accessese out-of-bounds, use-after-free errors, and uninitialized accesses.
+# MIRI_BASE = {
+#     "name": "miri-base",
+#     "env": {"MIRIFLAGS": f"-Zmiri-disable-stacked-borrows {MIRI_COMMON_FLAGS}"},
+# }
+
 # Every Miri configuration.
 MIRI_CONFIGS = [MIRI]
 
-# Per-test BorrowSanitizer configurations. `--skip-harness` omits retags in
-# libtest/getopts so short tests are not dominated by harness retags.
+# BorrowSanitizer configurations.
 BSAN_CONFIGS = [
     # Full checking
     {
@@ -89,24 +83,21 @@ BSAN_CONFIGS = [
     }
 ]
 
-# Fully instrumented harness builds (no `--skip-harness`). Used for bare
-# `libtest` and per-crate `libtest-crate` floors, not for per-test timings.
-LIBTEST_INSTRUMENTED_CONFIGS = [
+# Fully instrumented builds for the bare libtest benchmark only.
+LIBTEST_CONFIGS = [
     {
         "name": "full",
-        "binary": "full-harness",
         "cmd": ["cargo", "bsan", "test", "--lib"],
         "env": {"RUSTFLAGS": "--cfg=miri"},
     },
     {
         "name": "no-op",
-        "binary": "nop-harness",
         "cmd": ["cargo", "bsan", "test", "--nop", "--lib"],
         "env": {"RUSTFLAGS": "--cfg=miri"},
     },
 ]
 
-# Every configuration used for per-test timings.
+# Every configuration that requires compiling a native binary.
 ALL_BINARY_CONFIGS = [NATIVE] + BSAN_CONFIGS
 
 
@@ -277,26 +268,21 @@ def compile_miri_tests(cwd: Path):
         cwd=cwd,
     )
 
-def capture_miri_replay(cwd: Path, t: str, config: dict, scratch: Path) -> Path:
-    """Run cargo-miri once to emit a replay script for test filter `t`."""
+def run_miri_test(cwd: Path, t: str, config: dict, scratch: Path) -> float:
+    """Time a single Miri test, excluding `cargo-miri` overhead, by capturing its
+    final `miri` invocation as a standalone script."""
     replay = scratch / "miri-replay.sh"
-    if replay.is_file():
-        replay.unlink()
 
     override_env = { **(config.get("env") or {}) }
     override_env["MIRI"] = str(ensure_miri_wrapper(scratch))
     override_env["BSAN_MIRI_REPLAY"] = str(replay)
 
+    # One cargo-miri run generates the replay script for this test's final miri
+    # invocation; we then time that script on its own, free of cargo overhead.
     run_capture(["cargo", "miri", "test", "-q", "--lib", "--", "--exact", t, "--nocapture"],
                 cwd=cwd, env=override_env)
     if not replay.is_file():
         sys.exit(f"Error: failed to intercept miri invocation for test {t}.")
-    return replay
-
-def run_miri_test(cwd: Path, t: str, config: dict, scratch: Path) -> float:
-    """Time a single Miri test, excluding `cargo-miri` overhead, by capturing its
-    final `miri` invocation as a standalone script."""
-    replay = capture_miri_replay(cwd, t, config, scratch)
     return hyperfine_mean(str(replay), config)
 
 def list_tests(cwd: Path, cmd: list[str]) -> list[str]:
@@ -359,140 +345,61 @@ def require_positive_mean(mean: float, name: str, t: str, bench_name: str) -> No
     if mean <= 0:
         sys.exit(f"Reported 0s mean execution time for {name} on test {t} from {bench_name}")
 
-def _time_zero_test_modes(
-    scratch: Path,
-    target: str,
-    crate: str,
-    version: str,
-    test_name: str,
-    result_label: str,
-    *,
-    native_binary: str,
-    launch_args: str,
-    extra: dict,
-) -> tuple[dict[str, float], list, list]:
-    """Time native + instrumented full/no-op zero-test launches.
+def measure_bare_libtest(target: str, scratch: Path) -> tuple[list, list]:
+    """Time the empty fixture crate's fully instrumented harness once."""
+    if not LIBTEST_EMPTY_DIR.is_dir():
+        sys.exit(f"Error: bare libtest fixture missing: {LIBTEST_EMPTY_DIR}")
 
-    `scratch` must already contain `native_binary` and each
-    LIBTEST_INSTRUMENTED_CONFIGS[*]["binary"].
-    """
-    means: dict[str, float] = {}
+    bare_scratch = scratch / "bare-libtest"
+    bare_scratch.mkdir(parents=True, exist_ok=True)
+    label = f"{LIBTEST_CRATE}@{LIBTEST_VERSION} - {target}"
+    print(f"Running bare libtest: {label}")
+
+    for config in [NATIVE] + LIBTEST_CONFIGS:
+        compile_test_binary(config, cwd=LIBTEST_EMPTY_DIR, out_dir=bare_scratch)
+        try:
+            run(["cargo", "clean", "--quiet"], cwd=LIBTEST_EMPTY_DIR)
+        except subprocess.CalledProcessError:
+            pass
+
     raw_rows = []
     relative_rows = []
-    row_start = (target, crate, version, test_name)
-    print(f"  -> {test_name} ({result_label})")
+    row_start = (target, LIBTEST_CRATE, LIBTEST_VERSION, LIBTEST_NAME)
+    print(f"  -> {LIBTEST_NAME}")
 
-    native_bin = scratch / native_binary
     native_mean = hyperfine_mean(
-        f"{native_bin} {launch_args}",
+        f"{bare_scratch / NATIVE['name']} --nocapture",
         NATIVE,
         env=NATIVE.get("env"),
     )
-    require_positive_mean(native_mean, NATIVE["name"], test_name, result_label)
+    require_positive_mean(native_mean, NATIVE["name"], LIBTEST_NAME, label)
     print(f"    - {NATIVE['name']}={round(native_mean, 8)}s")
-    means[NATIVE["name"]] = native_mean
     raw_rows.append(row_start + (NATIVE["name"], native_mean))
 
-    for config in LIBTEST_INSTRUMENTED_CONFIGS:
-        binary = scratch / config["binary"]
+    for config in LIBTEST_CONFIGS:
         mean = hyperfine_mean(
-            f"{binary} {launch_args}",
+            f"{bare_scratch / config['name']} --nocapture",
             config,
             env=config.get("env"),
         )
-        require_positive_mean(mean, config["name"], test_name, result_label)
+        require_positive_mean(mean, config["name"], LIBTEST_NAME, label)
         print(f"    - {config['name']}={round(mean, 8)}s")
-        means[config["name"]] = mean
         raw_rows.append(row_start + (config["name"], mean))
         ratio = mean / native_mean
-        print(f"    - {config['name']} vs {NATIVE['name']} ({test_name}) = {round(ratio, 4)}x")
+        print(f"    - {config['name']} vs {NATIVE['name']} = {round(ratio, 4)}x")
         relative_rows.append({
-            "name": f"{result_label} [{test_name}]",
+            "name": f"{label} [{LIBTEST_NAME}]",
             "unit": "Mean Relative Execution Time",
             "value": ratio,
             "extra": json.dumps({
                 "mode": config["name"],
                 "baseline": NATIVE["name"],
                 "target": target,
-                "version": version,
-                "crate": crate,
-                "test_name": test_name,
-                "skip_harness": False,
-                "libtest_seconds": means,
-                **extra,
+                "version": LIBTEST_VERSION,
+                "crate": LIBTEST_CRATE,
+                "test_name": LIBTEST_NAME,
             }),
         })
-    return means, raw_rows, relative_rows
-
-
-def measure_bare_libtest(target: str, scratch: Path) -> tuple[list, list]:
-    """Time a true bare libtest harness via the empty fixture crate.
-
-    Builds `tests/benches/libtest-empty` without `--skip-harness` and launches
-    the test binary with no tests. This is the suite's `libtest` benchmark.
-    """
-    if not LIBTEST_EMPTY_DIR.is_dir():
-        sys.exit(f"Error: bare libtest fixture missing: {LIBTEST_EMPTY_DIR}")
-
-    bare_scratch = scratch / "bare-libtest"
-    bare_scratch.mkdir(parents=True, exist_ok=True)
-    src_dir = LIBTEST_EMPTY_DIR
-    label = f"{LIBTEST_BARE_CRATE}@{LIBTEST_BARE_VERSION} - {target}"
-    print(f"Running bare libtest: {label}")
-
-    compile_test_binary(NATIVE, cwd=src_dir, out_dir=bare_scratch)
-    try:
-        run(["cargo", "clean", "--quiet"], cwd=src_dir)
-    except subprocess.CalledProcessError:
-        pass
-
-    for config in LIBTEST_INSTRUMENTED_CONFIGS:
-        compile_test_binary(
-            config, cwd=src_dir, out_dir=bare_scratch, binary_name=config["binary"]
-        )
-        try:
-            run(["cargo", "clean", "--quiet"], cwd=src_dir)
-        except subprocess.CalledProcessError:
-            pass
-
-    _means, raw_rows, relative_rows = _time_zero_test_modes(
-        bare_scratch,
-        target,
-        LIBTEST_BARE_CRATE,
-        LIBTEST_BARE_VERSION,
-        LIBTEST_BARE_NAME,
-        label,
-        native_binary=NATIVE["name"],
-        # Empty crate: no filter needed; suite has zero #[test] items.
-        launch_args="--nocapture",
-        extra={"bare_libtest": True},
-    )
-    return raw_rows, relative_rows
-
-
-def measure_crate_libtest_floor(
-    scratch: Path,
-    target: str,
-    crate: str,
-    version: str,
-    bench_name: str,
-) -> tuple[list, list]:
-    """Time this crate's fully instrumented test binary with zero matches.
-
-    Distinct from bare `libtest`: includes discovering/filtering this crate's
-    test list under an instrumented harness.
-    """
-    _means, raw_rows, relative_rows = _time_zero_test_modes(
-        scratch,
-        target,
-        crate,
-        version,
-        LIBTEST_CRATE_NAME,
-        bench_name,
-        native_binary=NATIVE["name"],
-        launch_args=f"--exact {LIBTEST_FLOOR_FILTER} --nocapture",
-        extra={"libtest_crate_floor": True},
-    )
     return raw_rows, relative_rows
 
 def process_config(
@@ -503,9 +410,6 @@ def process_config(
     crate = cfg.get("name")
     version = cfg.get("version")
     excluded_tests = set(cfg.get("exclude") or [])
-    included_tests = cfg.get("include")
-    if included_tests is not None:
-        included_tests = set(included_tests)
 
     if not crate or not version:
         sys.exit(f"Error: invalid per-crate config:\n{cfg}")
@@ -517,26 +421,10 @@ def process_config(
         print("Excluding:")
         for test_name in excluded_tests:
             print(f"- {test_name}")
-    if included_tests is not None:
-        print("Including only:")
-        for test_name in sorted(included_tests):
-            print(f"- {test_name}")
 
     src_dir = download_crate(crate, version, scratch)
-
-    # Per-test binaries (native + skip-harness full/no-op).
     for config in ALL_BINARY_CONFIGS:
         compile_test_binary(config, cwd=src_dir, out_dir=scratch)
-        try:
-            run(["cargo", "clean", "--quiet"], cwd=src_dir)
-        except subprocess.CalledProcessError:
-            pass
-
-    # Fully instrumented harness binaries for the per-crate libtest floor.
-    for config in LIBTEST_INSTRUMENTED_CONFIGS:
-        compile_test_binary(
-            config, cwd=src_dir, out_dir=scratch, binary_name=config["binary"]
-        )
         try:
             run(["cargo", "clean", "--quiet"], cwd=src_dir)
         except subprocess.CalledProcessError:
@@ -550,35 +438,25 @@ def process_config(
         print(f"Found {len(all_tests)} tests for {bench_name}.")
 
     tests = [t for t in all_tests if t not in excluded_tests]
-    if included_tests is not None:
-        missing = included_tests - set(all_tests)
-        if missing:
-            sys.exit(
-                f"Error: include list references unknown tests for {bench_name}: "
-                + ", ".join(sorted(missing))
-            )
-        tests = [t for t in tests if t in included_tests]
     if not tests:
         sys.exit(f"Error: every discovered test was excluded for {bench_name}.")
 
     compile_miri_tests(src_dir)
 
-    # vs-native: wall-clock ratios (BSan built with --skip-harness).
-    # vs-Miri: wall-clock ratios (Miri always interprets the harness).
+    # a mapping from (config, baseline) pairs to mean execution times for each test case
+    # for example, we would have `ratios[("no-op", "miri-tb")]` map to the list of
+    # mean execution times for our no-op mode relative to Miri with tree borrows enabled.
     ratios: dict[tuple[str, str], list[float]] = {}
-    raw_results = []
 
-    # Per-crate instrumented harness floor (not the bare libtest benchmark).
-    crate_libtest_rows, crate_libtest_relative = measure_crate_libtest_floor(
-        scratch, target, crate, version, bench_name
-    )
-    raw_results.extend(crate_libtest_rows)
-
+    # a raw list of execution times per crate, version, test case, and mode
+    raw_results: tuple[str, str, str, str, str, float] = []
     for t in tests:
         row_start = (target, crate, version, t)
         print(f"  -> {t}")
+        # a mapping from each config to its mean execution time
         per_test_means: dict[str, float] = {}
 
+        # execute every natively-compiled binary and record its mean execution time
         for config in ALL_BINARY_CONFIGS:
             binary = scratch / config["name"]
             mean = hyperfine_mean(f"{binary} --exact {t} --nocapture", config,
@@ -590,6 +468,7 @@ def process_config(
 
         baselines = {NATIVE["name"]: per_test_means.pop(NATIVE["name"])}
 
+        # execute Miri and add each configuration as a baseline for comparison
         for miri_config in MIRI_CONFIGS:
             miri_mean = run_miri_test(src_dir, t, miri_config, scratch)
             require_positive_mean(miri_mean, miri_config["name"], t, bench_name)
@@ -603,10 +482,8 @@ def process_config(
                 ratios.setdefault((mode, baseline), []).append(ratio)
                 print(f"    - {mode} vs {baseline} = {round(ratio, 4)}x")
 
-    relative_results = list(crate_libtest_relative)
+    relative_results = []
     for (mode, baseline), ratio_list in ratios.items():
-        if not ratio_list:
-            continue
         relative_results.append({
             "name": bench_name,
             "unit": "Mean Relative Execution Time",
@@ -618,15 +495,15 @@ def process_config(
                 "version": version,
                 "crate": crate,
                 "max": max(ratio_list),
-                "min": min(ratio_list),
-                "skip_harness": True,
+                "min": min(ratio_list)
             }),
         })
 
-    return {
+    all_results = {
         "relative": relative_results,
         "raw": raw_results
     }
+    return all_results
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
@@ -652,7 +529,6 @@ def main(argv: list[str]) -> int:
     with tempfile.TemporaryDirectory() as scratch_str:
         scratch = Path(scratch_str)
 
-        # Bare libtest once per bench run (empty fixture crate).
         bare_raw, bare_relative = measure_bare_libtest(args.target, scratch)
         all_results.setdefault("relative", [])
         all_results["relative"] += bare_relative

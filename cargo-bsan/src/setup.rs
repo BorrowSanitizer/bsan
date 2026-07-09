@@ -22,11 +22,6 @@ pub struct EnvConfig {
     pub quiet: bool,
     pub lto: bool,
     pub nop: bool,
-    /// When set, the `test` / `getopts` crates in the BSan sysroot are built
-    /// without retag emission (`-Zcodegen-emit-retag` omitted). The LLVM pass
-    /// still runs so shadow-stack / boundary validation stay consistent with
-    /// instrumented `std`. Useful for benchmarks where harness retags dominate
-    /// short tests.
     pub skip_harness: bool,
 }
 

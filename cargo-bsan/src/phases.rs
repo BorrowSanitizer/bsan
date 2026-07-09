@@ -159,12 +159,11 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     cmd.arg("--target-dir").arg(target_dir);
 
     // *After* we set all the flags that need setting, forward everything else. Make sure to skip
-    // `--target-dir` (which would otherwise be set twice). Also strip cargo-bsan-only flags
-    // that must not reach cargo itself.
+    // `--target-dir` (which would otherwise be set twice).
     for arg in
         ArgSplitFlagValue::from_string_iter(&mut args, "--target-dir").filter_map(Result::err)
     {
-        if arg != "--nop" && arg != "--skip-harness" && arg != "--lto" {
+        if arg != "--nop" && arg != "--skip-harness" {
             cmd.arg(arg);
         }
     }
@@ -266,10 +265,6 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
     let in_rustdoc = phase == RustcPhase::Rustdoc;
 
     if target_crate {
-        // `--skip-harness` still runs the LLVM pass on `test`/`getopts` so
-        // shadow-stack / boundary validation stay consistent with instrumented
-        // `std`, but omits `-Zcodegen-emit-retag` so the harness does not mint
-        // borrow tags (the dominant cost in short tests).
         let crate_name = get_arg_flag_value("--crate-name");
         let skip_retags = env.skip_harness
             && matches!(crate_name.as_deref(), Some("test") | Some("getopts"));
@@ -317,8 +312,6 @@ fn bsan_rustflags(
         BSAN_DEFAULT_RUSTFLAGS.iter().map(ToString::to_string).collect::<Vec<_>>();
 
     if skip_retags {
-        // Keep the LLVM pass / shadow stack, but do not emit retag intrinsics
-        // for this crate. Used for libtest/getopts under `--skip-harness`.
         additional_args.retain(|f| f != "-Zcodegen-emit-retag");
     }
 
