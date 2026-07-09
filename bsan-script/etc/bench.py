@@ -391,12 +391,12 @@ def process_config(
         # execute Miri and add each configuration as a baseline for comparison
         for miri_config in MIRI_CONFIGS:
             miri_mean = run_miri_test(src_dir, t, miri_config, scratch)
-            if mean <= 0:
+            if miri_mean <= 0:
                 sys.exit(f"""Reported 0s mean execution time for
                           {config["name"]} on test {t} from {bench_name}""")
             print(f"    - {miri_config['name']}={round(miri_mean, 8)}s")
             baselines[miri_config["name"]] = miri_mean
-            raw_results.append(row_start + (miri_config["name"], mean))
+            raw_results.append(row_start + (miri_config["name"], miri_mean))
 
         for mode, mode_mean in per_test_means.items():
             for baseline, baseline_mean in baselines.items():
