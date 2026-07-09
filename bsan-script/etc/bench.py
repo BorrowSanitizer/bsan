@@ -27,7 +27,7 @@ WARMUP = 1
 NATIVE = {
     "name": "native",
     "cmd": ["cargo", "test", "--lib"],
-    "env": {"RUSTFLAGS": "--cfg=bsan"},
+    "env": {"RUSTFLAGS": "--cfg=bsan --cfg=miri"},
 }
 
 # Flags shared by every Miri configuration. These disable most forms of
