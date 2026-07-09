@@ -62,6 +62,7 @@ BSAN_CONFIGS = [
     {
         "name": "full",
         "cmd": ["cargo", "bsan", "test", "--lib"],
+        "env": {"RUSTFLAGS": "--cfg=miri"},
     },
     # No-op checking. Instrumentation is inserted, but
     # all memory access checks, retags, and reference count
@@ -69,6 +70,7 @@ BSAN_CONFIGS = [
     {
         "name": "no-op",
         "cmd": ["cargo", "bsan", "test", "--nop", "--lib"],
+        "env": {"RUSTFLAGS": "--cfg=miri"},
     }
 ]
 
@@ -86,6 +88,24 @@ CSV_HEADERS = [
     'mean_exec_time_seconds'
 ]
 
+class TestHarnessJSON:
+    def __init__(self, txt):
+        self.lines = txt.splitlines()
+        self.idx = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        while self.idx < len(self.lines):
+            prev = self.idx
+            self.idx += 1
+            try:
+                return json.loads(self.lines[prev])
+            except json.JSONDecodeError:
+                continue
+        raise StopIteration
+
 def _build_env(kwargs: dict) -> dict:
     """Creates a copy of the current environment, merged with an `env` mapping from `kwargs`."""
     env = os.environ.copy()
@@ -101,7 +121,6 @@ def run(
     The command inherits the current environment.
     """
     return subprocess.run(cmd, check=True, env=_build_env(kwargs), **kwargs)
-
 def run_capture(
     cmd: list[str],
     **kwargs,
@@ -148,7 +167,7 @@ def compile_test_binary(config: dict, cwd: Path, out_dir: Path):
     """Compiles the test binary for the given cargo invocation and copies it into
     `out_dir`. Aborts on compile failure or if no executable is created.
     """
-    print(f">>> compiling tests ({config["name"]}): {' '.join(config["cmd"])}",
+    print(f"compiling tests ({config["name"]}): {' '.join(config["cmd"])}",
           file=sys.stderr)
     # We need to parse the output JSON to find the name of the test binary.
     msg_json = run_capture(
@@ -156,18 +175,11 @@ def compile_test_binary(config: dict, cwd: Path, out_dir: Path):
         cwd=cwd,
         env=config.get("env"),
     )
-    for line in msg_json.splitlines():
-        if not line.strip():
-            continue
-        try:
-            msg = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-
+    for msg in TestHarnessJSON(msg_json):
         exe = msg.get("executable")
         target = msg.get("target") or {}
         if exe and target.get("test"):
-            print(">>> done.")
+            print("done.")
             binary = out_dir / config["name"]
             shutil.copy2(exe, binary)
             binary.chmod(0o755)
@@ -225,7 +237,7 @@ def ensure_miri_wrapper(scratch: Path) -> Path:
     return wrapper
 
 def compile_miri_tests(cwd: Path):
-    print(">>> compiling tests (miri)")
+    print("compiling tests (miri)")
     run_capture(
         ["cargo", "miri", "test", "--no-run", "--message-format=json"],
         cwd=cwd,
@@ -248,14 +260,33 @@ def run_miri_test(cwd: Path, t: str, config: dict, scratch: Path) -> float:
         sys.exit(f"Error: failed to intercept miri invocation for test {t}.")
     return hyperfine_mean(str(replay), config)
 
-def list_tests(test_bin: Path) -> list[str]:
-    """Return all #[test] names discovered in the given test binary."""
-    out = run_capture([str(test_bin), "--list", "--format=terse"])
+def list_tests(cwd: Path, cmd: list[str]) -> list[str]:
+    out = run_capture(cmd + [
+        # Format the test list as JSON
+        "--list", "--format=json",
+        # Enable JSON output
+        "-Zunstable-options"
+        ],
+        cwd=cwd
+    )
     tests = []
-    for line in out.splitlines():
-        line = line.strip()
-        if line.endswith(": test"):
-            tests.append(line[:-len(": test")])
+    for obj in TestHarnessJSON(out):
+        type = obj.get("type")
+        event = obj.get("event")
+        name = obj.get("name")
+        ignored = obj.get("ignore")
+        # every JSON output line had "type" and "event" keys
+        if type is not None and event is not None:
+            if type == "test" and event == "discovered":
+                # the "ignore" flag indicates if the test configured
+                # to be ignored under this compilation configuration.
+                if name is not None and ignored is not None:
+                    if not ignored:
+                        tests.append(name)
+                    continue
+            else:
+                continue
+        sys.exit(f"Invalid libtest JSON format.")
     return tests
 
 def hyperfine_mean(cmd, config: dict, **kwargs) -> float:
@@ -317,13 +348,17 @@ def process_config(
         except subprocess.CalledProcessError:
             pass
 
-    all_tests = list_tests(scratch / NATIVE["name"])
+    all_tests = list_tests(src_dir, ["cargo", "miri", "test", "--"])
+
     if not all_tests:
         sys.exit(f"Error: no tests discovered for {bench_name}.")
+    else:
+        print(f"Found {len(all_tests)} tests for {bench_name}.")
 
     tests = [t for t in all_tests if t not in excluded_tests]
     if not tests:
         sys.exit(f"Error: every discovered test was excluded for {bench_name}.")
+
     compile_miri_tests(src_dir)
 
     # a mapping from (config, baseline) pairs to mean execution times for each test case
