@@ -62,6 +62,11 @@ THREADLOCAL uptr __bsan_had_error = 0;
 SANITIZER_INTERFACE_ATTRIBUTE
 atomic_uintptr_t __bsan_bor_tag_ctr{3};
 
+// Accumulates the number of tree-node visits performed by the Rust runtime
+// since the last garbage collection request
+SANITIZER_INTERFACE_ATTRIBUTE
+atomic_uintptr_t __bsan_visits_since_gc{0};
+
 namespace __bsan {
 
 // Is the runtime initialized?
@@ -75,18 +80,16 @@ BorTag NewBorTag() {
   return atomic_fetch_add(&__bsan_bor_tag_ctr, 1, memory_order_relaxed);
 }
 
-// Counts retags so that we can periodically trigger garbage collection.
-static atomic_uintptr_t retag_ctr{0};
-
-// Increments the retag counter and asks the global context to run the garbage
-// collector once every `retags_per_gc` retags. Concurrent requests across
-// threads are coalesced by `RequestGC`.
+// Asks the global context to run the garbage collector once the Rust runtime
+// has reported at least `visits_per_gc` tree-node visits since the last
+// request, then resets the counter. Concurrent requests across threads are
+// coalesced by `RequestGC`.
 static void MaybeRequestGC() {
-  uptr interval = flags()->retags_per_gc;
+  uptr interval = flags()->visits_per_gc;
   if (interval == 0)
     return;
-  uptr count = atomic_fetch_add(&retag_ctr, 1, memory_order_relaxed) + 1;
-  if (count % interval == 0) {
+  if (atomic_load(&__bsan_visits_since_gc, memory_order_relaxed) >= interval) {
+    atomic_store(&__bsan_visits_since_gc, 0, memory_order_relaxed);
     global_ctx()->RequestGC();
   }
 }

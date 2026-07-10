@@ -105,6 +105,9 @@ unsafe extern "C" {
     #[thread_local]
     pub unsafe static mut __bsan_had_error: usize;
 
+    /// Tree-node visits accumulated since the last GC request.
+    pub unsafe static __bsan_visits_since_gc: core::sync::atomic::AtomicUsize;
+
     /// Symbolize a single PC into "file:line:column" and returns 1 on success.
     fn __bsan_symbolize_pc(
         pc: usize,
