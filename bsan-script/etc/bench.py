@@ -348,7 +348,7 @@ def process_config(
         except subprocess.CalledProcessError:
             pass
 
-    all_tests = list_tests(src_dir, ["cargo", "miri", "test", "--"])
+    all_tests = list_tests(src_dir, ["cargo", "miri", "test", "--lib", "--"])
 
     if not all_tests:
         sys.exit(f"Error: no tests discovered for {bench_name}.")
