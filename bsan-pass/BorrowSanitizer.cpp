@@ -1274,30 +1274,25 @@ private:
   }
 
   /// Returns the integer shadow offset that corresponds to a given application
-  /// address `Addr`:
-  ///
-  ///     Offset = (Addr & ~AndMask) ^ XorMask
-  ///
-  /// getShadowOriginPtr turns this into the shadow and origin pointers by
-  /// adding ShadowBase and OriginBase respectively. When `Alignment` cannot be
-  /// shown to be at least kMinProvAlignment, the offset is additionally rounded
-  /// down to a provenance-slot (kMinProvAlignment) boundary, so sub-slot
-  /// addresses map to the slot that holds their provenance.
+  /// address
   Value *getShadowPtrOffset(Value *Addr, IRBuilder<> &IRB,
                             MaybeAlign Alignment) {
     Type *IntptrTy = ptrToIntPtrType(Addr->getType());
     Value *OffsetLong = IRB.CreatePointerCast(Addr, IntptrTy);
+
+    Align AddrAlign = Alignment.valueOrOne();
+    Align CommonAlign = commonAlignment(AddrAlign, kMinProvAlignment.value());
+
+    if (CommonAlign != kMinProvAlignment) {
+      uint64_t Mask = kMinProvAlignment.value() - 1;
+      OffsetLong = IRB.CreateAnd(OffsetLong, constToIntPtr(IntptrTy, ~Mask));
+    }
 
     if (uint64_t AndMask = BS.MapParams->AndMask)
       OffsetLong = IRB.CreateAnd(OffsetLong, constToIntPtr(IntptrTy, ~AndMask));
 
     if (uint64_t XorMask = BS.MapParams->XorMask)
       OffsetLong = IRB.CreateXor(OffsetLong, constToIntPtr(IntptrTy, XorMask));
-
-    if (!Alignment || *Alignment < kMinProvAlignment) {
-      uint64_t Mask = kMinProvAlignment.value() - 1;
-      OffsetLong = IRB.CreateAnd(OffsetLong, constToIntPtr(IntptrTy, ~Mask));
-    }
 
     return OffsetLong;
   }
