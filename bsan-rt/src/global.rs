@@ -9,15 +9,40 @@ use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use crate::errors::{ErrorFormatContext, UBInfo};
 use crate::helpers::FxHashMap;
 use crate::memory::Heap;
+use crate::sanitizer_common::Span;
 use crate::tree_borrows::data_structures::{AccessType, RangeObjectMap};
 use crate::tree_borrows::{AllocStateImpl, ProtectorKind};
 use crate::*;
 
 pub static DISABLE_NODE_DEBUG_INFO: AtomicBool = AtomicBool::new(false);
 
+/// Thread-local slot for a boxed `(UBInfo, Span)` set by `handle_error` and
+/// consumed by `__bsan_format_pending_ub` once the C++ side has captured the
+/// stack and located the first user-code frame.
+#[thread_local]
+static PENDING_ERROR: UnsafeCell<*mut (UBInfo, Span)> = UnsafeCell::new(core::ptr::null_mut());
+
 unsafe extern "C" {
     fn __bsan_abort() -> !;
     fn __bsan_disable_node_debug_info() -> bool;
+}
+
+/// Called from the `HANDLE_ERROR` C++ macro after the stack trace has been
+/// captured and the first user-code frame PC has been located.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __bsan_format_pending_ub(user_frame_pc: usize) {
+    let ptr = unsafe { *PENDING_ERROR.get() };
+    if ptr.is_null() {
+        return;
+    }
+    unsafe { *PENDING_ERROR.get() = core::ptr::null_mut() };
+    let (ub_info, original_pc) = unsafe { *alloc::boxed::Box::from_raw(ptr) };
+    let (primary, origin) = crate::sanitizer_common::SanitizerCommon::resolve_error_location(
+        user_frame_pc,
+        original_pc,
+    );
+    let mut ctx = ErrorFormatContext::default();
+    crate::eprint!("error: {}", ctx.display_ub(ub_info, primary, origin));
 }
 
 #[derive(Default)]
@@ -198,9 +223,13 @@ impl GlobalCtx {
     }
 
     pub fn handle_error(&self, ub_info: UBInfo, pc: Span) {
-        let mut ctx = ErrorFormatContext::default();
-        crate::eprint!("error: {}", ctx.display_ub(ub_info, pc));
         unsafe {
+            let old_ptr = *PENDING_ERROR.get();
+            if !old_ptr.is_null() {
+                drop(alloc::boxed::Box::from_raw(old_ptr));
+            }
+            let ptr = alloc::boxed::Box::into_raw(alloc::boxed::Box::new((ub_info, pc)));
+            *PENDING_ERROR.get() = ptr;
             crate::sanitizer_common::__bsan_had_error = 1;
         }
     }

@@ -5,7 +5,7 @@ use core::cmp::max;
 use hashbrown::HashMap;
 
 use crate::helpers::Size;
-use crate::sanitizer_common::{SanitizerCommon, Span, Symbol};
+use crate::sanitizer_common::{SanitizerCommon, Symbol};
 use crate::tree_borrows::diagnostics::TreeBorrowsUb;
 use crate::AllocId;
 
@@ -29,57 +29,91 @@ pub struct ErrorFormatContext {
 }
 
 impl ErrorFormatContext {
-    pub fn display_ub(&mut self, info: UBInfo, span: Span) -> String {
-        let symbol = SanitizerCommon::symbolize(span);
-        let mut result = String::new();
-        result.push_str("Undefined Behavior: ");
-        match info {
+    pub fn display_ub(&mut self, info: UBInfo, symbol: Symbol, origin: Option<Symbol>) -> String {
+        let mut result = String::from("Undefined Behavior: ");
+        let message = match info {
             UBInfo::UseAfterFree => {
-                result.push_str("trying to access an allocation that has been freed.\n");
-                result.push_str(&self.format_symbol_standalone(symbol));
-                result.push('\n');
+                "trying to access an allocation that has been freed.\n".to_string()
             }
-            UBInfo::AccessOutOfBounds { alloc_id, access_size, alloc_size, offset } => {
-                result.push_str(&format!(
-                    "an access of size {access_size:x}b at offset 0x{offset:x} is out of bounds for {alloc_id:?} of size {alloc_size:x}b.\n"
-                ));
-                result.push_str(&self.format_symbol_standalone(symbol));
-                result.push('\n');
-            }
+            UBInfo::AccessOutOfBounds { alloc_id, access_size, alloc_size, offset } => format!(
+                "an access of size {access_size:x}b at offset 0x{offset:x} is out of bounds for {alloc_id:?} of size {alloc_size:x}b.\n"
+            ),
             UBInfo::AliasingViolation(error) => {
-                result.push_str(&self.display_tree_error(error, symbol))
+                result.push_str(&self.display_tree_error(error, symbol, origin));
+                return result;
             }
-        }
+        };
+        result.push_str(&message);
+        result.push_str(&self.format_symbol_standalone(symbol));
+        result.push_str(&self.format_origin(origin, None));
+        result.push('\n');
         result
     }
 
-    fn display_tree_error(&mut self, mut error: TreeBorrowsUb, symbol: Symbol) -> String {
+    /// Renders the origin note pointing at the immediate library site
+    fn format_origin(&mut self, origin: Option<Symbol>, max_indent: Option<usize>) -> String {
+        let Some(origin) = origin else {
+            return String::new();
+        };
+        let indent = max_indent.unwrap_or_else(|| origin.line_length());
+        let mut buffer = format!(
+            "{} = note: the above line calls library code, where the error was detected:\n",
+            " ".repeat(indent)
+        );
+        buffer.push_str(&self.format_symbol(origin, indent));
+        buffer
+    }
+
+    fn display_tree_error(
+        &mut self,
+        mut error: TreeBorrowsUb,
+        symbol: Symbol,
+        origin: Option<Symbol>,
+    ) -> String {
         let mut buffer = String::new();
 
         let mut max_indentation = symbol.line_length();
-        let event_symbols: Vec<(Symbol, String)> = error
+        let event_symbols: Vec<(Option<Symbol>, Option<Symbol>, String)> = error
             .history
             .events
             .drain(..)
             .map(|evt| {
-                let symbol = SanitizerCommon::symbolize(evt.0.unwrap_or(Span::dummy()));
-                max_indentation = max_indentation.max(symbol.line_length());
-                (symbol, evt.1)
+                if let Some(span) = evt.0 {
+                    let (sym, origin) = SanitizerCommon::symbolize_with_origin(span);
+                    max_indentation = max_indentation.max(sym.line_length());
+                    if let Some(origin) = &origin {
+                        max_indentation = max_indentation.max(origin.line_length());
+                    }
+                    (Some(sym), origin, evt.1)
+                } else {
+                    (None, None, evt.1)
+                }
             })
             .collect();
+
+        if let Some(origin) = &origin {
+            max_indentation = max_indentation.max(origin.line_length());
+        }
 
         buffer.push_str(&error.title);
         buffer.push('\n');
 
         buffer.push_str(&self.format_symbol(symbol, max_indentation));
 
+        buffer.push_str(&self.format_origin(origin, Some(max_indentation)));
+
         for detail in error.details {
             buffer.push_str(&format!("{} = help: {}\n", " ".repeat(max_indentation), detail));
         }
 
-        for (symbol, msg) in event_symbols {
-            buffer.push_str(&format!("help: {}\n", msg));
-            buffer.push_str(&self.format_symbol(symbol, max_indentation));
+        for (symbol, origin, msg) in event_symbols {
+            if let Some(symbol) = symbol {
+                buffer.push_str(&format!("help: {}\n", msg));
+                buffer.push_str(&self.format_symbol(symbol, max_indentation));
+                buffer.push_str(&self.format_origin(origin, Some(max_indentation)));
+            } else {
+                buffer.push_str(&format!("{} = help: {}\n", " ".repeat(max_indentation), msg));
+            }
         }
         buffer.push('\n');
         buffer

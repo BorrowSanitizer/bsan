@@ -14,7 +14,7 @@ help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to 
    |
 LL | x = 1;
    |
-help: this transition corresponds to a loss of read permissions
+   = help: this transition corresponds to a loss of read permissions
 
 stack backtrace:
 0: shr_frozen_violation2::main
@@ -23,3 +23,5 @@ stack backtrace:
  at RUSTLIB/core/src/ops/function.rs:LL:CC
 2: std::sys::backtrace::__rust_begin_short_backtrace
  at RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.
