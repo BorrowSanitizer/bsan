@@ -12,7 +12,7 @@
 //! - idempotency properties asserted in `perms.rs` (for optimizations)
 
 use alloc::boxed::Box;
-use core::ops::Range;
+use core::ops::{Deref, DerefMut, Range};
 use core::ptr::NonNull;
 use core::{cmp, fmt, mem};
 
@@ -275,12 +275,33 @@ pub struct LocationTree {
     /// `unwrap` any `perm.get(&key)`.
     ///
     /// We do uphold the fact that `keys(perms)` is a subset of `keys(nodes)`
-    pub perms: FxHashMap<BorTag, LocationState>,
+    pub perms: FxHashMap<NonNull<Node>, LocationState>,
     /// Caches information about the relatedness of nodes for a wildcard access.
     pub exposed_cache: ExposedCache,
 }
 
-pub type NodeMap = FxHashMap<BorTag, NonNull<Node>>;
+
+#[derive(Debug)]
+pub(super) struct NodeMap(FxHashMap<BorTag, NonNull<Node>>);
+
+impl Default for NodeMap {
+    fn default() -> Self {
+        Self(FxHashMap::default())
+    }
+}
+
+impl Deref for NodeMap {
+    type Target = FxHashMap<BorTag, NonNull<Node>>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for NodeMap {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 /// Looks up a node pointer that is already registered in `nodes`.
 ///
@@ -406,6 +427,7 @@ impl EagerTree {
                 debug_info
             },
         };
+        let root_ptr = alloc_node(root_node);
         let locations = {
             let mut perms = FxHashMap::default();
             // We manually set it to `Unique` on all in-bounds positions.
@@ -413,7 +435,7 @@ impl EagerTree {
             // not yet accessed nodes exist. Essentially, we pretend there
             // was a write that initialized these to `Unique`.
             perms.insert(
-                root_tag,
+                root_ptr,
                 LocationState::new_accessed(
                     Permission::new_unique(),
                     IdempotentForeignAccess::None,
@@ -423,7 +445,7 @@ impl EagerTree {
             DedupRangeMap::new(size, LocationTree { perms, exposed_cache })
         };
         let mut nodes = NodeMap::default();
-        nodes.insert(root_tag, alloc_node(root_node));
+        nodes.insert(root_tag, root_ptr);
         Self { roots: SmallVec::from_slice(&[root_tag]), nodes, locations }
     }
 }
@@ -439,7 +461,7 @@ impl Drop for EagerTree {
 impl Clone for EagerTree {
     fn clone(&self) -> Self {
         let mut nodes = NodeMap::default();
-        for (&tag, &old_ptr) in &self.nodes {
+        for (&tag, &old_ptr) in self.nodes.iter() {
             let old = unsafe { old_ptr.as_ref() };
             let new_ptr = alloc_node(Node {
                 tag: old.tag,
@@ -454,7 +476,7 @@ impl Clone for EagerTree {
             });
             nodes.insert(tag, new_ptr);
         }
-        for (&tag, &old_ptr) in &self.nodes {
+        for (&tag, &old_ptr) in self.nodes.iter() {
             let old = unsafe { old_ptr.as_ref() };
             let new_ptr = nodes.get(&tag).copied().unwrap();
             let new = unsafe { new_ptr.as_ptr().as_mut().unwrap() };
@@ -465,7 +487,16 @@ impl Clone for EagerTree {
                 .map(|child| node_ptr_from_map(&nodes, node_tag(*child)))
                 .collect();
         }
-        Self { nodes, locations: self.locations.clone(), roots: self.roots.clone() }
+        // Remap perms keys from old node pointers to the newly allocated ones.
+        let mut locations = self.locations.clone();
+        for (_, loc) in locations.iter_mut_all() {
+            let old_perms = mem::take(&mut loc.perms);
+            for (old_ptr, state) in old_perms {
+                let new_ptr = node_ptr_from_map(&nodes, node_tag(old_ptr));
+                loc.perms.insert(new_ptr, state);
+            }
+        }
+        Self { nodes, locations, roots: self.roots.clone() }
     }
 }
 
@@ -488,9 +519,10 @@ impl EagerTree {
             // as the default SIFA for not-yet-initialized locations.
             // Record whether we did any change; if not, the invariant is restored and we can stop the traversal.
             let mut any_change = false;
+            let current_ptr = node_ptr_from_map(&self.nodes, current);
             for (_range, loc) in self.locations.iter_mut_all() {
                 // Check if this node has a state for this location (or range of locations).
-                if let Some(perm) = loc.perms.get_mut(&current) {
+                if let Some(perm) = loc.perms.get_mut(&current_ptr) {
                     // Update the per-location SIFA, recording if it changed.
                     any_change |=
                         perm.idempotent_foreign_access.ensure_no_stronger_than(strongest_allowed);
@@ -555,15 +587,16 @@ impl EagerTree {
         let child = self.node(child_idx);
         // Check that for that one child, `can_be_replaced_by_child` holds for the permission
         // on all locations.
+        let idx_ptr = node_ptr_from_map(&self.nodes, idx);
         for (_range, loc) in self.locations.iter_all() {
             let parent_perm = loc
                 .perms
-                .get(&idx)
+                .get(&idx_ptr)
                 .map(|x| x.permission)
                 .unwrap_or_else(|| node.default_initial_perm);
             let child_perm = loc
                 .perms
-                .get(&child_idx)
+                .get(&child_ptr)
                 .map(|x| x.permission)
                 .unwrap_or_else(|| child.default_initial_perm);
             if !parent_perm.can_be_replaced_by_child(child_perm) {
@@ -589,15 +622,16 @@ impl EagerTree {
         let child = self.node(child_idx);
         // Check that for that one child, `can_be_replaced_by_child` holds for the permission
         // on all locations.
+        let idx_ptr = node_ptr_from_map(&self.nodes, idx);
         for (_range, loc) in self.locations.iter_all() {
             let parent_perm = loc
                 .perms
-                .get(&idx)
+                .get(&idx_ptr)
                 .map(|x| x.permission)
                 .unwrap_or_else(|| node.default_initial_perm);
             let child_perm = loc
                 .perms
-                .get(&child_idx)
+                .get(&child_ptr)
                 .map(|x| x.permission)
                 .unwrap_or_else(|| child.default_initial_perm);
             if !parent_perm.can_be_replaced_by_child(child_perm) {
@@ -614,13 +648,14 @@ impl EagerTree {
     /// whose children were rotated somewhere else can be deleted without
     /// having to first modify them to clear that array.
     fn remove_useless_node(&mut self, tag: BorTag) {
+        let Some(ptr) = self.nodes.remove(&tag) else {
+            return;
+        };
         for (_range, loc) in self.locations.iter_mut_all() {
-            loc.perms.remove(&tag);
+            loc.perms.remove(&ptr);
             loc.exposed_cache.remove(tag);
         }
-        if let Some(ptr) = self.nodes.remove(&tag) {
-            dealloc_node(ptr);
-        }
+        dealloc_node(ptr);
     }
 
     /// Traverses the entire tree looking for useless tags.
@@ -924,8 +959,9 @@ impl LocationTree {
         // `loc_range` is only for diagnostics (it is the range of
         // the `RangeMap` on which we are currently working).
         let node_skipper = |args: &NodeAppArgs<'_, LocationTree>| -> ContinueTraversal {
-            let node = node_from_map(args.nodes, args.tag);
-            let perm = args.data.perms.get(&args.tag);
+            let node_ptr = node_ptr_from_map(args.nodes, args.tag);
+            let node = unsafe { node_ptr.as_ref() };
+            let perm = args.data.perms.get(&node_ptr);
 
             let old_state = perm.copied().unwrap_or_else(|| node.default_location_state());
             old_state.skip_if_known_noop(access_kind, args.rel_pos)
@@ -933,8 +969,9 @@ impl LocationTree {
         let mut visit_count: usize = 0;
         let node_app = |args: NodeAppArgs<'_, LocationTree>| {
             visit_count += 1;
-            let node = node_from_map_mut(args.nodes, args.tag);
-            let perm = args.data.perms.entry(args.tag);
+            let node_ptr = node_ptr_from_map(args.nodes, args.tag);
+            let node = unsafe { node_ptr.as_ptr().as_mut().unwrap() };
+            let perm = args.data.perms.entry(node_ptr);
 
             let state = perm.or_insert(node.default_location_state());
 
@@ -1031,8 +1068,9 @@ impl LocationTree {
         TreeVisitor { data: self, nodes }.traverse_children_this(
             root,
             |args| -> ContinueTraversal {
-                let node = node_from_map(args.nodes, args.tag);
-                let perm = args.data.perms.get(&args.tag);
+                let node_ptr = node_ptr_from_map(args.nodes, args.tag);
+                let node = unsafe { node_ptr.as_ref() };
+                let perm = args.data.perms.get(&node_ptr);
 
                 let old_state = perm.copied().unwrap_or_else(|| node.default_location_state());
                 // If we know where, relative to this node, the wildcard access occurs,
@@ -1048,7 +1086,8 @@ impl LocationTree {
             },
             |args| {
                 visit_count += 1;
-                let node = node_from_map_mut(args.nodes, args.tag);
+                let node_ptr = node_ptr_from_map(args.nodes, args.tag);
+                let node = unsafe { node_ptr.as_ptr().as_mut().unwrap() };
 
                 let protected = global.get_protector_kind(node.tag).is_some();
 
@@ -1061,7 +1100,7 @@ impl LocationTree {
                     return Err(no_valid_exposed_references_error(diagnostics));
                 };
 
-                let entry = args.data.perms.entry(args.tag);
+                let entry = args.data.perms.entry(node_ptr);
                 let perm = entry.or_insert(node.default_location_state());
 
                 // We only count exposed nodes through which an access could happen.
@@ -1409,7 +1448,7 @@ impl AllocState for EagerTree {
                 .locations
                 .iter_mut(Size::from_bytes(start) + base_offset, Size::from_bytes(end - start))
             {
-                loc.perms.insert(new_tag, perm);
+                loc.perms.insert(new_ptr, perm);
             }
         }
 
@@ -1491,12 +1530,13 @@ impl AllocState for EagerTree {
                         access_tag,
                         |_| ContinueTraversal::Recurse,
                         |args: NodeAppArgs<'_, _>| {
-                            let node = node_from_map(args.nodes, args.tag);
+                            let node_ptr = node_ptr_from_map(args.nodes, args.tag);
+                            let node = unsafe { node_ptr.as_ref() };
 
                             let perm = args
                                 .data
                                 .perms
-                                .get(&args.tag)
+                                .get(&node_ptr)
                                 .copied()
                                 .unwrap_or_else(|| node.default_location_state());
                             if global.get_protector_kind(node.tag)
@@ -1549,7 +1589,8 @@ impl AllocState for EagerTree {
         };
 
         for (loc_range, loc) in self.locations.iter_mut_all() {
-            if let Some(p) = loc.perms.get(&source_tag)
+            let source_ptr = node_ptr_from_map(&self.nodes, source_tag);
+            if let Some(p) = loc.perms.get(&source_ptr)
                 && let Some(access_kind) = p.permission.protector_end_access()
                 && p.accessed
             {

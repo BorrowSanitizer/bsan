@@ -1,3 +1,4 @@
+//! UNUSED: Ported from Miri, kept for reference.
 //! This module implements the `UniMap`, which is a way to get efficient mappings
 //! optimized for the setting of `tree_borrows/tree.rs`.
 //!

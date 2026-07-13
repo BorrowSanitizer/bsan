@@ -5,7 +5,7 @@ use core::fmt;
 use core::ops::Range;
 
 use super::perms::{AccessKind, PermTransition, Permission, ProtectorKind};
-use super::tree::{node_tag, EagerTree, LocationState};
+use super::tree::{node_ptr_from_map, node_tag, EagerTree, LocationState};
 use crate::helpers::AllocRange;
 use crate::tree_borrows::LazyTree;
 use crate::{eprintln, *};
@@ -681,7 +681,7 @@ impl DisplayRepr {
                     .locations
                     .iter_all()
                     .map(move |(_offset, loc)| {
-                        let perm = loc.perms.get(&idx);
+                        let perm = loc.perms.get(&node_ptr_from_map(&tree.nodes, idx));
                         perm.cloned()
                     })
                     .collect::<Vec<_>>();
@@ -915,8 +915,10 @@ impl EagerTree {
         for tag in all_tags {
             if old_tree.nodes.contains_key(&tag) {
                 let mut diffs = Vec::new();
+                let tag_ptr = node_ptr_from_map(&self.nodes, tag);
+                let old_tag_ptr = node_ptr_from_map(&old_tree.nodes, tag);
                 for (range, loc) in self.locations.iter_all() {
-                    let new_perm = loc.perms.get(&tag).copied();
+                    let new_perm = loc.perms.get(&tag_ptr).copied();
 
                     // Find permission in old_tree for this range (sampling at start)
                     let old_perm_at_start = if let Some((_, old_loc)) = old_tree
@@ -924,7 +926,7 @@ impl EagerTree {
                         .iter(Size::from_bytes(range.start), Size::from_bytes(1))
                         .next()
                     {
-                        old_loc.perms.get(&tag).copied()
+                        old_loc.perms.get(&old_tag_ptr).copied()
                     } else {
                         None
                     };

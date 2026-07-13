@@ -3,7 +3,7 @@ use core::fmt::Debug;
 
 use super::perms::AccessKind;
 use super::tree::{
-    node_from_map, node_from_map_mut, node_tag, AccessRelatedness, EagerTree, NodeMap,
+    node_from_map, node_from_map_mut, node_ptr_from_map, node_tag, AccessRelatedness, EagerTree, NodeMap,
 };
 #[cfg(feature = "expensive-consistency-checks")]
 use crate::borrow_tracker::GlobalState;
@@ -202,7 +202,8 @@ impl EagerTree {
         node_from_map_mut(&mut self.nodes, tag).is_exposed = true;
 
         for (_, loc) in self.locations.iter_mut_all() {
-            let perm = loc.perms.get(&tag).map(|p| p.permission()).unwrap_or_else(|| {
+            let tag_ptr = node_ptr_from_map(&self.nodes, tag);
+            let perm = loc.perms.get(&tag_ptr).map(|p| p.permission()).unwrap_or_else(|| {
                 node_from_map(&self.nodes, tag).default_location_state().permission()
             });
 
@@ -226,7 +227,8 @@ impl EagerTree {
             return;
         }
         for (_, loc) in self.locations.iter_mut_all() {
-            let perm = loc.perms.get(&tag).map(|p| p.permission()).unwrap_or_else(|| {
+            let tag_ptr = node_ptr_from_map(&self.nodes, tag);
+            let perm = loc.perms.get(&tag_ptr).map(|p| p.permission()).unwrap_or_else(|| {
                 node_from_map(&self.nodes, tag).default_location_state().permission()
             });
             // We are transitioning from protected to unprotected.
@@ -255,7 +257,7 @@ impl EagerTree {
 
                 let exposed_as = if node.is_exposed {
                     let perm =
-                        perms.get(&tag).copied().unwrap_or_else(|| node.default_location_state());
+                        perms.get(node_ptr).copied().unwrap_or_else(|| node.default_location_state());
 
                     perm.permission()
                         .strongest_allowed_local_access(protected_tags.contains_key(&node.tag))
