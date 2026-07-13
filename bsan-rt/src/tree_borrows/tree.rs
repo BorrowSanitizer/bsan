@@ -280,14 +280,8 @@ pub struct LocationTree {
     pub exposed_cache: ExposedCache,
 }
 
-#[derive(Debug)]
-pub(super) struct NodeMap(FxHashMap<BorTag, NonNull<Node>>);
-
-impl Default for NodeMap {
-    fn default() -> Self {
-        Self(FxHashMap::default())
-    }
-}
+#[derive(Debug, Default)]
+pub(crate) struct NodeMap(FxHashMap<BorTag, NonNull<Node>>);
 
 impl Deref for NodeMap {
     type Target = FxHashMap<BorTag, NonNull<Node>>;
