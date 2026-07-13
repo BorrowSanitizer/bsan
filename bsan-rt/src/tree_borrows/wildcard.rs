@@ -3,7 +3,8 @@ use core::fmt::Debug;
 
 use super::perms::AccessKind;
 use super::tree::{
-    node_from_map, node_from_map_mut, node_ptr_from_map, node_tag, AccessRelatedness, EagerTree, NodeMap,
+    node_from_map, node_from_map_mut, node_ptr_from_map, node_tag, AccessRelatedness, EagerTree,
+    NodeMap,
 };
 #[cfg(feature = "expensive-consistency-checks")]
 use crate::borrow_tracker::GlobalState;
@@ -256,8 +257,10 @@ impl EagerTree {
                 let state = exposed_cache.0.get(&tag).cloned().unwrap_or_default();
 
                 let exposed_as = if node.is_exposed {
-                    let perm =
-                        perms.get(node_ptr).copied().unwrap_or_else(|| node.default_location_state());
+                    let perm = perms
+                        .get(node_ptr)
+                        .copied()
+                        .unwrap_or_else(|| node.default_location_state());
 
                     perm.permission()
                         .strongest_allowed_local_access(protected_tags.contains_key(&node.tag))

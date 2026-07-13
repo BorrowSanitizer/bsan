@@ -280,7 +280,6 @@ pub struct LocationTree {
     pub exposed_cache: ExposedCache,
 }
 
-
 #[derive(Debug)]
 pub(super) struct NodeMap(FxHashMap<BorTag, NonNull<Node>>);
 
