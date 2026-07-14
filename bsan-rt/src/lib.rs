@@ -481,7 +481,7 @@ unsafe extern "C-unwind" fn __bsan_alloc_impl(
         debug_bsan!("alloc", base_addr, bor_tag, alloc_info.as_ptr());
         // Log the root node of the new allocation's tree.
         let alloc_id = unsafe { alloc_info.as_ref().alloc_id.get() };
-        crate::sanitizer_common::SanitizerCommon::log_node(alloc_id.get(), bor_tag.get());
+        crate::sanitizer_common::SanitizerCommon::log_node(alloc_id.get());
         alloc_info
     })
 }

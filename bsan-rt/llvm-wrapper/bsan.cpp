@@ -289,6 +289,11 @@ extern "C" {
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_internal_init() {}
 
+// Defined by the Rust runtime; flushes the final buffered node-log row. Weak
+// so --nop mode (no Rust runtime) still links.
+SANITIZER_WEAK_ATTRIBUTE
+void __bsan_flush_node_log();
+
 void __bsan_init() {
   CHECK(!bsan_init_running);
   if (bsan_inited)
@@ -315,6 +320,12 @@ void __bsan_init() {
   BsanThread *main_thread = BsanThread::Create(nullptr, nullptr);
   SetCurrentThread(main_thread);
   main_thread->Init();
+
+  // Flush the final run-length-encoded node-log row at exit. Registered after
+  // InitializeInterceptors so the atexit machinery is ready. The Rust runtime
+  // owns the buffered run; the symbol is weak so --nop mode still links.
+  if (node_logging_enabled && &__bsan_flush_node_log)
+    Atexit(__bsan_flush_node_log);
 
   bsan_init_running = false;
   bsan_inited = true;
@@ -457,6 +468,12 @@ bool node_log_opened = false;
 SANITIZER_INTERFACE_ATTRIBUTE
 bool __bsan_node_logging_enabled() { return __bsan::node_logging_enabled; }
 
+// The instrumented crate's directory (CARGO_MANIFEST_DIR, set by cargo for the
+// test/run process), or null when not run under cargo. The node logger treats
+// a frame as user code when its file lives under this directory.
+SANITIZER_INTERFACE_ATTRIBUTE
+const char *__bsan_project_dir() { return GetEnv("CARGO_MANIFEST_DIR"); }
+
 // Exposes the caller stack snapshot taken by the most recent GET_SPAN on this
 // thread (see CaptureLogFrames). Returns the frame count and points `*out` at
 // the innermost-first PC array. Valid only until the next capture.
@@ -478,9 +495,9 @@ void __bsan_append_log(const char *buf, uptr len) {
     node_log_opened = true;
     node_log_fd = OpenFile(path, WrOnly);
     if (node_log_fd != kInvalidFd) {
-      const char header[] =
-          "alloc_id,bor_tag,user_file,user_line,user_col,user_source,"
-          "test_file,test_line,test_col,test_source\n";
+      const char header[] = "num_alloc_ids,num_nodes,alloc_ids,"
+                            "origin_file,origin_line,origin_col,origin_source,"
+                            "test_file,test_line,test_col,test_source\n";
       WriteToFile(node_log_fd, header, sizeof(header) - 1);
     }
   }

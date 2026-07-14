@@ -121,14 +121,46 @@ impl SanitizerCommon {
         (Self::symbolize_pc(span.0).0, None)
     }
 
+    /// The instrumented crate's directory (`CARGO_MANIFEST_DIR`), cached. A
+    /// frame counts as user code when its file lives under this directory.
+    /// `None` when not run under cargo.
+    fn project_dir() -> Option<&'static str> {
+        static DIR: spin::Once<Option<String>> = spin::Once::new();
+        DIR.call_once(|| {
+            let ptr = unsafe { __bsan_project_dir() };
+            if ptr.is_null() {
+                return None;
+            }
+            unsafe { core::ffi::CStr::from_ptr(ptr) }.to_str().ok().map(str::to_string)
+        })
+        .as_deref()
+    }
+
+    /// Whether `file` belongs to the crate under test: under the project
+    /// directory when run via cargo, else the fallback "not a dependency or
+    /// toolchain path" (`!is_library`).
+    fn is_user_file(file: &str, is_library: bool) -> bool {
+        match Self::project_dir() {
+            Some(dir) => file.strip_prefix(dir).is_some_and(|rest| rest.starts_with('/')),
+            None => !is_library,
+        }
+    }
+
     /// Resolves, in a single pass over the full caller stack captured by the
     /// most recent `GET_SPAN` on this thread (innermost first, no depth limit),
     /// two source locations for node-execution logging:
-    /// - the first user-code frame (not under `.cargo`/`.rustup`) — the line
-    ///   that most directly triggered the node's creation; falls back to the
-    ///   first resolvable frame, then the raw immediate PC;
-    /// - the first testbench frame (path or module/function contains "test"),
-    ///   or [`Symbol::Unused`] when the node originates outside any test.
+    /// - `origin`: the innermost resolvable frame — where the operation
+    ///   literally happened, even if that is library/stdlib code (e.g. inside
+    ///   `Box::new`); falls back to the raw immediate PC;
+    /// - `test`: the first user-code testbench frame (under the project
+    ///   directory, see [`is_user_file`](Self::is_user_file), with its path or
+    ///   module/function containing "test") — the enclosing test;
+    ///   [`Symbol::Unused`] otherwise. libtest (`library/test/`) is excluded
+    ///   since it is not under the crate.
+    ///
+    /// Each prefers a frame with a real line number over a line-0 frame
+    /// (compiler-generated glue, e.g. a test-harness `main`, resolves to a file
+    /// but no line), falling back to a line-0 frame of the same kind.
     fn resolve_log_locations() -> (Symbol, Symbol) {
         let mut frames_ptr: *const usize = ptr::null();
         let n = unsafe { __bsan_captured_frames(&mut frames_ptr) };
@@ -139,32 +171,36 @@ impl SanitizerCommon {
         };
         let immediate = frames.first().copied().unwrap_or(0);
 
-        let mut user: Option<Symbol> = None;
-        let mut user_fallback: Option<Symbol> = None;
-        let mut test: Option<Symbol> = None;
+        let mut origin: Option<Symbol> = None; // any frame, line > 0
+        let mut origin_lineless: Option<Symbol> = None; // any frame, line == 0
+        let mut test: Option<Symbol> = None; // user testbench, line > 0
+        let mut test_lineless: Option<Symbol> = None; // user testbench, line == 0
         for &pc in frames {
             if pc == 0 {
                 break;
             }
             let (sym, is_library, is_test) = Self::symbolize_pc(pc);
-            if !matches!(sym, Symbol::Resolved { .. }) {
+            let Symbol::Resolved { ref file, line, .. } = sym else {
                 continue;
+            };
+            let has_line = line > 0;
+            // origin = innermost resolvable frame, any kind.
+            let slot = if has_line { &mut origin } else { &mut origin_lineless };
+            slot.get_or_insert_with(|| sym.clone());
+            // The test frame must be user code (a file under the crate being
+            // tested), so libtest (`library/test/`, which contains "test") is
+            // excluded.
+            if is_test && Self::is_user_file(file, is_library) {
+                let slot = if has_line { &mut test } else { &mut test_lineless };
+                slot.get_or_insert_with(|| sym.clone());
             }
-            if user_fallback.is_none() {
-                user_fallback = Some(sym.clone());
-            }
-            if user.is_none() && !is_library {
-                user = Some(sym.clone());
-            }
-            if test.is_none() && is_test {
-                test = Some(sym.clone());
-            }
-            if user.is_some() && test.is_some() {
+            if origin.is_some() && test.is_some() {
                 break;
             }
         }
-        let user = user.or(user_fallback).unwrap_or(Symbol::Unresolved { pc: immediate });
-        (user, test.unwrap_or(Symbol::Unused))
+        let origin = origin.or(origin_lineless).unwrap_or(Symbol::Unresolved { pc: immediate });
+        let test = test.or(test_lineless).unwrap_or(Symbol::Unused);
+        (origin, test)
     }
 
     /// Read entire file into a String
@@ -253,30 +289,82 @@ impl SanitizerCommon {
         }
     }
 
-    /// Emits one CSV row describing a tree node as it is created: the tree's
-    /// allocation id, the node's borrow tag, and two source locations — the
-    /// first user-code line and the first testbench line that led to its
-    /// creation (each as file, line, column, source text). Testbench fields are
-    /// empty for nodes created outside any test. Uses the caller stack captured
-    /// by the enclosing hook's `GET_SPAN`, so it must be called synchronously
-    /// during that hook. A no-op unless
-    /// [`node_logging_enabled`](Self::node_logging_enabled).
-    pub fn log_node(alloc_id: usize, bor_tag: usize) {
+    /// Writes one `<num_alloc_ids>,<num_nodes>,<alloc_ids>,<body>` CSV row for a
+    /// run of consecutive nodes that shared the same location body. `alloc_ids`
+    /// is the space-separated, sorted list of the run's distinct allocations.
+    fn emit_node_row(body: &str, allocs: &crate::helpers::FxHashSet<usize>, num_nodes: u64) {
+        let mut ids: alloc::vec::Vec<usize> = allocs.iter().copied().collect();
+        ids.sort_unstable();
+        let ids_str = ids.iter().map(|id| id.to_string()).collect::<alloc::vec::Vec<_>>().join(" ");
+        let row =
+            alloc::format!("{},{num_nodes},{},{body}\n", ids.len(), Self::csv_field(&ids_str),);
+        unsafe { __bsan_append_log(row.as_ptr(), row.len()) };
+    }
+
+    /// Records a tree node as it is created, resolving two source locations
+    /// (origin, test) from the caller stack captured by the enclosing hook's
+    /// `GET_SPAN` — so it must be called synchronously during that hook.
+    ///
+    /// Consecutive nodes with an identical location body are run-length encoded:
+    /// per run we accumulate the number of nodes and the distinct allocations
+    /// (`alloc_id`s) seen. When the body changes the previous run is emitted as
+    /// one `<num_alloc_ids>,<num_nodes>,<alloc_ids>,<body>` row; the final run is
+    /// flushed at process exit by [`flush_node_log`](Self::flush_node_log).
+    /// A no-op unless [`node_logging_enabled`](Self::node_logging_enabled).
+    pub fn log_node(alloc_id: usize) {
         if !Self::node_logging_enabled() {
             return;
         }
-        let (user, test) = Self::resolve_log_locations();
-        let (uf, ul, uc, us) = Self::location_fields(user);
+        let (origin, test) = Self::resolve_log_locations();
+        let (of, ol, oc, os) = Self::location_fields(origin);
         let (tf, tl, tc, ts) = Self::location_fields(test);
-        let row = alloc::format!(
-            "{alloc_id},{bor_tag},{},{ul},{uc},{},{},{tl},{tc},{}\n",
-            Self::csv_field(&uf),
-            Self::csv_field(&us),
+        let body = alloc::format!(
+            "{},{ol},{oc},{},{},{tl},{tc},{}",
+            Self::csv_field(&of),
+            Self::csv_field(&os),
             Self::csv_field(&tf),
             Self::csv_field(&ts),
         );
-        unsafe { __bsan_append_log(row.as_ptr(), row.len()) };
+        let mut guard = NODE_LOG_RUN.lock();
+        match &mut *guard {
+            Some((last, nodes, allocs)) if *last == body => {
+                *nodes += 1;
+                allocs.insert(alloc_id);
+            }
+            Some((last, nodes, allocs)) => {
+                Self::emit_node_row(last, allocs, *nodes);
+                *last = body;
+                *nodes = 1;
+                allocs.clear();
+                allocs.insert(alloc_id);
+            }
+            None => {
+                let mut allocs = crate::helpers::FxHashSet::default();
+                allocs.insert(alloc_id);
+                *guard = Some((body, 1, allocs));
+            }
+        }
     }
+
+    /// Emits the final buffered run-length row. Called once at process exit.
+    pub fn flush_node_log() {
+        if let Some((body, nodes, allocs)) = NODE_LOG_RUN.lock().take() {
+            Self::emit_node_row(&body, &allocs, nodes);
+        }
+    }
+}
+
+/// Run-length state for node logging: the current location body, how many
+/// consecutive nodes have shared it, and the distinct `alloc_id`s among them.
+/// See [`SanitizerCommon::log_node`].
+static NODE_LOG_RUN: spin::Mutex<Option<(String, u64, crate::helpers::FxHashSet<usize>)>> =
+    spin::Mutex::new(None);
+
+/// Flushes the final node-log run. Registered as an atexit handler by the C++
+/// runtime when logging is enabled.
+#[unsafe(no_mangle)]
+pub extern "C" fn __bsan_flush_node_log() {
+    SanitizerCommon::flush_node_log();
 }
 
 unsafe extern "C" {
@@ -310,6 +398,10 @@ unsafe extern "C" {
 
     /// Whether node-execution logging is enabled (`BSAN_NODE_LOG` is set).
     fn __bsan_node_logging_enabled() -> bool;
+
+    /// The instrumented crate's directory (`CARGO_MANIFEST_DIR`), or null when
+    /// not run under cargo. Used to classify a frame as user code.
+    fn __bsan_project_dir() -> *const c_char;
 
     /// Points `*out` at this thread's most recent captured caller-PC stack
     /// (innermost first) and returns its length. Valid only until the next

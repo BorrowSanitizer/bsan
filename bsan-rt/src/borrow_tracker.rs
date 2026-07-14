@@ -378,7 +378,7 @@ impl<'b> BorrowTracker<'b> {
         )?;
 
         // Log the newly created child node.
-        crate::sanitizer_common::SanitizerCommon::log_node(alloc_id.get(), new_tag.get());
+        crate::sanitizer_common::SanitizerCommon::log_node(alloc_id.get());
 
         Ok(Provenance { alloc_info: self.alloc_info.0.as_ptr(), bor_tag: new_tag })
     }
