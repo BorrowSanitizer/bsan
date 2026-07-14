@@ -32,8 +32,9 @@ using __sanitizer::uptr;
 using __sanitizer::Vector;
 
 // The immediate caller PC of a runtime hook, captured at the retag/access
-// site. Symbolized lazily at display time as the error's origin note; the
-// primary error location comes from the live unwind in `HANDLE_ERROR`.
+// site. Symbolized lazily at display time. Node-execution logging captures the
+// full caller stack separately (see CaptureLogFrames), so the span itself
+// stays a single word with no per-node storage or ABI cost.
 typedef uptr Span;
 typedef uptr BorTag;
 
@@ -108,6 +109,15 @@ Provenance *GetRetValSlot(uptr Idx);
 void ClearSlot(uptr Idx);
 bool CallerIsInstrumented(void *sym);
 
+// True when node-execution logging is enabled (BSAN_NODE_LOG is set), cached at
+// startup so GET_SPAN can gate frame capture with a cheap read.
+extern bool node_logging_enabled;
+
+// Snapshots the caller stack starting at (pc, bp) into a thread-local buffer
+// for the node logger to resolve lazily. Called from GET_SPAN when logging is
+// enabled.
+void CaptureLogFrames(uptr pc, uptr bp);
+
 } // namespace __bsan
 
 extern "C" {
@@ -119,8 +129,14 @@ void __bsan_format_pending_ub(uptr user_frame_pc);
 
 namespace __bsan {
 
-// Capture the immediate caller PC of the runtime hook as the span.
-#define GET_SPAN uptr span = GET_CALLER_PC();
+// Capture the immediate caller PC of the runtime hook as the span. When node
+// logging is enabled, also snapshot the full caller stack into a thread-local
+// buffer (unbounded, resolved lazily by the Rust logger); normal runs pay only
+// the single GET_CALLER_PC().
+#define GET_SPAN                                                               \
+  Span span = GET_CALLER_PC();                                                 \
+  if (UNLIKELY(__bsan::node_logging_enabled))                                  \
+    __bsan::CaptureLogFrames(StackTrace::GetCurrentPc(), GET_CURRENT_FRAME());
 
 #define GET_SPAN_PC_BP                                                         \
   GET_SPAN;                                                                    \

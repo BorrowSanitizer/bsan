@@ -74,7 +74,8 @@ pub struct Event {
     /// the `TbError`, which should satisfy
     /// `event.transition_range.contains(error.error_offset)`.
     pub transition_range: Range<u64>,
-    /// Line of code that triggered this event.
+    /// Immediate caller PC of the line of code that triggered this event,
+    /// symbolized lazily at display time.
     pub span: Span,
 }
 

@@ -104,6 +104,27 @@ u32 GetStackTraceLen() {
   return static_cast<u32>(stacktrace_max_len) + 1;
 }
 
+// Node-execution logging state (see bsan.h). Cached at startup from
+// BSAN_NODE_LOG so GET_SPAN can gate frame capture on a plain bool read.
+bool node_logging_enabled = false;
+
+// Thread-local snapshot of the caller stack captured by the most recent
+// GET_SPAN on this thread; read by the Rust node logger via
+// __bsan_captured_frames. No fixed depth limit beyond the unwinder's own
+// (kStackTraceMax), since the frames are never stored in a node.
+static THREADLOCAL uptr log_frames[kStackTraceMax];
+static THREADLOCAL uptr log_nframes;
+
+void CaptureLogFrames(uptr pc, uptr bp) {
+  UNINITIALIZED BufferedStackTrace stack;
+  stack.Unwind(pc, bp, nullptr, true, kStackTraceMax);
+  // trace[0] is the capturing hook; store its callers (trace[1..]).
+  uptr n = 0;
+  for (uptr i = 1; i < stack.size; ++i)
+    log_frames[n++] = stack.trace[i];
+  log_nframes = n;
+}
+
 // Returns a pointer to the slot on the shadow stack at the given index.
 // The shadow stack grows downward, so we subtract by the given index
 // plus one to adjust the for the the zero-th slot.
@@ -171,6 +192,17 @@ static bool IsLibraryFile(const char *file) {
     if (internal_strstr(file, marker))
       return true;
   }
+  return false;
+}
+
+// Returns true if a frame belongs to the testbench: its file path or its
+// module/function name contains "test" (e.g. a `tests/` file, a `tests`
+// module, or a `#[test]` function).
+static bool IsTestFrame(const SymbolizedStack *frame) {
+  if (frame->info.file && internal_strstr(frame->info.file, "test"))
+    return true;
+  if (frame->info.function && internal_strstr(frame->info.function, "test"))
+    return true;
   return false;
 }
 
@@ -265,6 +297,7 @@ void __bsan_init() {
 
   AvoidCVE_2016_2143();
   InitializeFlags();
+  node_logging_enabled = GetEnv("BSAN_NODE_LOG") != nullptr;
   new (global_ctx()) GlobalContext();
 
   __bsan_internal_init();
@@ -341,7 +374,7 @@ void __bsan_validate_retval(void *prev_marker, Provenance *frame, uptr len) {
 // user code, and 2 when every candidate frame is internal library code
 SANITIZER_INTERFACE_ATTRIBUTE
 u32 __bsan_symbolize_pc(uptr pc, char *file_buf, uptr file_buf_len, u32 *line,
-                        u32 *column) {
+                        u32 *column, bool *is_test) {
   __sanitizer::Symbolizer *sym = __sanitizer::Symbolizer::GetOrInit();
   if (!sym) {
     return 0;
@@ -374,6 +407,8 @@ u32 __bsan_symbolize_pc(uptr pc, char *file_buf, uptr file_buf_len, u32 *line,
   if (column)
     *column = best->info.column;
   u32 result = IsLibraryFile(best->info.file) ? 2 : 1;
+  if (is_test)
+    *is_test = IsTestFrame(best);
   res->ClearAll();
   return result;
 }
@@ -406,6 +441,51 @@ void __bsan_free_buffer(char *buf, uptr size) {
   if (buf && size > 0) {
     UnmapOrDie(buf, size);
   }
+}
+
+// Node-execution logging (opt-in). When BSAN_NODE_LOG names a file, the Rust
+// runtime emits one CSV row per tree node as it is created; these helpers gate
+// the work and own the output file.
+namespace {
+StaticSpinMutex node_log_mu;
+fd_t node_log_fd = kInvalidFd;
+bool node_log_opened = false;
+} // namespace
+
+// Whether node-execution logging is enabled (BSAN_NODE_LOG is set). The Rust
+// side calls this before doing any symbolization work.
+SANITIZER_INTERFACE_ATTRIBUTE
+bool __bsan_node_logging_enabled() { return __bsan::node_logging_enabled; }
+
+// Exposes the caller stack snapshot taken by the most recent GET_SPAN on this
+// thread (see CaptureLogFrames). Returns the frame count and points `*out` at
+// the innermost-first PC array. Valid only until the next capture.
+SANITIZER_INTERFACE_ATTRIBUTE
+uptr __bsan_captured_frames(const uptr **out) {
+  *out = __bsan::log_frames;
+  return __bsan::log_nframes;
+}
+
+// Appends a preformatted CSV row (built on the Rust side) to the log file,
+// opening it and writing the header on first use. Thread-safe.
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_append_log(const char *buf, uptr len) {
+  const char *path = GetEnv("BSAN_NODE_LOG");
+  if (!path)
+    return;
+  SpinMutexLock lock(&node_log_mu);
+  if (!node_log_opened) {
+    node_log_opened = true;
+    node_log_fd = OpenFile(path, WrOnly);
+    if (node_log_fd != kInvalidFd) {
+      const char header[] =
+          "alloc_id,bor_tag,user_file,user_line,user_col,user_source,"
+          "test_file,test_line,test_col,test_source\n";
+      WriteToFile(node_log_fd, header, sizeof(header) - 1);
+    }
+  }
+  if (node_log_fd != kInvalidFd)
+    WriteToFile(node_log_fd, buf, len);
 }
 
 SANITIZER_WEAK_ATTRIBUTE

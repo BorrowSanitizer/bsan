@@ -30,6 +30,11 @@ def normalize_stdout(val):
     val = re.sub(
         "\\b\\d+\\.\\d+s\\b", "$TIME", val
     )  # the time keeps changing, obviously
+    # libtest prints this notice for any test still running after 60s; whether
+    # it appears depends on machine speed, so drop it to keep output stable.
+    val = re.sub(
+        r"test .*? has been running for over \d+ seconds\n?", "", val
+    )
     return val
 
 def check_output(actual, path, regex, name):

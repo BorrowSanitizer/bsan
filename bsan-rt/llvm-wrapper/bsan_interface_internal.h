@@ -32,7 +32,7 @@ void __bsan_rc_inc(BorTag Tag, AllocInfo *Info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 u32 __bsan_symbolize_pc(uptr pc, char *file_buf, uptr file_buf_len, u32 *line,
-                        u32 *column);
+                        u32 *column, bool *is_test);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 uptr __bsan_read_file(const char *path, char **file_buf, uptr *file_buf_len);
