@@ -1489,6 +1489,14 @@ private:
   void storeProvenanceWithReferenceCount(IRBuilder<> &IRB, Value *TagPtr,
                                          Value *InfoPtr, Provenance Prov,
                                          AtomicOrdering Ordering) {
+    // We always need to increment first, in case both the source and
+    // destination are the same provenance value. If we decrement the
+    // provenance in the destination first, then the garbage collector
+    // may see a zero reference count and deinitialize the provenance
+    // that we are about to store.
+    if (Prov != Provenance::omnivalid(BS)) {
+      IRB.CreateCall(BS.BsanFuncRcInc, {Prov.Tag, Prov.Info});
+    }
     // We only decrement on nonatomic loads. This leaks provenance exposed to
     // atomic operations, which is necessary to support them without locking.
     if (Ordering == AtomicOrdering::NotAtomic) {
@@ -1496,9 +1504,7 @@ private:
           loadProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Ordering);
       IRB.CreateCall(BS.BsanFuncRcDec, {Old.Tag, Old.Info});
     }
-    if (Prov != Provenance::omnivalid(BS)) {
-      IRB.CreateCall(BS.BsanFuncRcInc, {Prov.Tag, Prov.Info});
-    }
+
     storeProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Prov, Ordering);
   }
 

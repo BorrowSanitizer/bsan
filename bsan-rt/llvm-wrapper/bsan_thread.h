@@ -87,16 +87,6 @@ public:
     atomic_store(&zct_busy_, 0, memory_order_release);
   }
 
-  // Removes a provenance value from this thread's zero count table after its
-  // reference count is revived (a zero-to-one transition). If the value was
-  // recorded in another thread's table, this is a no-op here; the stale entry
-  // is still harmless because pruning re-checks `refcount == 0`.
-  void ReleaseProvenance(Provenance Prov) {
-    atomic_store(&zct_busy_, 1, memory_order_release);
-    zero_count_set_.remove(Prov);
-    atomic_store(&zct_busy_, 0, memory_order_release);
-  }
-
   bool ZctBusy() const {
     return atomic_load(&zct_busy_, memory_order_acquire) != 0;
   }

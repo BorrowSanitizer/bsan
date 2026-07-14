@@ -246,11 +246,10 @@ ALWAYS_INLINE static void UpdateShadowSlot(uptr d_aligned, uptr s_aligned,
   BorTag src_tag = *source_tag;
   AllocInfo *src_info = *source_info;
 
-  if (*dest_info != nullptr)
-    __bsan_rc_dec(*dest_tag, *dest_info);
-
   if (src_info != nullptr)
     __bsan_rc_inc(src_tag, src_info);
+  if (*dest_info != nullptr)
+    __bsan_rc_dec(*dest_tag, *dest_info);
 
   *dest_tag = src_tag;
   *dest_info = src_info;
@@ -341,16 +340,13 @@ void WriteShadow(void *dest, Provenance prov) {
 
   BorTag *tag_ptr = reinterpret_cast<BorTag *>(shadow_start);
   AllocInfo **info_ptr = reinterpret_cast<AllocInfo **>(origin_start);
-  if (*tag_ptr != 0) {
+
+  if (prov.info != nullptr)
+    __bsan_rc_inc(prov.tag, prov.info);
+  if (*tag_ptr != 0)
     __bsan_rc_dec(*tag_ptr, *info_ptr);
-  }
 
   *info_ptr = prov.info;
   *tag_ptr = prov.tag;
-
-  // The written provenance now holds a reference from this shadow slot.
-  if (prov.info != nullptr) {
-    __bsan_rc_inc(prov.tag, prov.info);
-  }
 }
 } // namespace __bsan
