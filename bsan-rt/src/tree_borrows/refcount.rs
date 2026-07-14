@@ -70,7 +70,7 @@ impl RefCount {
     pub fn decrement_nonatomic(&self) -> bool {
         unsafe {
             let count = self.0.as_ptr();
-            debug_assert!(*count > 0, "RefCount decremented below zero");
+            assert!(*count > 0, "RefCount decremented below zero");
             *count -= 1;
             *count == 0
         }
