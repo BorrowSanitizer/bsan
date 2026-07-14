@@ -1087,6 +1087,12 @@ impl Node {
     }
 }
 
+/// Trees with at most this many nodes are not worth pruning: the memory they
+/// hold is negligible, and the cost of traversing them every GC pass outweighs
+/// the savings. Skipped tags remain in the pending set, so they are pruned in
+/// a later pass once the tree grows past this threshold.
+pub const GC_MIN_TREE_SIZE: usize = 64;
+
 /// A tree that is lazily initialized: starts as `Uninit` (storing only the root tag, size, and
 /// span needed to construct the real `Tree` on demand), and transitions to `Init` the first
 /// time a child is added via `new_child`. All operations on a single-node tree short-circuit
@@ -1280,7 +1286,15 @@ impl AllocState for LazyTree {
     }
     fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool {
         match self {
-            LazyTree::Init(tree) => tree.remove_dead_tags(dead_tags),
+            LazyTree::Init(tree) => {
+                // Small trees are not worth pruning; skip them and leave their
+                // tags pending. Once the tree grows past the threshold, it
+                // becomes prunable (and freeable, if it empties out entirely).
+                if tree.tag_mapping.len() <= GC_MIN_TREE_SIZE {
+                    return false;
+                }
+                tree.remove_dead_tags(dead_tags)
+            }
             LazyTree::Uninit { root_tag, refcount, .. } => {
                 // A tree in the Uninit state only has a single node (the root). If
                 // this node is in the dead list with a zero reference count, then the
