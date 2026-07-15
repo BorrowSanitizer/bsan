@@ -32,7 +32,7 @@ pub struct BsanEnv {
     cargo_extra_flags: Vec<String>,
     /// Controls whether binaries are built in debug or release mode
     mode: Mode,
-    /// Additional CLI options
+    /// Silence output
     pub quiet: bool,
     pub skip: bool,
 }

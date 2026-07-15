@@ -260,11 +260,17 @@ fn run_tests(env: &mut BsanEnv, config: TestConfig) -> Result<(), anyhow::Error>
         cmd!(env.sh, "rm -rf {dep_cache}").quiet().run()?;
     }
     env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
+
     env.in_mode(Mode::Release, |env| {
         let args = &[];
         let mut env_guards = vec![];
         let cargo_bsan = env.build_artifact(CargoBsan, args)?;
-        let rust_runtime = env.build_artifact(BsanRt, args)?;
+
+        // We want release mode to ensure a reasonable level of performance, but
+        // we also want debug assertions enabled, too.
+        let rust_runtime = env.with_flags("RUSTFLAGS", &["-Cdebug-assertions=on"], |env| {
+            env.build_artifact(BsanRt, args)
+        })?;
         let llvm_runtime = env.build_artifact(CompilerRt, args)?;
 
         let pass = env.build_artifact(BsanPass, args)?;
