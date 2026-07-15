@@ -1253,9 +1253,11 @@ impl AllocState for LazyTree {
     fn increment(&self, tag: BorTag) -> bool {
         match self {
             LazyTree::Uninit { root_tag, refcount, .. } => {
-                // In the Uninit state the only node is the root, we add an debug_assert instead
-                debug_assert!(*root_tag == tag);
-                refcount.increment_nonatomic()
+                if *root_tag == tag {
+                    refcount.increment_nonatomic()
+                } else {
+                    false
+                }
             }
             LazyTree::Init(tree) => tree.increment(tag),
         }
@@ -1263,8 +1265,11 @@ impl AllocState for LazyTree {
     fn decrement(&self, tag: BorTag) -> bool {
         match self {
             LazyTree::Uninit { root_tag, refcount, .. } => {
-                debug_assert!(*root_tag == tag);
-                refcount.decrement_nonatomic()
+                if *root_tag == tag {
+                    refcount.decrement_nonatomic()
+                } else {
+                    false
+                }
             }
             LazyTree::Init(tree) => tree.decrement(tag),
         }
