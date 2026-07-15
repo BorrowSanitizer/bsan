@@ -33,7 +33,7 @@ impl RefCount {
     /// Returns `true` if the count transitioned from zero to one.
     pub fn increment(&self) -> bool {
         let prev = self.0.fetch_add(1, Ordering::Relaxed);
-        debug_assert!(prev <= usize::MAX, "RefCount overflow");
+        debug_assert!(prev < usize::MAX, "RefCount overflow");
         prev == 0
     }
 
@@ -58,7 +58,7 @@ impl RefCount {
     pub fn increment_nonatomic(&self) -> bool {
         unsafe {
             let count = self.0.as_ptr();
-            debug_assert!(*count <= usize::MAX, "RefCount overflow");
+            debug_assert!(*count < usize::MAX, "RefCount overflow");
             let was_zero = *count == 0;
             *count += 1;
             was_zero
