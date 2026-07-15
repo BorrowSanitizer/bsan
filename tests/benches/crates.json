@@ -17,9 +17,5 @@
       "exclude": [
             "tests::test_bit_vec_iterator"
       ]
-   },
-   {
-      "name": "alloc-no-stdlib",
-      "version": "2.0.4"
    }
 ]
