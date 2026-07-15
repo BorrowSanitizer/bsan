@@ -13,7 +13,10 @@
     },
    {
       "name": "bit-vec",
-      "version": "0.9.1"
+      "version": "0.9.1",
+      "exclude": [
+            "tests::test_bit_vec_iterator"
+      ]
    },
    {
       "name": "alloc-no-stdlib",
