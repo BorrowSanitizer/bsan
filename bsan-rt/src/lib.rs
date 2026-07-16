@@ -16,10 +16,13 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{fmt, ptr, slice};
 
+mod borrow_state;
 mod borrow_tracker;
 use libc_print::std_name::*;
 use spin::Mutex;
 mod tree_borrows;
+
+pub use borrow_state::BorrowState;
 
 mod global;
 use global::*;
@@ -237,13 +240,14 @@ impl Debug for FreeListOrAddr {
 /// Provenance is the "key" to this lock. To validate a memory access, we compare the allocation ID
 /// of a pointer's provenance with the value stored in its corresponding `AllocInfo` object. If the values
 /// do not match, then the access is invalid. If they do match, then we proceed to validate the access against
-/// the tree for the allocation.
+/// the [`BorrowState`] attached to this allocation.
 #[repr(C)]
 pub struct AllocInfo {
     alloc_id: Cell<AllocId>,
     free_or_addr: Cell<FreeListOrAddr>,
     size: Cell<Size>,
-    tree: Mutex<Option<AllocStateImpl>>,
+    /// Polymorphic borrow metadata for this allocation (`Uninit` | `Tree`).
+    borrow: Mutex<Option<AllocStateImpl>>,
 }
 
 impl AllocInfo {
@@ -252,7 +256,7 @@ impl AllocInfo {
             alloc_id: Cell::new(AllocId::invalid()),
             free_or_addr: Cell::new(FreeListOrAddr { base_addr: Size::ZERO }),
             size: Cell::new(Size::ZERO),
-            tree: Mutex::default(),
+            borrow: Mutex::default(),
         }
     }
 
@@ -261,7 +265,7 @@ impl AllocInfo {
             alloc_id: Cell::new(AllocId::default()),
             free_or_addr: Cell::new(FreeListOrAddr { base_addr }),
             size: Cell::new(size),
-            tree: Mutex::new(Some(AllocStateImpl::new(bor_tag, size, span))),
+            borrow: Mutex::new(Some(AllocStateImpl::new(bor_tag, size, span))),
         }
     }
 
@@ -610,10 +614,10 @@ unsafe extern "C" fn __bsan_prune(
 ) -> bool {
     let alloc: AllocInfoPtr = alloc_info.into();
     let dead_tags = unsafe { slice::from_raw_parts_mut(bor_tags, len) };
-    match alloc.tree.lock().as_mut() {
-        Some(tree) => tree.remove_dead_tags(dead_tags),
+    match alloc.borrow.lock().as_mut() {
+        Some(borrow) => borrow.remove_dead_tags(dead_tags),
         None => {
-            // The tree is already deallocated, so we can zero out dead_tags
+            // The allocation is already deallocated, so we can zero out dead_tags
             dead_tags.fill(BorTag::omnivalid());
             false
         }
