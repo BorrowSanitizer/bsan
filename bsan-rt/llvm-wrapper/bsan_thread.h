@@ -2,6 +2,7 @@
 #define BSAN_THREAD_H
 #include "bsan.h"
 #include "bsan_allocator.h"
+#include "bsan_dense_alloc.h"
 #include "bsan_set.h"
 #include "sanitizer_common/sanitizer_array_ref.h"
 #include "sanitizer_common/sanitizer_common.h"
@@ -91,6 +92,13 @@ public:
     return atomic_load(&zct_busy_, memory_order_acquire) != 0;
   }
 
+  BlockIndex AllocMetadata() {
+    return metadata_alloc.Alloc(&this->metadata_cache_);
+  }
+  void FreeMetadata(BlockIndex idx) {
+    metadata_alloc.Free(&this->metadata_cache_, idx);
+  }
+
 private:
   friend struct GlobalContext;
 
@@ -107,6 +115,9 @@ private:
   uptr shadow_stack_size_;
 
   BsanThreadLocalMallocStorage malloc_storage_;
+
+  // This thread's block-index cache for the `AllocInfo` metadata slab.
+  MetadataAlloc::Cache metadata_cache_;
 
   // The set of concrete provenance values that reached
   // a zero reference count while this thread was executing. This includes

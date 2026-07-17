@@ -3,7 +3,6 @@
 #include "bsan.h"
 #include "bsan_global.h"
 #include "bsan_interface_internal.h"
-#include "bsan_shadow.h"
 #include "bsan_thread.h"
 #include "interception/interception.h"
 #include "sanitizer_common/sanitizer_allocator.h"
@@ -91,7 +90,7 @@ INTERCEPTOR(void *, malloc, SIZE_T size) {
   if (!already_in_scope && INST_CALLER(malloc)) {
     Provenance *RetSlot = GetRetValSlot(0);
     BorTag Tag = NewBorTag();
-    *RetSlot = {Tag, __bsan_alloc(ptr, size, Tag, span)};
+    *RetSlot = PROV_PACK(__bsan_alloc(ptr, size, Tag, span), Tag);
   }
   return ptr;
 }
@@ -114,7 +113,7 @@ INTERCEPTOR(void, free, void *ptr) {
   InterceptorBarrier barrier;
   if (!already_in_scope && INST_CALLER(free)) {
     Provenance *slot = GetParamSlot(0);
-    __bsan_dealloc(ptr, slot->tag, slot->info, span, false);
+    __bsan_dealloc(ptr, PROV_TAG(*slot), PROV_BLOCK(*slot), span, false);
     HANDLE_ERROR_PC_BP(pc, bp);
   }
   return bsan_deallocate(ptr);
@@ -130,7 +129,7 @@ INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
   if (!already_in_scope && INST_CALLER(calloc)) {
     Provenance *RetSlot = GetRetValSlot(0);
     BorTag Tag = NewBorTag();
-    *RetSlot = {Tag, __bsan_alloc(ptr, nmemb * size, Tag, span)};
+    *RetSlot = PROV_PACK(__bsan_alloc(ptr, nmemb * size, Tag, span), Tag);
   }
   return ptr;
 }
@@ -144,22 +143,22 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
   bool is_inst = !already_in_scope && INST_CALLER(realloc);
   if (is_inst) {
     Provenance *slot = GetParamSlot(0);
-    __bsan_dealloc(ptr, slot->tag, slot->info, span, false);
+    __bsan_dealloc(ptr, PROV_TAG(*slot), PROV_BLOCK(*slot), span, false);
     HANDLE_ERROR_PC_BP(pc, bp);
   }
   void *nptr = bsan_realloc(ptr, size);
   if (is_inst) {
     Provenance *RetSlot = GetRetValSlot(0);
     BorTag Tag = NewBorTag();
-    *RetSlot = {Tag, __bsan_alloc(nptr, size, Tag, span)};
+    *RetSlot = PROV_PACK(__bsan_alloc(nptr, size, Tag, span), Tag);
   }
   return nptr;
 }
 
 static Provenance BsanAllocateMeta(void *ptr, SIZE_T size, uptr span) {
   BorTag tag = NewBorTag();
-  AllocInfo *info = __bsan_alloc(ptr, size, tag, span);
-  return {tag, info};
+  Block *info = __bsan_alloc(ptr, size, tag, span);
+  return PROV_PACK(info, tag);
 }
 
 static void *BsanAllocateMetaIntoStack(void *ptr, SIZE_T size, bool is_inst,

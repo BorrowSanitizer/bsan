@@ -59,39 +59,40 @@ void BorTagSet::destroy() {
 }
 
 void ConcreteProvenanceSet::insert(Provenance prov) {
-  if (prov.info != nullptr) {
-    set_[prov.info].insert(prov.tag);
+  if (IS_CONCRETE(prov)) {
+    set_[PROV_BLOCK_IDX(prov)].insert(PROV_TAG(prov));
   }
 }
 
 void ConcreteProvenanceSet::remove(Provenance prov) {
-  if (prov.info == nullptr) {
-    return;
-  }
-  // Only erase the tag; leave the (possibly now-empty) tag set in place. Erase
-  // shifts in place and never frees, so this takes no allocator lock and is
-  // safe to run while the world is stopped.
-  if (auto *tags = find(prov.info)) {
-    tags->erase(prov.tag);
+  if (IS_CONCRETE(prov)) {
+    // Only erase the tag; leave the (possibly now-empty) tag set in place.
+    // Erase shifts in place and never frees, so this takes no allocator lock
+    // and is safe to run while the world is stopped.
+    if (auto *tags = find(PROV_BLOCK_IDX(prov))) {
+      tags->erase(PROV_TAG(prov));
+    }
   }
 }
 
 void ConcreteProvenanceSet::clear() {
-  set_.forEach([](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
+  set_.forEach([](DenseMap<BlockIndex, BorTagSet>::value_type &KV) {
     KV.second.clear();
     return true;
   });
 }
 
 bool ConcreteProvenanceSet::contains(Provenance prov) {
-  if (auto *tags = find(prov.info)) {
-    return tags->contains(prov.tag);
+  if (IS_CONCRETE(prov)) {
+    if (auto *tags = find(PROV_BLOCK_IDX(prov))) {
+      return tags->contains(PROV_TAG(prov));
+    }
   }
   return false;
 }
 
 ConcreteProvenanceSet::~ConcreteProvenanceSet() {
-  set_.forEach([](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
+  set_.forEach([](DenseMap<BlockIndex, BorTagSet>::value_type &KV) {
     KV.second.destroy();
     return true;
   });

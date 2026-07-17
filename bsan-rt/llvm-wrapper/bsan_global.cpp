@@ -34,8 +34,7 @@ void GlobalContext::MergeZeroCounts(const uptr, BsanThread *const &thread,
   if (!thread->ZctBusy()) {
     // Move every unreachable value into the pending set, keeping the reachable
     // ones in this thread's zero count table for a future collection.
-    thread->zero_count_set_.retainIf([&](AllocInfo *info, BorTag tag) -> bool {
-      Provenance prov = {tag, info};
+    thread->zero_count_set_.retainIf([&](Provenance prov) -> bool {
       if (snap->live->contains(prov)) {
         return true;
       }
@@ -69,14 +68,15 @@ void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
 }
 
 void GlobalContext::CollectGarbage(Snapshot &snap) {
-  InternalMmapVector<RetiredAlloc> filtered;
+  InternalMmapVector<RetiredBlock> filtered;
   // Eject all retired allocation metadata objects
   // that are confirmed to be unreachable as of the
   // current minimum generation.
   for (uptr i = 0; i < quarantine_.size(); ++i) {
-    RetiredAlloc retired = quarantine_[i];
+    RetiredBlock retired = quarantine_[i];
     if (retired.retire_gen <= snap.min_drained) {
-      __bsan_eject(retired.info);
+      __bsan_eject(BLOCK(retired.index));
+      CurrentThread()->FreeMetadata(retired.index);
     } else {
       // If we can't eject this object yet, then
       // make sure it stays in quarantine.
@@ -87,12 +87,13 @@ void GlobalContext::CollectGarbage(Snapshot &snap) {
 
   // A pending set of unpruned tags
   ConcreteProvenanceSet still_pending;
-  pending_.drain([&](AllocInfo *info, BorTagSet &tags) {
+  pending_.drain([&](BlockIndex info, BorTagSet &tags) {
     // If `__bsan_prune` returns true, then the allocation's tree is empty;
     // every single tag was pruned.
-    if (__bsan_prune(info, tags.data(), tags.size())) {
+    if (__bsan_prune(BLOCK(info), tags.data(), tags.size())) {
       if (snap.min_drained == snap.gen) {
-        __bsan_eject(info);
+        __bsan_eject(BLOCK(info));
+        CurrentThread()->FreeMetadata(info);
       } else {
         quarantine_.push_back({info, snap.gen});
       }
@@ -103,7 +104,7 @@ void GlobalContext::CollectGarbage(Snapshot &snap) {
       const BorTag *retained = tags.data();
       for (uptr i = 0; i < tags.size(); ++i) {
         if (retained[i] != 0) {
-          still_pending.insert({retained[i], info});
+          still_pending.insert(PROV(info, retained[i]));
         }
       }
     }

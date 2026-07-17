@@ -21,13 +21,13 @@ public:
   uptr min_drained;
 };
 
-// An allocation that is unreachable and
-// has had all of its nodes pruned, but that
-// cannot be ejected yet, because it might still
+// A `Block` that is unreachable from any provenance
+// value in memory, and has had all of its nodes pruned,
+// but that cannot be ejected yet, because it might still
 // be stored within a thread's zero count table.
-struct RetiredAlloc {
-  // A non-null pointer to the allocation.
-  AllocInfo *info;
+struct RetiredBlock {
+  // The index of the block.
+  BlockIndex index;
   // The generation when it was retired.
   uptr retire_gen;
 };
@@ -92,7 +92,7 @@ private:
   void CollectGarbage(Snapshot &snap);
 
   // A list of retired allocations that have yet to be ejected.
-  InternalMmapVectorNoCtor<RetiredAlloc> quarantine_{};
+  InternalMmapVectorNoCtor<RetiredBlock> quarantine_{};
 
   // Guards `at_exit_stack_`.
   Mutex at_exit_lock_;

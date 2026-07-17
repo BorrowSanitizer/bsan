@@ -13,7 +13,7 @@ use core::fmt::Debug;
 #[cfg(not(test))]
 use core::panic::PanicInfo;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use core::{fmt, ptr, slice};
 
 mod borrow_tracker;
@@ -28,7 +28,6 @@ mod sanitizer_common;
 use borrow_tracker::*;
 
 mod errors;
-mod memory;
 
 use crate::helpers::{AllocRange, Size};
 use crate::sanitizer_common::Span;
@@ -152,13 +151,13 @@ impl fmt::Display for AllocId {
 
 unsafe extern "C" {
     #[link_name = "__bsan_bor_tag_ctr"]
-    unsafe static __BSAN_BOR_TAG_CTR: AtomicUsize;
+    unsafe static __BSAN_BOR_TAG_CTR: AtomicU32;
 }
 
 /// Unique identifier for a node within the tree
 #[repr(transparent)]
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct BorTag(usize);
+pub struct BorTag(u32);
 
 impl BorTag {
     #[inline]
@@ -197,7 +196,7 @@ impl BorTag {
     }
 
     #[inline]
-    pub fn get(&self) -> usize {
+    pub fn get(&self) -> u32 {
         self.0
     }
 }
@@ -229,18 +228,6 @@ pub struct Provenance {
 unsafe impl Sync for Provenance {}
 unsafe impl Send for Provenance {}
 
-#[derive(Clone, Copy)]
-pub(crate) union FreeListOrAddr {
-    pub base_addr: Size,
-    pub free_list_next: Option<NonNull<AllocInfo>>,
-}
-
-impl Debug for FreeListOrAddr {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{:x}", unsafe { self.base_addr.bytes() })
-    }
-}
-
 /// Every allocation is associated with a "lock" object, which is an instance of `AllocInfo`.
 /// Provenance is the "key" to this lock. To validate a memory access, we compare the allocation ID
 /// of a pointer's provenance with the value stored in its corresponding `AllocInfo` object. If the values
@@ -249,25 +236,34 @@ impl Debug for FreeListOrAddr {
 #[repr(C)]
 pub struct AllocInfo {
     alloc_id: Cell<AllocId>,
-    free_or_addr: Cell<FreeListOrAddr>,
+    offset: Cell<Size>,
     size: Cell<Size>,
     tree: Mutex<Option<AllocStateImpl>>,
 }
+
+// `AllocInfo` slots are handed out by the C++ `DenseSlabAlloc` slab
+// (`bsan-rt/llvm-wrapper/bsan_dense_alloc.h`), instantiated over a raw storage
+// blob of a hardcoded size/alignment. Keep these in sync: if this assertion
+// fails, update `AllocInfoStorage` in `bsan_metadata.cpp`.
+const _: () = {
+    assert!(core::mem::size_of::<AllocInfo>() == 160);
+    assert!(core::mem::align_of::<AllocInfo>() == 8);
+};
 
 impl AllocInfo {
     fn invalid() -> Self {
         AllocInfo {
             alloc_id: Cell::new(AllocId::invalid()),
-            free_or_addr: Cell::new(FreeListOrAddr { base_addr: Size::ZERO }),
+            offset: Cell::new(Size::ZERO),
             size: Cell::new(Size::ZERO),
             tree: Mutex::default(),
         }
     }
 
-    fn new(base_addr: Size, size: Size, bor_tag: BorTag, span: Span) -> Self {
+    fn new(offset: Size, size: Size, bor_tag: BorTag, span: Span) -> Self {
         Self {
             alloc_id: Cell::new(AllocId::default()),
-            free_or_addr: Cell::new(FreeListOrAddr { base_addr }),
+            offset: Cell::new(offset),
             size: Cell::new(size),
             tree: Mutex::new(Some(AllocStateImpl::new(bor_tag, size, span))),
         }
@@ -475,19 +471,19 @@ unsafe extern "C-unwind" fn __bsan_write_impl(
 // Registers a heap allocation of size `size`, storing its provenance in the return pointer.
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_alloc_impl(
+    info_dest: NonNull<AllocInfo>,
     base_addr: *mut c_void,
     size: Size,
     bor_tag: BorTag,
     pc: Span,
-) -> NonNull<AllocInfo> {
+) {
     let ctx = unsafe { global_ctx() };
     let range = AllocRange { start: Size::from_addr(base_addr), size };
     ctx.removing_exposed_provenance(range, false, || {
         #[allow(clippy::let_and_return)]
-        let alloc_info =
-            ctx.create_alloc_info(AllocInfo::new(Size::from_addr(base_addr), size, bor_tag, pc));
+        let alloc_info = AllocInfo::new(Size::from_addr(base_addr), size, bor_tag, pc);
+        unsafe { info_dest.write(alloc_info) };
         debug_bsan!("alloc", base_addr, bor_tag, alloc_info.as_ptr());
-        alloc_info
     })
 }
 
@@ -565,20 +561,6 @@ unsafe extern "C-unwind" fn __bsan_rc_dec_impl(
     BorrowTracker::for_alloc(prov, |bt| bt.decrement()).unwrap_or(false)
 }
 
-/// Reserves a stack slot for allocation metadata.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_reserve_stack_slot_impl() -> NonNull<AllocInfo> {
-    unsafe { global_ctx().create_alloc_info(AllocInfo::invalid()) }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_destroy_stack_slot_impl(slot: NonNull<AllocInfo>) {
-    let ctx = unsafe { global_ctx() };
-    unsafe {
-        ctx.destroy_alloc_info(slot);
-    }
-}
-
 /// Initializes stack allocation metadata in-place.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_alloc_stack_impl(
@@ -632,7 +614,6 @@ unsafe extern "C" fn __bsan_prune(
 /// be unreachable from any provenance value in shadow memory.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_eject(alloc_info: NonNull<AllocInfo>) {
-    let ctx = unsafe { global_ctx() };
     unsafe {
         // # Safety
         // Normally, we would have to lock the instance prior
@@ -641,7 +622,6 @@ unsafe extern "C" fn __bsan_eject(alloc_info: NonNull<AllocInfo>) {
         // to races (at least, until it's been returned to the bump
         // allocator by `destroy_alloc_info`).
         drop(alloc_info.replace(AllocInfo::invalid()));
-        ctx.destroy_alloc_info(alloc_info);
     }
 }
 

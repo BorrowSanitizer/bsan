@@ -1,14 +1,12 @@
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
-use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::errors::{ErrorFormatContext, UBInfo};
 use crate::helpers::FxHashMap;
-use crate::memory::Heap;
 use crate::sanitizer_common::Span;
 use crate::tree_borrows::data_structures::{AccessType, RangeObjectMap};
 use crate::tree_borrows::{AllocStateImpl, ProtectorKind};
@@ -26,6 +24,7 @@ pub static TREE_GC_MIN_NODES: AtomicUsize = AtomicUsize::new(0);
 #[thread_local]
 static PENDING_ERROR: UnsafeCell<*mut (UBInfo, Span)> = UnsafeCell::new(core::ptr::null_mut());
 
+#[allow(improper_ctypes)]
 unsafe extern "C" {
     fn __bsan_abort() -> !;
     fn __bsan_disable_node_debug_info() -> bool;
@@ -130,7 +129,6 @@ impl<'a> DerefMut for ExposedProvenanceRefMut<'a> {
 /// of unsafety throughout the library.
 pub struct GlobalCtx {
     protected_tags: RwLock<ProtectedTags>,
-    alloc_metadata_map: Heap<AllocInfo>,
     snapshots: RwLock<FxHashMap<AllocId, AllocStateImpl>>,
     exposed_provenance: RwLock<RangeObjectMap<AllocInfoPtr>>,
 }
@@ -139,18 +137,9 @@ impl GlobalCtx {
     fn new() -> Self {
         Self {
             protected_tags: RwLock::new(ProtectedTags::default()),
-            alloc_metadata_map: Heap::new(),
             snapshots: RwLock::new(FxHashMap::default()),
             exposed_provenance: RwLock::new(RangeObjectMap::new()),
         }
-    }
-
-    pub(crate) fn create_alloc_info(&self, info: AllocInfo) -> NonNull<AllocInfo> {
-        self.alloc_metadata_map.alloc(info)
-    }
-
-    pub(crate) unsafe fn destroy_alloc_info(&self, ptr: NonNull<AllocInfo>) {
-        unsafe { self.alloc_metadata_map.dealloc(ptr) }
     }
 
     pub fn protected_tags<'a>(&'a self) -> ProtectedTagsRef<'a> {
@@ -171,9 +160,6 @@ impl GlobalCtx {
     }
 
     pub fn get_exposed_provenance(&self, range: AllocRange) -> Option<AllocInfoPtr> {
-        // A zero-sized lookup (e.g. a deallocation, where the size of the access
-        // is determined by the allocation) still needs to resolve the allocation
-        // containing its start address, so we widen it to a single byte.
         let size = core::cmp::max(range.size, Size::from_bytes(1));
         let range = AllocRange { start: range.start, size };
         let exposed = self.exposed_provenance.read();

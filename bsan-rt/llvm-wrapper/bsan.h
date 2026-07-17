@@ -1,6 +1,7 @@
 #ifndef BSAN_H
 #define BSAN_H
 #include "bsan_allocator.h"
+#include "bsan_dense_alloc.h"
 #include "bsan_shadow.h"
 #include "sanitizer_common/sanitizer_addrhashmap.h"
 #include "sanitizer_common/sanitizer_atomic.h"
@@ -31,27 +32,14 @@ using __sanitizer::u8;
 using __sanitizer::uptr;
 using __sanitizer::Vector;
 
-// The immediate caller PC of a runtime hook, captured at the retag/access
-// site. Symbolized lazily at display time as the error's origin note; the
-// primary error location comes from the live unwind in `HANDLE_ERROR`.
 typedef uptr Span;
-typedef uptr BorTag;
-
-struct AllocInfo;
-
-struct Provenance {
-  BorTag tag;
-  AllocInfo *info;
-};
+typedef uptr AllocId;
+static constexpr AllocId kInvalidAllocId = 1;
 
 struct AtExitRecord {
   void (*func)(void *arg);
   void *arg;
 };
-
-const Provenance OMNIVALID = {0, nullptr};
-
-static constexpr uptr kMinProvAlignment = 8;
 
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance
     *__bsan_shadow_stack;
@@ -64,6 +52,16 @@ extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uintptr_t __bsan_bor_tag_ctr;
 extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uintptr_t __bsan_visits_since_gc;
 
 namespace __bsan {
+
+typedef DenseSlabAlloc<kMetadataSpace> MetadataAlloc;
+extern MetadataAlloc metadata_alloc;
+
+#define BLOCK(idx) (metadata_alloc.Map(idx))
+#define PROV_BLOCK(prov)                                                       \
+  (PROV_BLOCK_IDX(prov) ? BLOCK(PROV_BLOCK_IDX(prov)) : nullptr)
+#define PROV_PACK(block_ptr, tag)                                              \
+  ((block_ptr) ? PROV(metadata_alloc.IndexOf(block_ptr), (tag))                \
+               : (Provenance)(tag))
 
 typedef uptr ThreadId;
 
@@ -105,6 +103,7 @@ uptr FindUserFramePc(uptr pc, uptr bp);
 
 Provenance *GetParamSlot(uptr Idx);
 Provenance *GetRetValSlot(uptr Idx);
+
 void ClearSlot(uptr Idx);
 bool CallerIsInstrumented(void *sym);
 

@@ -15,6 +15,7 @@ BsanThread *BsanThread::Create(thread_callback_t start_routine, void *arg) {
   thread->arg_ = arg;
   thread->destructor_iterations_ = GetPthreadDestructorIterations();
   global_ctx()->Threads().RegisterThread(thread);
+  metadata_alloc.InitCache(&thread->metadata_cache_);
   return thread;
 }
 
@@ -33,6 +34,9 @@ void BsanThread::Init() {
 void BsanThread::Destroy(void *tsd) {
   BsanThread *t = (BsanThread *)tsd;
   global_ctx()->Threads().DeregisterThread(t->id);
+  // Return this thread's cached block indices to the global freelist;
+  // otherwise they are stranded in the cache we are about to unmap.
+  metadata_alloc.FlushCache(&t->metadata_cache_);
   t->zero_count_set_.~ConcreteProvenanceSet();
   UnmapOrDie(t->shadow_stack_bottom_, t->shadow_stack_size_);
   uptr size = RoundUpTo(sizeof(BsanThread), GetPageSizeCached());

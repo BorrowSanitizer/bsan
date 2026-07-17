@@ -26,15 +26,13 @@ impl AllocInfoPtr {
     /// Otherwise, the contents of its base address will be initialized with the next
     /// pointer in a free list.
     pub unsafe fn range(&self) -> AllocRange {
-        AllocRange { start: unsafe { self.base_addr() }, size: self.size.get() }
+        AllocRange { start: self.offset.get(), size: self.size.get() }
     }
 
     /// # Safety
     /// This instance of `AllocInfo` must represent a valid, non-freed allocation.
-    /// Otherwise, the contents of its base address will be initialized with the next
-    /// pointer in a free list.
-    pub unsafe fn base_addr(&self) -> Size {
-        unsafe { self.free_or_addr.get().base_addr }
+    pub unsafe fn offset(&self) -> Size {
+        self.offset.get()
     }
 
     fn tree<'b>(self) -> UBResult<TreeGuard<'b>> {
@@ -43,6 +41,12 @@ impl AllocInfoPtr {
 
     fn tree_opt<'b>(self) -> Option<TreeGuard<'b>> {
         let info: &'b AllocInfo = unsafe { self.0.as_ref() };
+        // A reserved-but-uninitialized slot (`__bsan_reserve_stack_slot`) is
+        // marked with the invalid alloc id; its `tree` still holds stale bytes
+        // from a recycled slot, so we must not lock or read it.
+        if info.alloc_id.get() == crate::AllocId::invalid() {
+            return None;
+        }
         let tree = info.tree.lock();
         if tree.is_none() {
             None
@@ -189,7 +193,7 @@ impl<'b> BorrowTracker<'b> {
     {
         let alloc_info: AllocInfoPtr = unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
         let alloc_size = alloc_info.size.get();
-        let base_addr = unsafe { alloc_info.base_addr() };
+        let base_addr = unsafe { alloc_info.offset() };
         let offset = Size::from_bytes(start.bytes().wrapping_sub(base_addr.bytes()));
         let tree = alloc_info.tree()?;
 
@@ -239,7 +243,7 @@ impl<'b> BorrowTracker<'b> {
 
             let alloc_id = alloc_info.alloc_id.get();
             let alloc_size = alloc_info.size.get();
-            let base_addr = unsafe { alloc_info.base_addr() };
+            let base_addr = unsafe { alloc_info.offset() };
             let access_size = access_size.unwrap_or(alloc_size);
             let is_sized_access = access_size != Size::ZERO;
 

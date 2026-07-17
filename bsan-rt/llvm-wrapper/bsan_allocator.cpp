@@ -1,7 +1,6 @@
 #include "bsan_allocator.h"
 #include "bsan.h"
 #include "bsan_flags.h"
-#include "bsan_shadow.h"
 #include "bsan_thread.h"
 #include "sanitizer_common/sanitizer_allocator.h"
 #include "sanitizer_common/sanitizer_allocator_checks.h"
