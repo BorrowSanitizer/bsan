@@ -12,6 +12,7 @@ path_macro = "1.0.0"
 which = "8.0.4"
 regex = "1.12.4"
 cfg-if = "1.0.4"
+tempfile = "3.27.0"
 
 [build-dependencies]
 rustc_tools_util = "0.4"

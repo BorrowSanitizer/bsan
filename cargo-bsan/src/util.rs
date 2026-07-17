@@ -1,9 +1,11 @@
-use std::env;
 use std::ffi::OsString;
+use std::fs::symlink_metadata;
 use std::io::{self, Write};
 use std::ops::{Deref, Not};
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::{env, fs};
 
 use cargo_metadata::{Metadata, MetadataCommand};
 use rustc_version::VersionMeta;
@@ -288,4 +290,24 @@ impl Deref for Sysroot {
     fn deref(&self) -> &Self::Target {
         &self.root
     }
+}
+
+/// Creates a temporary directory and a symlink inside it pointing to `target`.
+/// The symlink will be destroyed when the returned `TempDir` is dropped.
+pub fn create_symlink(target: &Path, link_name: &str) -> io::Result<PathBuf> {
+    let temp_dir = Cargo::get_target_dir();
+
+    if !temp_dir.exists() {
+        fs::create_dir_all(&temp_dir)?;
+    }
+    let link_path = temp_dir.join(link_name);
+
+    if link_path.exists() {
+        let metadata = symlink_metadata(&link_path)?;
+        assert!(metadata.is_symlink(), "unexpected, non-symlink file: {link_path:?}");
+        return Ok(link_path);
+    }
+
+    symlink(target, &link_path)?;
+    Ok(link_path)
 }
