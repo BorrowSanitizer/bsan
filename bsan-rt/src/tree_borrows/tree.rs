@@ -13,6 +13,7 @@
 
 // use alloc::boxed::Box;
 use core::ops::Range;
+use core::sync::atomic::Ordering::Relaxed;
 use core::{cmp, fmt, mem};
 
 use smallvec::SmallVec;
@@ -28,6 +29,7 @@ use super::refcount::RefCount;
 use super::tree_visitor::{ChildrenVisitMode, ContinueTraversal, NodeAppArgs, TreeVisitor};
 use super::wildcard::{ExposedCache, WildcardAccessLevel};
 use crate::errors::UBResult;
+use crate::global::TREE_GC_MIN_NODES;
 use crate::helpers::{AllocRange, FxHashSet, Size};
 use crate::sanitizer_common::Span;
 use crate::tree_borrows::{GlobalState, ProtectorKind};
@@ -1290,7 +1292,7 @@ impl AllocState for LazyTree {
                 // Small trees are not worth pruning; skip them and leave their
                 // tags pending. Once the tree grows past the threshold, it
                 // becomes prunable (and freeable, if it empties out entirely).
-                if tree.tag_mapping.len() <= GC_MIN_TREE_SIZE {
+                if tree.tag_mapping.len() <= TREE_GC_MIN_NODES.load(Relaxed) {
                     return false;
                 }
                 tree.remove_dead_tags(dead_tags)
