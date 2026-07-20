@@ -1,7 +1,7 @@
 [workspace]
 members = ["bsan-rt", "bsan-script", "cargo-bsan"]
 default-members = ["bsan-script", "cargo-bsan"]
-exclude = ["fiona-rs", "tests/test-cargo-bsan"]
+exclude = ["tests/test-cargo-bsan"]
 resolver = "3"
 
 [package]
