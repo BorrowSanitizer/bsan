@@ -26,7 +26,7 @@ using namespace __sanitizer;
 // define a dedicated, unused "anchor" symbol on the Rust
 // side to create a strong link between the two components.
 // When we run BorrowSanitizer in no-op mode, we define
-// this symbol manually.
+// this symbol manually by passing a flag to the linker.
 extern "C" void __bsan_rust_runtime_anchor(void);
 USED static void (*const bsan_rust_runtime_anchor)(void) =
     &__bsan_rust_runtime_anchor;

@@ -36,9 +36,17 @@ use crate::tree_borrows::perms::AccessKind;
 use crate::tree_borrows::tree::AllocStateImpl;
 use crate::tree_borrows::AllocState;
 
-#[thread_local]
+/// We link against the Rust component of our runtime
+/// via weak symbols. Unless we intervene, the linker
+/// will always discard the Rust component, because
+/// strong dependencies are necessary to "pull" a symbol
+/// from a static archive. To avoid this situation, we
+/// define a dedicated, unused "anchor" symbol on the Rust
+/// side to create a strong link between the two components.
+/// When we run BorrowSanitizer in no-op mode, we define
+/// this symbol manually by passing a flag to the linker.
 #[unsafe(no_mangle)]
-pub static mut __BSAN_HAD_ERROR: usize = 0;
+extern "C" fn __bsan_rust_runtime_anchor() {}
 
 /// A struct for summarizing debug information about memory operations
 #[cfg(feature = "debug")]
@@ -302,21 +310,6 @@ unsafe extern "C-unwind" fn __bsan_internal_init() {
         init_global_ctx();
     }
 }
-
-/// Anchor tying the Rust half of the runtime to the C++ half.
-///
-/// The C++ interface calls into Rust exclusively through weak declarations
-/// (`__bsan_*_impl`), and a *weak* reference never pulls a member out of a
-/// static archive. So on its own the linker would leave this entire object
-/// (`libbsan_rt.a`'s single codegen unit, where every `__bsan_*_impl` lives)
-/// out of the link, and every hook would silently resolve to null, disabling
-/// all provenance tracking. The C++ runtime holds a *strong* reference to this
-/// symbol, giving the linker an ordinary, non-weak reason to pull this object —
-/// and with it all the hooks — into the link. That lets the multipart runtime
-/// link through normal archive resolution instead of `--whole-archive`. The
-/// body is intentionally empty; only the symbol's presence matters.
-#[unsafe(no_mangle)]
-extern "C" fn __bsan_rust_runtime_anchor() {}
 
 /// Deinitializes the global state of the runtime library.
 /// We assume the global invariant that no other API functions
