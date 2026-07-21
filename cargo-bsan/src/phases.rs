@@ -232,7 +232,7 @@ pub fn phase_cc(args: impl Iterator<Item = String>) {
 
     // The sanitizer runtime requires a set of default system libraries
     // to always be linked. Here, we pass them with `--no-as-needed` to
-    // ensure that these libraries are never excludeddue to other linker
+    // ensure that these libraries are never excluded due to other linker
     // configurations.
     //
     // (see llvm-project/clang/lib/Driver/ToolChains/CommonArgs.cpp#L1590)
