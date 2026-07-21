@@ -537,7 +537,9 @@ impl EagerTree {
     fn can_be_replaced_by_children_dead(&self, idx: UniIndex) -> bool {
         let node = self.nodes.get(idx).unwrap();
 
-        if node.children.is_empty() {
+        // The caller only reaches this branch after `can_be_replaced_by_single_child_dead`
+        // has failed, so we do not need a redundant multi-child check
+        if node.children.len() <= 1 {
             return false;
         }
 
