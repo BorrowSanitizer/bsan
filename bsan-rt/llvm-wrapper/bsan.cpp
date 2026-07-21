@@ -18,6 +18,19 @@
 
 using namespace __sanitizer;
 
+// We link against the Rust component of our runtime
+// via weak symbols. Unless we intervene, the linker
+// will always discard the Rust component, because
+// strong dependencies are necessary to "pull" a symbol
+// from a static archive. To avoid this situation, we
+// define a dedicated, unused "anchor" symbol on the Rust
+// side to create a strong link between the two components.
+// When we run BorrowSanitizer in no-op mode, we define
+// this symbol manually by passing a flag to the linker.
+extern "C" void __bsan_rust_runtime_anchor(void);
+USED static void (*const bsan_rust_runtime_anchor)(void) =
+    &__bsan_rust_runtime_anchor;
+
 // Interface globals.
 // Stores the function pointer of a possibly
 // uninstrumented callee. We can check this against
@@ -247,8 +260,6 @@ void __sanitizer::BufferedStackTrace::UnwindImpl(uptr pc, uptr bp,
   else
     Unwind(max_depth, pc, 0, context, 0, 0, false);
 }
-
-// Interface.
 
 using namespace __bsan;
 

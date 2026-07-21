@@ -211,6 +211,7 @@ dependencies = [
  "rustc-build-sysroot",
  "rustc_tools_util",
  "rustc_version",
+ "tempfile",
  "which 8.0.4",
 ]
 

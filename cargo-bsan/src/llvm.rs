@@ -51,8 +51,6 @@ impl LlvmTools {
     }
 
     pub fn populate_env(&self, cmd: &mut Command) {
-        cmd.env("CC", &self.clang);
-        cmd.env("CXX", &self.clang);
         cmd.env("LLVM_SYMBOLIZER", &self.clang);
         cmd.env("LLD", &self.lld);
         cmd.env("LLVM_CONFIG", &self.lld);
@@ -63,7 +61,7 @@ impl LlvmTools {
     }
 
     pub fn from_env() -> Self {
-        let clang = expect_env_path("CC");
+        let clang = expect_env_path("CLANG_PATH");
         let llvm_symbolizer = expect_env_path("LLVM_SYMBOLIZER");
         let lld = expect_env_path("LLD");
         let llvm_config = expect_env_path("LLVM_CONFIG");
