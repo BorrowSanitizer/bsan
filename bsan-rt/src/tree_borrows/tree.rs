@@ -670,8 +670,14 @@ impl EagerTree {
     /// Each entry in `dead_tags` is zeroed out (set to [`BorTag::omnivalid`]) once its tag
     /// no longer needs to be tracked: either the node was removed, or it is guaranteed to
     /// re-enter a zero-count table before it can next become prunable. Entries left nonzero
-    /// are dead nodes that could not be pruned yet (they still have multiple reachable
-    /// children); the caller must keep them pending for a future GC pass.
+    /// are dead nodes that could not be pruned yet
+    ///
+    /// Roots only ever leave the tree as leaves; a dead root with children is never
+    /// replaced by them. Since a child's tag is always greater than its parent's,
+    /// promoting a child into `self.roots` could break the ascending-tag order of
+    /// `roots`, which [`LocationTree::perform_access`] and the wildcard consistency
+    /// checks rely on. This retains at most one dead root per tree, and only until its
+    /// subtree dies (or is compacted away), at which point it is removed as a leaf.
     fn remove_useless_children_dead(&mut self, dead_tags: &mut [BorTag]) {
         // debug_assert!(
         //     dead_tags.is_sorted(),
@@ -702,9 +708,13 @@ impl EagerTree {
                 continue;
             }
 
-            // `parent` is an Option<UniIndex>: if it is None, then `node` is a root,
-            // otherwise it is a child of some parent
+            // `parent` is an Option<UniIndex>: if it is None, then `node` is a root
             let parent = node.parent;
+
+            // A root is only ever removed once it is a leaf
+            if parent.is_none() && !node.children.is_empty() {
+                continue;
+            }
 
             // Node is a leaf
             if node.children.is_empty() {
@@ -724,31 +734,21 @@ impl EagerTree {
                 self.remove_useless_node(idx);
                 *entry = BorTag::omnivalid();
             }
-            // Node has exactly one child
+            // Node has exactly one child (and, per the guard above, a parent)
             else if let Some(child_idx) = self.can_be_replaced_by_single_child_dead(idx) {
-                // Replace a node with its only child, if it is a root then we promote the child
-                // to a root
-                match parent {
-                    Some(parent_idx) => {
-                        let children = &mut self.nodes.get_mut(parent_idx).unwrap().children;
-                        let pos = children.iter().position(|&c| c == idx).unwrap();
-                        children[pos] = child_idx;
-                    }
-                    None => {
-                        let pos = self.roots.iter().position(|&r| r == idx).unwrap();
-                        self.roots[pos] = child_idx;
-                    }
-                }
+                // Replace the node with its only child.
+                let parent_idx = parent.unwrap();
+                let children = &mut self.nodes.get_mut(parent_idx).unwrap().children;
+                let pos = children.iter().position(|&c| c == idx).unwrap();
+                children[pos] = child_idx;
                 self.nodes.get_mut(child_idx).unwrap().parent = parent;
                 self.remove_useless_node(idx);
                 *entry = BorTag::omnivalid();
             }
-            // Node has more than one child. If it has a (surviving) grandparent and every child
-            // can soundly replace it, compact it by reparenting all of its children onto that
-            // grandparent.
-            else if let Some(parent_idx) = parent
-                && self.can_be_replaced_by_children_dead(idx)
-            {
+            // Node has more than one child. If every child can soundly replace it, compact it
+            // by reparenting all of its children onto its parent.
+            else if self.can_be_replaced_by_children_dead(idx) {
+                let parent_idx = parent.unwrap();
                 // Move `idx`'s children out so we can reparent them
                 let children = mem::take(&mut self.nodes.get_mut(idx).unwrap().children);
                 // Point every grandchild at the grandparent.

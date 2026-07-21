@@ -959,3 +959,57 @@ fn retained_tag_is_pruned_once_children_die() {
     assert_eq!(tree.node_count(), 1);
     assert!(tree.contains_tag(t(10)));
 }
+
+/// Maps `tree.roots` to their tags, in vec order.
+fn root_tags(tree: &EagerTree) -> Vec<BorTag> {
+    tree.roots.iter().map(|&idx| tree.nodes.get(idx).unwrap().tag).collect()
+}
+
+#[test]
+fn dead_root_with_children_is_retained() {
+    // A dead root is never replaced by its child, since promoting the child into `roots`
+    // could break its ascending-tag order. Here the main root's only child (tag 30) has a
+    // larger tag than the wildcard subtree root (tag 20), so the pre-guard promotion would
+    // have produced roots [30, 20].
+    let mut tree = new_tree(t(10));
+    add_child(&mut tree, BorTag::wildcard(), t(20));
+    add_child(&mut tree, t(10), t(30));
+    tree.increment(t(20));
+    tree.increment(t(30));
+
+    let mut dead = [t(10)];
+    let empty = tree.remove_dead_tags(&mut dead);
+
+    assert!(!empty);
+    // The root cannot be pruned while it has a child; it must stay pending.
+    assert_eq!(dead, [t(10)]);
+    assert!(tree.contains_tag(t(10)));
+    assert_eq!(root_tags(&tree), [t(10), t(20)]);
+}
+
+#[test]
+fn dead_root_is_pruned_as_leaf_once_subtree_dies() {
+    let mut tree = new_tree(t(10));
+    add_child(&mut tree, BorTag::wildcard(), t(20));
+    add_child(&mut tree, t(10), t(30));
+    tree.increment(t(20));
+    tree.increment(t(30));
+
+    // First pass: the dead root is retained while its child is alive.
+    let mut dead = [t(10)];
+    assert!(!tree.remove_dead_tags(&mut dead));
+    assert_eq!(dead, [t(10)]);
+    assert_eq!(root_tags(&tree), [t(10), t(20)]);
+
+    // The wildcard root and the child die. The next pass removes both as leaves, which
+    // turns the main root into a leaf that is removed in the same pass, leaving `roots`
+    // empty so the caller can reclaim the tree.
+    tree.decrement(t(20));
+    tree.decrement(t(30));
+    let mut dead = [t(10), t(20), t(30)];
+    let empty = tree.remove_dead_tags(&mut dead);
+
+    assert!(empty, "every root was removed as a leaf");
+    assert_eq!(dead, [BorTag::omnivalid(); 3]);
+    assert_eq!(tree.node_count(), 0);
+}
