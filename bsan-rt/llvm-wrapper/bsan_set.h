@@ -73,12 +73,14 @@ public:
 
   void insert(Provenance Prov);
   void remove(Provenance Prov);
-  // Insert (node, tag) without reading node->tag (GC re-queue).
+  // Insert (node, tag) without reading node->tag (GC re-queue). Keyed by alloc
+  // root.
   void insertTag(Node *node, BorTag tag);
 
   void clear();
+  // Per-tag lookup under the alloc root.
   bool contains(Provenance prov);
-  // Explicit tag (MergeZeroCounts keeps node and tag separate).
+  // Explicit tag when the key is already an alloc root (MergeZeroCounts).
   bool contains(Node *node, BorTag tag);
 
   void swap(ConcreteProvenanceSet &other) { set_.swap(other.set_); }
@@ -107,10 +109,12 @@ public:
     });
   }
 
+  // Lookup by any Node* in the allocation (canonicalized to inline root).
   BorTagSet *find(Node *node);
   const BorTagSet *find(Node *node) const;
 
 private:
+  // Keyed by alloc-root Node*; values are live/pending/ZCT tags for that alloc.
   DenseMap<Node *, BorTagSet> set_;
 };
 

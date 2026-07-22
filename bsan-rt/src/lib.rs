@@ -630,6 +630,18 @@ unsafe extern "C" fn __bsan_prune(node: NonNull<Node>, bor_tags: *mut BorTag, le
     NodePtr::from(node).prune_dead_tags(dead_tags)
 }
 
+/// Inline root [`Node`] for the allocation containing `node`.
+/// Canonicalizes ZCT / live / pending map keys to one entry per allocation.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __bsan_alloc_root(node: *mut Node) -> *mut Node {
+    if node.is_null() {
+        return core::ptr::null_mut();
+    }
+    unsafe {
+        let root = RootNode::from_node(NonNull::new_unchecked(node));
+        RootNode::node_ptr(root).as_ptr()
+    }
+}
 
 /// Frees a [`RootNode`] recovered from any node in the allocation.
 /// Must be unreachable from shadow. Stack roots are ignored (frame owns the slot

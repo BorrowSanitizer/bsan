@@ -1,7 +1,17 @@
 #include "bsan_set.h"
 #include "bsan.h"
+#include "bsan_interface_internal.h"
 
 namespace __bsan {
+
+// Map keys are the allocation's inline root Node*. Shadow / RC still pass
+// child Node*; canonicalize before every DenseMap op.
+static Node *AllocRoot(Node *node) {
+  if (!ProvIsConcrete(node) || !__bsan_alloc_root)
+    return node;
+  Node *root = __bsan_alloc_root(node);
+  return root ? root : node;
+}
 
 uptr BorTagSet::lowerBound(BorTag Tag) const {
   // Binary search over the elements of the array
@@ -69,7 +79,7 @@ void ConcreteProvenanceSet::insertTag(Node *node, BorTag tag) {
   if (!ProvIsConcrete(node)) {
     return;
   }
-  set_[node].insert(tag);
+  set_[AllocRoot(node)].insert(tag);
 }
 
 void ConcreteProvenanceSet::remove(Provenance prov) {
@@ -112,7 +122,7 @@ BorTagSet *ConcreteProvenanceSet::find(Node *node) {
   if (!ProvIsConcrete(node)) {
     return nullptr;
   }
-  auto *KV = set_.find(node);
+  auto *KV = set_.find(AllocRoot(node));
   return KV ? &KV->second : nullptr;
 }
 
@@ -120,7 +130,7 @@ const BorTagSet *ConcreteProvenanceSet::find(Node *node) const {
   if (!ProvIsConcrete(node)) {
     return nullptr;
   }
-  const auto *KV = set_.find(node);
+  const auto *KV = set_.find(AllocRoot(node));
   return KV ? &KV->second : nullptr;
 }
 

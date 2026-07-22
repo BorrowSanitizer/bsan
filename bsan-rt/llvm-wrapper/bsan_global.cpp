@@ -33,7 +33,7 @@ void GlobalContext::MergeZeroCounts(const uptr, BsanThread *const &thread,
   // count table, then we can drain its contents for garbage collection.
   if (!thread->ZctBusy()) {
     // Move unreachable tags into pending; keep live ones in this thread's ZCT.
-    // Match on the ZCT entry's tag under its Node* key.
+    // Keys are alloc roots; match on the ZCT entry's tag, not root.tag.
     thread->zero_count_set_.retainIf([&](Node *node, BorTag tag) -> bool {
       if (snap->live->contains(node, tag)) {
         return true;
@@ -70,6 +70,7 @@ void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
 void GlobalContext::CollectGarbage(Snapshot &snap) {
   InternalMmapVector<RetiredAlloc> filtered;
   // Eject retired RootNode slots unreachable as of snap.min_drained.
+  // Quarantine / pending keys are already alloc roots.
   for (uptr i = 0; i < quarantine_.size(); ++i) {
     RetiredAlloc retired = quarantine_[i];
     if (retired.retire_gen <= snap.min_drained) {

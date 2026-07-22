@@ -69,6 +69,11 @@ bool __bsan_prune(Node *node, BorTag *tags, uptr len);
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_eject(Node *node);
 
+// Inline root Node* for the allocation containing `node` (RootNode::from_node
+// → RootNode::node_ptr). Used to canonicalize ZCT / live / pending map keys.
+SANITIZER_WEAK_ATTRIBUTE
+Node *__bsan_alloc_root(Node *node);
+
 } // extern "C"
 
 #endif
