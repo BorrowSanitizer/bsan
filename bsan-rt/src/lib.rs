@@ -36,9 +36,17 @@ use crate::tree_borrows::perms::AccessKind;
 use crate::tree_borrows::tree::AllocStateImpl;
 use crate::tree_borrows::AllocState;
 
-#[thread_local]
+/// We link against the Rust component of our runtime
+/// via weak symbols. Unless we intervene, the linker
+/// will always discard the Rust component, because
+/// strong dependencies are necessary to "pull" a symbol
+/// from a static archive. To avoid this situation, we
+/// define a dedicated, unused "anchor" symbol on the Rust
+/// side to create a strong link between the two components.
+/// When we run BorrowSanitizer in no-op mode, we define
+/// this symbol manually by passing a flag to the linker.
 #[unsafe(no_mangle)]
-pub static mut __BSAN_HAD_ERROR: usize = 0;
+extern "C" fn __bsan_rust_runtime_anchor() {}
 
 /// A struct for summarizing debug information about memory operations
 #[cfg(feature = "debug")]

@@ -366,10 +366,7 @@ impl BsanEnv {
     }
 
     pub fn build(&self, crate_dir: impl AsRef<OsStr>, args: &[String]) -> Result<()> {
-        // We build all targets, since building *just* the bin target does not include
-        // `dev-dependencies` and that changes feature resolution. This also gets us more
-        // parallelism in `./b test` as we build BorrowSanitizer and its tests together.
-        let mut cmd = self.cargo_cmd(crate_dir, "build").args(&["--all-targets"]).args(args);
+        let mut cmd = self.cargo_cmd(crate_dir, "build").args(args);
         if matches!(self.mode, Mode::Release) {
             cmd = cmd.arg("--release");
         }

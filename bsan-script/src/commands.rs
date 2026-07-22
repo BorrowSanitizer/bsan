@@ -516,7 +516,14 @@ impl Buildable for BsanRt {
     fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
         let llvm_objcopy = env.target_binary("llvm-objcopy");
         let rust_runtime = env.with_flags("RUSTFLAGS", RT_FLAGS, |env| {
-            env.build("bsan-rt", args)?;
+            let mut args: Vec<String> = args.iter().cloned().collect();
+            // We need to build the standard library from source so that we propagate
+            // `-Cpanic=abort` to `core` and `alloc`. Otherwise, we will use the prebuilt
+            // versions of these libraries, which use `-Cpanic=unwind`. This means that
+            // the symbol `rust_eh_personality` will be included, undefined, in the final
+            // static library.
+            args.push("-Zbuild-std=core,alloc".to_string());
+            env.build("bsan-rt", &args)?;
             Ok(env.assert_artifact(&self.artifact(env)))
         })?;
 

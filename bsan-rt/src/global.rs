@@ -2,7 +2,7 @@ use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -16,6 +16,11 @@ use crate::*;
 
 pub static DISABLE_NODE_DEBUG_INFO: AtomicBool = AtomicBool::new(false);
 
+/// Only prune borrow trees with more than this many nodes. Initialized from
+/// the `tree_gc_min_nodes` flag; the default mirrors the one in `bsan_flags.inc`.
+pub static TREE_GC_MIN_NODES: AtomicUsize =
+    AtomicUsize::new(crate::tree_borrows::tree::GC_MIN_TREE_SIZE);
+
 /// Thread-local slot for a boxed `(UBInfo, Span)` set by `handle_error` and
 /// consumed by `__bsan_format_pending_ub` once the C++ side has captured the
 /// stack and located the first user-code frame.
@@ -25,6 +30,7 @@ static PENDING_ERROR: UnsafeCell<*mut (UBInfo, Span)> = UnsafeCell::new(core::pt
 unsafe extern "C" {
     fn __bsan_abort() -> !;
     fn __bsan_disable_node_debug_info() -> bool;
+    fn __bsan_tree_gc_min_nodes() -> usize;
 }
 
 /// Called from the `HANDLE_ERROR` C++ macro after the stack trace has been
@@ -310,6 +316,7 @@ pub unsafe fn init_global_ctx() {
     unsafe {
         (*GLOBAL_CTX.0.get()).write(GlobalCtx::new());
         DISABLE_NODE_DEBUG_INFO.store(__bsan_disable_node_debug_info(), Ordering::Relaxed);
+        TREE_GC_MIN_NODES.store(__bsan_tree_gc_min_nodes(), Ordering::Relaxed);
     }
 }
 
