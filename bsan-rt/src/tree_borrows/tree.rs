@@ -446,7 +446,7 @@ impl EagerTree {
     /// If so, returns the index of said only child. If not, returns none.
     /// The caller iterates the dead tags directly, so `idx` is already known to be dead
     /// and there is no membership check — only the shape and permission conditions remain.
-    fn can_be_replaced_by_single_child_dead(&self, idx: UniIndex) -> Option<UniIndex> {
+    fn can_be_replaced_by_single_child(&self, idx: UniIndex) -> Option<UniIndex> {
         let node = self.nodes.get(idx).unwrap();
 
         let [child_idx] = node.children[..] else { return None };
@@ -476,13 +476,13 @@ impl EagerTree {
         Some(child_idx)
     }
 
-    /// Like [`Self::can_be_replaced_by_single_child_dead`], but for a node with more than one
+    /// Like [`Self::can_be_replaced_by_single_child`], but for a node with more than one
     /// child. This requires the stronger [`Permission::can_be_replaced_by_children`] check, and
     /// it must hold for every child at every location
-    fn can_be_replaced_by_children_dead(&self, idx: UniIndex) -> bool {
+    fn can_be_replaced_by_children(&self, idx: UniIndex) -> bool {
         let node = self.nodes.get(idx).unwrap();
 
-        // The caller only reaches this branch after `can_be_replaced_by_single_child_dead`
+        // The caller only reaches this branch after `can_be_replaced_by_single_child`
         // has failed, so we do not need a redundant multi-child check
         if node.children.len() <= 1 {
             return false;
@@ -554,10 +554,10 @@ impl EagerTree {
     /// `roots`, which [`LocationTree::perform_access`] and the wildcard consistency
     /// checks rely on. This retains at most one dead root per tree, and only until its
     /// subtree dies (or is compacted away), at which point it is removed as a leaf.
-    fn remove_useless_children_dead(&mut self, dead_tags: &mut [BorTag]) {
+    fn remove_useless_children(&mut self, dead_tags: &mut [BorTag]) {
         // debug_assert!(
         //     dead_tags.is_sorted(),
-        //     "remove_useless_children_dead requires ascending-sorted tags"
+        //     "remove_useless_children requires ascending-sorted tags"
         // );
 
         // Iterating through dead_tags in reverse (descending tag order)
@@ -611,7 +611,7 @@ impl EagerTree {
                 *entry = BorTag::omnivalid();
             }
             // Node has exactly one child (and, per the guard above, a parent)
-            else if let Some(child_idx) = self.can_be_replaced_by_single_child_dead(idx) {
+            else if let Some(child_idx) = self.can_be_replaced_by_single_child(idx) {
                 // Replace the node with its only child.
                 let parent_idx = parent.unwrap();
                 let children = &mut self.nodes.get_mut(parent_idx).unwrap().children;
@@ -623,7 +623,7 @@ impl EagerTree {
             }
             // Node has more than one child. If every child can soundly replace it, compact it
             // by reparenting all of its children onto its parent.
-            else if self.can_be_replaced_by_children_dead(idx) {
+            else if self.can_be_replaced_by_children(idx) {
                 let parent_idx = parent.unwrap();
                 // Move `idx`'s children out so we can reparent them
                 let children = mem::take(&mut self.nodes.get_mut(idx).unwrap().children);
@@ -1459,7 +1459,7 @@ impl AllocState for EagerTree {
     }
 
     fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool {
-        self.remove_useless_children_dead(dead_tags);
+        self.remove_useless_children(dead_tags);
         self.locations.merge_adjacent_thorough();
         self.roots.is_empty()
     }
