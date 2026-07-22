@@ -32,9 +32,8 @@ using __sanitizer::uptr;
 using __sanitizer::Vector;
 
 // The immediate caller PC of a runtime hook, captured at the retag/access
-// site. Symbolized lazily at display time. Node-execution logging captures the
-// full caller stack separately (see CaptureLogFrames), so the span itself
-// stays a single word with no per-node storage or ABI cost.
+// site. Symbolized lazily at display time as the error's origin note; the
+// primary error location comes from the live unwind in `HANDLE_ERROR`.
 typedef uptr Span;
 typedef uptr BorTag;
 

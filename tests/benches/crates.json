@@ -1,10 +1,7 @@
 [
    {
         "name": "hashbrown",
-        "version": "0.17.0",
-        "exclude": [
-            "map::test_map::test_lots_of_insertions"
-        ]
+        "version": "0.17.1"
     },
     {
         "name": "rand",
@@ -13,5 +10,12 @@
     {
         "name": "matchers",
         "version": "0.2.0"
-    }
+    },
+   {
+      "name": "bit-vec",
+      "version": "0.9.1",
+      "exclude": [
+            "tests::test_bit_vec_iterator"
+      ]
+   }
 ]
