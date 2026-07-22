@@ -377,8 +377,17 @@ impl<'b> BorrowTracker<'b> {
             span,
         )?;
 
-        // Log the newly created child node.
-        crate::sanitizer_common::SanitizerCommon::log_node(alloc_id.get());
+        // E2: the reborrow that created the new child tag.
+        if parent_tag.is_wildcard() {
+            crate::log_event!("E2: Reborrow(t{}, tw, s{})", new_tag.get(), retag_info.size.bytes());
+        } else {
+            crate::log_event!(
+                "E2: Reborrow(t{}, t{}, s{})",
+                new_tag.get(),
+                parent_tag.get(),
+                retag_info.size.bytes()
+            );
+        }
 
         Ok(Provenance { alloc_info: self.alloc_info.0.as_ptr(), bor_tag: new_tag })
     }
@@ -410,6 +419,13 @@ impl<'b> BorrowTracker<'b> {
         access_kind: AccessKind,
         span: Span,
     ) -> UBResult<()> {
+        // E3/E4: the read or write access, by the accessing tag.
+        match (access_kind, self.bor_tag.is_wildcard()) {
+            (AccessKind::Read, false) => crate::log_event!("E3: Read(t{})", self.bor_tag.get()),
+            (AccessKind::Read, true) => crate::log_event!("E3: Read(tw)"),
+            (AccessKind::Write, false) => crate::log_event!("E4: Write(t{})", self.bor_tag.get()),
+            (AccessKind::Write, true) => crate::log_event!("E4: Write(tw)"),
+        }
         self.tree.perform_access(
             self.bor_tag,
             self.range,
@@ -450,6 +466,9 @@ impl<'b> BorrowTracker<'b> {
         if self.tree.contains_tag(tag) {
             let protected = global_ctx.protected_tags().get_protector_kind(tag).is_some();
             self.tree.expose_tag(tag, protected);
+            // E8: the tag became exposed for wildcard accesses.
+            let alloc_id = self.alloc_info.alloc_id.get();
+            crate::log_event!("E8: Exposed (t{}, {alloc_id:?})", tag.get());
         }
         Ok(())
     }

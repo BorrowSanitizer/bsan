@@ -69,6 +69,13 @@ void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
 }
 
 void GlobalContext::CollectGarbage(Snapshot &snap) {
+  // E6: one event per garbage-collection cycle (matches the Miri tracing
+  // branch, which emits `E6: GC` at the start of `run_provenance_gc`).
+  if (UNLIKELY(node_logging_enabled)) {
+    static const char kGcEvent[] = "E6: GC\n";
+    __bsan_append_log(kGcEvent, sizeof(kGcEvent) - 1);
+  }
+
   InternalMmapVector<RetiredAlloc> filtered;
   // Eject all retired allocation metadata objects
   // that are confirmed to be unreachable as of the

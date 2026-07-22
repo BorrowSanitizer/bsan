@@ -108,14 +108,9 @@ Provenance *GetRetValSlot(uptr Idx);
 void ClearSlot(uptr Idx);
 bool CallerIsInstrumented(void *sym);
 
-// True when node-execution logging is enabled (BSAN_NODE_LOG is set), cached at
-// startup so GET_SPAN can gate frame capture with a cheap read.
+// True when event logging is enabled (BSAN_NODE_LOG is set), cached at startup
+// so the event emitters can gate their work with a cheap read.
 extern bool node_logging_enabled;
-
-// Snapshots the caller stack starting at (pc, bp) into a thread-local buffer
-// for the node logger to resolve lazily. Called from GET_SPAN when logging is
-// enabled.
-void CaptureLogFrames(uptr pc, uptr bp);
 
 } // namespace __bsan
 
@@ -128,14 +123,8 @@ void __bsan_format_pending_ub(uptr user_frame_pc);
 
 namespace __bsan {
 
-// Capture the immediate caller PC of the runtime hook as the span. When node
-// logging is enabled, also snapshot the full caller stack into a thread-local
-// buffer (unbounded, resolved lazily by the Rust logger); normal runs pay only
-// the single GET_CALLER_PC().
-#define GET_SPAN                                                               \
-  Span span = GET_CALLER_PC();                                                 \
-  if (UNLIKELY(__bsan::node_logging_enabled))                                  \
-    __bsan::CaptureLogFrames(StackTrace::GetCurrentPc(), GET_CURRENT_FRAME());
+// Capture the immediate caller PC of the runtime hook as the span.
+#define GET_SPAN Span span = GET_CALLER_PC();
 
 #define GET_SPAN_PC_BP                                                         \
   GET_SPAN;                                                                    \

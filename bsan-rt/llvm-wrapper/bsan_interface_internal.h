@@ -32,10 +32,18 @@ void __bsan_rc_inc(BorTag Tag, AllocInfo *Info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 u32 __bsan_symbolize_pc(uptr pc, char *file_buf, uptr file_buf_len, u32 *line,
-                        u32 *column, bool *is_test);
+                        u32 *column);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 uptr __bsan_read_file(const char *path, char **file_buf, uptr *file_buf_len);
+
+// Whether event logging is enabled (BSAN_NODE_LOG is set).
+SANITIZER_INTERFACE_ATTRIBUTE
+bool __bsan_node_logging_enabled();
+
+// Appends a preformatted event line to the event log, opening it on first use.
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_append_log(const char *buf, uptr len);
 
 SANITIZER_WEAK_ATTRIBUTE
 AllocInfo *__bsan_alloc(void *base_addr, uptr size, BorTag bor_tag, Span pc);

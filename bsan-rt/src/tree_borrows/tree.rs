@@ -12,6 +12,7 @@
 //! - idempotency properties asserted in `perms.rs` (for optimizations)
 
 // use alloc::boxed::Box;
+use core::cell::Cell;
 use core::ops::Range;
 use core::sync::atomic::Ordering::Relaxed;
 use core::{cmp, fmt, mem};
@@ -554,11 +555,14 @@ impl EagerTree {
     /// `roots`, which [`LocationTree::perform_access`] and the wildcard consistency
     /// checks rely on. This retains at most one dead root per tree, and only until its
     /// subtree dies (or is compacted away), at which point it is removed as a leaf.
-    fn remove_useless_children(&mut self, dead_tags: &mut [BorTag]) {
+    fn remove_useless_children(&mut self, dead_tags: &mut [BorTag], alloc_id: AllocId) {
         // debug_assert!(
         //     dead_tags.is_sorted(),
         //     "remove_useless_children requires ascending-sorted tags"
         // );
+
+        // Node count before pruning, so we can report how many were removed (E7).
+        let before_count = self.tag_mapping.len();
 
         // Iterating through dead_tags in reverse (descending tag order)
         for entry in dead_tags.iter_mut().rev() {
@@ -643,6 +647,12 @@ impl EagerTree {
             }
             // Otherwise, the dead node could not be pruned this pass.
         }
+
+        // E7: nodes pruned from this allocation this pass. Miri emits one event
+        // per root; bsan prunes all of an allocation's roots in a single pass,
+        // so this reports the allocation and the total number of nodes removed.
+        let removed_count = before_count.saturating_sub(self.tag_mapping.len());
+        crate::log_event!("E7: Pruned({alloc_id:?}, {})", removed_count);
     }
 }
 
@@ -774,12 +784,17 @@ impl LocationTree {
         //
         // `loc_range` is only for diagnostics (it is the range of
         // the `RangeMap` on which we are currently working).
+        let skipped_count = Cell::new(0usize);
         let node_skipper = |args: &NodeAppArgs<'_, LocationTree>| -> ContinueTraversal {
             let node = args.nodes.get(args.idx).unwrap();
             let perm = args.data.perms.get(args.idx);
 
             let old_state = perm.copied().unwrap_or_else(|| node.default_location_state());
-            old_state.skip_if_known_noop(access_kind, args.rel_pos)
+            let decision = old_state.skip_if_known_noop(access_kind, args.rel_pos);
+            if matches!(decision, ContinueTraversal::SkipSelfAndChildren) {
+                skipped_count.set(skipped_count.get() + 1);
+            }
+            decision
         };
         let mut visit_count: usize = 0;
         let node_app = |args: NodeAppArgs<'_, LocationTree>| {
@@ -826,6 +841,13 @@ impl LocationTree {
             crate::sanitizer_common::__bsan_visits_since_gc
                 .fetch_add(visit_count, core::sync::atomic::Ordering::Relaxed);
         }
+        // E5: one access event per accessed allocation, with visited/skipped counts.
+        crate::log_event!(
+            "E5: Access({:?}, {}, {})",
+            diagnostics.alloc_id,
+            visit_count,
+            skipped_count.get()
+        );
         result
     }
 
@@ -862,6 +884,7 @@ impl LocationTree {
         // Whether there is an exposed node in this tree that allows this access.
         let mut has_valid_exposed = false;
         let mut visit_count: usize = 0;
+        let skipped_count = Cell::new(0usize);
 
         // This does a traversal across the tree updating children before their parents. The
         // difference to `perform_normal_access` is that we take the access relatedness from
@@ -888,14 +911,18 @@ impl LocationTree {
                 let old_state = perm.copied().unwrap_or_else(|| node.default_location_state());
                 // If we know where, relative to this node, the wildcard access occurs,
                 // then check if we can skip the entire subtree.
-                if let Some(relatedness) = get_relatedness(args.idx, node, args.data)
+                let decision = if let Some(relatedness) = get_relatedness(args.idx, node, args.data)
                     && let Some(relatedness) = relatedness.to_relatedness()
                 {
                     // We can use the usual SIFA machinery to skip nodes.
                     old_state.skip_if_known_noop(access_kind, relatedness)
                 } else {
                     ContinueTraversal::Recurse
+                };
+                if matches!(decision, ContinueTraversal::SkipSelfAndChildren) {
+                    skipped_count.set(skipped_count.get() + 1);
                 }
+                decision
             },
             |args| {
                 visit_count += 1;
@@ -958,6 +985,13 @@ impl LocationTree {
             crate::sanitizer_common::__bsan_visits_since_gc
                 .fetch_add(visit_count, core::sync::atomic::Ordering::Relaxed);
         }
+        // E5: one wildcard-access event per accessed allocation, with visited/skipped counts.
+        crate::log_event!(
+            "E5: WC Access({:?}, {}, {})",
+            diagnostics.alloc_id,
+            visit_count,
+            skipped_count.get()
+        );
         // If there is no exposed node in this tree that allows this access, then the access *must*
         // be foreign to the entire subtree. Foreign accesses are only possible on wildcard subtrees
         // as there are no ancestors to the main root. So if we do not find a valid exposed node in
@@ -1076,7 +1110,7 @@ pub trait AllocState: Clone {
     ) -> UBResult<()>;
     fn expose_tag(&mut self, tag: BorTag, protected: bool);
     #[allow(dead_code)]
-    fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool;
+    fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag], alloc_id: AllocId) -> bool;
 }
 
 impl AllocState for LazyTree {
@@ -1168,7 +1202,7 @@ impl AllocState for LazyTree {
             tree.expose_tag(tag, protected);
         }
     }
-    fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool {
+    fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag], alloc_id: AllocId) -> bool {
         match self {
             LazyTree::Init(tree) => {
                 // Small trees are not worth pruning; skip them and leave their
@@ -1177,7 +1211,7 @@ impl AllocState for LazyTree {
                 if tree.tag_mapping.len() <= TREE_GC_MIN_NODES.load(Relaxed) {
                     return false;
                 }
-                tree.remove_dead_tags(dead_tags)
+                tree.remove_dead_tags(dead_tags, alloc_id)
             }
             LazyTree::Uninit { root_tag, refcount, .. } => {
                 // A tree in the Uninit state only has a single node (the root). If
@@ -1476,8 +1510,8 @@ impl AllocState for EagerTree {
         }
     }
 
-    fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool {
-        self.remove_useless_children(dead_tags);
+    fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag], alloc_id: AllocId) -> bool {
+        self.remove_useless_children(dead_tags, alloc_id);
         self.locations.merge_adjacent_thorough();
         self.roots.is_empty()
     }

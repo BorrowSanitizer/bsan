@@ -96,6 +96,17 @@ macro_rules! debug_bsan {
     };
 }
 
+/// Emits one Tree Borrows event to the event log (enabled via `BSAN_NODE_LOG`),
+/// using the same syntax as the Miri tracing branch, e.g.
+/// `log_event!("E3: Read(t{})", tag.get())`. Arguments are only formatted when
+/// logging is enabled. See [`SanitizerCommon::log_event`].
+#[macro_export]
+macro_rules! log_event {
+    ($($arg:tt)*) => {
+        $crate::sanitizer_common::SanitizerCommon::log_event(::core::format_args!($($arg)*))
+    };
+}
+
 #[unsafe(no_mangle)]
 pub static __BSAN_ALLOC_ID_CTR: AtomicUsize = AtomicUsize::new(3);
 
@@ -487,9 +498,9 @@ unsafe extern "C-unwind" fn __bsan_alloc_impl(
         let alloc_info =
             ctx.create_alloc_info(AllocInfo::new(Size::from_addr(base_addr), size, bor_tag, pc));
         debug_bsan!("alloc", base_addr, bor_tag, alloc_info.as_ptr());
-        // Log the root node of the new allocation's tree.
+        // E1: the root tag of the new allocation's tree.
         let alloc_id = unsafe { alloc_info.as_ref().alloc_id.get() };
-        crate::sanitizer_common::SanitizerCommon::log_node(alloc_id.get());
+        crate::log_event!("E1: Root Tag({alloc_id:?}, t{})", bor_tag.get());
         alloc_info
     })
 }
@@ -598,6 +609,9 @@ unsafe extern "C" fn __bsan_alloc_stack_impl(
     global_ctx.removing_exposed_provenance(range, false, || unsafe {
         alloc_info.write(AllocInfo::new(start, size, bor_tag, pc));
     });
+    // E1: the root tag of the new stack allocation's tree.
+    let alloc_id = unsafe { alloc_info.as_ref().alloc_id.get() };
+    crate::log_event!("E1: Root Tag({alloc_id:?}, t{})", bor_tag.get());
 }
 
 /// Records that a pointer's provenance has been exposed (e.g. via a
@@ -620,9 +634,10 @@ unsafe extern "C" fn __bsan_prune(
     len: usize,
 ) -> bool {
     let alloc: AllocInfoPtr = alloc_info.into();
+    let alloc_id = alloc.alloc_id.get();
     let dead_tags = unsafe { slice::from_raw_parts_mut(bor_tags, len) };
     match alloc.tree.lock().as_mut() {
-        Some(tree) => tree.remove_dead_tags(dead_tags),
+        Some(tree) => tree.remove_dead_tags(dead_tags, alloc_id),
         None => {
             // The tree is already deallocated, so we can zero out dead_tags
             dead_tags.fill(BorTag::omnivalid());
