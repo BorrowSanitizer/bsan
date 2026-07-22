@@ -7,7 +7,6 @@
 
 #[macro_use]
 extern crate alloc;
-use core::cell::Cell;
 use core::ffi::c_void;
 use core::fmt::Debug;
 #[cfg(not(test))]
@@ -18,7 +17,6 @@ use core::{fmt, ptr, slice};
 
 mod borrow_tracker;
 use libc_print::std_name::*;
-use spin::Mutex;
 mod tree_borrows;
 
 mod global;
@@ -33,8 +31,7 @@ mod memory;
 use crate::helpers::{AllocRange, Size};
 use crate::sanitizer_common::Span;
 use crate::tree_borrows::perms::AccessKind;
-use crate::tree_borrows::tree::AllocStateImpl;
-use crate::tree_borrows::AllocState;
+use crate::tree_borrows::tree::Node;
 
 #[thread_local]
 #[unsafe(no_mangle)]
@@ -46,23 +43,23 @@ struct DebugSummary {
     op: &'static str,
     ptr: usize,
     bor_tag: BorTag,
-    info: AllocInfoSummary,
+    info: NodeSummary,
 }
 
 #[cfg(feature = "debug")]
 impl fmt::Display for DebugSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.info {
-            AllocInfoSummary::Omnivalid => {
+            NodeSummary::Omnivalid => {
                 write!(f, "[{}] 0x{:x} @{:?} -> (omnivalid)", self.op, self.ptr, self.bor_tag)
             }
-            AllocInfoSummary::Wildcard => {
+            NodeSummary::Wildcard => {
                 write!(f, "[{}] 0x{:x} @{:?} -> (wildcard)", self.op, self.ptr, self.bor_tag)
             }
-            AllocInfoSummary::Null => {
+            NodeSummary::Null => {
                 write!(f, "[{}] 0x{:x} @{:?} -> (null)", self.op, self.ptr, self.bor_tag)
             }
-            AllocInfoSummary::Valid { alloc_id, base_addr, size } => write!(
+            NodeSummary::Valid { alloc_id, base_addr, size } => write!(
                 f,
                 "[{}] 0x{:x} @{:?} -> ({:?}, {:?}, {:?})",
                 self.op, self.ptr, self.bor_tag, alloc_id, base_addr, size
@@ -72,17 +69,25 @@ impl fmt::Display for DebugSummary {
 }
 
 macro_rules! debug_bsan {
-    ($op:literal, $p:ident, $bor_tag:ident, $alloc_info:expr) => {
+    ($op:literal, $p:ident, $prov:expr) => {
         #[cfg(feature = "debug")]
         {
             #[allow(unused_unsafe)]
-            let info = match $bor_tag.0 {
-                0 => AllocInfoSummary::Omnivalid,
-                1 => AllocInfoSummary::Null,
-                2 => AllocInfoSummary::Wildcard,
-                _ => unsafe { &*$alloc_info }.summarize(),
+            let prov: Provenance = $prov;
+            let bor_tag = prov.tag();
+            let info = if prov.is_omnivalid() {
+                NodeSummary::Omnivalid
+            } else if prov.is_invalid() {
+                NodeSummary::Null
+            } else if prov.is_wildcard() {
+                NodeSummary::Wildcard
+            } else {
+                unsafe {
+                    let root = RootNode::from_node(NonNull::new_unchecked(prov.node()));
+                    root.as_ref().summarize()
+                }
             };
-            let summary = DebugSummary { op: $op, ptr: 0, bor_tag: $bor_tag, info };
+            let summary = DebugSummary { op: $op, ptr: 0, bor_tag, info };
             libc_print::std_name::println!("{}", summary);
         }
     };
@@ -211,85 +216,97 @@ impl fmt::Debug for BorTag {
     }
 }
 
-#[repr(C)]
+/// One-word provenance: a single [`Node`] pointer.
+///
+/// Sentinel scheme (do not dereference):
+/// - null / address 0 = empty / omnivalid
+/// - address 1 = invalid
+/// - address 2 = wildcard
+///
+/// Concrete values are real `Node*` (child or root). Tag lives on [`Node`].
+#[repr(transparent)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Provenance {
-    bor_tag: BorTag,
-    alloc_info: *mut AllocInfo,
-}
+pub struct Provenance(*mut Node);
 
 unsafe impl Sync for Provenance {}
 unsafe impl Send for Provenance {}
 
-#[derive(Clone, Copy)]
-pub(crate) union FreeListOrAddr {
-    pub base_addr: Size,
-    pub free_list_next: Option<NonNull<AllocInfo>>,
-}
-
-impl Debug for FreeListOrAddr {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{:x}", unsafe { self.base_addr.bytes() })
+impl Provenance {
+    #[inline]
+    pub const fn omnivalid() -> Self {
+        Self(ptr::null_mut())
     }
-}
 
-/// Every allocation is associated with a "lock" object, which is an instance of `AllocInfo`.
-/// Provenance is the "key" to this lock. To validate a memory access, we compare the allocation ID
-/// of a pointer's provenance with the value stored in its corresponding `AllocInfo` object. If the values
-/// do not match, then the access is invalid. If they do match, then we proceed to validate the access against
-/// the tree for the allocation.
-#[repr(C)]
-pub struct AllocInfo {
-    alloc_id: Cell<AllocId>,
-    free_or_addr: Cell<FreeListOrAddr>,
-    size: Cell<Size>,
-    tree: Mutex<Option<AllocStateImpl>>,
-}
+    #[inline]
+    #[allow(clippy::manual_dangling_ptr)] // intentional sentinel addr 1, not a dangling tip
+    pub const fn invalid() -> Self {
+        Self(1 as *mut Node)
+    }
 
-impl AllocInfo {
-    fn invalid() -> Self {
-        AllocInfo {
-            alloc_id: Cell::new(AllocId::invalid()),
-            free_or_addr: Cell::new(FreeListOrAddr { base_addr: Size::ZERO }),
-            size: Cell::new(Size::ZERO),
-            tree: Mutex::default(),
+    #[inline]
+    #[allow(clippy::manual_dangling_ptr)] // intentional sentinel addr 2, not a dangling tip
+    pub const fn wildcard() -> Self {
+        Self(2 as *mut Node)
+    }
+
+    #[inline]
+    pub fn from_node(node: *mut Node) -> Self {
+        Self(node)
+    }
+
+    #[inline]
+    pub fn node(self) -> *mut Node {
+        self.0
+    }
+
+    #[inline]
+    pub fn is_omnivalid(self) -> bool {
+        self.0.is_null()
+    }
+
+    #[inline]
+    pub fn is_invalid(self) -> bool {
+        self.0 as usize == 1
+    }
+
+    #[inline]
+    pub fn is_wildcard(self) -> bool {
+        self.0 as usize == 2
+    }
+
+    /// Concrete heap `Node*` are 8-byte aligned (same as CRT `kMinProvAlignment`).
+    /// Unaligned addresses above the sentinel range are not concrete.
+    #[inline]
+    pub fn is_concrete(self) -> bool {
+        let addr = self.0 as usize;
+        addr > 2 && addr.is_multiple_of(8)
+    }
+
+    /// Tag for this provenance: sentinel tags for 0/1/2, else `node.tag`.
+    #[inline]
+    pub fn tag(self) -> BorTag {
+        if self.is_omnivalid() {
+            BorTag::omnivalid()
+        } else if self.is_invalid() {
+            BorTag::invalid()
+        } else if self.is_wildcard() {
+            BorTag::wildcard()
+        } else if !self.is_concrete() {
+            BorTag::omnivalid()
+        } else {
+            unsafe { (*self.0).tag }
         }
     }
-
-    fn new(base_addr: Size, size: Size, bor_tag: BorTag, span: Span) -> Self {
-        Self {
-            alloc_id: Cell::new(AllocId::default()),
-            free_or_addr: Cell::new(FreeListOrAddr { base_addr }),
-            size: Cell::new(size),
-            tree: Mutex::new(Some(AllocStateImpl::new(bor_tag, size, span))),
-        }
-    }
-
-    #[cfg(feature = "debug")]
-    fn summarize(&self) -> AllocInfoSummary {
-        AllocInfoSummary::Valid {
-            alloc_id: self.alloc_id,
-            base_addr: self.base_addr,
-            size: self.size,
-        }
-    }
 }
 
-/// A shallow version of `AllocInfo`, for use in debug logging.
+/// A shallow version of root-node metadata, for use in debug logging.
 #[cfg(feature = "debug")]
 #[derive(Debug)]
-pub(crate) enum AllocInfoSummary {
+pub(crate) enum NodeSummary {
     Omnivalid,
-    /// When Prov is wildcard, AllocInfo is invalid
     Wildcard,
-    /// When Prov is null, AllocInfo is invalid
     Null,
-    /// When Prov is valid, only drop the tree_lock field
-    Valid {
-        alloc_id: AllocId,
-        base_addr: FreeListAddrUnion,
-        size: Size,
-    },
+    Valid { alloc_id: AllocId, base_addr: Size, size: Size },
 }
 
 /// Initializes the global state of the runtime library.
@@ -346,15 +363,25 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
     im_len: usize,
     pin_data: Option<NonNull<[Size; 2]>>,
     pin_len: usize,
-    bor_tag: BorTag,
-    alloc_info: *mut AllocInfo,
+    node: *mut Node,
     dest: NonNull<Provenance>,
     pc: Span,
     checked: bool,
 ) {
-    debug_bsan!("retag", object_addr, bor_tag, alloc_info);
+    let prov = Provenance::from_node(node);
+    debug_bsan!("retag", ptr, prov);
     let ctx = unsafe { global_ctx() };
-    let prov = Provenance { bor_tag, alloc_info };
+
+    // Sentinels and unaligned shadow noise must not go through
+    // `for_access_unchecked` (derefs Node*). Omnivalid/invalid: pass through.
+    // Unaligned garbage: treat as omnivalid. Wildcard still resolves below.
+    if !prov.is_concrete() && !prov.is_wildcard() {
+        let out =
+            if prov.is_omnivalid() || prov.is_invalid() { prov } else { Provenance::omnivalid() };
+        unsafe { dest.write(out) };
+        return;
+    }
+
     let opt_slice = |opt_ptr: Option<NonNull<[Size; 2]>>, len| -> Option<_> {
         opt_ptr.map(|ptr| unsafe { slice::from_raw_parts(ptr.as_ptr(), len) })
     };
@@ -366,7 +393,7 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
         pin_layout: opt_slice(pin_data, pin_len),
     };
 
-    let prov = if checked {
+    let prov = if checked && prov.is_concrete() {
         unsafe {
             BorrowTracker::for_access_unchecked(
                 ctx,
@@ -391,9 +418,10 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_protector_end_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo, pc: Span) {
+extern "C" fn __bsan_protector_end_impl(node: *mut Node, pc: Span) {
     let ctx = unsafe { global_ctx() };
-    let prov = Provenance { bor_tag, alloc_info };
+    let prov = Provenance::from_node(node);
+    let bor_tag = prov.tag();
     BorrowTracker::for_alloc_weak(prov, |mut bt| {
         let _ = bt.protector_end(ctx, pc);
     });
@@ -407,14 +435,13 @@ extern "C" fn __bsan_protector_end_impl(bor_tag: BorTag, alloc_info: *mut AllocI
 unsafe extern "C-unwind" fn __bsan_read_impl(
     ptr: *mut c_void,
     access_size: Size,
-    bor_tag: BorTag,
-    alloc_info: *mut AllocInfo,
+    node: *mut Node,
     pc: Span,
     checked: bool,
 ) {
-    debug_bsan!("read", ptr, bor_tag, alloc_info);
+    let prov = Provenance::from_node(node);
+    debug_bsan!("read", ptr, prov);
     let ctx = unsafe { global_ctx() };
-    let prov = Provenance { bor_tag, alloc_info };
     if checked {
         unsafe {
             BorrowTracker::for_access_unchecked(
@@ -438,14 +465,13 @@ unsafe extern "C-unwind" fn __bsan_read_impl(
 unsafe extern "C-unwind" fn __bsan_write_impl(
     ptr: *mut c_void,
     access_size: Size,
-    bor_tag: BorTag,
-    alloc_info: *mut AllocInfo,
+    node: *mut Node,
     pc: Span,
     checked: bool,
 ) {
-    debug_bsan!("write", ptr, bor_tag, alloc_info);
+    let prov = Provenance::from_node(node);
+    debug_bsan!("write", ptr, prov);
     let ctx = unsafe { global_ctx() };
-    let prov = Provenance { bor_tag, alloc_info };
     if checked {
         unsafe {
             BorrowTracker::for_access_unchecked(
@@ -464,37 +490,31 @@ unsafe extern "C-unwind" fn __bsan_write_impl(
     .unwrap_or_else(|err| ctx.handle_error(err, pc));
 }
 
-// Registers a heap allocation of size `size`, storing its provenance in the return pointer.
+// Registers a heap allocation of size `size`, returning a pointer to the inline root node.
 #[unsafe(no_mangle)]
 unsafe extern "C-unwind" fn __bsan_alloc_impl(
     base_addr: *mut c_void,
     size: Size,
     bor_tag: BorTag,
     pc: Span,
-) -> NonNull<AllocInfo> {
+) -> NonNull<Node> {
     let ctx = unsafe { global_ctx() };
     let range = AllocRange { start: Size::from_addr(base_addr), size };
     ctx.removing_exposed_provenance(range, false, || {
         #[allow(clippy::let_and_return)]
-        let alloc_info =
-            ctx.create_alloc_info(AllocInfo::new(Size::from_addr(base_addr), size, bor_tag, pc));
-        debug_bsan!("alloc", base_addr, bor_tag, alloc_info.as_ptr());
-        alloc_info
+        let node =
+            ctx.create_root_node(RootNode::new(Size::from_addr(base_addr), size, bor_tag, pc));
+        debug_bsan!("alloc", base_addr, Provenance::from_node(node.as_ptr()));
+        node
     })
 }
 
 /// Deregisters a heap allocation
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_dealloc(
-    ptr: *mut c_void,
-    bor_tag: BorTag,
-    alloc_info: *mut AllocInfo,
-    pc: Span,
-    checked: bool,
-) {
-    debug_bsan!("dealloc", ptr, bor_tag, alloc_info);
+extern "C" fn __bsan_dealloc(ptr: *mut c_void, node: *mut Node, pc: Span, checked: bool) {
+    let prov = Provenance::from_node(node);
+    debug_bsan!("dealloc", ptr, prov);
     let ctx = unsafe { global_ctx() };
-    let prov: Provenance = Provenance { bor_tag, alloc_info };
 
     if checked {
         unsafe {
@@ -509,65 +529,62 @@ extern "C" fn __bsan_dealloc(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_dealloc_stack_impl(
-    bor_tag: BorTag,
-    alloc_info: *mut AllocInfo,
-    span: Span,
-) {
-    debug_bsan!("dealloc", ptr, bor_tag, alloc_info);
+unsafe extern "C-unwind" fn __bsan_dealloc_stack_impl(node: *mut Node, span: Span) {
+    let prov = Provenance::from_node(node);
+    debug_bsan!("dealloc", node, prov);
     let ctx = unsafe { global_ctx() };
-    let prov: Provenance = Provenance { bor_tag, alloc_info };
     BorrowTracker::for_alloc_weak(prov, |bt| {
         let _ = bt.dealloc(ctx, span);
     });
 }
 
-/// Increments the reference count associated with a provenance value.
+/// Increments the reference count on a concrete `Node*`.
 ///
 /// Returns `true` if the count transitioned from zero to one.
+/// Atomic on the named node; does not take the allocation mutex.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_rc_inc_impl(
-    bor_tag: BorTag,
-    alloc_info: *mut AllocInfo,
-) -> bool {
-    // A null `alloc_info` denotes an empty/cleared shadow slot (e.g. one whose
-    // info was nulled by `ClearShadow` while a stale tag lingered). There is no
-    // allocation to deref, so there is nothing to count.
-    if alloc_info.is_null() {
+unsafe extern "C-unwind" fn __bsan_rc_inc_impl(node: *mut Node) -> bool {
+    let prov = Provenance::from_node(node);
+    if !prov.is_concrete() {
         return false;
     }
-    let prov = Provenance { bor_tag, alloc_info };
-    BorrowTracker::for_alloc(prov, |bt| bt.increment()).unwrap_or(false)
+    unsafe { (*node).refcount.increment() }
 }
 
-/// Decrements the reference count associated with a provenance value.
+/// Decrements the reference count on a concrete `Node*`.
 ///
 /// Returns `true` if the count reached zero.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_rc_dec_impl(
-    bor_tag: BorTag,
-    alloc_info: *mut AllocInfo,
-) -> bool {
-    // See `__bsan_rc_inc_impl`: a null `alloc_info` is an empty shadow slot with
-    // no live reference to release.
-    if alloc_info.is_null() {
+unsafe extern "C-unwind" fn __bsan_rc_dec_impl(node: *mut Node) -> bool {
+    let prov = Provenance::from_node(node);
+    if !prov.is_concrete() {
         return false;
     }
-    let prov = Provenance { bor_tag, alloc_info };
-    BorrowTracker::for_alloc(prov, |bt| bt.decrement()).unwrap_or(false)
+    unsafe { (*node).refcount.decrement() }
 }
 
-/// Reserves a stack slot for allocation metadata.
+/// Tag of a concrete [`Node`]. Must not be called on provenance sentinels.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_reserve_stack_slot_impl() -> NonNull<AllocInfo> {
-    unsafe { global_ctx().create_alloc_info(AllocInfo::invalid()) }
+unsafe extern "C" fn __bsan_node_tag_impl(node: *mut Node) -> BorTag {
+    unsafe { (*node).tag }
+}
+
+/// Reserves a stack slot for a [`RootNode`].
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __bsan_reserve_stack_slot_impl() -> NonNull<Node> {
+    unsafe { global_ctx().create_root_node(RootNode::invalid_stack()) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_destroy_stack_slot_impl(slot: NonNull<AllocInfo>) {
+unsafe extern "C" fn __bsan_destroy_stack_slot_impl(slot: NonNull<Node>) {
     let ctx = unsafe { global_ctx() };
     unsafe {
-        ctx.destroy_alloc_info(slot);
+        let root = RootNode::from_node(slot);
+        debug_assert!((*root.as_ptr()).on_stack);
+        // Clear borrow state, then return the slot to the free list.
+        drop(root.replace(RootNode::invalid_stack()));
+        RootNode::wire_state(root);
+        ctx.destroy_root_node(slot);
     }
 }
 
@@ -577,15 +594,20 @@ unsafe extern "C" fn __bsan_alloc_stack_impl(
     base_addr: *mut c_void,
     size: Size,
     bor_tag: BorTag,
-    alloc_info: NonNull<AllocInfo>,
+    node: NonNull<Node>,
     pc: Span,
 ) {
-    debug_bsan!("alloc_stack", base_addr, bor_tag, alloc_info.as_ptr());
+    debug_bsan!("alloc_stack", base_addr, Provenance::from_node(node.as_ptr()));
     let global_ctx = unsafe { global_ctx() };
     let start = Size::from_addr(base_addr);
     let range = AllocRange { start, size };
     global_ctx.removing_exposed_provenance(range, false, || unsafe {
-        alloc_info.write(AllocInfo::new(start, size, bor_tag, pc));
+        let root = RootNode::from_node(node);
+        let on_stack = (*root.as_ptr()).on_stack;
+        let mut fresh = RootNode::new(start, size, bor_tag, pc);
+        fresh.on_stack = on_stack;
+        root.write(fresh);
+        RootNode::wire_state(root);
     });
 }
 
@@ -593,9 +615,9 @@ unsafe extern "C" fn __bsan_alloc_stack_impl(
 /// pointer-to-integer cast), so that it can later be recovered when an
 /// integer is cast back to a pointer with wildcard provenance.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_expose_prov_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+unsafe extern "C" fn __bsan_expose_prov_impl(node: *mut Node) {
     let ctx = unsafe { global_ctx() };
-    let prov = Provenance { bor_tag, alloc_info };
+    let prov = Provenance::from_node(node);
     BorrowTracker::for_alloc_weak(prov, |mut bt| {
         let _ = bt.expose_tag(ctx);
     });
@@ -603,76 +625,67 @@ unsafe extern "C" fn __bsan_expose_prov_impl(bor_tag: BorTag, alloc_info: *mut A
 
 /// Prunes a series of nodes that are identified by the list of borrow tags.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_prune(
-    alloc_info: NonNull<AllocInfo>,
-    bor_tags: *mut BorTag,
-    len: usize,
-) -> bool {
-    let alloc: AllocInfoPtr = alloc_info.into();
+unsafe extern "C" fn __bsan_prune(node: NonNull<Node>, bor_tags: *mut BorTag, len: usize) -> bool {
     let dead_tags = unsafe { slice::from_raw_parts_mut(bor_tags, len) };
-    match alloc.tree.lock().as_mut() {
-        Some(tree) => tree.remove_dead_tags(dead_tags),
-        None => {
-            // The tree is already deallocated, so we can zero out dead_tags
-            dead_tags.fill(BorTag::omnivalid());
-            false
-        }
-    }
+    NodePtr::from(node).prune_dead_tags(dead_tags)
 }
 
-/// Deallocates an instance of [AllocInfo]. This instance must
-/// be unreachable from any provenance value in shadow memory.
+
+/// Frees a [`RootNode`] recovered from any node in the allocation.
+/// Must be unreachable from shadow. Stack roots are ignored (frame owns the slot
+/// until [`__bsan_destroy_stack_slot_impl`]).
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_eject(alloc_info: NonNull<AllocInfo>) {
+unsafe extern "C" fn __bsan_eject(node: NonNull<Node>) {
     let ctx = unsafe { global_ctx() };
     unsafe {
-        // # Safety
-        // Normally, we would have to lock the instance prior
-        // to deallocating it. However, we can assume that it is no
-        // longer reachable in shadow memory, so it is not subject
-        // to races (at least, until it's been returned to the bump
-        // allocator by `destroy_alloc_info`).
-        drop(alloc_info.replace(AllocInfo::invalid()));
-        ctx.destroy_alloc_info(alloc_info);
+        // Unreachable from shadow, so safe until returned to the bump allocator.
+        let root = RootNode::from_node(node);
+        if (*root.as_ptr()).on_stack {
+            return;
+        }
+        drop(root.replace(RootNode::invalid()));
+        // Stale locks must see `BorrowState::None`, not a dangling mutex.
+        RootNode::wire_state(root);
+        ctx.destroy_root_node(RootNode::node_ptr(root));
     }
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_print(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
-    let prov = Provenance { bor_tag, alloc_info };
+extern "C" fn __bsan_print(node: *mut Node) {
+    let prov = Provenance::from_node(node);
     crate::println!("{prov:?}");
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_print_borrow_state(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+extern "C" fn __bsan_print_borrow_state(node: *mut Node) {
     let ctx = unsafe { global_ctx() };
-    let prov = Provenance { bor_tag, alloc_info };
+    let prov = Provenance::from_node(node);
     BorrowTracker::for_alloc_weak(prov, |bt| {
         bt.debug_print_tree(ctx, false);
     });
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_tree_size(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
-    let prov = Provenance { bor_tag, alloc_info };
+extern "C" fn __bsan_tree_size(node: *mut Node) {
+    let prov = Provenance::from_node(node);
     BorrowTracker::for_alloc_weak(prov, |bt| {
         crate::println!("Tree size: {}", bt.debug_tree_size());
     });
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_snapshot(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+extern "C" fn __bsan_snapshot(node: *mut Node) {
     let ctx = unsafe { global_ctx() };
-    let prov = Provenance { bor_tag, alloc_info };
+    let prov = Provenance::from_node(node);
     BorrowTracker::for_alloc_weak(prov, |bt| {
         bt.debug_take_snapshot(ctx);
     });
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_print_diff(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+extern "C" fn __bsan_print_diff(node: *mut Node) {
     let ctx = unsafe { global_ctx() };
-    let prov = Provenance { bor_tag, alloc_info };
+    let prov = Provenance::from_node(node);
     BorrowTracker::for_alloc_weak(prov, |bt| bt.debug_print_diff(ctx));
 }
 

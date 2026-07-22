@@ -25,10 +25,16 @@ SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_shadow_clear(void *dest, uptr size);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_rc_dec(BorTag Tag, AllocInfo *Info);
+void __bsan_rc_dec(Node *node);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_rc_inc(BorTag Tag, AllocInfo *Info);
+void __bsan_rc_inc(Node *node);
+
+// Tag of a concrete Node*. Must not be called on provenance sentinels.
+// Prefer __bsan_node_tag_impl (Rust RT); CRT fallback reads Node::tag first
+// word.
+SANITIZER_INTERFACE_ATTRIBUTE
+BorTag __bsan_node_tag(Node *node);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 u32 __bsan_symbolize_pc(uptr pc, char *file_buf, uptr file_buf_len, u32 *line,
@@ -38,39 +44,30 @@ SANITIZER_INTERFACE_ATTRIBUTE
 uptr __bsan_read_file(const char *path, char **file_buf, uptr *file_buf_len);
 
 SANITIZER_WEAK_ATTRIBUTE
-AllocInfo *__bsan_alloc(void *base_addr, uptr size, BorTag bor_tag, Span pc);
+Node *__bsan_alloc(void *base_addr, uptr size, BorTag bor_tag, Span pc);
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info, Span pc,
-                    bool checked);
+void __bsan_dealloc(void *ptr, Node *node, Span pc, bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_read(void *ptr, uptr access_size, BorTag bor_tag,
-                 AllocInfo *alloc_info, bool checked);
+void __bsan_read(void *ptr, uptr access_size, Node *node, bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_write(void *ptr, uptr access_size, BorTag bor_tag,
-                  AllocInfo *alloc_info, bool checked);
-
-// Records a zero-count (alloc_info, bor_tag) pair in the zero-count table.
-// Called by the Rust core when a node's reference count reaches zero.
-SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_release(BorTag bor_tag, AllocInfo *alloc_info);
+void __bsan_write(void *ptr, uptr access_size, Node *node, bool checked);
 
 // Requests a garbage collection. Any thread may call this.
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_request_gc();
 
-// Prunes a list of nodes from a tree that correspond to the tags in the list.
-// Returns true if every tag has been pruned, indicating that the allocation
-// metadata object can also be reclaimed.
+// Prunes tags from the tree rooted at `node`.
+// Returns true if the tree is empty afterward (caller may eject the RootNode).
 SANITIZER_WEAK_ATTRIBUTE
-bool __bsan_prune(AllocInfo *Info, BorTag *tags, uptr len);
+bool __bsan_prune(Node *node, BorTag *tags, uptr len);
 
-// Frees an `AllocInfo` object. The pointer must be nonnull and unreachable
-// in shadow memory.
+// Frees a root Node / RootNode slot. The pointer must be nonnull and
+// unreachable in shadow memory.
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_eject(AllocInfo *Info);
+void __bsan_eject(Node *node);
 
 } // extern "C"
 

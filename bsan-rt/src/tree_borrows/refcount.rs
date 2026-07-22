@@ -1,9 +1,6 @@
 use core::sync::atomic::{fence, AtomicUsize, Ordering};
 
 /// A thread-safe reference count with correct atomic ordering semantics.
-// TODO: remove `allow(dead_code)` once the `__bsan_rc_inc`/`__bsan_rc_dec`
-// endpoints (lib.rs) actually drive this type.
-#[allow(dead_code)]
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct RefCount(AtomicUsize);
@@ -15,15 +12,8 @@ impl Clone for RefCount {
     }
 }
 
-#[allow(dead_code)]
 impl RefCount {
     /// Creates a new `RefCount` initialized to 0.
-    ///
-    /// A freshly minted tag has no references yet: it is reachable only as a
-    /// root (live on a shadow stack) until a reference to it is written into
-    /// shadow *memory*, at which point [`Self::increment`] raises the count.
-    /// The runtime records every fresh tag in its thread's zero-count table as
-    /// a collection candidate (see `__bsan_retag`/`__bsan_alloc`).
     pub fn new() -> Self {
         Self(AtomicUsize::new(0))
     }
@@ -50,29 +40,6 @@ impl RefCount {
             true
         } else {
             false
-        }
-    }
-
-    /// Increments the reference count **without** atomic synchronization,
-    /// returning `true` if the count transitioned from zero to one.
-    pub fn increment_nonatomic(&self) -> bool {
-        unsafe {
-            let count = self.0.as_ptr();
-            debug_assert!(*count <= usize::MAX / 2, "RefCount overflow");
-            let was_zero = *count == 0;
-            *count += 1;
-            was_zero
-        }
-    }
-
-    /// Decrements the reference count **without** atomic synchronization,
-    /// returning `true` if the count reached zero.
-    pub fn decrement_nonatomic(&self) -> bool {
-        unsafe {
-            let count = self.0.as_ptr();
-            debug_assert!(*count > 0, "RefCount decremented below zero");
-            *count -= 1;
-            *count == 0
         }
     }
 

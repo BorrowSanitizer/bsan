@@ -17,6 +17,7 @@ use core::ptr::NonNull;
 use core::{cmp, fmt, mem};
 
 use smallvec::SmallVec;
+use spin::Mutex;
 
 use super::data_structures::DedupRangeMap;
 use super::diagnostics::{
@@ -40,7 +41,7 @@ use crate::*;
 compile_error!("Only one of the following features can be selected: 'lazy', 'eager'");
 
 #[cfg(feature = "lazy")]
-pub type AllocStateImpl = LazyTree;
+pub type AllocStateImpl = BorrowState;
 
 #[cfg(feature = "eager")]
 pub type AllocStateImpl = EagerTree;
@@ -356,11 +357,22 @@ pub struct EagerTree {
     ///
     /// Has array size 2 because that still ensures the minimum size for SmallVec.
     pub(super) roots: SmallVec<[BorTag; 2]>,
+    /// Shared allocation-level borrow state mutex (same pointer as every `Node.state`).
+    pub(super) state: NonNull<Mutex<BorrowState>>,
+    /// When `Some`, this pointer is the inline root inside a `RootNode` and must not be
+    /// `Box`-deallocated. Test-only trees built via [`EagerTree::new`] leave this `None`.
+    inline_root: Option<NonNull<Node>>,
 }
 
 /// A node in the borrow tree. Each node is uniquely identified by a tag via
 /// the `nodes` map of `Tree`.
 #[derive(Debug)]
+/// A node in a Tree Borrows tree (root or child).
+///
+/// `#[repr(C)]` keeps `tag` first so the CRT `__bsan_node_tag` fallback
+/// (`*(BorTag*)node`) is sound when the Rust RT is not linked. Prefer
+/// `__bsan_node_tag_impl` when the RT is present.
+#[repr(C)]
 pub struct Node {
     /// The tag of this node.
     pub tag: BorTag,
@@ -381,11 +393,35 @@ pub struct Node {
     default_initial_idempotent_foreign_access: IdempotentForeignAccess,
     /// Whether a wildcard access could happen through this node.
     pub is_exposed: bool,
-    /// Number of live references to this node. Always accessed under the
-    /// allocation's tree `Mutex`.
+    /// Live shadow-slot references to this node (atomic; no tree mutex).
     pub refcount: RefCount,
+    /// Points at the allocation's shared [`BorrowState`] mutex (interior of the `RootNode`).
+    pub state: NonNull<Mutex<BorrowState>>,
     /// Some extra information useful only for debugging purposes.
     pub debug_info: NodeDebugInfo,
+}
+
+impl Node {
+    /// Builds the inline root node for a fresh allocation. `state` is wired after the
+    /// enclosing [`RootNode`] is placed in the heap.
+    pub(crate) fn new_root(tag: BorTag, span: Span) -> Self {
+        let root_default_perm = Permission::new_disabled();
+        Self {
+            tag,
+            parent: None,
+            children: SmallVec::default(),
+            default_initial_perm: root_default_perm,
+            default_initial_idempotent_foreign_access: IdempotentForeignAccess::None,
+            is_exposed: false,
+            refcount: RefCount::new(),
+            state: NonNull::dangling(),
+            debug_info: {
+                let mut debug_info = NodeDebugInfo::new(tag, root_default_perm, span);
+                debug_info.add_name("root of the allocation");
+                debug_info
+            },
+        }
+    }
 }
 
 impl EagerTree {
@@ -400,6 +436,9 @@ impl EagerTree {
 
 impl EagerTree {
     /// Create a new tree, with only a root pointer.
+    ///
+    /// Test/debug helper: the root is heap-allocated and freed with the tree (`inline_root` is
+    /// `None`). Production allocations use [`EagerTree::from_inline_root`] instead.
     pub fn new(root_tag: BorTag, size: Size, span: Span) -> Self {
         // The root has `Disabled` as the default permission,
         // so that any access out of bounds is invalid.
@@ -413,6 +452,7 @@ impl EagerTree {
             default_initial_idempotent_foreign_access: IdempotentForeignAccess::None,
             is_exposed: false,
             refcount: RefCount::new(),
+            state: NonNull::dangling(),
             debug_info: {
                 let mut debug_info = NodeDebugInfo::new(root_tag, root_default_perm, span);
                 // name the root so that all allocations contain one named pointer
@@ -421,6 +461,22 @@ impl EagerTree {
             },
         };
         let root_ptr = alloc_node(root_node);
+        Self::from_root_ptr(root_ptr, size, NonNull::dangling(), None)
+    }
+
+    /// Builds a tree around an existing inline root node (owned by a `RootNode`).
+    pub(crate) fn from_inline_root(root_ptr: NonNull<Node>, size: Size) -> Self {
+        let state = unsafe { root_ptr.as_ref().state };
+        Self::from_root_ptr(root_ptr, size, state, Some(root_ptr))
+    }
+
+    fn from_root_ptr(
+        root_ptr: NonNull<Node>,
+        size: Size,
+        state: NonNull<Mutex<BorrowState>>,
+        inline_root: Option<NonNull<Node>>,
+    ) -> Self {
+        let root_tag = unsafe { root_ptr.as_ref().tag };
         let locations = {
             let mut perms = FxHashMap::default();
             // We manually set it to `Unique` on all in-bounds positions.
@@ -439,13 +495,21 @@ impl EagerTree {
         };
         let mut nodes = NodeMap::default();
         nodes.insert(root_tag, root_ptr);
-        Self { roots: SmallVec::from_slice(&[root_tag]), nodes, locations }
+        Self { roots: SmallVec::from_slice(&[root_tag]), nodes, locations, state, inline_root }
     }
 }
 
 impl Drop for EagerTree {
     fn drop(&mut self) {
+        // Snapshot/debug trees (`inline_root == None`) own every boxed node and free them.
+        // Production trees wrap an inline root inside a `RootNode`: child boxes may still be
+        // named by shadow provenance, so they are freed only by `remove_useless_node` after
+        // RC hits 0 — never here.
+        let standalone = self.inline_root.is_none();
         for (_, ptr) in self.nodes.drain() {
+            if !standalone {
+                continue;
+            }
             dealloc_node(ptr);
         }
     }
@@ -465,6 +529,7 @@ impl Clone for EagerTree {
                     .default_initial_idempotent_foreign_access,
                 is_exposed: old.is_exposed,
                 refcount: old.refcount.clone(),
+                state: old.state,
                 debug_info: old.debug_info.clone(),
             });
             nodes.insert(tag, new_ptr);
@@ -489,7 +554,8 @@ impl Clone for EagerTree {
                 loc.perms.insert(new_ptr, state);
             }
         }
-        Self { nodes, locations, roots: self.roots.clone() }
+        // Clones are fully owned heaps (snapshots); nothing is inline.
+        Self { nodes, locations, roots: self.roots.clone(), state: self.state, inline_root: None }
     }
 }
 
@@ -635,11 +701,10 @@ impl EagerTree {
         Some(child_idx)
     }
 
-    /// Properly removes a node.
-    /// The node to be removed should not otherwise be usable. It also
-    /// should have no children, but this is not checked, so that nodes
-    /// whose children were rotated somewhere else can be deleted without
-    /// having to first modify them to clear that array.
+    /// Unlinks `tag` from the node map and frees its box when it is not the
+    /// inline root. Production child boxes are freed only through this path,
+    /// and only after the GC caller has checked `refcount == 0` and unlinked
+    /// the node from its parent (see `remove_useless_children_dead`).
     fn remove_useless_node(&mut self, tag: BorTag) {
         let Some(ptr) = self.nodes.remove(&tag) else {
             return;
@@ -648,7 +713,9 @@ impl EagerTree {
             loc.perms.remove(&ptr);
             loc.exposed_cache.remove(tag);
         }
-        dealloc_node(ptr);
+        if self.inline_root != Some(ptr) {
+            dealloc_node(ptr);
+        }
     }
 
     /// Traverses the entire tree looking for useless tags.
@@ -1152,7 +1219,7 @@ impl LocationTree {
 }
 
 impl Node {
-    pub fn default_location_state(&self) -> LocationState {
+    pub(crate) fn default_location_state(&self) -> LocationState {
         LocationState::new_non_accessed(
             self.default_initial_perm,
             self.default_initial_idempotent_foreign_access,
@@ -1160,29 +1227,37 @@ impl Node {
     }
 }
 
-/// A tree that is lazily initialized: starts as `Uninit` (storing only the root tag, size, and
-/// span needed to construct the real `Tree` on demand), and transitions to `Init` the first
-/// time a child is added via `new_child`. All operations on a single-node tree short-circuit
-/// without ever allocating the underlying `Tree`.
+/// Allocation-level borrow state: starts empty or uninitialized, and transitions to
+/// `Init` the first time a child is added via `new_child`. All operations on a
+/// single-node tree short-circuit without ever allocating the underlying `EagerTree`.
 #[derive(Clone, Debug)]
 #[allow(clippy::large_enum_variant)]
-pub enum LazyTree {
-    Uninit { root_tag: BorTag, size: Size, span: Span, refcount: RefCount },
+pub enum BorrowState {
+    /// Allocation metadata has been freed or not yet installed.
+    None,
+    Uninit {
+        root_tag: BorTag,
+        size: Size,
+        span: Span,
+    },
     Init(EagerTree),
 }
 
-impl LazyTree {
+impl BorrowState {
     pub fn new(root_tag: BorTag, size: Size, span: Span) -> Self {
-        LazyTree::Uninit { root_tag, size, span, refcount: RefCount::new() }
+        BorrowState::Uninit { root_tag, size, span }
     }
 
-    /// Forces the tree into the `Init` state, constructing the underlying `Tree` if needed.
-    fn ensure_init(&mut self) {
-        if let LazyTree::Uninit { root_tag, size, span, refcount } = self {
-            let mut tree = EagerTree::new(*root_tag, *size, *span);
-            tree.node_mut(*root_tag).refcount = refcount.clone();
-            *self = LazyTree::Init(tree);
+    /// Forces the tree into the `Init` state around the given inline root node.
+    pub(crate) fn ensure_init(&mut self, root: NonNull<Node>) {
+        if let BorrowState::Uninit { size, .. } = *self {
+            let tree = EagerTree::from_inline_root(root, size);
+            *self = BorrowState::Init(tree);
         }
+    }
+
+    pub(crate) fn is_live(&self) -> bool {
+        !matches!(self, BorrowState::None)
     }
 }
 
@@ -1212,8 +1287,6 @@ impl AccessRelatedness {
 pub trait AllocState: Clone {
     fn contains_tag(&self, tag: BorTag) -> bool;
     fn node_count(&self) -> usize;
-    fn increment(&self, tag: BorTag) -> bool;
-    fn decrement(&self, tag: BorTag) -> bool;
     fn new_child(
         &mut self,
         base_offset: Size,
@@ -1223,7 +1296,8 @@ pub trait AllocState: Clone {
         outside_perm: Permission,
         protected: bool,
         span: Span,
-    ) -> UBResult<()>;
+        root: NonNull<Node>,
+    ) -> UBResult<NonNull<Node>>;
     fn perform_access(
         &mut self,
         tag: BorTag,
@@ -1256,17 +1330,19 @@ pub trait AllocState: Clone {
     fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool;
 }
 
-impl AllocState for LazyTree {
+impl AllocState for BorrowState {
     fn contains_tag(&self, tag: BorTag) -> bool {
         match self {
-            LazyTree::Uninit { root_tag, .. } => *root_tag == tag,
-            LazyTree::Init(tree) => tree.nodes.contains_key(&tag),
+            BorrowState::None => false,
+            BorrowState::Uninit { root_tag, .. } => *root_tag == tag,
+            BorrowState::Init(tree) => tree.nodes.contains_key(&tag),
         }
     }
     fn node_count(&self) -> usize {
         match self {
-            LazyTree::Uninit { .. } => 1,
-            LazyTree::Init(tree) => tree.nodes.len(),
+            BorrowState::None => 0,
+            BorrowState::Uninit { .. } => 1,
+            BorrowState::Init(tree) => tree.nodes.len(),
         }
     }
     fn new_child(
@@ -1278,9 +1354,10 @@ impl AllocState for LazyTree {
         outside_perm: Permission,
         protected: bool,
         span: Span,
-    ) -> UBResult<()> {
-        self.ensure_init();
-        let LazyTree::Init(tree) = self else { unreachable!() };
+        root: NonNull<Node>,
+    ) -> UBResult<NonNull<Node>> {
+        self.ensure_init(root);
+        let BorrowState::Init(tree) = self else { unreachable!() };
         tree.new_child(
             base_offset,
             parent_tag,
@@ -1302,8 +1379,8 @@ impl AllocState for LazyTree {
         span: Span,
     ) -> UBResult<()> {
         match self {
-            LazyTree::Uninit { .. } => Ok(()),
-            LazyTree::Init(tree) => tree.perform_access(
+            BorrowState::None | BorrowState::Uninit { .. } => Ok(()),
+            BorrowState::Init(tree) => tree.perform_access(
                 tag,
                 access_range,
                 access_kind,
@@ -1323,8 +1400,8 @@ impl AllocState for LazyTree {
         span: Span,
     ) -> UBResult<()> {
         match self {
-            LazyTree::Uninit { .. } => Ok(()),
-            LazyTree::Init(tree) => tree.dealloc(tag, access_range, global, alloc_id, span),
+            BorrowState::None | BorrowState::Uninit { .. } => Ok(()),
+            BorrowState::Init(tree) => tree.dealloc(tag, access_range, global, alloc_id, span),
         }
     }
     fn perform_protector_end_access(
@@ -1335,51 +1412,37 @@ impl AllocState for LazyTree {
         span: Span,
     ) -> UBResult<()> {
         match self {
-            LazyTree::Uninit { .. } => Ok(()),
-            LazyTree::Init(tree) => tree.perform_protector_end_access(tag, global, alloc_id, span),
+            BorrowState::None | BorrowState::Uninit { .. } => Ok(()),
+            BorrowState::Init(tree) => {
+                tree.perform_protector_end_access(tag, global, alloc_id, span)
+            }
         }
     }
     fn expose_tag(&mut self, tag: BorTag, protected: bool) {
-        self.ensure_init();
-        if let LazyTree::Init(tree) = self {
+        // Caller must `ensure_init` first (see BorrowTracker::expose_tag).
+        if let BorrowState::Init(tree) = self {
             tree.expose_tag(tag, protected);
         }
     }
     fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
-        if let LazyTree::Init(tree) = self {
+        if let BorrowState::Init(tree) = self {
             tree.remove_unreachable_tags(live_tags);
         }
     }
     fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool {
         match self {
-            LazyTree::Init(tree) => tree.remove_dead_tags(dead_tags),
-            LazyTree::Uninit { root_tag, refcount, .. } => {
-                // A tree in the Uninit state only has a single node (the root). If
-                // this node is in the dead list with a zero reference count, then the
-                // tree is dead and the associated AllocInfo metadata can be freed.
-                let root_is_dead = refcount.get() == 0 && dead_tags.contains(root_tag);
+            BorrowState::None => {
+                dead_tags.fill(BorTag::omnivalid());
+                false
+            }
+            BorrowState::Init(tree) => tree.remove_dead_tags(dead_tags),
+            BorrowState::Uninit { root_tag, .. } => {
+                // Uninit has only the root. If it is in the dead list, the RootNode may be freed.
+                // Refcount lives on the inline Node; ZCT insert already saw RC==0.
+                let root_is_dead = dead_tags.contains(root_tag);
                 dead_tags.fill(BorTag::omnivalid());
                 root_is_dead
             }
-        }
-    }
-    fn increment(&self, tag: BorTag) -> bool {
-        match self {
-            LazyTree::Uninit { root_tag, refcount, .. } => {
-                // In the Uninit state the only node is the root, we add an debug_assert instead
-                debug_assert!(*root_tag == tag);
-                refcount.increment_nonatomic()
-            }
-            LazyTree::Init(tree) => tree.increment(tag),
-        }
-    }
-    fn decrement(&self, tag: BorTag) -> bool {
-        match self {
-            LazyTree::Uninit { root_tag, refcount, .. } => {
-                debug_assert!(*root_tag == tag);
-                refcount.decrement_nonatomic()
-            }
-            LazyTree::Init(tree) => tree.decrement(tag),
         }
     }
 }
@@ -1400,7 +1463,81 @@ impl AllocState for EagerTree {
         outside_perm: Permission,
         protected: bool,
         span: Span,
+        _root: NonNull<Node>,
+    ) -> UBResult<NonNull<Node>> {
+        EagerTree::new_child(
+            self,
+            base_offset,
+            parent_tag,
+            new_tag,
+            inside_perms,
+            outside_perm,
+            protected,
+            span,
+        )
+    }
+    fn perform_access(
+        &mut self,
+        tag: BorTag,
+        access_range: AllocRange,
+        access_kind: AccessKind,
+        access_cause: AccessCause,
+        global: &GlobalState,
+        alloc_id: AllocId,
+        span: Span,
     ) -> UBResult<()> {
+        EagerTree::perform_access(
+            self,
+            tag,
+            access_range,
+            access_kind,
+            access_cause,
+            global,
+            alloc_id,
+            span,
+        )
+    }
+    fn dealloc(
+        &mut self,
+        tag: BorTag,
+        access_range: AllocRange,
+        global: &GlobalState,
+        alloc_id: AllocId,
+        span: Span,
+    ) -> UBResult<()> {
+        EagerTree::dealloc(self, tag, access_range, global, alloc_id, span)
+    }
+    fn perform_protector_end_access(
+        &mut self,
+        tag: BorTag,
+        global: &GlobalState,
+        alloc_id: AllocId,
+        span: Span,
+    ) -> UBResult<()> {
+        EagerTree::perform_protector_end_access(self, tag, global, alloc_id, span)
+    }
+    fn expose_tag(&mut self, tag: BorTag, protected: bool) {
+        EagerTree::expose_tag(self, tag, protected)
+    }
+    fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
+        EagerTree::remove_unreachable_tags(self, live_tags)
+    }
+    fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool {
+        EagerTree::remove_dead_tags(self, dead_tags)
+    }
+}
+
+impl EagerTree {
+    pub(super) fn new_child(
+        &mut self,
+        base_offset: Size,
+        parent_tag: BorTag,
+        new_tag: BorTag,
+        inside_perms: DedupRangeMap<LocationState>,
+        outside_perm: Permission,
+        protected: bool,
+        span: Span,
+    ) -> UBResult<NonNull<Node>> {
         let parent_ptr = if parent_tag.is_wildcard() {
             None
         } else {
@@ -1418,6 +1555,7 @@ impl AllocState for EagerTree {
             default_initial_idempotent_foreign_access: default_strongest_idempotent,
             is_exposed: false,
             refcount: RefCount::new(),
+            state: self.state,
             debug_info: NodeDebugInfo::new(new_tag, outside_perm, span),
         });
         self.nodes.insert(new_tag, new_ptr);
@@ -1450,9 +1588,10 @@ impl AllocState for EagerTree {
             self.update_idempotent_foreign_access_after_retag(parent_tag, min_sifa);
         }
 
-        Ok(())
+        Ok(new_ptr)
     }
-    fn perform_access(
+
+    pub(super) fn perform_access(
         &mut self,
         tag: BorTag,
         access_range: AllocRange,
@@ -1490,7 +1629,8 @@ impl AllocState for EagerTree {
         }
         Ok(())
     }
-    fn dealloc(
+
+    pub(super) fn dealloc(
         &mut self,
         tag: BorTag,
         access_range: AllocRange,
@@ -1562,7 +1702,8 @@ impl AllocState for EagerTree {
         }
         Ok(())
     }
-    fn perform_protector_end_access(
+
+    pub(super) fn perform_protector_end_access(
         &mut self,
         tag: BorTag,
         global: &GlobalState,
@@ -1616,31 +1757,34 @@ impl AllocState for EagerTree {
         Ok(())
     }
 
-    fn expose_tag(&mut self, tag: BorTag, protected: bool) {
-        EagerTree::expose_tag(self, tag, protected);
-    }
-
-    fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
+    pub(super) fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
         for i in 0..(self.roots.len()) {
             self.remove_useless_children(self.roots[i], live_tags);
         }
         self.locations.merge_adjacent_thorough();
     }
-    fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool {
+
+    pub(super) fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool {
         self.remove_useless_children_dead(dead_tags);
         self.locations.merge_adjacent_thorough();
         self.roots.is_empty()
     }
-    fn increment(&self, tag: BorTag) -> bool {
+
+    /// Tag-keyed RC helpers for unit tests. Production RC goes through
+    /// `__bsan_rc_inc/dec` on the stored `Node*` directly.
+    #[cfg(test)]
+    pub(super) fn increment(&self, tag: BorTag) -> bool {
         self.nodes
             .get(&tag)
-            .map(|ptr| unsafe { ptr.as_ref().refcount.increment_nonatomic() })
+            .map(|ptr| unsafe { ptr.as_ref().refcount.increment() })
             .unwrap_or(false)
     }
-    fn decrement(&self, tag: BorTag) -> bool {
+
+    #[cfg(test)]
+    pub(super) fn decrement(&self, tag: BorTag) -> bool {
         self.nodes
             .get(&tag)
-            .map(|ptr| unsafe { ptr.as_ref().refcount.decrement_nonatomic() })
+            .map(|ptr| unsafe { ptr.as_ref().refcount.decrement() })
             .unwrap_or(false)
     }
 }

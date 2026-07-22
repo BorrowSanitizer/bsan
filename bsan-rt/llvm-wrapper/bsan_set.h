@@ -73,16 +73,20 @@ public:
 
   void insert(Provenance Prov);
   void remove(Provenance Prov);
+  // Insert (node, tag) without reading node->tag (GC re-queue).
+  void insertTag(Node *node, BorTag tag);
 
   void clear();
   bool contains(Provenance prov);
+  // Explicit tag (MergeZeroCounts keeps node and tag separate).
+  bool contains(Node *node, BorTag tag);
 
   void swap(ConcreteProvenanceSet &other) { set_.swap(other.set_); }
 
   // Removes all entries from the set, after executing the
   // given callback for each allocation.
   template <typename Fn> void drain(Fn visit) {
-    set_.forEach([&](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
+    set_.forEach([&](DenseMap<Node *, BorTagSet>::value_type &KV) {
       visit(KV.first, KV.second);
       KV.second.destroy();
       set_.erase(KV.first);
@@ -92,29 +96,22 @@ public:
 
   // Retain only the provenance values that satisfy the given predicate.
   template <typename Fn> void retainIf(Fn retain) {
-    set_.forEach([&](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
-      AllocInfo *info = KV.first;
-      KV.second.retainIf([&](BorTag tag) { return retain(info, tag); });
+    set_.forEach([&](DenseMap<Node *, BorTagSet>::value_type &KV) {
+      Node *node = KV.first;
+      KV.second.retainIf([&](BorTag tag) { return retain(node, tag); });
       if (KV.second.size() == 0) {
         KV.second.destroy();
-        set_.erase(info);
+        set_.erase(node);
       }
       return true;
     });
   }
 
-  BorTagSet *find(AllocInfo *Info) {
-    auto *KV = set_.find(Info);
-    return KV ? &KV->second : nullptr;
-  }
-
-  const BorTagSet *find(AllocInfo *Info) const {
-    const auto *KV = set_.find(Info);
-    return KV ? &KV->second : nullptr;
-  }
+  BorTagSet *find(Node *node);
+  const BorTagSet *find(Node *node) const;
 
 private:
-  DenseMap<AllocInfo *, BorTagSet> set_;
+  DenseMap<Node *, BorTagSet> set_;
 };
 
 } // namespace __bsan

@@ -13,7 +13,7 @@ use core::ptr::{self, NonNull};
 pub use heap::*;
 use libc::{pthread_attr_destroy, pthread_attr_init, pthread_attr_t, rlimit, _SC_PAGESIZE};
 
-use crate::{AllocInfo, BorTag};
+use crate::{BorTag, RootNode};
 
 pub const BSAN_PROT_FLAGS: i32 = libc::PROT_READ | libc::PROT_WRITE;
 #[cfg(not(miri))]
@@ -94,14 +94,14 @@ pub(crate) unsafe trait WordAligned: Sized {
         mem::align_of::<Self>() == mem::align_of::<usize>()
     }
 }
-unsafe impl WordAligned for AllocInfo {}
+unsafe impl WordAligned for RootNode {}
 unsafe impl WordAligned for BorTag {}
 
 /// # Safety
-/// Values of type `AllocInfo` can fit within the size of a heap chunk.
-unsafe impl Heapable for AllocInfo {
-    fn next(ptr: *mut AllocInfo) -> *mut Option<NonNull<AllocInfo>> {
-        unsafe { (&raw mut (*((*ptr).free_or_addr).as_ptr()).free_list_next) }
+/// Values of type `RootNode` can fit within the size of a heap chunk.
+unsafe impl Heapable for RootNode {
+    fn next(ptr: *mut RootNode) -> *mut Option<NonNull<RootNode>> {
+        unsafe { &raw mut (*ptr).free_list_next }
     }
 }
 

@@ -20,20 +20,9 @@ static void CheckMemoryLayout() {
     CHECK(addr_is_type((start + end) / 2, type));
     CHECK(addr_is_type(end - 1, type));
     if (type == MappingDesc::APP) {
-      uptr addr = start;
-      CHECK(MEM_IS_SHADOW(MEM_TO_SHADOW(addr)));
-      CHECK(MEM_IS_ORIGIN(MEM_TO_ORIGIN(addr)));
-      CHECK_EQ(MEM_TO_ORIGIN(addr), SHADOW_TO_ORIGIN(MEM_TO_SHADOW(addr)));
-
-      addr = (start + end) / 2;
-      CHECK(MEM_IS_SHADOW(MEM_TO_SHADOW(addr)));
-      CHECK(MEM_IS_ORIGIN(MEM_TO_ORIGIN(addr)));
-      CHECK_EQ(MEM_TO_ORIGIN(addr), SHADOW_TO_ORIGIN(MEM_TO_SHADOW(addr)));
-
-      addr = end - 1;
-      CHECK(MEM_IS_SHADOW(MEM_TO_SHADOW(addr)));
-      CHECK(MEM_IS_ORIGIN(MEM_TO_ORIGIN(addr)));
-      CHECK_EQ(MEM_TO_ORIGIN(addr), SHADOW_TO_ORIGIN(MEM_TO_SHADOW(addr)));
+      CHECK(MEM_IS_SHADOW(MEM_TO_SHADOW(start)));
+      CHECK(MEM_IS_SHADOW(MEM_TO_SHADOW((start + end) / 2)));
+      CHECK(MEM_IS_SHADOW(MEM_TO_SHADOW(end - 1)));
     }
     prev_end = end;
   }
@@ -78,7 +67,7 @@ static bool ProtectMemoryRange(uptr beg, uptr size, const char *name) {
   return true;
 }
 
-static bool InitShadow(bool init_origins, bool dry_run) {
+static bool InitShadow(bool dry_run) {
   // Let user know mapping parameters first.
   VPrintf(1, "bsan_init %p\n", (void *)&__bsan_init);
   for (unsigned i = 0; i < kMemoryLayoutSize; ++i)
@@ -86,7 +75,7 @@ static bool InitShadow(bool init_origins, bool dry_run) {
             kMemoryLayout[i].end - 1);
 
   // Verify the memory layout is internally consistent and that the
-  // application-to-shadow/origin mappings stay within their regions.
+  // application-to-shadow mappings stay within their regions.
   CheckMemoryLayout();
 
   if (!MEM_IS_APP(&__bsan_init)) {
@@ -109,10 +98,8 @@ static bool InitShadow(bool init_origins, bool dry_run) {
     if (start >= maxVirtualAddress)
       continue;
 
-    bool map = type == MappingDesc::SHADOW ||
-               (init_origins && type == MappingDesc::ORIGIN);
-    bool protect = type == MappingDesc::INVALID ||
-                   (!init_origins && type == MappingDesc::ORIGIN);
+    bool map = type == MappingDesc::SHADOW;
+    bool protect = type == MappingDesc::INVALID;
     CHECK(!(map && protect));
     if (!map && !protect) {
       CHECK(type == MappingDesc::APP || type == MappingDesc::ALLOCATOR);
@@ -148,7 +135,7 @@ static bool InitShadow(bool init_origins, bool dry_run) {
   return true;
 }
 
-static void ReportUnavailableMemoryRegions(bool init_origins) {
+static void ReportUnavailableMemoryRegions() {
   const uptr maxVirtualAddress = GetMaxUserVirtualAddress();
   for (unsigned i = 0; i < kMemoryLayoutSize; ++i) {
     uptr start = kMemoryLayout[i].start;
@@ -159,10 +146,8 @@ static void ReportUnavailableMemoryRegions(bool init_origins) {
     if (start >= maxVirtualAddress)
       continue;
 
-    bool map = type == MappingDesc::SHADOW ||
-               (init_origins && type == MappingDesc::ORIGIN);
-    bool protect = type == MappingDesc::INVALID ||
-                   (!init_origins && type == MappingDesc::ORIGIN);
+    bool map = type == MappingDesc::SHADOW;
+    bool protect = type == MappingDesc::INVALID;
     if (!map && !protect) {
       if (type == MappingDesc::ALLOCATOR)
         CheckMemoryRangeAvailability(start, size, true, kMemoryLayout[i].name);
@@ -174,11 +159,10 @@ static void ReportUnavailableMemoryRegions(bool init_origins) {
 
 namespace __bsan {
 bool InitShadowWithReExec() {
-  bool init_origins = true;
   // Start with dry run: check layout is ok, but don't print warnings because
   // warning messages will cause tests to fail (even if we successfully re-exec
   // after the warning).
-  bool success = InitShadow(init_origins, true);
+  bool success = InitShadow(true);
   if (!success) {
 #if SANITIZER_LINUX
     // Perhaps ASLR entropy is too high. If ASLR is enabled, re-exec without it.
@@ -195,13 +179,13 @@ bool InitShadowWithReExec() {
       ReExec();
     }
 #endif
-    ReportUnavailableMemoryRegions(init_origins);
+    ReportUnavailableMemoryRegions();
     return false;
   }
 
   // The earlier dry run didn't actually map or protect anything. Run again in
   // non-dry run mode.
-  return InitShadow(init_origins, false);
+  return InitShadow(false);
 }
 
 static void AlignPtr8(uptr addr, uptr &aligned_addr) {
@@ -231,30 +215,25 @@ void CopyAligned(void *dest, const void *src, uptr size) {
   internal_memcpy((void *)d_aligned, (const void *)s_aligned, s_size);
 }
 
+// Copy/move one 8-byte shadow provenance slot (Node*).
+// Invariant: shadow holds N ⇔ N.refcount accounts for that slot.
 ALWAYS_INLINE static void UpdateShadowSlot(uptr d_aligned, uptr s_aligned,
                                            uptr offset) {
   uptr d_shadow = MEM_TO_SHADOW(d_aligned);
-  uptr d_origin = MEM_TO_ORIGIN(d_aligned);
   uptr s_shadow = MEM_TO_SHADOW(s_aligned);
-  uptr s_origin = MEM_TO_ORIGIN(s_aligned);
 
-  AllocInfo **dest_info = reinterpret_cast<AllocInfo **>(d_origin + offset);
-  AllocInfo **source_info = reinterpret_cast<AllocInfo **>(s_origin + offset);
+  Provenance *dest = reinterpret_cast<Provenance *>(d_shadow + offset);
+  Provenance *source = reinterpret_cast<Provenance *>(s_shadow + offset);
 
-  BorTag *dest_tag = reinterpret_cast<BorTag *>(d_shadow + offset);
-  BorTag *source_tag = reinterpret_cast<BorTag *>(s_shadow + offset);
+  Provenance src = *source;
 
-  BorTag src_tag = *source_tag;
-  AllocInfo *src_info = *source_info;
+  // Inc before dec: same Node* in src and dest must not hit zero mid-update.
+  if (ProvIsConcrete(src))
+    __bsan_rc_inc(src);
+  if (ProvIsConcrete(*dest))
+    __bsan_rc_dec(*dest);
 
-  if (*dest_info != nullptr)
-    __bsan_rc_dec(*dest_tag, *dest_info);
-
-  if (src_info != nullptr)
-    __bsan_rc_inc(src_tag, src_info);
-
-  *dest_tag = src_tag;
-  *dest_info = src_info;
+  *dest = src;
 }
 
 void CopyShadow(void *dest, const void *src, uptr size) {
@@ -314,19 +293,16 @@ void ClearShadow(void *dest, uptr size) {
   AlignRange8((uptr)dest, size, d_aligned, d_size);
 
   uptr shadow_start = MEM_TO_SHADOW(d_aligned);
-  uptr origin_start = MEM_TO_ORIGIN(d_aligned);
 
   const uptr step = kMinProvAlignment;
 
   for (uptr offset = 0; offset < d_size; offset += step) {
-    BorTag *tag_ptr = reinterpret_cast<BorTag *>(shadow_start + offset);
-    AllocInfo **info_ptr =
-        reinterpret_cast<AllocInfo **>(origin_start + offset);
+    Provenance *slot = reinterpret_cast<Provenance *>(shadow_start + offset);
 
-    if (*info_ptr != nullptr) {
-      __bsan_rc_dec(*tag_ptr, *info_ptr);
-      *info_ptr = nullptr;
+    if (ProvIsConcrete(*slot)) {
+      __bsan_rc_dec(*slot);
     }
+    *slot = OMNIVALID;
   }
 }
 
@@ -336,20 +312,14 @@ void WriteShadow(void *dest, Provenance prov) {
   uptr d_aligned, d_size;
   AlignRange8((uptr)dest, 8, d_aligned, d_size);
   uptr shadow_start = MEM_TO_SHADOW(d_aligned);
-  uptr origin_start = MEM_TO_ORIGIN(d_aligned);
 
-  BorTag *tag_ptr = reinterpret_cast<BorTag *>(shadow_start);
-  AllocInfo **info_ptr = reinterpret_cast<AllocInfo **>(origin_start);
-  if (*info_ptr != nullptr) {
-    __bsan_rc_dec(*tag_ptr, *info_ptr);
-  }
+  Provenance *slot = reinterpret_cast<Provenance *>(shadow_start);
+  // Inc before dec: same Node* must not hit zero mid-update.
+  if (ProvIsConcrete(prov))
+    __bsan_rc_inc(prov);
+  if (ProvIsConcrete(*slot))
+    __bsan_rc_dec(*slot);
 
-  *info_ptr = prov.info;
-  *tag_ptr = prov.tag;
-
-  // The written provenance now holds a reference from this shadow slot.
-  if (prov.info != nullptr) {
-    __bsan_rc_inc(prov.tag, prov.info);
-  }
+  *slot = prov;
 }
 } // namespace __bsan

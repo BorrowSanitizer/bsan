@@ -37,9 +37,9 @@
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
-// Provenance is two words: a borrow tag and
-// a pointer to an allocation metadata object.
-static const unsigned kProvenanceSize = 16;
+// Provenance is one word: a Node* (sentinels 0/1/2 for
+// omnivalid/invalid/wildcard).
+static const unsigned kProvenanceSize = 8;
 static const Align kMinProvAlignment = Align(8);
 
 static cl::opt<bool> ClHandleAsmConservative(
@@ -127,12 +127,10 @@ namespace {
 // Memory map parameters used in application-to-shadow address calculation.
 // Offset = (Addr & ~AndMask) ^ XorMask
 // Shadow = ShadowBase + Offset
-// Origin = OriginBase + Offset
 struct MemoryMapParams {
   uint64_t AndMask;
   uint64_t XorMask;
   uint64_t ShadowBase;
-  uint64_t OriginBase;
 };
 
 } // end anonymous namespace
@@ -142,7 +140,6 @@ static const MemoryMapParams kLinuxX8664MemoryMapParams = {
     0,              // AndMask (not used)
     0x500000000000, // XorMask
     0,              // ShadowBase (not used)
-    0x100000000000, // OriginBase
 };
 
 // aarch64 Linux
@@ -150,7 +147,6 @@ static const MemoryMapParams kLinuxAArch64MemoryMapParams = {
     0,               // AndMask (not used)
     0x0B00000000000, // XorMask
     0,               // ShadowBase (not used)
-    0x0200000000000, // OriginBase
 };
 
 namespace {
@@ -207,8 +203,8 @@ public:
     unsigned PtrSize = M.getDataLayout().getPointerSize();
     IntptrTy = Type::getIntNTy(*C, PtrSize * 8);
 
-    ProvenanceTy = StructType::get(IntptrTy, PtrTy);
-    ProvenanceSize = ConstantInt::get(IntptrTy, 16);
+    ProvenanceTy = PtrTy;
+    ProvenanceSize = ConstantInt::get(IntptrTy, 8);
   }
   bool instrumentModule(Module &M);
   bool instrumentFunction(Function &F, FunctionAnalysisManager &FAM,
@@ -574,23 +570,22 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   BsanFuncRetag = M.getOrInsertFunction(
       BSAN("retag"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, Int8Ty, PtrTy,
-      IntptrTy, PtrTy, IntptrTy, IntptrTy, PtrTy, PtrTy, BoolTy);
+      IntptrTy, PtrTy, IntptrTy, PtrTy, PtrTy, BoolTy);
 
   BsanFuncPopFrame = M.getOrInsertFunction(
       BSAN("pop_frame"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, IntptrTy);
 
   BsanFuncRead = M.getOrInsertFunction(BSAN("read"), AL, IRB.getVoidTy(), PtrTy,
-                                       IntptrTy, IntptrTy, PtrTy, BoolTy);
+                                       IntptrTy, PtrTy, BoolTy);
 
-  BsanFuncWrite =
-      M.getOrInsertFunction(BSAN("write"), AL, IRB.getVoidTy(), PtrTy, IntptrTy,
-                            IntptrTy, PtrTy, BoolTy);
+  BsanFuncWrite = M.getOrInsertFunction(BSAN("write"), AL, IRB.getVoidTy(),
+                                        PtrTy, IntptrTy, PtrTy, BoolTy);
 
   BsanFuncAllocStack =
       M.getOrInsertFunction(BSAN("alloc_stack"), AL, IRB.getVoidTy(), PtrTy,
                             IntptrTy, IntptrTy, PtrTy);
-  BsanFuncDeallocStack = M.getOrInsertFunction(
-      BSAN("dealloc_stack"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, PtrTy);
+  BsanFuncDeallocStack = M.getOrInsertFunction(BSAN("dealloc_stack"), AL,
+                                               IRB.getVoidTy(), PtrTy, PtrTy);
 
   BsanFuncMark = M.getOrInsertFunction(BSAN("mark"), AL, PtrTy, PtrTy);
 
@@ -600,11 +595,11 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncValidateRetval = M.getOrInsertFunction(
       BSAN("validate_retval"), AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
 
-  BsanFuncRcInc = M.getOrInsertFunction(BSAN("rc_inc"), AL, IRB.getVoidTy(),
-                                        IntptrTy, PtrTy);
+  BsanFuncRcInc =
+      M.getOrInsertFunction(BSAN("rc_inc"), AL, IRB.getVoidTy(), PtrTy);
 
-  BsanFuncRcDec = M.getOrInsertFunction(BSAN("rc_dec"), AL, IRB.getVoidTy(),
-                                        IntptrTy, PtrTy);
+  BsanFuncRcDec =
+      M.getOrInsertFunction(BSAN("rc_dec"), AL, IRB.getVoidTy(), PtrTy);
 
   BsanFuncMemCpy = M.getOrInsertFunction(BSAN("memcpy"), AL, IRB.getVoidTy(),
                                          PtrTy, PtrTy, IntptrTy);
@@ -625,8 +620,8 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncDestroyStackSlot = M.getOrInsertFunction(BSAN("destroy_stack_slot"),
                                                    AL, IRB.getVoidTy(), PtrTy);
 
-  BsanFuncExposeProv = M.getOrInsertFunction(BSAN("expose_prov"), AL,
-                                             IRB.getVoidTy(), IntptrTy, PtrTy);
+  BsanFuncExposeProv =
+      M.getOrInsertFunction(BSAN("expose_prov"), AL, IRB.getVoidTy(), PtrTy);
 
   EHPersonality Pers = getDefaultEHPersonality(TargetTriple);
   DefaultPersonalityFn =
@@ -648,22 +643,19 @@ void BorrowSanitizer::createUserspaceApi(Module &M,
 
 namespace {
 
-// A pointer's provenance value.
+// A pointer's provenance value: a single Node* IR value.
 //
-// Each pointer has provenance, indicating its permission to access
-// a memory location.
+// Sentinels (inttoptr of 0/1/2): omnivalid / invalid / wildcard.
+// Concrete values are real Node* pointers; tag lives on the Node.
 class Provenance {
 public:
-  Value *Tag = nullptr;
-  Value *Info = nullptr;
+  Value *Node = nullptr;
   ElementCount Elems = ElementCount::getFixed(1);
   Provenance() {}
-  Provenance(Value *Tag, Value *Info) : Tag(Tag), Info(Info) {}
-  Provenance(Value *Tag, Value *Info, ElementCount Elems)
-      : Tag(Tag), Info(Info), Elems(Elems) {}
+  Provenance(Value *Node) : Node(Node) {}
+  Provenance(Value *Node, ElementCount Elems) : Node(Node), Elems(Elems) {}
   bool operator==(const Provenance &Other) const {
-    return this->Tag == Other.Tag && this->Info == Other.Info &&
-           this->Elems == Other.Elems;
+    return this->Node == Other.Node && this->Elems == Other.Elems;
   }
   bool operator!=(const Provenance &Other) const { return !(*this == Other); }
 
@@ -672,6 +664,8 @@ public:
                               ElementCount Elems = ElementCount::getFixed(1));
   static Provenance wildcard(BorrowSanitizer &BS,
                              ElementCount Elems = ElementCount::getFixed(1));
+  static Provenance invalid(BorrowSanitizer &BS,
+                            ElementCount Elems = ElementCount::getFixed(1));
 };
 
 struct ProvenanceKey {
@@ -724,30 +718,30 @@ public:
 
 void Provenance::addIncoming(BasicBlock *IncomingBlock,
                              Provenance &IncomingProv) {
-  assert(isa<PHINode>(this->Tag));
-  PHINode *TagNode = cast<PHINode>(this->Tag);
-
-  assert(isa<PHINode>(this->Info));
-  PHINode *InfoNode = cast<PHINode>(this->Info);
-
-  TagNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Tag);
-  InfoNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Info);
+  assert(isa<PHINode>(this->Node));
+  PHINode *NodePhi = cast<PHINode>(this->Node);
+  NodePhi->setIncomingValueForBlock(IncomingBlock, IncomingProv.Node);
 }
 
 Provenance Provenance::omnivalid(BorrowSanitizer &BS, ElementCount Elems) {
   if (Elems.isScalar()) {
-    Value *Zero = ConstantInt::get(BS.IntptrTy, 0);
-    Value *InvalidPtr = ConstantPointerNull::get(BS.PtrTy);
-    return Provenance(Zero, InvalidPtr, Elems);
+    return Provenance(ConstantPointerNull::get(BS.PtrTy), Elems);
+  }
+  report_fatal_error("Vector provenance is not supported yet");
+}
+
+Provenance Provenance::invalid(BorrowSanitizer &BS, ElementCount Elems) {
+  if (Elems.isScalar()) {
+    Constant *One = ConstantInt::get(BS.IntptrTy, 1);
+    return Provenance(ConstantExpr::getIntToPtr(One, BS.PtrTy), Elems);
   }
   report_fatal_error("Vector provenance is not supported yet");
 }
 
 Provenance Provenance::wildcard(BorrowSanitizer &BS, ElementCount Elems) {
   if (Elems.isScalar()) {
-    Value *Two = ConstantInt::get(BS.IntptrTy, 2);
-    Value *InvalidPtr = ConstantPointerNull::get(BS.PtrTy);
-    return Provenance(Two, InvalidPtr, Elems);
+    Constant *Two = ConstantInt::get(BS.IntptrTy, 2);
+    return Provenance(ConstantExpr::getIntToPtr(Two, BS.PtrTy), Elems);
   }
   report_fatal_error("Vector provenance is not supported yet");
 }
@@ -1278,11 +1272,11 @@ private:
   ///
   ///     Offset = (Addr & ~AndMask) ^ XorMask
   ///
-  /// getShadowOriginPtr turns this into the shadow and origin pointers by
-  /// adding ShadowBase and OriginBase respectively. When `Alignment` cannot be
-  /// shown to be at least kMinProvAlignment, the offset is additionally rounded
-  /// down to a provenance-slot (kMinProvAlignment) boundary, so sub-slot
-  /// addresses map to the slot that holds their provenance.
+  /// getShadowPtr turns this into the shadow Node* slot by adding ShadowBase.
+  /// When `Alignment` cannot be shown to be at least kMinProvAlignment, the
+  /// offset is additionally rounded down to a provenance-slot
+  /// (kMinProvAlignment) boundary, so sub-slot addresses map to the slot that
+  /// holds their provenance.
   Value *getShadowPtrOffset(Value *Addr, IRBuilder<> &IRB,
                             MaybeAlign Alignment) {
     Type *IntptrTy = ptrToIntPtrType(Addr->getType());
@@ -1302,9 +1296,9 @@ private:
     return OffsetLong;
   }
 
-  std::pair<Value *, Value *>
-  getShadowOriginPtr(IRBuilder<> &IRB, Value *Addr,
-                     MaybeAlign Alignment = kMinProvAlignment) {
+  // Shadow stores a single Node* provenance word.
+  Value *getShadowPtr(IRBuilder<> &IRB, Value *Addr,
+                      MaybeAlign Alignment = kMinProvAlignment) {
     VectorType *VectTy = dyn_cast<VectorType>(Addr->getType());
     if (!VectTy) {
       assert(Addr->getType()->isPointerTy());
@@ -1318,18 +1312,8 @@ private:
       ShadowLong =
           IRB.CreateAdd(ShadowLong, constToIntPtr(IntptrTy, ShadowBase));
     }
-    Value *ShadowPtr = IRB.CreateIntToPtr(
-        ShadowLong, getPtrToShadowPtrType(IntptrTy, BS.IntptrTy));
-
-    Value *OriginLong = ShadowOffset;
-    uint64_t OriginBase = BS.MapParams->OriginBase;
-    if (OriginBase != 0)
-      OriginLong =
-          IRB.CreateAdd(OriginLong, constToIntPtr(IntptrTy, OriginBase));
-    Value *OriginPtr = IRB.CreateIntToPtr(
-        OriginLong, getPtrToShadowPtrType(IntptrTy, BS.PtrTy));
-
-    return std::make_pair(ShadowPtr, OriginPtr);
+    return IRB.CreateIntToPtr(ShadowLong,
+                              getPtrToShadowPtrType(IntptrTy, BS.PtrTy));
   }
 
   Provenance loadProvenanceFromShadow(
@@ -1337,10 +1321,8 @@ private:
       ElementCount Elems = ElementCount::getFixed(1),
       AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
     if (Elems.isScalar()) {
-      Value *TagPtr, *InfoPtr;
-      std::tie(TagPtr, InfoPtr) = getShadowOriginPtr(IRB, Base, Alignment);
-      Provenance Prov =
-          loadProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Ordering);
+      Value *ShadowPtr = getShadowPtr(IRB, Base, Alignment);
+      Provenance Prov = loadProvenanceAligned(IRB, ShadowPtr, Ordering);
       Value *Slot = allocStackSlot(IRB, false);
       storeProvenance(IRB, Prov, Slot);
       return Prov;
@@ -1351,13 +1333,7 @@ private:
   Provenance loadProvenance(IRBuilder<> &IRB, Value *Src,
                             ElementCount Elems = ElementCount::getFixed(1)) {
     if (Elems.isScalar()) {
-      Value *ZeroIdx = ConstantInt::get(IRB.getInt64Ty(), 0);
-      Value *TagPtr = Src;
-      Value *InfoPtr =
-          IRB.CreateGEP(BS.ProvenanceTy, Src,
-                        {ZeroIdx, ConstantInt::get(IRB.getInt32Ty(), 1)});
-      return loadProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr,
-                                           AtomicOrdering::NotAtomic);
+      return loadProvenanceAligned(IRB, Src, AtomicOrdering::NotAtomic);
     }
     report_fatal_error("Vector provenance is not supported yet");
   }
@@ -1412,6 +1388,10 @@ private:
     if (Provenance *Prov = BaseProvMap.find(Key)) {
       return *Prov;
     }
+    // Null pointer constants carry invalid provenance.
+    if (isa<ConstantPointerNull>(Key.V)) {
+      return Provenance::invalid(BS);
+    }
     if (Argument *Arg = dyn_cast<Argument>(Key.V)) {
       // We always need to load the provenance for arguments right at the
       // beginning of the function. Otherwise, subsequent function calls could
@@ -1447,12 +1427,7 @@ private:
     if (Prov.Elems.isVector()) {
       report_fatal_error("Vector provenance is not supported yet");
     }
-    Value *ZeroIdx = ConstantInt::get(IRB.getInt64Ty(), 0);
-    Value *TagPtr = Base;
-    Value *InfoPtr =
-        IRB.CreateGEP(BS.ProvenanceTy, Base,
-                      {ZeroIdx, ConstantInt::get(IRB.getInt32Ty(), 1)});
-    storeProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Prov, Ordering);
+    storeProvenanceAligned(IRB, Base, Prov, Ordering);
   }
 
   // Stores a provenance value into shadow memory, starting at the given object
@@ -1466,50 +1441,42 @@ private:
     if (Prov.Elems.isVector()) {
       report_fatal_error("Vectors are not supported.");
     } else {
-      Value *TagPtr, *InfoPtr;
-      std::tie(TagPtr, InfoPtr) = getShadowOriginPtr(IRB, ObjAddr, Alignment);
-      storeProvenanceWithReferenceCount(IRB, TagPtr, InfoPtr, Prov, Ordering);
+      Value *ShadowPtr = getShadowPtr(IRB, ObjAddr, Alignment);
+      storeProvenanceWithReferenceCount(IRB, ShadowPtr, Prov, Ordering);
     }
   }
 
-  // Loads a provenance value into shadow memory pairwise at the specified
-  // addresses. Each address must be aligned to the wordsize.
-  Provenance loadProvenanceAlignedPairwise(IRBuilder<> &IRB, Value *TagPtr,
-                                           Value *InfoPtr,
-                                           AtomicOrdering Ordering) {
-    LoadInst *Tag =
-        IRB.CreateAlignedLoad(BS.IntptrTy, TagPtr, kMinProvAlignment);
-    Tag->setAtomic(Ordering);
-    LoadInst *Info =
-        IRB.CreateAlignedLoad(BS.PtrTy, InfoPtr, kMinProvAlignment);
-    Info->setAtomic(Ordering);
-    return Provenance(Tag, Info);
+  // Loads a single Node* provenance word.
+  Provenance loadProvenanceAligned(IRBuilder<> &IRB, Value *SlotPtr,
+                                   AtomicOrdering Ordering) {
+    LoadInst *Node =
+        IRB.CreateAlignedLoad(BS.PtrTy, SlotPtr, kMinProvAlignment);
+    Node->setAtomic(Ordering);
+    return Provenance(Node);
   }
 
-  void storeProvenanceWithReferenceCount(IRBuilder<> &IRB, Value *TagPtr,
-                                         Value *InfoPtr, Provenance Prov,
+  // One-word shadow store with per-Node* RC. CRT no-ops sentinel pointers.
+  // Stack-slot stores use `storeProvenance` instead (GC roots, no RC).
+  void storeProvenanceWithReferenceCount(IRBuilder<> &IRB, Value *SlotPtr,
+                                         Provenance Prov,
                                          AtomicOrdering Ordering) {
+    // Increment first in case source and destination are the same Node*:
+    // decrementing first can hit zero and let GC reclaim before we store.
+    if (Prov != Provenance::omnivalid(BS)) {
+      IRB.CreateCall(BS.BsanFuncRcInc, {Prov.Node});
+    }
     // We only decrement on nonatomic loads. This leaks provenance exposed to
     // atomic operations, which is necessary to support them without locking.
     if (Ordering == AtomicOrdering::NotAtomic) {
-      Provenance Old =
-          loadProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Ordering);
-      IRB.CreateCall(BS.BsanFuncRcDec, {Old.Tag, Old.Info});
+      Provenance Old = loadProvenanceAligned(IRB, SlotPtr, Ordering);
+      IRB.CreateCall(BS.BsanFuncRcDec, {Old.Node});
     }
-    if (Prov != Provenance::omnivalid(BS)) {
-      IRB.CreateCall(BS.BsanFuncRcInc, {Prov.Tag, Prov.Info});
-    }
-    storeProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Prov, Ordering);
+    storeProvenanceAligned(IRB, SlotPtr, Prov, Ordering);
   }
 
-  // Stores a provenance value into shadow memory pairwise at the specified
-  // addresses. Each address must be aligned to the word size.
-  void storeProvenanceAlignedPairwise(IRBuilder<> &IRB, Value *TagPtr,
-                                      Value *InfoPtr, Provenance Prov,
-                                      AtomicOrdering Ordering) {
-    IRB.CreateAlignedStore(Prov.Tag, TagPtr, kMinProvAlignment)
-        ->setAtomic(Ordering);
-    IRB.CreateAlignedStore(Prov.Info, InfoPtr, kMinProvAlignment)
+  void storeProvenanceAligned(IRBuilder<> &IRB, Value *SlotPtr, Provenance Prov,
+                              AtomicOrdering Ordering) {
+    IRB.CreateAlignedStore(Prov.Node, SlotPtr, kMinProvAlignment)
         ->setAtomic(Ordering);
   }
 
@@ -1704,10 +1671,9 @@ private:
     Value *ImArrayLen = getLayoutArrayLength(RI.ImArray);
     Value *PinArrayLen = getLayoutArrayLength(RI.PinArray);
     Value *Slot = allocStackSlot(IRB, RI.isProtected());
-    IRB.CreateCall(BS.BsanFuncRetag,
-                   {SrcAddr, RI.Size, RI.Perms, RI.ImArray, ImArrayLen,
-                    RI.PinArray, PinArrayLen, SrcProv.Tag, SrcProv.Info, Slot,
-                    IRB.getInt1(false)});
+    IRB.CreateCall(BS.BsanFuncRetag, {SrcAddr, RI.Size, RI.Perms, RI.ImArray,
+                                      ImArrayLen, RI.PinArray, PinArrayLen,
+                                      SrcProv.Node, Slot, IRB.getInt1(false)});
     Provenance RetaggedProv = loadProvenance(IRB, Slot);
     storeProvenanceToShadow(IRB, Operand, RetaggedProv);
   }
@@ -1720,10 +1686,9 @@ private:
       Value *ImArrayLen = getLayoutArrayLength(RI.ImArray);
       Value *PinArrayLen = getLayoutArrayLength(RI.PinArray);
       Value *Dest = allocStackSlot(IRB, RI.isProtected());
-      IRB.CreateCall(BS.BsanFuncRetag,
-                     {Ptr, RI.Size, RI.Perms, RI.ImArray, ImArrayLen,
-                      RI.PinArray, PinArrayLen, Prov->Tag, Prov->Info, Dest,
-                      IRB.getInt1(false)});
+      IRB.CreateCall(BS.BsanFuncRetag, {Ptr, RI.Size, RI.Perms, RI.ImArray,
+                                        ImArrayLen, RI.PinArray, PinArrayLen,
+                                        Prov->Node, Dest, IRB.getInt1(false)});
       setProvenance(&CB, loadProvenance(IRB, Dest));
     }
   }
@@ -2011,17 +1976,14 @@ private:
   Provenance createScalarProvenancePHI(IRBuilder<> &IRB,
                                        iterator_range<pred_iterator> Blocks) {
     unsigned NumIncoming = std::distance(Blocks.begin(), Blocks.end());
-    PHINode *TagNode = IRB.CreatePHI(BS.IntptrTy, NumIncoming, "_bsphi_tag");
-    TagNode->dropDbgRecords();
-    PHINode *InfoNode = IRB.CreatePHI(BS.PtrTy, NumIncoming, "_bsphi_info");
-    InfoNode->dropDbgRecords();
+    PHINode *NodePhi = IRB.CreatePHI(BS.PtrTy, NumIncoming, "_bsphi_node");
+    NodePhi->dropDbgRecords();
 
     Provenance Omni = Provenance::omnivalid(BS);
     for (BasicBlock *BB : Blocks) {
-      TagNode->addIncoming(Omni.Tag, BB);
-      InfoNode->addIncoming(Omni.Info, BB);
+      NodePhi->addIncoming(Omni.Node, BB);
     }
-    return Provenance(TagNode, InfoNode);
+    return Provenance(NodePhi);
   }
 
   Provenance createProvenancePHI(IRBuilder<> &IRB, ProvenanceField Comp,
@@ -2057,9 +2019,8 @@ private:
   }
 
   Provenance createAllocaMetadata(IRBuilder<> &IRB) {
-    Value *Tag = newBorrowTag(IRB);
-    Value *Info = IRB.CreateCall(BS.BsanFuncReserveStackSlot, {});
-    return Provenance(Tag, Info);
+    Value *Node = IRB.CreateCall(BS.BsanFuncReserveStackSlot, {});
+    return Provenance(Node);
   }
 
   void initAllocaMetadata(IRBuilder<> &IRB, AllocaInst *AI, Provenance Prov) {
@@ -2069,15 +2030,15 @@ private:
 
   void initAllocaMetadata(IRBuilder<> &IRB, Value *Addr, Value *Size,
                           Provenance Prov) {
-    IRB.CreateCall(BS.BsanFuncAllocStack, {Addr, Size, Prov.Tag, Prov.Info});
+    Value *Tag = newBorrowTag(IRB);
+    IRB.CreateCall(BS.BsanFuncAllocStack, {Addr, Size, Tag, Prov.Node});
   }
 
   void instrumentLifetimeStart(IntrinsicInst &II) {
     if (auto *AI = findAllocaForValue(II.getArgOperand(0), true)) {
       if (auto Prov = getProvenance(II.getParent(), AI)) {
         IRBuilder<> IRB(&II);
-        IRB.CreateCall(BS.BsanFuncDeallocStack,
-                       {AI, (*Prov).Tag, (*Prov).Info});
+        IRB.CreateCall(BS.BsanFuncDeallocStack, {AI, (*Prov).Node});
         initAllocaMetadata(IRB, AI, *Prov);
       }
     }
@@ -2087,8 +2048,7 @@ private:
     if (auto *AI = findAllocaForValue(II.getArgOperand(0), true)) {
       if (auto Prov = getProvenance(II.getParent(), AI)) {
         IRBuilder<> IRB(&II);
-        IRB.CreateCall(BS.BsanFuncDeallocStack,
-                       {AI, (*Prov).Tag, (*Prov).Info});
+        IRB.CreateCall(BS.BsanFuncDeallocStack, {AI, (*Prov).Node});
       }
     }
   }
@@ -2125,15 +2085,15 @@ private:
       // SafeStack-safe allocas are never instrumented, so any access that
       // reaches here needs the full borrow-tracking check (`checked = false`).
       // The runtime retains the unchecked fast path for future use.
-      IRB.CreateCall(BS.BsanFuncRead, {Ptr, Size, (*Prov).Tag, (*Prov).Info,
-                                       IRB.getInt1(false)});
+      IRB.CreateCall(BS.BsanFuncRead,
+                     {Ptr, Size, (*Prov).Node, IRB.getInt1(false)});
     }
   }
 
   void insertWriteCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size) {
     if (auto Prov = getProvenance(IRB.GetInsertBlock(), Ptr)) {
-      IRB.CreateCall(BS.BsanFuncWrite, {Ptr, Size, (*Prov).Tag, (*Prov).Info,
-                                        IRB.getInt1(false)});
+      IRB.CreateCall(BS.BsanFuncWrite,
+                     {Ptr, Size, (*Prov).Node, IRB.getInt1(false)});
     }
   }
 
@@ -2260,8 +2220,7 @@ private:
     const uint64_t SlotSize = kMinProvAlignment.value();
     uint64_t AlignedBytes = alignTo(Bytes, SlotSize);
 
-    Value *TagPtr, *InfoPtr;
-    std::tie(TagPtr, InfoPtr) = getShadowOriginPtr(IRB, Base, Alignment);
+    Value *ShadowPtr = getShadowPtr(IRB, Base, Alignment);
 
     const uint64_t MaxInlineSlots = 8;
     uint64_t NumSlots = AlignedBytes / SlotSize;
@@ -2269,9 +2228,8 @@ private:
     if (NumSlots <= MaxInlineSlots) {
       for (uint64_t I = 0; I < NumSlots; ++I) {
         Value *Idx = ConstantInt::get(BS.IntptrTy, I * SlotSize);
-        Value *SlotTagPtr = ptradd(IRB, TagPtr, Idx);
-        Value *SlotInfoPtr = ptradd(IRB, InfoPtr, Idx);
-        storeProvenanceWithReferenceCount(IRB, SlotTagPtr, SlotInfoPtr,
+        Value *SlotPtr = ptradd(IRB, ShadowPtr, Idx);
+        storeProvenanceWithReferenceCount(IRB, SlotPtr,
                                           Provenance::omnivalid(BS), Ordering);
       }
     } else {
@@ -2290,7 +2248,7 @@ private:
   void visitPtrToIntInst(PtrToIntInst &I) {
     if (auto Prov = getProvenance(I.getParent(), I.getPointerOperand())) {
       IRBuilder<> IRB(&I);
-      IRB.CreateCall(BS.BsanFuncExposeProv, {(*Prov).Tag, (*Prov).Info});
+      IRB.CreateCall(BS.BsanFuncExposeProv, {(*Prov).Node});
     }
   }
 
@@ -2402,15 +2360,13 @@ private:
         Provenance ProvR =
             assertProvenanceScalar(BB, {SI.getFalseValue(), Idx});
 
-        Value *Tag, *Info;
+        Value *Node;
         if (ProvL != ProvR) {
-          Tag = IRB.CreateSelect(SI.getCondition(), ProvL.Tag, ProvR.Tag);
-          Info = IRB.CreateSelect(SI.getCondition(), ProvL.Info, ProvR.Info);
+          Node = IRB.CreateSelect(SI.getCondition(), ProvL.Node, ProvR.Node);
         } else {
-          Tag = ProvL.Tag;
-          Info = ProvL.Info;
+          Node = ProvL.Node;
         }
-        setProvenance({&SI, Idx}, Provenance(Tag, Info));
+        setProvenance({&SI, Idx}, Provenance(Node));
       }
     }
   }

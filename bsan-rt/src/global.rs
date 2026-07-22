@@ -10,6 +10,7 @@ use crate::errors::{ErrorFormatContext, UBInfo};
 use crate::helpers::FxHashMap;
 use crate::memory::Heap;
 use crate::tree_borrows::data_structures::{AccessType, RangeObjectMap};
+use crate::tree_borrows::tree::Node;
 use crate::tree_borrows::{AllocStateImpl, ProtectorKind};
 use crate::*;
 
@@ -63,20 +64,20 @@ impl<'a> Deref for ProtectedTagsRef<'a> {
     }
 }
 
-pub struct ExposedProvenanceRef<'a>(RwLockReadGuard<'a, RangeObjectMap<AllocInfoPtr>>);
+pub struct ExposedProvenanceRef<'a>(RwLockReadGuard<'a, RangeObjectMap<NodePtr>>);
 
 impl<'a> Deref for ExposedProvenanceRef<'a> {
-    type Target = RangeObjectMap<AllocInfoPtr>;
+    type Target = RangeObjectMap<NodePtr>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-pub struct ExposedProvenanceRefMut<'a>(RwLockWriteGuard<'a, RangeObjectMap<AllocInfoPtr>>);
+pub struct ExposedProvenanceRefMut<'a>(RwLockWriteGuard<'a, RangeObjectMap<NodePtr>>);
 
 impl<'a> Deref for ExposedProvenanceRefMut<'a> {
-    type Target = RangeObjectMap<AllocInfoPtr>;
+    type Target = RangeObjectMap<NodePtr>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -100,9 +101,9 @@ impl<'a> DerefMut for ExposedProvenanceRefMut<'a> {
 /// of unsafety throughout the library.
 pub struct GlobalCtx {
     protected_tags: RwLock<ProtectedTags>,
-    alloc_metadata_map: Heap<AllocInfo>,
+    alloc_metadata_map: Heap<RootNode>,
     snapshots: RwLock<FxHashMap<AllocId, AllocStateImpl>>,
-    exposed_provenance: RwLock<RangeObjectMap<AllocInfoPtr>>,
+    exposed_provenance: RwLock<RangeObjectMap<NodePtr>>,
 }
 
 impl GlobalCtx {
@@ -115,12 +116,15 @@ impl GlobalCtx {
         }
     }
 
-    pub(crate) fn create_alloc_info(&self, info: AllocInfo) -> NonNull<AllocInfo> {
-        self.alloc_metadata_map.alloc(info)
+    pub(crate) fn create_root_node(&self, info: RootNode) -> NonNull<Node> {
+        let root = self.alloc_metadata_map.alloc(info);
+        unsafe { RootNode::wire_state(root) };
+        RootNode::node_ptr(root)
     }
 
-    pub(crate) unsafe fn destroy_alloc_info(&self, ptr: NonNull<AllocInfo>) {
-        unsafe { self.alloc_metadata_map.dealloc(ptr) }
+    pub(crate) unsafe fn destroy_root_node(&self, node: NonNull<Node>) {
+        let root = unsafe { RootNode::from_node(node) };
+        unsafe { self.alloc_metadata_map.dealloc(root) }
     }
 
     pub fn protected_tags<'a>(&'a self) -> ProtectedTagsRef<'a> {
@@ -140,7 +144,7 @@ impl GlobalCtx {
         ExposedProvenanceRefMut(self.exposed_provenance.write())
     }
 
-    pub fn get_exposed_provenance(&self, range: AllocRange) -> Option<AllocInfoPtr> {
+    pub fn get_exposed_provenance(&self, range: AllocRange) -> Option<NodePtr> {
         // A zero-sized lookup (e.g. a deallocation, where the size of the access
         // is determined by the allocation) still needs to resolve the allocation
         // containing its start address, so we widen it to a single byte.
