@@ -59,39 +59,73 @@ void BorTagSet::destroy() {
 }
 
 void ConcreteProvenanceSet::insert(Provenance prov) {
-  if (prov.info != nullptr) {
-    set_[prov.info].insert(prov.tag);
+  if (!ProvIsConcrete(prov)) {
+    return;
   }
+  insertTag(prov, __bsan_node_tag(prov));
+}
+
+void ConcreteProvenanceSet::insertTag(Node *node, BorTag tag) {
+  if (!ProvIsConcrete(node)) {
+    return;
+  }
+  set_[node].insert(tag);
 }
 
 void ConcreteProvenanceSet::remove(Provenance prov) {
-  if (prov.info == nullptr) {
+  if (!ProvIsConcrete(prov)) {
     return;
   }
   // Only erase the tag; leave the (possibly now-empty) tag set in place. Erase
   // shifts in place and never frees, so this takes no allocator lock and is
   // safe to run while the world is stopped.
-  if (auto *tags = find(prov.info)) {
-    tags->erase(prov.tag);
+  if (auto *tags = find(prov)) {
+    tags->erase(__bsan_node_tag(prov));
   }
 }
 
 void ConcreteProvenanceSet::clear() {
-  set_.forEach([](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
+  set_.forEach([](DenseMap<Node *, BorTagSet>::value_type &KV) {
     KV.second.clear();
     return true;
   });
 }
 
 bool ConcreteProvenanceSet::contains(Provenance prov) {
-  if (auto *tags = find(prov.info)) {
-    return tags->contains(prov.tag);
+  if (!ProvIsConcrete(prov)) {
+    return false;
+  }
+  return contains(prov, __bsan_node_tag(prov));
+}
+
+bool ConcreteProvenanceSet::contains(Node *node, BorTag tag) {
+  if (!ProvIsConcrete(node)) {
+    return false;
+  }
+  if (auto *tags = find(node)) {
+    return tags->contains(tag);
   }
   return false;
 }
 
+BorTagSet *ConcreteProvenanceSet::find(Node *node) {
+  if (!ProvIsConcrete(node)) {
+    return nullptr;
+  }
+  auto *KV = set_.find(node);
+  return KV ? &KV->second : nullptr;
+}
+
+const BorTagSet *ConcreteProvenanceSet::find(Node *node) const {
+  if (!ProvIsConcrete(node)) {
+    return nullptr;
+  }
+  const auto *KV = set_.find(node);
+  return KV ? &KV->second : nullptr;
+}
+
 ConcreteProvenanceSet::~ConcreteProvenanceSet() {
-  set_.forEach([](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
+  set_.forEach([](DenseMap<Node *, BorTagSet>::value_type &KV) {
     KV.second.destroy();
     return true;
   });

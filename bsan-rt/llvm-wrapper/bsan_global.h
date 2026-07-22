@@ -27,7 +27,7 @@ public:
 // be stored within a thread's zero count table.
 struct RetiredAlloc {
   // A non-null pointer to the allocation.
-  AllocInfo *info;
+  Node *node;
   // The generation when it was retired.
   uptr retire_gen;
 };

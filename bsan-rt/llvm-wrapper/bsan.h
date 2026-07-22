@@ -34,21 +34,42 @@ using __sanitizer::Vector;
 typedef uptr Span;
 typedef uptr BorTag;
 
-struct AllocInfo;
+struct Node;
 
-struct Provenance {
-  BorTag tag;
-  AllocInfo *info;
-};
+// One-word provenance: a single Node*.
+//
+// Sentinel scheme (do not dereference these addresses):
+//   nullptr / (Node*)0  = empty / omnivalid
+//   (Node*)1            = invalid
+//   (Node*)2            = wildcard
+// Concrete values are real Node* (child or root). Tag lives on Node;
+// ZCT / prune read it via __bsan_node_tag when needed.
+typedef Node *Provenance;
+
+const Provenance OMNIVALID = nullptr;
+const Provenance INVALID_PROV = (Node *)(uptr)1;
+const Provenance WILDCARD_PROV = (Node *)(uptr)2;
+
+// Heap Node* are at least 8-byte aligned. Addresses 0/1/2 are sentinels;
+// other unaligned values are garbage (e.g. early std_detect shadow noise).
+static constexpr uptr kMinProvAlignment = 8;
+
+inline bool ProvIsOmnivalid(Provenance p) { return p == nullptr; }
+inline bool ProvIsInvalid(Provenance p) { return (uptr)p == 1; }
+inline bool ProvIsWildcard(Provenance p) { return (uptr)p == 2; }
+inline bool ProvIsConcrete(Provenance p) {
+  return (uptr)p > 2 && ((uptr)p % kMinProvAlignment) == 0;
+}
+// Sentinel or aligned Node*. Rejects unaligned garbage in shadow slots.
+inline bool ProvIsKnown(Provenance p) {
+  return ProvIsOmnivalid(p) || ProvIsInvalid(p) || ProvIsWildcard(p) ||
+         ProvIsConcrete(p);
+}
 
 struct AtExitRecord {
   void (*func)(void *arg);
   void *arg;
 };
-
-const Provenance OMNIVALID = {0, nullptr};
-
-static constexpr uptr kMinProvAlignment = 8;
 
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance
     *__bsan_shadow_stack;

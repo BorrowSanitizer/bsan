@@ -7,7 +7,7 @@ use core::ops::Range;
 use super::perms::{AccessKind, PermTransition, Permission, ProtectorKind};
 use super::tree::{node_ptr_from_map, node_tag, EagerTree, LocationState};
 use crate::helpers::AllocRange;
-use crate::tree_borrows::LazyTree;
+use crate::tree_borrows::BorrowState;
 use crate::{eprintln, *};
 
 /// Cause of an access: either a real access or one
@@ -964,26 +964,29 @@ impl EagerTree {
     }
 }
 
-impl LazyTree {
+impl BorrowState {
     pub fn print_tree(&self, protected_tags: &ProtectedTagsRef<'_>, show_unnamed: bool) {
         match self {
-            LazyTree::Init(tree) => tree.print_tree(protected_tags, show_unnamed),
-            LazyTree::Uninit { root_tag, size, span, .. } => {
+            BorrowState::None => {}
+            BorrowState::Init(tree) => tree.print_tree(protected_tags, show_unnamed),
+            BorrowState::Uninit { root_tag, size, span, .. } => {
                 EagerTree::new(*root_tag, *size, *span).print_tree(protected_tags, show_unnamed)
             }
         }
     }
 
-    pub fn print_tree_diff(&self, old_tree: &LazyTree, protected_tags: &ProtectedTagsRef<'_>) {
+    pub fn print_tree_diff(&self, old_tree: &BorrowState, protected_tags: &ProtectedTagsRef<'_>) {
         let self_tree = match self {
-            LazyTree::Init(t) => t.clone(),
-            LazyTree::Uninit { root_tag, size, span, .. } => {
+            BorrowState::None => return,
+            BorrowState::Init(t) => t.clone(),
+            BorrowState::Uninit { root_tag, size, span, .. } => {
                 EagerTree::new(*root_tag, *size, *span)
             }
         };
         let old_tree = match old_tree {
-            LazyTree::Init(t) => t.clone(),
-            LazyTree::Uninit { root_tag, size, span, .. } => {
+            BorrowState::None => return,
+            BorrowState::Init(t) => t.clone(),
+            BorrowState::Uninit { root_tag, size, span, .. } => {
                 EagerTree::new(*root_tag, *size, *span)
             }
         };

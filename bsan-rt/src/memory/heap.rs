@@ -195,7 +195,7 @@ mod test {
     use std::thread;
 
     use super::*;
-    use crate::AllocInfo;
+    use crate::RootNode;
 
     #[repr(align(8))]
     #[derive(Default)]
@@ -257,7 +257,7 @@ mod test {
     }
 
     #[test]
-    fn heapable_alloc_info() {
-        assert!(AllocInfo::is_heapable());
+    fn heapable_root_node() {
+        assert!(RootNode::is_heapable());
     }
 }
