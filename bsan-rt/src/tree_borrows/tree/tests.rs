@@ -6,6 +6,7 @@ use std::fmt;
 
 use super::super::exhaustive::{precondition, Exhaustive};
 use super::*;
+use crate::helpers::FxHashSet;
 
 impl Exhaustive for LocationState {
     fn exhaustive() -> Box<dyn Iterator<Item = Self>> {
