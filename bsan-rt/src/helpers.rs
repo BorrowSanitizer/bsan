@@ -4,6 +4,7 @@ use core::{fmt, ops};
 use hashbrown::{HashMap, HashSet};
 use rustc_hash::FxBuildHasher;
 
+#[allow(dead_code)]
 pub type FxHashSet<T, A = Global> = HashSet<T, FxBuildHasher, A>;
 pub type FxHashMap<K, V, A = Global> = HashMap<K, V, FxBuildHasher, A>;
 
