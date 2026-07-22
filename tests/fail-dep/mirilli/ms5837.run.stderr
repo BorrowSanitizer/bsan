@@ -1,4 +1,9 @@
 error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+   --> bsan/tests/fail-dep/mirilli/ms5837.rs:LL:CC
+   |
+LL | c_implementation::crc4(c_input_buffer.as_ptr());
+   |
+    = note: the above line calls library code, where the error was detected:
    --> CARGO_REGISTRY/.../crc4.rs:LL:CC
    |
 LL | n_prom[0] = ((n_prom[0]) & $HEX);  // CRC byte is replaced by 0
@@ -17,3 +22,5 @@ stack backtrace:
  at bsan/tests/fail-dep/mirilli/ms5837.rs:LL:CC
 2: <fn() as core::ops::function::FnOnce<()>>::call_once
  at RUSTLIB/core/src/ops/function.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

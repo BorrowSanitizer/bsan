@@ -18,11 +18,15 @@ fn looks_like_rustdoc() -> bool {
 }
 
 fn main() {
-    env_logger::init();
     let mut args = env::args();
 
-    // Skip binary name.
-    args.next().unwrap();
+    let binary_name = args.next().unwrap();
+    if let Some(cc_wrapper) = env::var_os("BSAN_CC_WRAPPER")
+        && let Some(as_str) = cc_wrapper.to_str()
+        && as_str == binary_name
+    {
+        return phase_cc(args);
+    }
 
     if env::var_os("BSAN_CALLED_FROM_SETUP").is_some() {
         phase_rustc(args, RustcPhase::Setup);

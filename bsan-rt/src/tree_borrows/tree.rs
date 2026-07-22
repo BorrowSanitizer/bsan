@@ -781,7 +781,9 @@ impl LocationTree {
             let old_state = perm.copied().unwrap_or_else(|| node.default_location_state());
             old_state.skip_if_known_noop(access_kind, args.rel_pos)
         };
+        let mut visit_count: usize = 0;
         let node_app = |args: NodeAppArgs<'_, LocationTree>| {
+            visit_count += 1;
             let node = args.nodes.get_mut(args.idx).unwrap();
             let mut perm = args.data.perms.entry(args.idx);
 
@@ -812,14 +814,19 @@ impl LocationTree {
         };
 
         let visitor = TreeVisitor { nodes, data: self };
-        match visit_children {
+        let result = match visit_children {
             ChildrenVisitMode::VisitChildrenOfAccessed => visitor
                 .traverse_this_parents_children_other(access_source, node_skipper, node_app)
                 .map_err(|e| e.into()),
             ChildrenVisitMode::SkipChildrenOfAccessed => visitor
                 .traverse_nonchildren(access_source, node_skipper, node_app)
                 .map_err(|e| e.into()),
+        };
+        unsafe {
+            crate::sanitizer_common::__bsan_visits_since_gc
+                .fetch_add(visit_count, core::sync::atomic::Ordering::Relaxed);
         }
+        result
     }
 
     /// Performs a wildcard access on the tree with root `root`. Takes the `access_relatedness`
@@ -854,6 +861,7 @@ impl LocationTree {
 
         // Whether there is an exposed node in this tree that allows this access.
         let mut has_valid_exposed = false;
+        let mut visit_count: usize = 0;
 
         // This does a traversal across the tree updating children before their parents. The
         // difference to `perform_normal_access` is that we take the access relatedness from
@@ -890,6 +898,7 @@ impl LocationTree {
                 }
             },
             |args| {
+                visit_count += 1;
                 let node = args.nodes.get_mut(args.idx).unwrap();
 
                 let protected = global.get_protector_kind(node.tag).is_some();
@@ -945,6 +954,10 @@ impl LocationTree {
                 })
             },
         )?;
+        unsafe {
+            crate::sanitizer_common::__bsan_visits_since_gc
+                .fetch_add(visit_count, core::sync::atomic::Ordering::Relaxed);
+        }
         // If there is no exposed node in this tree that allows this access, then the access *must*
         // be foreign to the entire subtree. Foreign accesses are only possible on wildcard subtrees
         // as there are no ancestors to the main root. So if we do not find a valid exposed node in
@@ -1179,9 +1192,11 @@ impl AllocState for LazyTree {
     fn increment(&self, tag: BorTag) -> bool {
         match self {
             LazyTree::Uninit { root_tag, refcount, .. } => {
-                // In the Uninit state the only node is the root, we add an debug_assert instead
-                debug_assert!(*root_tag == tag);
-                refcount.increment_nonatomic()
+                if *root_tag == tag {
+                    refcount.increment_nonatomic()
+                } else {
+                    false
+                }
             }
             LazyTree::Init(tree) => tree.increment(tag),
         }
@@ -1189,8 +1204,11 @@ impl AllocState for LazyTree {
     fn decrement(&self, tag: BorTag) -> bool {
         match self {
             LazyTree::Uninit { root_tag, refcount, .. } => {
-                debug_assert!(*root_tag == tag);
-                refcount.decrement_nonatomic()
+                if *root_tag == tag {
+                    refcount.decrement_nonatomic()
+                } else {
+                    false
+                }
             }
             LazyTree::Init(tree) => tree.decrement(tag),
         }

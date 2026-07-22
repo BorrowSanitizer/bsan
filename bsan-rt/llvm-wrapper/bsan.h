@@ -31,6 +31,9 @@ using __sanitizer::u8;
 using __sanitizer::uptr;
 using __sanitizer::Vector;
 
+// The immediate caller PC of a runtime hook, captured at the retag/access
+// site. Symbolized lazily at display time as the error's origin note; the
+// primary error location comes from the live unwind in `HANDLE_ERROR`.
 typedef uptr Span;
 typedef uptr BorTag;
 
@@ -56,6 +59,9 @@ extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __bsan_had_error;
 
 extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uintptr_t __bsan_bor_tag_ctr;
+
+// Tree-node visits accumulated by the Rust runtime since the last GC request.
+extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uintptr_t __bsan_visits_since_gc;
 
 namespace __bsan {
 
@@ -95,12 +101,25 @@ void InitializeInterceptors();
 
 u32 GetStackTraceLen();
 void PrintStackTrace(StackTrace &stack);
+uptr FindUserFramePc(uptr pc, uptr bp);
 
 Provenance *GetParamSlot(uptr Idx);
 Provenance *GetRetValSlot(uptr Idx);
 void ClearSlot(uptr Idx);
 bool CallerIsInstrumented(void *sym);
 
+} // namespace __bsan
+
+extern "C" {
+// Formats and prints the pending UB error stored by handle_error, using
+// user_frame_pc as the primary source location (0 = fall back to the original
+// trigger span).
+void __bsan_format_pending_ub(uptr user_frame_pc);
+}
+
+namespace __bsan {
+
+// Capture the immediate caller PC of the runtime hook as the span.
 #define GET_SPAN uptr span = GET_CALLER_PC();
 
 #define GET_SPAN_PC_BP                                                         \
@@ -111,6 +130,7 @@ bool CallerIsInstrumented(void *sym);
   if (UNLIKELY(__bsan_had_error)) {                                            \
     uptr pc = StackTrace::GetCurrentPc();                                      \
     uptr bp = GET_CURRENT_FRAME();                                             \
+    __bsan_format_pending_ub(__bsan::FindUserFramePc(pc, bp));                 \
     UNINITIALIZED BufferedStackTrace stack;                                    \
     stack.Unwind(pc, bp, nullptr, true, __bsan::GetStackTraceLen());           \
     PrintStackTrace(stack);                                                    \
@@ -119,6 +139,7 @@ bool CallerIsInstrumented(void *sym);
 
 #define HANDLE_ERROR_PC_BP(pc, bp)                                             \
   if (UNLIKELY(__bsan_had_error)) {                                            \
+    __bsan_format_pending_ub(__bsan::FindUserFramePc(pc, bp));                 \
     UNINITIALIZED BufferedStackTrace stack;                                    \
     stack.Unwind(pc, bp, nullptr, true, __bsan::GetStackTraceLen());           \
     PrintStackTrace(stack);                                                    \

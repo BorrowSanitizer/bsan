@@ -1,4 +1,9 @@
 error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0xf] is forbidden
+   --> bsan/tests/fail-dep/mirilli/sgp4_rs.rs:LL:CC
+   |
+LL | let _ = TwoLineElement::new(line1, line2).unwrap();
+   |
+    = note: the above line calls library code, where the error was detected:
    --> CARGO_REGISTRY/.../sgp4io.rs:LL:CC
    |
 LL | longstr1[j] = '_';
@@ -17,3 +22,5 @@ stack backtrace:
  at CARGO_REGISTRY/.../sgp4_sys.rs:LL:CC
 2: <sgp4_rs::TwoLineElement>::new
  at CARGO_REGISTRY/.../lib.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

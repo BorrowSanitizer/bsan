@@ -1,4 +1,9 @@
 error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x4c] is forbidden
+   --> bsan/tests/fail-dep/mirilli/klu-rs.rs:LL:CC
+   |
+LL | builder.finish(KluSettings::new())
+   |
+    = note: the above line calls library code, where the error was detected:
    --> CARGO_REGISTRY/.../klu_analyze.rs:LL:CC
    |
 LL | Common->status = KLU_OK ;
@@ -17,3 +22,5 @@ stack backtrace:
  at CARGO_REGISTRY/.../raw.rs:LL:CC
 2: <klu_rs::KluMatrixSpec<i32>>::init
  at CARGO_REGISTRY/.../lib.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

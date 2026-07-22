@@ -1,4 +1,9 @@
 error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+    --> bsan/tests/miri-tests/fail/aliasing/box-cell-alias.rs:LL:CC
+   |
+LL | unsafe { (*ptr).set(20) }; //miri: ~ ERROR: does not exist in the borrow stack
+   |
+     = note: the above line calls library code, where the error was detected:
     --> RUSTLIB/core/src/cell.rs:LL:CC
    |
 LL | mem::replace(unsafe { &mut *self.value.get() }, val)
@@ -21,7 +26,7 @@ help: the protected tag <TAG>(WeakProtector) later transitioned to Unique due to
    |
 LL | crate::intrinsics::write_via_move(dest, src);
    |
-help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
+     = help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
 
 stack backtrace:
 0: <core::cell::Cell<u8>>::replace
@@ -30,3 +35,5 @@ stack backtrace:
  at RUSTLIB/core/src/cell.rs:LL:CC
 2: box_cell_alias::helper
  at bsan/tests/miri-tests/fail/aliasing/box-cell-alias.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

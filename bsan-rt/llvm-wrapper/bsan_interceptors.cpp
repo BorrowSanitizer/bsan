@@ -82,9 +82,9 @@ extern "C" void *__bsan_crt_malloc(SIZE_T size) {
 }
 
 INTERCEPTOR(void *, malloc, SIZE_T size) {
-  GET_SPAN;
   if (DlsymAlloc::Use())
     return DlsymAlloc::Allocate(size);
+  GET_SPAN;
   bool already_in_scope = BlockInterception();
   InterceptorBarrier barrier;
   void *ptr = bsan_malloc(size);
@@ -105,25 +105,25 @@ extern "C" void __bsan_crt_free(void *ptr) {
 }
 
 INTERCEPTOR(void, free, void *ptr) {
-  GET_SPAN_PC_BP;
   if (UNLIKELY(!ptr))
     return;
   if (DlsymAlloc::PointerIsMine(ptr))
     return DlsymAlloc::Free(ptr);
+  GET_SPAN_PC_BP;
   bool already_in_scope = BlockInterception();
   InterceptorBarrier barrier;
   if (!already_in_scope && INST_CALLER(free)) {
     Provenance *slot = GetParamSlot(0);
-    __bsan_dealloc(ptr, slot->tag, slot->info, span);
+    __bsan_dealloc(ptr, slot->tag, slot->info, span, false);
     HANDLE_ERROR_PC_BP(pc, bp);
   }
   return bsan_deallocate(ptr);
 }
 
 INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
-  uptr span = GET_CALLER_PC();
   if (DlsymAlloc::Use())
     return DlsymAlloc::Callocate(nmemb, size);
+  GET_SPAN;
   bool already_in_scope = BlockInterception();
   InterceptorBarrier barrier;
   void *ptr = bsan_calloc(nmemb, size);
@@ -136,15 +136,15 @@ INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
 }
 
 INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
-  GET_SPAN_PC_BP;
   if (DlsymAlloc::Use() || DlsymAlloc::PointerIsMine(ptr))
     return DlsymAlloc::Realloc(ptr, size);
+  GET_SPAN_PC_BP;
   bool already_in_scope = BlockInterception();
   InterceptorBarrier barrier;
   bool is_inst = !already_in_scope && INST_CALLER(realloc);
   if (is_inst) {
     Provenance *slot = GetParamSlot(0);
-    __bsan_dealloc(ptr, slot->tag, slot->info, span);
+    __bsan_dealloc(ptr, slot->tag, slot->info, span, false);
     HANDLE_ERROR_PC_BP(pc, bp);
   }
   void *nptr = bsan_realloc(ptr, size);

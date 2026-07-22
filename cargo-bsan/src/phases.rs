@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::process::Command;
 
 use rustc_version::VersionMeta;
 
@@ -59,6 +60,12 @@ pub const BSAN_DEFAULT_RUSTFLAGS: &[&str] = &[
 
 pub const BSAN_DEFAULT_CFLAGS: &[&str] =
     &["-g", "-O0", "-fno-omit-frame-pointer", "-mno-omit-leaf-frame-pointer"];
+
+// We need to ensure that libc and certain default system libraries are always linked.
+// Our runtime intercepts symbols within these libraries, so if they are missing, then
+// linking will fail (see llvm-project/clang/lib/Driver/ToolChains/CommonArgs.cpp#L1590).
+// These dependencies are always linked on our supported targets (x86 and arm linux);
+pub const BSAN_SYSTEM_LIBS: &[&str] = &["pthread", "rt", "m", "dl", "resolv", "c", "unwind"];
 
 pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     if has_arg_flag("--help") || has_arg_flag("-h") {
@@ -126,11 +133,7 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
         }
     };
 
-    let cargo_bsan_path = env::current_exe()
-        .expect("current executable path invalid")
-        .into_os_string()
-        .into_string()
-        .expect("current executable path is not valid UTF-8");
+    let cargo_bsan_path = env::current_exe().expect("current executable path invalid");
 
     let mut cmd = Cargo::cmd();
     cmd.arg(&cargo_cmd);
@@ -170,6 +173,11 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     }
     cmd.env("RUSTC_WRAPPER", &cargo_bsan_path);
 
+    let cc_wrapper = create_symlink(&cargo_bsan_path, "clang").unwrap();
+    cmd.env("CC", &cc_wrapper);
+    cmd.env("CXX", &cc_wrapper);
+    cmd.env("BSAN_CC_WRAPPER", &cc_wrapper);
+
     // If both RUSTC_WORKSPACE_WRAPPER and RUSTC_WRAPPER are set,
     // then both are executed in succession. Providing an independent
     // workspace-level wrapper is not supported, so we clear this variable.
@@ -201,12 +209,44 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     cmd.env("BSAN_SYMBOLIZER", &llvm_tools.llvm_symbolizer);
     cmd.env("BSAN_SYSROOT", target_sysroot.as_os_str());
 
-    let cflags = bsan_cflags(&deps, &llvm_tools);
-    cmd.env("CFLAGS", &cflags);
-    cmd.env("CXXFLAGS", &cflags);
-
     // Run cargo.
     debug_cmd("[cargo-bsan rustc]", env.verbose, &cmd);
+    exec(cmd)
+}
+
+pub fn phase_cc(args: impl Iterator<Item = String>) {
+    let deps = Dependencies::from_env();
+    let llvm_tools = LlvmTools::from_env();
+    let env: EnvConfig = EnvConfig::from_env();
+    let mut cmd = Command::new(&llvm_tools.clang);
+
+    for arg in args {
+        // Unused linker arguments are treated as warnings.
+        // Instead of manually determining when clang is being invoked
+        // as a linker, which is flaky, we allow warnings.
+        if arg == "-Werror" {
+            continue;
+        }
+        cmd.arg(arg);
+    }
+
+    // The sanitizer runtime requires a set of default system libraries
+    // to always be linked. Here, we pass them with `--no-as-needed` to
+    // ensure that these libraries are never excluded due to other linker
+    // configurations.
+    //
+    // (see llvm-project/clang/lib/Driver/ToolChains/CommonArgs.cpp#L1590)
+    cmd.arg("-Wl,--push-state,--no-as-needed");
+    for arg in BSAN_SYSTEM_LIBS {
+        cmd.arg(format!("-l{arg}"));
+    }
+    cmd.arg("-Wl,--pop-state");
+
+    let cflags = bsan_cflags(&env, &deps, &llvm_tools);
+    cmd.args(cflags);
+
+    // Run clang.
+    debug_cmd("[clang]", env.verbose, &cmd);
     exec(cmd)
 }
 
@@ -279,20 +319,6 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
     }
 }
 
-/// Whether this rustc invocation links an executable (a `bin` or `cdylib`), as
-/// opposed to an rlib (which only records native-lib deps) or a Rust `dylib`
-/// such as `libstd.so` (which tolerates undefined symbols and must not pull the
-/// runtime). Only executables should whole-archive the runtime. An invocation
-/// with no explicit `--crate-type` (e.g. a bare `rustc foo.rs`) defaults to a
-/// binary.
-fn links_executable() -> bool {
-    let types: Vec<String> = get_arg_flag_values("--crate-type").collect();
-    if types.is_empty() {
-        return true;
-    }
-    types.iter().flat_map(|t| t.split(',')).any(|t| matches!(t, "bin" | "cdylib"))
-}
-
 fn bsan_rustflags(env: &EnvConfig, deps: &Dependencies, llvm_tools: &LlvmTools) -> Vec<String> {
     let mut additional_args =
         BSAN_DEFAULT_RUSTFLAGS.iter().map(ToString::to_string).collect::<Vec<_>>();
@@ -301,33 +327,16 @@ fn bsan_rustflags(env: &EnvConfig, deps: &Dependencies, llvm_tools: &LlvmTools) 
     additional_args.push(format!("-L{}", llvm_include.display()));
     additional_args.push(format!("-lstatic={llvm_lib}"));
 
-    if !env.nop && links_executable() {
+    if env.nop {
+        // We use a dedicated, strong "anchor" symbol to prevent the linker from discarding
+        // the Rust component of the runtime, which is otherwise only used via weak symbols.
+        // In no-op mode, we intentionally do *not* want to link the Rust component, so we need
+        // to define the anchor manually.
+        additional_args.push(String::from("-Clink-arg=-Wl,--defsym=__bsan_rust_runtime_anchor=0"));
+    } else {
         let (rust_include, rust_lib) = deps.rust_runtime();
-        // The C++ runtime references the Rust entry points (`__bsan_internal_init`
-        // and the `__bsan_*_impl` hooks) only through weak declarations, which do
-        // not pull a member out of a static archive — so the runtime must be
-        // force-linked or every hook stays NULL, silently disabling all provenance
-        // tracking. `--whole-archive` does that with no anchor symbol.
-        //
-        // Pass the archive straight to the linker (`-Clink-arg`) rather than via
-        // rustc's `-lstatic`: `-lstatic` records it as a native-lib dependency
-        // that propagates into every rlib's metadata and bundles a second copy
-        // into the sysroot, putting two copies on the link line (which
-        // whole-archiving then defines twice).
-        //
-        // Restrict this to crates that link an executable. `libbsan_rt.a` also
-        // bundles `compiler_builtins`/`core`/`alloc`; whole-archiving pulls those
-        // CGUs, whose internal hidden symbols go undefined when linked next to a
-        // second `compiler_builtins`, which breaks the `libstd.so` (Rust `dylib`)
-        // build during sysroot setup. Binaries link std statically, so `libstd.so`
-        // only needs to build — and a Rust `dylib` tolerates the undefined
-        // `__bsan_*` references, which the final executable link resolves from the
-        // whole-archived runtime. nop mode links no Rust runtime and keeps using
-        // the weak stubs, so it is unaffected.
         additional_args.push(format!("-Clink-arg=-L{}", rust_include.display()));
-        additional_args.push(String::from("-Clink-arg=-Wl,--whole-archive"));
         additional_args.push(format!("-Clink-arg=-l{rust_lib}"));
-        additional_args.push(String::from("-Clink-arg=-Wl,--no-whole-archive"));
     }
 
     additional_args.push(format!("-Clinker={}", llvm_tools.clang.display()));
@@ -345,12 +354,29 @@ fn bsan_rustflags(env: &EnvConfig, deps: &Dependencies, llvm_tools: &LlvmTools) 
     additional_args
 }
 
-fn bsan_cflags(deps: &Dependencies, llvm_tools: &LlvmTools) -> String {
+fn bsan_cflags(env: &EnvConfig, deps: &Dependencies, llvm_tools: &LlvmTools) -> Vec<String> {
     let mut additional_args =
         BSAN_DEFAULT_CFLAGS.iter().map(ToString::to_string).collect::<Vec<_>>();
+    // The instrumentation pass must run during compilation, so it is always required.
     additional_args.push(format!("-fpass-plugin={}", deps.llvm_pass.display()));
-    additional_args.push(format!("-fuse-ld={}", llvm_tools.lld.display()));
-    additional_args.join(" ")
+
+    additional_args.push(format!("--ld-path={}", llvm_tools.lld.display()));
+
+    let (llvm_include, llvm_lib) = deps.llvm_runtime();
+    additional_args.push(format!("-L{}", llvm_include.display()));
+    additional_args.push(format!("-l{llvm_lib}"));
+    if env.nop {
+        // We use a dedicated, strong "anchor" symbol to prevent the linker from discarding
+        // the Rust component of the runtime, which is otherwise only used via weak symbols.
+        // In no-op mode, we intentionally do *not* want to link the Rust component, so we need
+        // to define the anchor manually.
+        additional_args.push(String::from("-Wl,--defsym=__bsan_rust_runtime_anchor=0"));
+    } else {
+        let (rust_include, rust_lib) = deps.rust_runtime();
+        additional_args.push(format!("-L{}", rust_include.display()));
+        additional_args.push(format!("-l{rust_lib}"));
+    }
+    additional_args
 }
 
 pub fn phase_rustdoc(args: impl Iterator<Item = String>) {
