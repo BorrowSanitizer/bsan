@@ -796,8 +796,10 @@ impl EagerTree {
             // Node has exactly one child
             else if let Some(child_tag) = self.can_be_replaced_by_single_child_dead(tag) {
                 // Replace a node with its only child, if it is a root then we promote the child
-                // to a root
+                // to a root. Update the back-edge before the forward edge (same order as
+                // `remove_useless_children`) so the tree is never transiently inconsistent.
                 let child_ptr = node_ptr_from_map(&self.nodes, child_tag);
+                self.node_mut(child_tag).parent = parent;
                 match parent {
                     Some(parent_ptr) => {
                         let parent_tag = node_tag(parent_ptr);
@@ -810,7 +812,6 @@ impl EagerTree {
                         self.roots[pos] = child_tag;
                     }
                 }
-                self.node_mut(child_tag).parent = parent;
                 self.remove_useless_node(tag);
                 *entry = BorTag::omnivalid();
             }
