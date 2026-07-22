@@ -670,6 +670,8 @@ public:
   void addIncoming(BasicBlock *IncomingBlock, Provenance &IncomingProv);
   static Provenance omnivalid(BorrowSanitizer &BS,
                               ElementCount Elems = ElementCount::getFixed(1));
+  static Provenance invalid(BorrowSanitizer &BS,
+                            ElementCount Elems = ElementCount::getFixed(1));
   static Provenance wildcard(BorrowSanitizer &BS,
                              ElementCount Elems = ElementCount::getFixed(1));
 };
@@ -739,6 +741,15 @@ Provenance Provenance::omnivalid(BorrowSanitizer &BS, ElementCount Elems) {
     Value *Zero = ConstantInt::get(BS.IntptrTy, 0);
     Value *InvalidPtr = ConstantPointerNull::get(BS.PtrTy);
     return Provenance(Zero, InvalidPtr, Elems);
+  }
+  report_fatal_error("Vector provenance is not supported yet");
+}
+
+Provenance Provenance::invalid(BorrowSanitizer &BS, ElementCount Elems) {
+  if (Elems.isScalar()) {
+    Value *One = ConstantInt::get(BS.IntptrTy, 1);
+    Value *InvalidPtr = ConstantPointerNull::get(BS.PtrTy);
+    return Provenance(One, InvalidPtr, Elems);
   }
   report_fatal_error("Vector provenance is not supported yet");
 }
@@ -1411,6 +1422,10 @@ private:
   std::optional<Provenance> getProvenance(BasicBlock *BB, ProvenanceKey Key) {
     if (Provenance *Prov = BaseProvMap.find(Key)) {
       return *Prov;
+    }
+    // We return invalid provenance for null pointers.
+    if (auto *CI = dyn_cast<ConstantPointerNull>(Key.V)) {
+      return Provenance::invalid(BS);
     }
     if (Argument *Arg = dyn_cast<Argument>(Key.V)) {
       // We always need to load the provenance for arguments right at the
