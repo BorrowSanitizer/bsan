@@ -16,10 +16,9 @@ use crate::*;
 
 pub static DISABLE_NODE_DEBUG_INFO: AtomicBool = AtomicBool::new(false);
 
-/// Only prune borrow trees with more than this many nodes. Initialized from
-/// the `tree_gc_min_nodes` flag; the default mirrors the one in `bsan_flags.inc`.
-pub static TREE_GC_MIN_NODES: AtomicUsize =
-    AtomicUsize::new(crate::tree_borrows::tree::GC_MIN_TREE_SIZE);
+/// Only prune borrow trees with more than this many nodes; this initial value is only
+/// the pre-init default and is replaced by the flag's default (64) in `bsan_flags.inc`.
+pub static TREE_GC_MIN_NODES: AtomicUsize = AtomicUsize::new(0);
 
 /// Thread-local slot for a boxed `(UBInfo, Span)` set by `handle_error` and
 /// consumed by `__bsan_format_pending_ub` once the C++ side has captured the
