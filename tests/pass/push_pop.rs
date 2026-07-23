@@ -1,4 +1,5 @@
 //@run:0
+//@rustc-env: BSAN_OPTIONS=visits_per_gc=0
 #[path = "../utils/mod.rs"]
 #[macro_use]
 mod utils;
