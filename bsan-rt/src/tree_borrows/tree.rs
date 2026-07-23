@@ -499,35 +499,28 @@ impl EagerTree {
     /// If so, returns the index of said only child. If not, returns none.
     /// The caller iterates the dead tags directly, so `idx` is already known to be dead
     /// and there is no membership check — only the shape and permission conditions remain.
-    fn can_be_replaced_by_single_child(&self, idx: UniIndex) -> Option<UniIndex> {
+    fn can_be_replaced_by_single_child(&self, idx: UniIndex) -> bool {
         let node = self.nodes.get(idx).unwrap();
         // A root is never replaced by its children
         if node.parent.is_none() {
-            return None;
+            return false;
         }
         // Must match single child case
-        let [child_idx] = node.children[..] else { return None };
+        let [child_idx] = node.children[..] else { return false };
 
-        let child = self.nodes.get(child_idx).unwrap();
         // Check that for that one child, `can_be_replaced_by_child` holds for the permission
         // on all locations.
-        for (_range, loc) in self.locations.iter_all() {
-            let parent_perm = loc
-                .perms
-                .get(idx)
-                .map(|x| x.permission)
-                .unwrap_or_else(|| node.default_initial_perm);
+        let child = self.nodes.get(child_idx).unwrap();
+        return self.locations.iter_all().all(|(_range, loc)| {
+            let parent_perm =
+                loc.perms.get(idx).map(|x| x.permission).unwrap_or(node.default_initial_perm);
             let child_perm = loc
                 .perms
                 .get(child_idx)
                 .map(|x| x.permission)
-                .unwrap_or_else(|| child.default_initial_perm);
-            if !parent_perm.can_be_replaced_by_child(child_perm) {
-                return None;
-            }
-        }
-
-        Some(child_idx)
+                .unwrap_or(child.default_initial_perm);
+            parent_perm.can_be_replaced_by_child(child_perm)
+        });
     }
 
     /// Like [`Self::can_be_replaced_by_single_child`], but for a node with more than one
@@ -648,12 +641,13 @@ impl EagerTree {
                 }
                 // Node has exactly one child (and, per the guard above, a parent)
                 1 => {
-                    if let Some(child_idx) = self.can_be_replaced_by_single_child(idx) {
+                    if self.can_be_replaced_by_single_child(idx) {
                         // Replace the node with its only child.
+                        let child_idx = node.children[0];
                         let parent_idx = parent.unwrap();
-                        let children = &mut self.nodes.get_mut(parent_idx).unwrap().children;
-                        let pos = children.iter().position(|&c| c == idx).unwrap();
-                        children[pos] = child_idx;
+                        let siblings = &mut self.nodes.get_mut(parent_idx).unwrap().children;
+                        let pos = siblings.iter().position(|&c| c == idx).unwrap();
+                        siblings[pos] = child_idx;
                         self.nodes.get_mut(child_idx).unwrap().parent = parent;
                         self.remove_useless_node(idx);
                         *entry = BorTag::omnivalid();
