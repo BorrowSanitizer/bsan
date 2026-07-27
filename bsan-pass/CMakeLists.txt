@@ -13,10 +13,12 @@ set(BSAN_SOURCES
   BorrowSanitizer.cpp
   BorrowSanitizerPass.cpp
   Retag.cpp
+  InstrumentationPlan.cpp
 )
 
 set(BSAN_HEADERS
   BorrowSanitizerPass.h
+  InstrumentationPlan.h
   Retag.h
 )
 
