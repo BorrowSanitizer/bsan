@@ -135,14 +135,12 @@ impl ErrorFormatContext {
                     .entry(path.clone())
                     .or_insert_with(|| SanitizerCommon::read_file(&path).unwrap_or_default());
                 if let Some(content_raw) = SanitizerCommon::get_source_line(file, line) {
-
                     let content = content_raw.trim();
                     let trimmed_ws_diff = content_raw.len() - content.len();
-                    
+
                     let line = line.to_string();
                     let line_indent_len = max(indentation, line.len()) - line.len();
                     let line_indent = " ".repeat(line_indent_len);
-
 
                     buffer.push_str(&format!("{max_indent} |\n",));
                     buffer.push_str(&format!("{line_indent}{line} | {content}\n"));
@@ -153,11 +151,8 @@ impl ErrorFormatContext {
                         // There's an error in the symbolizer or instrumentation that is
                         // beyond our control at this point, so we skip printing the caret.
                         buffer.push_str(&format!("{max_indent} |\n",));
-                    }else{
-                        let mut offset = col - trimmed_ws_diff;
-                        if offset > 0 {
-                            offset -= 1;
-                        }
+                    } else {
+                        let offset = col.saturating_sub(trimmed_ws_diff).saturating_sub(1);
                         let column_repeat = " ".repeat(offset);
                         buffer.push_str(&format!("{max_indent} | {column_repeat}^\n",));
                     }
