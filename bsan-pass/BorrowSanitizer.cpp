@@ -1150,6 +1150,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // An allocation used to store the boundary marker for
   // invoke instructions involving uninstrumented functions.
   AllocaInst *MarkerAlloca = nullptr;
+
 public:
   BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
                          const TargetLibraryInfo &TLI, DominatorTree &DT,
