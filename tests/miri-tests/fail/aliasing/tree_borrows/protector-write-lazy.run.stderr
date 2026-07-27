@@ -2,18 +2,18 @@ error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x0] is 
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/protector-write-lazy.rs:LL:CC
    |
 LL | unsafe { println!("Value of funky: {}", *funky_ptr_lazy_on_fst_elem) } //miri: ~ ERROR: /reborrow through .* is forbidden/
-   |
+   |          ^
    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow (acting as a child read access)
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/protector-write-lazy.rs:LL:CC
    |
 LL | unsafe { (&mut *(ptr_to_vec.wrapping_add(1))) as *mut i32 }.wrapping_sub(1);
-   |
+   |          ^
 help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a protector release (acting as a foreign write access) on every location previously accessed by this tag
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/protector-write-lazy.rs:LL:CC
    |
 LL | }
-   |
+   |  ^
    = help: this transition corresponds to a loss of read and write permissions
 
 stack backtrace:

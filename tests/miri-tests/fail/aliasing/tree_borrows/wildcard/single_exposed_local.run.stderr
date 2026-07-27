@@ -2,12 +2,12 @@ error: Undefined Behavior: write access through <wildcard> at ALLOC[0x0] is forb
     --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/single_exposed_local.rs:LL:CC
    |
 LL | unsafe { wild.write(0) }; //miri: ~ ERROR: /write access through <wildcard> at .* is forbidden/
-   |
+   |               ^
      = note: the above line calls library code, where the error was detected:
     --> RUSTLIB/core/src/ptr/mod.rs:LL:CC
    |
 LL | intrinsics::write_via_move(dst, src)
-   |
+   |                                 ^
      = help: there are no exposed tags which may perform this access here
 
 stack backtrace:

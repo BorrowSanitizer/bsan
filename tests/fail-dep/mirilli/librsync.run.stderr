@@ -2,12 +2,12 @@ error: Undefined Behavior: deallocation through <TAG>(WeakProtector) at ALLOC[0x
    --> bsan/tests/fail-dep/mirilli/librsync.rs:LL:CC
    |
 LL | });
-   |
+   | ^
     = note: the above line calls library code, where the error was detected:
    --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
    |
 LL | unsafe { libc::free(ptr as *mut libc::c_void) }
-   |
+   |          ^
     = help: the accessed tag <TAG>(WeakProtector) has state Reserved (conflicted) which forbids this deallocation (acting as a child write access)
 help: the accessed tag <TAG>(WeakProtector) was created here, in the initial state Reserved
    --> bsan/tests/fail-dep/mirilli/librsync.rs:LL:CC
@@ -18,7 +18,7 @@ help: the accessed tag <TAG>(WeakProtector) later transitioned to Reserved (conf
    --> CARGO_REGISTRY/.../lib.rs:LL:CC
    |
 LL | (*h).borrow_mut()
-   |
+   | ^
     = help: this transition corresponds to a temporary loss of write permissions until function exit
 
 stack backtrace:

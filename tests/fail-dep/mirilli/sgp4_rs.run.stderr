@@ -2,12 +2,12 @@ error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0xf]
    --> bsan/tests/fail-dep/mirilli/sgp4_rs.rs:LL:CC
    |
 LL | let _ = TwoLineElement::new(line1, line2).unwrap();
-   |
+   |         ^
     = note: the above line calls library code, where the error was detected:
    --> CARGO_REGISTRY/.../sgp4io.rs:LL:CC
    |
 LL | longstr1[j] = '_';
-   |
+   |             ^
     = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
    --> RUSTLIB/core/src/slice/mod.rs:LL:CC

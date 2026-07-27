@@ -2,30 +2,30 @@ error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x4]
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/return_invalid_mut.rs:LL:CC
    |
 LL | *ret = 3; //miri: ~ ERROR: /write access through .* is forbidden/
-   |
+   | ^
    = help: the accessed tag <TAG>(unprotected) is a child of the conflicting tag <TAG>(unprotected)
    = help: the conflicting tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/return_invalid_mut.rs:LL:CC
    |
 LL | let ret = foo(arg);
-   |
+   |           ^
 help: the conflicting tag <TAG>(unprotected) was created here, in the initial state Reserved
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/return_invalid_mut.rs:LL:CC
    |
 LL | let ret = unsafe { &mut (*xraw).1 };
-   |
+   |                    ^
 help: the conflicting tag <TAG>(unprotected) later transitioned to Unique due to a child write access at offsets [0x4..0x8]
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/return_invalid_mut.rs:LL:CC
    |
 LL | *ret = *ret; // activate
-   |
+   | ^
    = help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
 help: the conflicting tag <TAG>(unprotected) later transitioned to Frozen due to a foreign read access at offsets [0x4..0x8]
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/return_invalid_mut.rs:LL:CC
    |
 LL | let _val = unsafe { *xraw }; // invalidate xref for writing
-   |
+   |                     ^
    = help: this transition corresponds to a loss of write permissions
 
 stack backtrace:

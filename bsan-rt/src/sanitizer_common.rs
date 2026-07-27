@@ -132,8 +132,7 @@ impl SanitizerCommon {
         if line_number == 0 {
             return None;
         }
-
-        content.lines().nth((line_number - 1) as usize).map(|s| s.trim().to_string())
+        content.lines().nth((line_number - 1) as usize).map(|s| s.to_string())
     }
 }
 

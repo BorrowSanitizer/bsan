@@ -2,7 +2,7 @@ error: Undefined Behavior: trying to access an allocation that has been freed.
   --> bsan/tests/miri-tests/fail/baseline/dangling_pointers/dangling_primitive.rs:LL:CC
    |
 LL | dbg!(*ptr); //miri: ~ ERROR: has been freed
-   |
+   | ^
 
 stack backtrace:
 0: dangling_primitive::main

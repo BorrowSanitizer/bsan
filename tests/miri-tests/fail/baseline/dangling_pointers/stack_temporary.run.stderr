@@ -2,7 +2,7 @@ error: Undefined Behavior: trying to access an allocation that has been freed.
   --> bsan/tests/miri-tests/fail/baseline/dangling_pointers/stack_temporary.rs:LL:CC
    |
 LL | let val = *x; //miri: ~ ERROR: has been freed
-   |
+   |           ^
 
 stack backtrace:
 0: stack_temporary::main

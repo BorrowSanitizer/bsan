@@ -8,12 +8,12 @@ help: the accessed tag <TAG>(unprotected) was created here, in the initial state
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/write-during-2phase.rs:LL:CC
    |
 LL | let res = f.add(unsafe {
-   |
+   |           ^
 help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x0..0x8]
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/write-during-2phase.rs:LL:CC
    |
 LL | *alias = 42;
-   |
+   | ^
    = help: this transition corresponds to a loss of read and write permissions
 
 stack backtrace:

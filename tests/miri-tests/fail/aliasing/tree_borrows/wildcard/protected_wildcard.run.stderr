@@ -2,7 +2,7 @@ error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x0]
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/protected_wildcard.rs:LL:CC
    |
 LL | *ref1 = 13; //miri: ~ ERROR: /write access through .* is forbidden/
-   |
+   | ^
    = help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
    = help: this foreign write access would cause the protected tag <TAG>(StrongProtector) (currently Reserved) to become Disabled
    = help: protected tags must never be Disabled
@@ -10,7 +10,7 @@ help: the accessed tag <TAG>(unprotected) was created here
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/protected_wildcard.rs:LL:CC
    |
 LL | let mut protect = |_arg: &mut u32| {
-   |
+   |                   ^
 help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/protected_wildcard.rs:LL:CC
    |
