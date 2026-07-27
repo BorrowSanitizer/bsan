@@ -11,7 +11,8 @@ RUN apt-get update && apt-get install -y \
     vim \
     pkg-config \ 
     libssl-dev \ 
-    sudo \
+    libunwind-dev \
+    sudo \    
     git \
     gdb \
     && rm -rf /var/lib/apt/lists/*
