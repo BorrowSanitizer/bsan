@@ -65,6 +65,14 @@ MIRI_CONFIGS = [MIRI]
 # trace has no source locations.
 SYMBOLIZER = "/root/.rustup/toolchains/bsan/bin/llvm-symbolizer"
 
+# Full checking, with stack instrumentation disabled.
+# Added to the set of configurations by the `--no-stack` flag.
+NO_STACK_CONFIG = {
+    "name": "no-stack",
+    "cmd": ["cargo", "bsan", "test", "--lib"],
+    "env": {"RUSTFLAGS": "--cfg=miri", "BSAN_DISABLE_STACK_INSTRUMENTATION": "1"},
+}
+
 # BorrowSanitizer configurations.
 BSAN_CONFIGS = [
     # Full checking
@@ -72,12 +80,6 @@ BSAN_CONFIGS = [
         "name": "full",
         "cmd": ["cargo", "bsan", "test", "--lib"],
         "env": {"RUSTFLAGS": "--cfg=miri"},
-    },
-    # Full checking, with stack instrumentation disabled
-    {
-        "name": "full",
-        "cmd": ["cargo", "bsan", "test", "--lib"],
-        "env": {"RUSTFLAGS": "--cfg=miri", "BSAN_DISABLE_STACK_INSTRUMENTATION": "1"},
     },
     # Full, but with wildcard provenance disabled.
     {
@@ -777,7 +779,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description="Benchmark relative execution time",
         usage=(
-            "%(prog)s [--crate NAME ...] <crates> <target> <output_json> <output_csv>"
+            "%(prog)s [--crate NAME ...] <crates> <target> <output_json> <output_csv> [--no-stack]"
         ),
     )
     parser.add_argument("crates_json", type=Path)
@@ -827,8 +829,13 @@ def main(argv: list[str]) -> int:
         help="Where this run's log can be read, e.g. its CI job. Recorded "
              "against every failed test, whose output is printed to the log.",
     )
+    parser.add_argument("--no-stack", action="store_true",
+                        help="also benchmark full checking with stack "
+                             "instrumentation disabled")
 
     args = parser.parse_args(argv)
+    if args.no_stack:
+        ALL_BINARY_CONFIGS.append(NO_STACK_CONFIG)
     for tool in ["cargo", "hyperfine"]:
         require_tool(tool)
     os.environ.setdefault("BSAN_SYMBOLIZER", SYMBOLIZER)
