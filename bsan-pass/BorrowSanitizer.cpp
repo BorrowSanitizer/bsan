@@ -48,6 +48,22 @@ static cl::opt<bool> ClHandleAsmConservative(
              "outputs to wildcard Provenance"),
     cl::Hidden, cl::init(true));
 
+static cl::opt<bool> ClDisableStackInstrumentation(
+    "bsan-disable-stack-instrumentation",
+    cl::desc("Disable instrumentation of stack allocations (allocas and byval "
+             "arguments). Accesses through pointers to the stack are never "
+             "checked."),
+    cl::Hidden, cl::init(false));
+
+// rustc parses `-Cllvm-args` before loading plugins passed via
+// `-Zllvm-plugins`, so our options are not registered yet at parse time. The
+// environment provides an alternative channel for setting this option when
+// the pass is loaded through rustc instead of `opt`.
+static bool disableStackInstrumentation() {
+  return ClDisableStackInstrumentation ||
+         std::getenv("BSAN_DISABLE_STACK_INSTRUMENTATION") != nullptr;
+}
+
 static AtomicOrdering addAcquireOrdering(AtomicOrdering A) {
   switch (A) {
   case AtomicOrdering::NotAtomic:
@@ -484,6 +500,8 @@ bool BorrowSanitizer::shouldTrustFunction(const TargetLibraryInfo *TLI,
 
 // We only instrument allocations that have a non-zero size.
 bool BorrowSanitizer::shouldInstrumentAlloca(const AllocaInst &AI) {
+  if (disableStackInstrumentation())
+    return false;
   // Although Rust emits retags for ZSTs, tracking
   // allocations leads to false positive errors—probably
   // due to interactions with lowering.
@@ -1569,14 +1587,17 @@ private:
         TypeSize TS = BS.DL->getTypeAllocSize(Ty);
         Value *Size = EntryIRB.CreateTypeSize(BS.IntptrTy, TS);
 
-        Provenance Prov = createAllocaMetadata(EntryIRB);
-        initAllocaMetadata(EntryIRB, &Arg, Size, Prov);
-        setProvenance(&Arg, Prov);
-
         ByValArgInfo Info;
         Info.Arg = &Arg;
-        Info.AllocProv = Prov;
         Info.Size = Size;
+
+        if (!disableStackInstrumentation()) {
+          Provenance Prov = createAllocaMetadata(EntryIRB);
+          initAllocaMetadata(EntryIRB, &Arg, Size, Prov);
+          setProvenance(&Arg, Prov);
+          Info.AllocProv = Prov;
+          ByValAllocs.push_back(Prov);
+        }
 
         // If a `byval` parameter does not have an explicit alignment, then
         // we use the alignment of the type. As specified in the LLVM guide:
@@ -1592,7 +1613,6 @@ private:
           Info.Fields.push_back({NumParamProv, Desc});
         }
         ByValArgs.push_back(Info);
-        ByValAllocs.push_back(Prov);
       } else {
 
         SmallVector<ProvenanceField> ProvDesc = BS.getProvenanceDesc(
@@ -1653,8 +1673,10 @@ private:
       }
       copyProvenance(EntryIRB, Info.Arg, Fields, Info.Size, Info.Alignment,
                      AtomicOrdering::NotAtomic);
-      Value *Slot = ShadowStack.getStackAllocSlot(EntryIRB);
-      storeProvenance(EntryIRB, Info.AllocProv, Slot);
+      if (!disableStackInstrumentation()) {
+        Value *Slot = ShadowStack.getStackAllocSlot(EntryIRB);
+        storeProvenance(EntryIRB, Info.AllocProv, Slot);
+      }
     }
 
     // We push additional slots into the frame header for

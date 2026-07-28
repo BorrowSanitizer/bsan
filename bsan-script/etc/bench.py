@@ -58,11 +58,11 @@ MIRI_CONFIGS = [MIRI]
 
 # BorrowSanitizer configurations.
 BSAN_CONFIGS = [
-    # Full checking
+    # Full checking, with stack instrumentation disabled
     {
         "name": "full",
         "cmd": ["cargo", "bsan", "test", "--lib"],
-        "env": {"RUSTFLAGS": "--cfg=miri"},
+        "env": {"RUSTFLAGS": "--cfg=miri", "BSAN_DISABLE_STACK_INSTRUMENTATION": "1"},
     },
     # No-op checking. Instrumentation is inserted, but
     # all memory access checks, retags, and reference count
