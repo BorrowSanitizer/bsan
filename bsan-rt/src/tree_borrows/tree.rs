@@ -660,7 +660,10 @@ impl EagerTree {
                 }
                 // Node has more than one child. If every child can soundly replace it, compact it
                 // by reparenting all of its children onto its parent.
-                _ if compact && self.can_be_replaced_by_children(idx) => {
+                _ if compact
+                    && !node.default_initial_perm.is_reserved_im()
+                    && self.can_be_replaced_by_children(idx) =>
+                {
                     let parent_idx = parent.unwrap();
                     // Move `idx`'s children out so we can reparent them
                     let children = mem::take(&mut self.nodes.get_mut(idx).unwrap().children);
