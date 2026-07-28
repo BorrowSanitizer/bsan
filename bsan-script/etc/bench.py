@@ -56,13 +56,21 @@ MIRI = {
 # Every Miri configuration.
 MIRI_CONFIGS = [MIRI]
 
+# Full checking, with stack instrumentation disabled.
+# Added to the set of configurations by the `--no-stack` flag.
+NO_STACK_CONFIG = {
+    "name": "no-stack",
+    "cmd": ["cargo", "bsan", "test", "--lib"],
+    "env": {"RUSTFLAGS": "--cfg=miri", "BSAN_DISABLE_STACK_INSTRUMENTATION": "1"},
+}
+
 # BorrowSanitizer configurations.
 BSAN_CONFIGS = [
-    # Full checking, with stack instrumentation disabled
+    # Full checking
     {
         "name": "full",
         "cmd": ["cargo", "bsan", "test", "--lib"],
-        "env": {"RUSTFLAGS": "--cfg=miri", "BSAN_DISABLE_STACK_INSTRUMENTATION": "1"},
+        "env": {"RUSTFLAGS": "--cfg=miri"},
     },
     # No-op checking. Instrumentation is inserted, but
     # all memory access checks, retags, and reference count
@@ -431,15 +439,20 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description="Benchmark relative execution time",
         usage=(
-            "%(prog)s <crates> <target> <output_json> <output_csv>"
+            "%(prog)s <crates> <target> <output_json> <output_csv> [--no-stack]"
         ),
     )
     parser.add_argument("crates_json", type=Path)
     parser.add_argument("target", type=str)
     parser.add_argument("output_json", type=Path)
     parser.add_argument("output_csv", type=Path)
+    parser.add_argument("--no-stack", action="store_true",
+                        help="also benchmark full checking with stack "
+                             "instrumentation disabled")
 
     args = parser.parse_args(argv)
+    if args.no_stack:
+        ALL_BINARY_CONFIGS.append(NO_STACK_CONFIG)
     for tool in ["cargo", "hyperfine"]:
         require_tool(tool)
 
