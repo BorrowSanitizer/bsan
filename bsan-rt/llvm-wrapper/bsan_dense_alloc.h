@@ -7,7 +7,7 @@
 // list containing batches of blocks. However, the original design can only
 // be used for objects smaller than 32 bits. Our version hands out 256-byte
 // blocks from a preallocated 1 TB region. The only significant changes are
-// in the implementation of `AllocSuperBlock`, which atomically bumps a
+// within the implementation of `AllocSuperBlock`, which atomically bumps a
 // pointer forward through the fixed region.
 
 #include "bsan.h"
