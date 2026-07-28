@@ -74,6 +74,25 @@ static cl::opt<bool> ClInstrumentVariadics(
     "bsan-variadics", cl::desc("Instrument functions with variadic arguments."),
     cl::Hidden, cl::init(true));
 
+static cl::opt<bool> ClInstrumentAllocas(
+    "bsan-inst-allocas",
+    cl::desc("Instrument stack allocations (`alloca`)"),
+    cl::Hidden, cl::init(true));
+
+static cl::opt<bool> ClInstrumentByval(
+    "bsan-inst-byval",
+    cl::desc("Instrument implicit `byval` allocations."),
+    cl::Hidden, cl::init(true));
+
+// rustc parses `-Cllvm-args` before loading plugins passed via
+// `-Zllvm-plugins`, so our options are not registered yet at parse time. The
+// environment provides an alternative channel for setting this option when
+// the pass is loaded through rustc instead of `opt`.
+static bool disableStackInstrumentation() {
+  return ClDisableStackInstrumentation ||
+         std::getenv("BSAN_DISABLE_STACK_INSTRUMENTATION") != nullptr;
+}
+
 static AtomicOrdering addAcquireOrdering(AtomicOrdering A) {
   switch (A) {
   case AtomicOrdering::NotAtomic:
@@ -563,6 +582,8 @@ bool BorrowSanitizer::shouldTrustFunction(const TargetLibraryInfo *TLI,
 
 // We only instrument allocations that have a non-zero size.
 bool BorrowSanitizer::shouldInstrumentAlloca(const AllocaInst &AI) {
+  if (disableStackInstrumentation())
+    return false;
   // Although Rust emits retags for ZSTs, tracking
   // allocations leads to false positive errors—probably
   // due to interactions with lowering.
@@ -1805,8 +1826,15 @@ private:
 
         ByValArgInfo Info;
         Info.Arg = &Arg;
-        Info.AllocProv = Prov;
         Info.Size = Size;
+
+        if (!disableStackInstrumentation()) {
+          Provenance Prov = createAllocaMetadata(EntryIRB);
+          initAllocaMetadata(EntryIRB, &Arg, Size, Prov);
+          setProvenance(&Arg, Prov);
+          Info.AllocProv = Prov;
+          ByValAllocs.push_back(Prov);
+        }
 
         // If a `byval` parameter does not have an explicit alignment, then
         // we use the alignment of the type. As specified in the LLVM guide:
@@ -1871,9 +1899,11 @@ private:
       copyProvenance(EntryIRB, ShadowPtr, Fields, Info.Size,
                      AtomicOrdering::NotAtomic);
 
-      Value *Slot = ShadowStack.getStackAllocSlot(EntryIRB);
-      auto SlotPtr = getMainProvenancePtr(EntryIRB, Slot);
-      storeProvenance(EntryIRB, SlotPtr, Info.AllocProv);
+      if (!disableStackInstrumentation()) {
+        Value *Slot = ShadowStack.getStackAllocSlot(EntryIRB);
+        auto SlotPtr = getMainProvenancePtr(EntryIRB, Slot);
+        storeProvenance(EntryIRB, SlotPtr, Info.AllocProv);
+      }
     }
 
     // We push additional slots into the frame header for

@@ -67,11 +67,17 @@ SYMBOLIZER = "/root/.rustup/toolchains/bsan/bin/llvm-symbolizer"
 
 # BorrowSanitizer configurations.
 BSAN_CONFIGS = [
-    # Full checking.
+    # Full checking
     {
         "name": "full",
         "cmd": ["cargo", "bsan", "test", "--lib"],
         "env": {"RUSTFLAGS": "--cfg=miri"},
+    },
+    # Full checking, with stack instrumentation disabled
+    {
+        "name": "full",
+        "cmd": ["cargo", "bsan", "test", "--lib"],
+        "env": {"RUSTFLAGS": "--cfg=miri", "BSAN_DISABLE_STACK_INSTRUMENTATION": "1"},
     },
     # Full, but with wildcard provenance disabled.
     {
