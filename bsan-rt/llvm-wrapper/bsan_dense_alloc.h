@@ -182,9 +182,10 @@ private:
               seg, kNumSegments);
       c->cursor = seg * kBlocksPerSegment;
       c->end = c->cursor + kBlocksPerSegment;
-      // Block 0 of the region is reserved as the invalid index.
+      // We reserve indices 0-2 for omnivalid, invalid, and wildcard provenance.
+      // TODO: can we use this space for something else?
       if (UNLIKELY(c->cursor == 0))
-        c->cursor = 1;
+        c->cursor = 3;
     }
     uptr batch = Min(Cache::kSize, c->end - c->cursor);
     for (uptr i = 0; i < batch; i++)

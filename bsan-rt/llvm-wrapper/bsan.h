@@ -57,8 +57,7 @@ typedef DenseSlabAlloc<kMetadataSpace> MetadataAlloc;
 extern MetadataAlloc metadata_alloc;
 
 #define BLOCK(idx) (metadata_alloc.Map(idx))
-#define PROV_BLOCK(prov)                                                       \
-  (PROV_BLOCK_IDX(prov) ? BLOCK(PROV_BLOCK_IDX(prov)) : nullptr)
+#define PROV_BLOCK(prov) (BLOCK(PROV_BLOCK_IDX(prov)))
 #define PROV_PACK(block_ptr, tag)                                              \
   ((block_ptr) ? PROV(metadata_alloc.IndexOf(block_ptr), (tag))                \
                : (Provenance)(tag))
