@@ -2,24 +2,24 @@ error: Undefined Behavior: deallocation through <TAG>(WeakProtector) at ALLOC[0x
     --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/deallocate_against_protector1.rs:LL:CC
    |
 LL | drop(unsafe { Box::from_raw(raw) });
-   |
+   | ^
      = note: the above line calls library code, where the error was detected:
     --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
    |
 LL | unsafe { libc::free(ptr as *mut libc::c_void) }
-   |
+   |          ^
      = help: the allocation of the accessed tag <TAG>(WeakProtector) also contains the strongly protected tag <TAG>(StrongProtector)
      = help: the strongly protected tag <TAG>(StrongProtector) disallows deallocations
 help: the accessed tag <TAG>(WeakProtector) was created here
     --> RUSTLIB/core/src/mem/mod.rs:LL:CC
    |
 LL | pub const fn drop<T>(_x: T)
-   |
+   | ^
 help: the strongly protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
     --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/deallocate_against_protector1.rs:LL:CC
    |
 LL | inner(Box::leak(Box::new(0)), |x| {
-   |
+   | ^
 
 stack backtrace:
 0: <std::alloc::System as core::alloc::global::GlobalAlloc>::dealloc

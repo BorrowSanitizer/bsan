@@ -2,7 +2,7 @@ error: Undefined Behavior: trying to access an allocation that has been freed.
   --> bsan/tests/fail/baseline/free_box.rs:LL:CC
    |
 LL | *ptr = 1;
-   |
+   | ^
 
 stack backtrace:
 0: free_box::main

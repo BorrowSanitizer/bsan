@@ -2,7 +2,7 @@ error: Undefined Behavior: read access through <wildcard> at ALLOC[0x0] is forbi
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/multi_exposed_siblings_disable.rs:LL:CC
    |
 LL | let _fail = unsafe { *wild }; //miri: ~ ERROR: /read access through .* is forbidden/
-   |
+   |                      ^
    = help: there are no exposed tags which may perform this access here
 
 stack backtrace:

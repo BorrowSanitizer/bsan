@@ -2,12 +2,12 @@ error: Undefined Behavior: deallocation through <wildcard> at ALLOC[0x0] is forb
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/dealloc.rs:LL:CC
    |
 LL | unsafe { std::alloc::dealloc(wild as *mut u8, Layout::new::<u32>()) }; //miri: ~ ERROR: /deallocation through <wildcard> .* is forbidden/
-   |
+   |          ^
    = note: the above line calls library code, where the error was detected:
   --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
    |
 LL | unsafe { libc::free(ptr as *mut libc::c_void) }
-   |
+   |          ^
    = help: there are no exposed tags which may perform this access here
 
 stack backtrace:

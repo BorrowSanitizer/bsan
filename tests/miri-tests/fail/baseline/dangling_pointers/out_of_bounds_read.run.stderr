@@ -2,7 +2,7 @@ error: Undefined Behavior: an access of size 2b at offset 0x6 is out of bounds f
  --> bsan/tests/miri-tests/fail/baseline/dangling_pointers/out_of_bounds_read.rs:LL:CC
    |
 LL | let x = unsafe { *v.as_ptr().wrapping_byte_add(6) }; //miri: ~ ERROR: attempting to access 2 bytes
-   |
+   |                  ^
 
 stack backtrace:
 0: out_of_bounds_read::main
