@@ -19,7 +19,7 @@ help: the strongly protected tag <TAG>(StrongProtector) was created here, in the
     --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/deallocate_against_protector1.rs:LL:CC
    |
 LL | inner(Box::leak(Box::new(0)), |x| {
-   |
+   | ^
 
 stack backtrace:
 0: <std::alloc::System as core::alloc::global::GlobalAlloc>::dealloc

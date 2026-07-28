@@ -2,7 +2,7 @@ error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x0] is 
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/write-during-2phase.rs:LL:CC
    |
 LL | fn add(&mut self, n: u64) -> u64 {
-   |
+   | ^
    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow (acting as a child read access)
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/write-during-2phase.rs:LL:CC

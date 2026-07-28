@@ -13,7 +13,7 @@ help: the accessed tag <TAG>(WeakProtector) was created here, in the initial sta
    --> bsan/tests/fail-dep/mirilli/librsync.rs:LL:CC
    |
 LL | let t = thread::spawn(move || {
-   |
+   | ^
 help: the accessed tag <TAG>(WeakProtector) later transitioned to Reserved (conflicted) due to a reborrow (acting as a foreign read access) at offsets [0x0..0x10]
    --> CARGO_REGISTRY/.../lib.rs:LL:CC
    |

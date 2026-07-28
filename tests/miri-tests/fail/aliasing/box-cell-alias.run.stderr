@@ -15,7 +15,7 @@ help: the accessed tag <TAG>(unprotected) was created here
     --> RUSTLIB/core/src/cell.rs:LL:CC
    |
 LL | pub const fn get(&self) -> *mut T {
-   |
+   | ^
 help: the protected tag <TAG>(WeakProtector) was created here, in the initial state Reserved
     --> bsan/tests/miri-tests/fail/aliasing/box-cell-alias.rs:LL:CC
    |

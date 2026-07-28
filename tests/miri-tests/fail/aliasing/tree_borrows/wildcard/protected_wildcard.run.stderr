@@ -15,7 +15,7 @@ help: the protected tag <TAG>(StrongProtector) was created here, in the initial 
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/protected_wildcard.rs:LL:CC
    |
 LL | let mut protect = |_arg: &mut u32| {
-   |
+   | ^
 
 stack backtrace:
 0: protected_wildcard::main::{closure#0}
