@@ -13,7 +13,7 @@ stack backtrace:
 0: std::sys::alloc::PLATFORM::dealloc
  at RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
 1: __rustc::__rdl_dealloc
- at RUSTLIB/std/src/alloc.rs:LL:CC
+ at RUSTLIB/std/src/alloc.rs
 2: alloc::alloc::dealloc_nonnull
  at RUSTLIB/alloc/src/alloc.rs:LL:CC
 
