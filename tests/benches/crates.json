@@ -1,5 +1,5 @@
 [
-   {
+    {
         "name": "hashbrown",
         "version": "0.17.0",
         "exclude": [
@@ -14,11 +14,475 @@
         "name": "matchers",
         "version": "0.2.0"
     },
-   {
-      "name": "bit-vec",
-      "version": "0.9.1",
-      "exclude": [
+    {
+        "name": "bit-vec",
+        "version": "0.9.1",
+        "exclude": [
             "tests::test_bit_vec_iterator"
-      ]
-   }
+        ]
+    },
+    {
+        "name": "chacha20",
+        "version": "0.10.0"
+    },
+    {
+        "name": "either",
+        "version": "1.15.0"
+    },
+    {
+        "name": "foldhash",
+        "version": "0.2.0"
+    },
+    {
+        "name": "getrandom",
+        "version": "0.4.1"
+    },
+    {
+        "name": "indexmap",
+        "version": "2.13.0"
+    },
+    {
+        "name": "itertools",
+        "version": "0.14.0"
+    },
+    {
+        "name": "libc",
+        "version": "0.2.178"
+    },
+    {
+        "name": "linux-raw-sys",
+        "version": "0.12.1"
+    },
+    {
+        "name": "log",
+        "version": "0.4.29"
+    },
+    {
+        "name": "aho-corasick",
+        "version": "1.1.3"
+    },
+    {
+        "name": "memchr",
+        "version": "2.8.0"
+    },
+    {
+        "name": "ppv-lite86",
+        "version": "0.2.21"
+    },
+    {
+        "name": "proc-macro2",
+        "version": "1.0.101"
+    },
+    {
+        "name": "regex-automata",
+        "version": "0.4.13"
+    },
+    {
+        "name": "rustix",
+        "version": "1.1.3"
+    },
+    {
+        "name": "serde_core",
+        "version": "1.0.228"
+    },
+    {
+        "name": "socket2",
+        "version": "0.6.2"
+    },
+    {
+        "name": "unicode-ident",
+        "version": "1.0.19"
+    },
+    {
+        "name": "zerocopy",
+        "version": "0.8.31"
+    },
+    {
+        "name": "rustc-hash",
+        "version": "2.1.1"
+    },
+    {
+        "name": "rustversion",
+        "version": "1.0.22"
+    },
+    {
+        "name": "ryu",
+        "version": "1.0.23"
+    },
+    {
+        "name": "scopeguard",
+        "version": "1.2.0"
+    },
+    {
+        "name": "semver",
+        "version": "1.0.27"
+    },
+    {
+        "name": "serde",
+        "version": "1.0.228"
+    },
+    {
+        "name": "serde_derive",
+        "version": "1.0.228"
+    },
+    {
+        "name": "serde_json",
+        "version": "1.0.149"
+    },
+    {
+        "name": "serde_urlencoded",
+        "version": "0.7.1"
+    },
+    {
+        "name": "sha2",
+        "version": "0.11.0-rc.5"
+    },
+    {
+        "name": "shlex",
+        "version": "1.3.0"
+    },
+    {
+        "name": "slab",
+        "version": "0.4.12"
+    },
+    {
+        "name": "smallvec",
+        "version": "2.0.0-alpha.12"
+    },
+    {
+        "name": "spin",
+        "version": "0.10.0"
+    },
+    {
+        "name": "strsim",
+        "version": "0.11.1"
+    },
+    {
+        "name": "strum",
+        "version": "0.27.2"
+    },
+    {
+        "name": "strum_macros",
+        "version": "0.27.2"
+    },
+    {
+        "name": "subtle",
+        "version": "2.6.1"
+    },
+    {
+        "name": "sync_wrapper",
+        "version": "1.0.2"
+    },
+    {
+        "name": "synstructure",
+        "version": "0.13.2"
+    },
+    {
+        "name": "termcolor",
+        "version": "1.4.1"
+    },
+    {
+        "name": "thiserror-impl",
+        "version": "2.0.18"
+    },
+    {
+        "name": "thread_local",
+        "version": "1.1.9"
+    },
+    {
+        "name": "time-core",
+        "version": "0.1.8"
+    },
+    {
+        "name": "time-macros",
+        "version": "0.2.27"
+    },
+    {
+        "name": "tinyvec",
+        "version": "1.10.0"
+    },
+    {
+        "name": "tinyvec_macros",
+        "version": "0.1.1"
+    },
+    {
+        "name": "tokio-macros",
+        "version": "2.6.0"
+    },
+    {
+        "name": "toml",
+        "version": "1.0.3+spec-1.1.0"
+    },
+    {
+        "name": "toml_datetime",
+        "version": "1.0.0+spec-1.1.0"
+    },
+    {
+        "name": "tower-service",
+        "version": "0.3.3"
+    },
+    {
+        "name": "tracing-core",
+        "version": "0.1.36"
+    },
+    {
+        "name": "typenum",
+        "version": "1.19.0"
+    },
+    {
+        "name": "unicode-bidi",
+        "version": "0.3.18"
+    },
+    {
+        "name": "unicode-normalization",
+        "version": "0.1.25"
+    },
+    {
+        "name": "unicode-xid",
+        "version": "0.2.6"
+    },
+    {
+        "name": "untrusted",
+        "version": "0.9.0"
+    },
+    {
+        "name": "utf8parse",
+        "version": "0.2.2"
+    },
+    {
+        "name": "uuid",
+        "version": "1.21.0"
+    },
+    {
+        "name": "wasi",
+        "version": "0.14.7+wasi-0.2.4"
+    },
+    {
+        "name": "windows_aarch64_gnullvm",
+        "version": "0.53.1"
+    },
+    {
+        "name": "windows_aarch64_msvc",
+        "version": "0.53.1"
+    },
+    {
+        "name": "windows_i686_gnu",
+        "version": "0.53.1"
+    },
+    {
+        "name": "windows_i686_msvc",
+        "version": "0.53.1"
+    },
+    {
+        "name": "windows-sys",
+        "version": "0.61.2"
+    },
+    {
+        "name": "windows-targets",
+        "version": "0.53.5"
+    },
+    {
+        "name": "windows_x86_64_gnu",
+        "version": "0.53.1"
+    },
+    {
+        "name": "windows_x86_64_gnullvm",
+        "version": "0.53.1"
+    },
+    {
+        "name": "windows_x86_64_msvc",
+        "version": "0.53.1"
+    },
+    {
+        "name": "zeroize",
+        "version": "1.8.2"
+    },
+    {
+        "name": "addr2line",
+        "version": "0.26.0"
+    },
+    {
+        "name": "anstream",
+        "version": "1.0.0"
+    },
+    {
+        "name": "anstyle",
+        "version": "1.0.13"
+    },
+    {
+        "name": "anstyle-query",
+        "version": "1.1.5"
+    },
+    {
+        "name": "arrayvec",
+        "version": "0.7.6"
+    },
+    {
+        "name": "bitflags",
+        "version": "2.11.0"
+    },
+    {
+        "name": "block-buffer",
+        "version": "0.11.0"
+    },
+    {
+        "name": "byteorder",
+        "version": "1.5.0"
+    },
+    {
+        "name": "bytes",
+        "version": "1.11.1"
+    },
+    {
+        "name": "cc",
+        "version": "1.2.56"
+    },
+    {
+        "name": "cfg-if",
+        "version": "1.0.4"
+    },
+    {
+        "name": "clap",
+        "version": "4.5.59"
+    },
+    {
+        "name": "clap_builder",
+        "version": "4.5.59"
+    },
+    {
+        "name": "clap_derive",
+        "version": "4.5.55"
+    },
+    {
+        "name": "clap_lex",
+        "version": "1.0.0"
+    },
+    {
+        "name": "colorchoice",
+        "version": "1.0.4"
+    },
+    {
+        "name": "cpufeatures",
+        "version": "0.3.0"
+    },
+    {
+        "name": "crossbeam-utils",
+        "version": "0.8.21"
+    },
+    {
+        "name": "crypto-common",
+        "version": "0.2.0"
+    },
+    {
+        "name": "darling",
+        "version": "0.23.0"
+    },
+    {
+        "name": "darling_core",
+        "version": "0.23.0"
+    },
+    {
+        "name": "darling_macro",
+        "version": "0.23.0"
+    },
+    {
+        "name": "digest",
+        "version": "0.11.0"
+    },
+    {
+        "name": "encoding_rs",
+        "version": "0.8.35"
+    },
+    {
+        "name": "env_logger",
+        "version": "0.11.9"
+    },
+    {
+        "name": "equivalent",
+        "version": "1.0.2"
+    },
+    {
+        "name": "event-listener",
+        "version": "5.4.1"
+    },
+    {
+        "name": "fastrand",
+        "version": "2.3.0"
+    },
+    {
+        "name": "fnv",
+        "version": "1.0.7"
+    },
+    {
+        "name": "form_urlencoded",
+        "version": "1.2.2"
+    },
+    {
+        "name": "futures-core",
+        "version": "0.3.32"
+    },
+    {
+        "name": "futures-io",
+        "version": "0.3.32"
+    },
+    {
+        "name": "futures-macro",
+        "version": "0.3.32"
+    },
+    {
+        "name": "futures-sink",
+        "version": "0.3.32"
+    },
+    {
+        "name": "futures-task",
+        "version": "0.3.32"
+    },
+    {
+        "name": "futures-util",
+        "version": "0.3.32"
+    },
+    {
+        "name": "generic-array",
+        "version": "1.3.5"
+    },
+    {
+        "name": "gimli",
+        "version": "0.33.0"
+    },
+    {
+        "name": "heck",
+        "version": "0.5.0"
+    },
+    {
+        "name": "hermit-abi",
+        "version": "0.5.2"
+    },
+    {
+        "name": "hmac",
+        "version": "0.13.0-rc.5"
+    },
+    {
+        "name": "httparse",
+        "version": "1.10.1"
+    },
+    {
+        "name": "http-body",
+        "version": "1.0.1"
+    },
+    {
+        "name": "httpdate",
+        "version": "1.0.3"
+    },
+    {
+        "name": "hyper",
+        "version": "1.8.1"
+    },
+    {
+        "name": "itoa",
+        "version": "1.0.17"
+    },
+    {
+        "name": "lock_api",
+        "version": "0.4.14"
+    }
 ]
