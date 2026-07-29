@@ -528,13 +528,11 @@ impl EagerTree {
     /// it must hold for every child at every location
     fn can_be_replaced_by_children(&self, idx: UniIndex) -> bool {
         let node = self.nodes.get(idx).unwrap();
-        // A root is never replaced by its children
-        if node.parent.is_none() {
-            return false;
-        }
-        // Reparenting a very wide node checks every child at every location, and pushes all of
-        // them onto the parent's child list. Skip it rather than pay for it.
-        if node.children.len() > MAX_COMPACTED_CHILDREN.load(Relaxed) {
+        // Exit early if the node is a root, `ReservedIM`, or above max children.
+        if node.parent.is_none()
+            || node.default_initial_perm.is_reserved_im()
+            || node.children.len() > MAX_COMPACTED_CHILDREN.load(Relaxed)
+        {
             return false;
         }
 
@@ -665,10 +663,7 @@ impl EagerTree {
                 }
                 // Node has more than one child. If every child can soundly replace it, compact it
                 // by reparenting all of its children onto its parent.
-                _ if compact
-                    && !node.default_initial_perm.is_reserved_im()
-                    && self.can_be_replaced_by_children(idx) =>
-                {
+                _ if compact && self.can_be_replaced_by_children(idx) => {
                     let parent_idx = parent.unwrap();
                     // Move `idx`'s children out so we can reparent them
                     let children = mem::take(&mut self.nodes.get_mut(idx).unwrap().children);
