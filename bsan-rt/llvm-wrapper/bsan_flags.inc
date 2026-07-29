@@ -17,5 +17,4 @@ BSAN_FLAG(uptr, tree_gc_min_nodes, 64,
           "0 makes every initialized tree prunable.")
 BSAN_FLAG(uptr, max_compacted_children, 16,
           "Only compact away a dead node by reparenting its children onto its"
-          "parent if it has at most this many children. 0 disables this form of"
-          "compaction entirely.")
+          "parent if doing so leaves the parent with at most this many children.")

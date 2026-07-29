@@ -528,11 +528,15 @@ impl EagerTree {
     /// it must hold for every child at every location
     fn can_be_replaced_by_children(&self, idx: UniIndex) -> bool {
         let node = self.nodes.get(idx).unwrap();
-        // Exit early if the node is a root, `ReservedIM`, or above max children.
-        if node.parent.is_none()
-            || node.default_initial_perm.is_reserved_im()
-            || node.children.len() > MAX_COMPACTED_CHILDREN.load(Relaxed)
-        {
+        // A root nor `ReservedIM` parent is never replaced
+        let Some(parent_idx) = node.parent else { return false };
+        if node.default_initial_perm.is_reserved_im() {
+            return false;
+        }
+
+        // Check that the final compaction result would be within bounds
+        let parent_width = self.nodes.get(parent_idx).unwrap().children.len();
+        if parent_width + node.children.len() - 1 > MAX_COMPACTED_CHILDREN.load(Relaxed) {
             return false;
         }
 
