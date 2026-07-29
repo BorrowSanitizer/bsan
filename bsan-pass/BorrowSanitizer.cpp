@@ -1285,30 +1285,25 @@ private:
   }
 
   /// Returns the integer shadow offset that corresponds to a given application
-  /// address `Addr`:
-  ///
-  ///     Offset = (Addr & ~AndMask) ^ XorMask
-  ///
-  /// getShadowOriginPtr turns this into the shadow and origin pointers by
-  /// adding ShadowBase and OriginBase respectively. When `Alignment` cannot be
-  /// shown to be at least kMinProvAlignment, the offset is additionally rounded
-  /// down to a provenance-slot (kMinProvAlignment) boundary, so sub-slot
-  /// addresses map to the slot that holds their provenance.
+  /// address
   Value *getShadowPtrOffset(Value *Addr, IRBuilder<> &IRB,
                             MaybeAlign Alignment) {
     Type *IntptrTy = ptrToIntPtrType(Addr->getType());
     Value *OffsetLong = IRB.CreatePointerCast(Addr, IntptrTy);
+
+    Align AddrAlign = Alignment.valueOrOne();
+    Align CommonAlign = commonAlignment(AddrAlign, kMinProvAlignment.value());
+
+    if (CommonAlign != kMinProvAlignment) {
+      uint64_t Mask = kMinProvAlignment.value() - 1;
+      OffsetLong = IRB.CreateAnd(OffsetLong, constToIntPtr(IntptrTy, ~Mask));
+    }
 
     if (uint64_t AndMask = BS.MapParams->AndMask)
       OffsetLong = IRB.CreateAnd(OffsetLong, constToIntPtr(IntptrTy, ~AndMask));
 
     if (uint64_t XorMask = BS.MapParams->XorMask)
       OffsetLong = IRB.CreateXor(OffsetLong, constToIntPtr(IntptrTy, XorMask));
-
-    if (!Alignment || *Alignment < kMinProvAlignment) {
-      uint64_t Mask = kMinProvAlignment.value() - 1;
-      OffsetLong = IRB.CreateAnd(OffsetLong, constToIntPtr(IntptrTy, ~Mask));
-    }
 
     return OffsetLong;
   }
@@ -1344,7 +1339,7 @@ private:
   }
 
   Provenance loadProvenanceFromShadow(
-      IRBuilder<> &IRB, Value *Base, MaybeAlign Alignment = kMinProvAlignment,
+      IRBuilder<> &IRB, Value *Base, Align Alignment,
       ElementCount Elems = ElementCount::getFixed(1),
       AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
     if (Elems.isScalar()) {
@@ -1359,8 +1354,10 @@ private:
     report_fatal_error("Vectors are not supported.");
   }
 
-  Provenance loadProvenance(IRBuilder<> &IRB, Value *Src,
-                            ElementCount Elems = ElementCount::getFixed(1)) {
+  // Loads a provenance value from an already-aligned address in main memory.
+  Provenance
+  loadProvenanceAligned(IRBuilder<> &IRB, Value *Src,
+                        ElementCount Elems = ElementCount::getFixed(1)) {
     if (Elems.isScalar()) {
       Value *ZeroIdx = ConstantInt::get(IRB.getInt64Ty(), 0);
       Value *TagPtr = Src;
@@ -1445,7 +1442,7 @@ private:
             EntryIRB.CreateMul(BS.ProvenanceSize, ArgProvOffset);
         Value *ArgProvenancePtr = ptrsub(EntryIRB, HeaderTop, ByteOffset);
         Provenance ArgProvenance =
-            loadProvenance(EntryIRB, ArgProvenancePtr, Elems);
+            loadProvenanceAligned(EntryIRB, ArgProvenancePtr, Elems);
         setProvenance(Key, ArgProvenance);
         return ArgProvenance;
       }
@@ -1475,8 +1472,8 @@ private:
   // address needs to be manually aligned, or if it is already at the correct
   // alignment.
   void
-  storeProvenanceToShadow(IRBuilder<> &IRB, Value *ObjAddr, Provenance Prov,
-                          MaybeAlign Alignment = kMinProvAlignment,
+  storeProvenanceToShadow(IRBuilder<> &IRB, Value *ObjAddr, Align Alignment,
+                          Provenance Prov,
                           AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
     if (Prov.Elems.isVector()) {
       report_fatal_error("Vectors are not supported.");
@@ -1648,7 +1645,7 @@ private:
         Value *HeaderTop = ShadowStack.getOrInitFrameHeaderTop(EntryIRB);
         Value *ByteOffset = EntryIRB.CreateMul(BS.ProvenanceSize, SlotOffset);
         Value *ProvPtr = ptrsub(EntryIRB, HeaderTop, ByteOffset);
-        Provenance Prov = loadProvenance(EntryIRB, ProvPtr, Desc.Elems);
+        Provenance Prov = loadProvenanceAligned(EntryIRB, ProvPtr, Desc.Elems);
         Fields.push_back({Desc, Prov});
       }
       copyProvenance(EntryIRB, Info.Arg, Fields, Info.Size, Info.Alignment,
@@ -1718,8 +1715,9 @@ private:
   void instrumentRetagMem(CallBase &CB) {
     IRBuilder<> IRB(&CB);
     Value *Operand = CB.getOperand(0);
-    Value *SrcAddr = IRB.CreateLoad(BS.PtrTy, Operand);
-    Provenance SrcProv = loadProvenanceFromShadow(IRB, Operand);
+    Align OperandAlign = Operand->getPointerAlignment(*BS.DL);
+    Value *SrcAddr = IRB.CreateAlignedLoad(BS.PtrTy, Operand, OperandAlign);
+    Provenance SrcProv = loadProvenanceFromShadow(IRB, Operand, OperandAlign);
 
     RetagInfo RI(&CB);
     Value *ImArrayLen = getLayoutArrayLength(RI.ImArray);
@@ -1729,8 +1727,8 @@ private:
                    {SrcAddr, RI.Size, RI.Perms, RI.ImArray, ImArrayLen,
                     RI.PinArray, PinArrayLen, SrcProv.Tag, SrcProv.Info, Slot,
                     IRB.getInt1(false)});
-    Provenance RetaggedProv = loadProvenance(IRB, Slot);
-    storeProvenanceToShadow(IRB, Operand, RetaggedProv);
+    Provenance RetaggedProv = loadProvenanceAligned(IRB, Slot);
+    storeProvenanceToShadow(IRB, Operand, OperandAlign, RetaggedProv);
   }
 
   void instrumentRetagReg(CallBase &CB) {
@@ -1745,7 +1743,7 @@ private:
                      {Ptr, RI.Size, RI.Perms, RI.ImArray, ImArrayLen,
                       RI.PinArray, PinArrayLen, Prov->Tag, Prov->Info, Dest,
                       IRB.getInt1(false)});
-      setProvenance(&CB, loadProvenance(IRB, Dest));
+      setProvenance(&CB, loadProvenanceAligned(IRB, Dest));
     }
   }
 
@@ -1993,7 +1991,7 @@ private:
     // Finally, load the return value's provenance from the shadow stack.
     for (const auto &[Idx, Ptr] : llvm::enumerate(ReturnProvPtrs)) {
       ElementCount Elems = ReturnDesc[Idx].Elems;
-      Provenance Prov = loadProvenance(After, Ptr, Elems);
+      Provenance Prov = loadProvenanceAligned(After, Ptr, Elems);
       setProvenance({&CB, Idx}, Prov);
     }
   }
@@ -2248,7 +2246,7 @@ private:
       }
 
       Value *ObjAddr = ptradd(IRB, Pointer, Desc.ByteOffset);
-      storeProvenanceToShadow(IRB, ObjAddr, Prov, FieldAlign, Ordering);
+      storeProvenanceToShadow(IRB, ObjAddr, FieldAlign, Prov, Ordering);
 
       Cursor = IRB.CreateNUWAdd(Desc.ByteOffset, Desc.ByteWidth);
     }

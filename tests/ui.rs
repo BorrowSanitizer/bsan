@@ -245,6 +245,9 @@ regexes! {
     // erase line numbers in source locations
     r"(?m)^ *[0-9]+ *\|" => "LL |",
     // erase line and column info
+    // note that unlike Miri, we do *not* replace these
+    // with "LL:CC". On aarch64, allocator shims do not
+    // consistently have line numbers.
     r"\.(rs|c|cpp):[0-9]+:[0-9]+(: [0-9]+:[0-9]+)?" => ".rs:LL:CC",
     // erase alloc ids
     "alloc[0-9]+"                    => "ALLOC",
@@ -273,11 +276,14 @@ regexes! {
     // erase Rust stdlib path
     "[^ \n`]*/(rust[^/]*|checkout)/library/" => "RUSTLIB/",
     // erase platform file paths and line numbers
-    r"\bsys/([a-z_]+)/[a-z]+\.rs:\d+:\d+\b" => "sys/$1/PLATFORM.rs:l:c",
+    r"\bsys/([a-z_]+)/[a-z]+\.rs:\d+:\d+\b" => "sys/$1/PLATFORM.rs",
     // erase platform dependent line retrieved
     r"(-->\s+\S+/PLATFORM\.rs:l:c)\n\s*\|\s*\n\s*\d+\s*\|.*\n\s*\|\s*\n" => "$1\n",
     // erase paths into the crate registry
     r"[^ ]*/\.?cargo/registry/.*/(.*\.(rs|c|cpp))"  => "CARGO_REGISTRY/.../$1",
+    // erase line numbers for the allocator shims (e.g. __rdl_alloc) within stdlib.
+    // these are sometimes missing on aarch64.
+    r"(__rdl_\w+\n[ \t]*at [^\n]+):LL:CC" => "$1",
     // normalize workspace paths to relative
     r"(/.*/tests/)([^ \n]+)" => "bsan/tests/$2",
     r"::h[0-9a-f]{16}\b" => "::HASH",
