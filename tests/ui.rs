@@ -245,9 +245,9 @@ regexes! {
     // erase line numbers in source locations
     r"(?m)^ *[0-9]+ *\|" => "LL |",
     // erase line and column info
-    // note that unlike Miri, we do *not* replace these 
+    // note that unlike Miri, we do *not* replace these
     // with "LL:CC". On aarch64, allocator shims do not
-    // consistently have line numbers. 
+    // consistently have line numbers.
     r"\.(rs|c|cpp):[0-9]+:[0-9]+(: [0-9]+:[0-9]+)?" => ".rs:LL:CC",
     // erase alloc ids
     "alloc[0-9]+"                    => "ALLOC",
