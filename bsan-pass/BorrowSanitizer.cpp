@@ -1,6 +1,5 @@
 #include "BorrowSanitizerPass.h"
 #include "Retag.h"
-#include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
@@ -10,6 +9,7 @@
 #include "llvm/IR/AttributeMask.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/CycleInfo.h"
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/EHPersonalities.h"
@@ -106,21 +106,6 @@ static Constant *getOrInsertGlobal(Module &M, StringRef Name, Type *Ty) {
         M, Ty, false, GlobalVariable::ExternalLinkage, nullptr, Name, nullptr,
         GlobalVariable::NotThreadLocal, std::nullopt, true);
   });
-}
-
-static bool inSCC(DominatorTree &DT, LoopInfo &LI, BasicBlock *BB) {
-  if (LI.getLoopFor(BB))
-    return true;
-  // It's still possible for us to have irreducible control flow, in which
-  // case LLVM would not recognize a loop, but it would still be possible for
-  // us to enter this basic block again. We would use LLVM's CycleInfo instead,
-  // which would catch this, but it does not support incremental updates yet.
-  for (BasicBlock *SuccBB : successors(BB)) {
-    if (isPotentiallyReachable(SuccBB, BB, nullptr, &DT, &LI)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 namespace {
@@ -833,8 +818,7 @@ private:
 
   // Returns the total number of stack slots currently allocated
   // in the given basic block.
-  Value *&getCurrentOffset(DominatorTree &DT, LoopInfo &LI, IRBuilder<> &IRB,
-                           Type *Ty) {
+  Value *&getCurrentOffset(CycleInfo &CI, IRBuilder<> &IRB, Type *Ty) {
     BasicBlock *InsertBB = IRB.GetInsertBlock();
     // If we already have an offset, then no initialization is necessary.
     auto It = BlockOffsets.find(InsertBB);
@@ -864,7 +848,9 @@ private:
 
     Value *Offset;
     Value *GlobalOffset = IRB.CreateLoad(Ty, GlobalOffsetAlloc);
-    if (inSCC(DT, LI, InsertBB)) {
+    // We can enter this block more than once, so we need to cache the offset
+    // that we assigned on the first visit.
+    if (CI.getCycle(InsertBB)) {
       Value *InitVal = ConstantInt::get(Ty, -1, true);
       AllocaInst *CachedOffsetAlloc = createEntryAlloca(InsertBB, InitVal);
       Value *CachedOffset = IRB.CreateLoad(Ty, CachedOffsetAlloc);
@@ -880,9 +866,9 @@ private:
 
   // Allocates the requested number of slots,
   // returning the slot count offset.
-  Value *alloc(DominatorTree &DT, LoopInfo &LI, IRBuilder<> &IRB,
-               ElementCount EC, Type *Ty, bool IsFnEntry) {
-    Value *&Offset = getCurrentOffset(DT, LI, IRB, Ty);
+  Value *alloc(CycleInfo &CI, IRBuilder<> &IRB, ElementCount EC, Type *Ty,
+               bool IsFnEntry) {
+    Value *&Offset = getCurrentOffset(CI, IRB, Ty);
     Value *Elems = IRB.CreateElementCount(Ty, EC);
     Offset = IRB.CreateAdd(Offset, Elems);
     return Offset;
@@ -1039,11 +1025,10 @@ public:
   }
 
   // Allocates one or more shadow stack slots from the requested section.
-  Value *bumpStackSlot(DominatorTree &DT, LoopInfo &LI, IRBuilder<> &IRB,
-                       bool IsFnEntry,
+  Value *bumpStackSlot(CycleInfo &CI, IRBuilder<> &IRB, bool IsFnEntry,
                        ElementCount Elems = ElementCount::getFixed(1)) {
     Value *SlotOffset = slotsFor(IsFnEntry).alloc(
-        DT, LI, IRB, Elems, SlotSize->getType(), IsFnEntry);
+        CI, IRB, Elems, SlotSize->getType(), IsFnEntry);
     Value *ProvOffset = IRB.CreateMul(SlotOffset, SlotSize);
     if (IsFnEntry) {
       assert(FnEntryTop && "No function-entry slots available");
@@ -1054,11 +1039,10 @@ public:
   }
 
   // Allocates one or more shadow stack slots from the requested section.
-  Value *allocStackSlot(DominatorTree &DT, LoopInfo &LI, IRBuilder<> &IRB,
-                        bool IsFnEntry,
+  Value *allocStackSlot(CycleInfo &CI, IRBuilder<> &IRB, bool IsFnEntry,
                         ElementCount Elems = ElementCount::getFixed(1)) {
 
-    Value *Slot = bumpStackSlot(DT, LI, IRB, IsFnEntry, Elems);
+    Value *Slot = bumpStackSlot(CI, IRB, IsFnEntry, Elems);
     if (!IsFnEntry) {
       // We need to update the bottom of the frame every time we allocate a
       // slot, because arbitrary instructions can be lowered into calls to
@@ -1073,10 +1057,9 @@ public:
 
   // Returns a pointer to the bottom of the specified section of the
   // shadow frame.
-  Value *getStackPtr(DominatorTree &DT, LoopInfo &LI, IRBuilder<> &IRB,
-                     bool IsFnEntry) {
+  Value *getStackPtr(CycleInfo &CI, IRBuilder<> &IRB, bool IsFnEntry) {
     Value *CurrOffset =
-        getOutgoingOffset(DT, LI, IRB, SlotSize->getType(), IsFnEntry);
+        getOutgoingOffset(CI, IRB, SlotSize->getType(), IsFnEntry);
     Value *ProvOffset = IRB.CreateMul(CurrOffset, SlotSize);
     Value *Base = IsFnEntry ? FnEntryTop : getOrInitFrameHeaderBottom(IRB);
     return ptrsub(IRB, Base, ProvOffset);
@@ -1085,9 +1068,9 @@ public:
   // Returns the current offset from the top of the relevant section. This is
   // used to update the stack pointer before calling functions and to get the
   // total number of function-entry retags before popping a stack frame.
-  Value *getOutgoingOffset(DominatorTree &DT, LoopInfo &LI, IRBuilder<> &IRB,
-                           Type *Ty, bool IsFnEntry) {
-    return slotsFor(IsFnEntry).getCurrentOffset(DT, LI, IRB, Ty);
+  Value *getOutgoingOffset(CycleInfo &CI, IRBuilder<> &IRB, Type *Ty,
+                           bool IsFnEntry) {
+    return slotsFor(IsFnEntry).getCurrentOffset(CI, IRB, Ty);
   }
 
   // Patches both section counters and promotes their tracking allocas.
@@ -1117,7 +1100,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // Cached analysis results
   const TargetLibraryInfo *TLI;
   DominatorTree &DT;
-  LoopInfo LI;
+  CycleInfo Cycles;
   const StackSafetyGlobalInfo &SSGI;
 
   // The end of the prologue of the function, where we initialize our
@@ -1191,7 +1174,7 @@ public:
     while (IRBuilder<> *AtExit = EE.Next()) {
     }
     DTU.flush();
-    LI.analyze(DT);
+    Cycles.compute(F);
 
     BasicBlock *EntryBlock = &F.getEntryBlock();
     IRBuilder<> EntryIRB(EntryBlock, EntryBlock->getFirstNonPHIIt());
@@ -1749,16 +1732,16 @@ private:
 
   Value *bumpStackSlot(IRBuilder<> &IRB, bool IsFnEntry,
                        ElementCount Elems = ElementCount::getFixed(1)) {
-    return ShadowStack.bumpStackSlot(DT, LI, IRB, IsFnEntry, Elems);
+    return ShadowStack.bumpStackSlot(Cycles, IRB, IsFnEntry, Elems);
   }
 
   Value *allocStackSlot(IRBuilder<> &IRB, bool IsFnEntry,
                         ElementCount Elems = ElementCount::getFixed(1)) {
-    return ShadowStack.allocStackSlot(DT, LI, IRB, IsFnEntry, Elems);
+    return ShadowStack.allocStackSlot(Cycles, IRB, IsFnEntry, Elems);
   }
 
   Value *getStackOffset(IRBuilder<> &IRB, bool IsFnEntry) {
-    return ShadowStack.getStackPtr(DT, LI, IRB, IsFnEntry);
+    return ShadowStack.getStackPtr(Cycles, IRB, IsFnEntry);
   }
 
   using InstVisitor<BorrowSanitizerVisitor>::visit;
@@ -1893,8 +1876,11 @@ private:
       if (II->getNormalDest()->getSinglePredecessor()) {
         NextInst = &II->getNormalDest()->front();
       } else {
-        NextInst =
-            &SplitEdge(II->getParent(), II->getNormalDest(), &DT, &LI)->front();
+        BasicBlock *Src = II->getParent();
+        BasicBlock *Dst = II->getNormalDest();
+        BasicBlock *NewBB = SplitEdge(Src, Dst, &DT);
+        Cycles.splitCriticalEdge(Src, Dst, NewBB);
+        NextInst = &NewBB->front();
       }
     } else {
       assert(CB.getIterator() != CB.getParent()->end());
@@ -2440,7 +2426,7 @@ private:
       Value *NumStackAllocs =
           ShadowStack.getNumStackAllocSlots(IRB, BS.IntptrTy);
       Value *NumProtectors =
-          ShadowStack.getOutgoingOffset(DT, LI, IRB, BS.IntptrTy, true);
+          ShadowStack.getOutgoingOffset(Cycles, IRB, BS.IntptrTy, true);
       Value *MaxNumProtectors = ConstantInt::get(BS.IntptrTy, NumFnEntryRetags);
 
       Value *FrameHeaderBottom = ShadowStack.getOrInitFrameHeaderBottom(IRB);
