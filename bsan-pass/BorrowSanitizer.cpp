@@ -332,24 +332,25 @@ private:
   /// a pointer, then in Rust its field will use i64 (if repr(C)). However,
   /// clang will use `ptr` regardless. This will be resolved once the byte type
   /// is more broadly supported.
-  SmallVector<ProvenanceField> getProvenanceDesc(IRBuilder<> &IRB, Type *Ty,
-                                                 bool ClearGaps = false);
+  SmallVector<ProvenanceField> getProvenanceLayout(IRBuilder<> &IRB, Type *Ty,
+                                                   bool ClearGaps = false);
 
 private:
-  Value *getProvenanceDesc(IRBuilder<> &IRB,
-                           SmallVector<ProvenanceField> &ProvDesc,
-                           Type *CurrentTy, Value *ByteOffset,
-                           bool ClearGaps = false);
+  Value *getProvenanceLayout(IRBuilder<> &IRB,
+                             SmallVector<ProvenanceField> &ProvDesc,
+                             Type *CurrentTy, Value *ByteOffset,
+                             bool ClearGaps = false);
 };
 } // end anonymous namespace
 
 // Provides a list of the locations of provenance values inside a type.
 SmallVector<ProvenanceField>
-BorrowSanitizer::getProvenanceDesc(IRBuilder<> &IRB, Type *Ty, bool ClearGaps) {
+BorrowSanitizer::getProvenanceLayout(IRBuilder<> &IRB, Type *Ty,
+                                     bool ClearGaps) {
   SmallVector<ProvenanceField> Desc;
   if (Ty->isSized()) {
     Value *Zero = ConstantInt::get(IRB.getIntPtrTy(*DL), 0);
-    getProvenanceDesc(IRB, Desc, Ty, Zero, ClearGaps);
+    getProvenanceLayout(IRB, Desc, Ty, Zero, ClearGaps);
   }
   return Desc;
 }
@@ -361,7 +362,7 @@ Value *BorrowSanitizer::getAllocaSizeBytes(IRBuilder<> &IRB, AllocaInst *AI) {
 
 // Populates a vector with the list of locations of provenance
 // values within a type.
-Value *BorrowSanitizer::getProvenanceDesc(
+Value *BorrowSanitizer::getProvenanceLayout(
     IRBuilder<> &IRB, SmallVector<ProvenanceField> &ProvDesc, Type *CurrentTy,
     Value *ByteOffset, bool ClearGaps) {
   assert(CurrentTy->isSized() && "expected a sized type");
@@ -412,7 +413,7 @@ Value *BorrowSanitizer::getProvenanceDesc(
           IRB.CreateTypeSize(IntptrTy, SL->getElementOffset(Idx));
       Value *CurrByteOffset = IRB.CreateAdd(ByteOffset, ElemOffset);
       auto *ProvOffset =
-          getProvenanceDesc(IRB, ProvDesc, ElemTy, CurrByteOffset, ClearGaps);
+          getProvenanceLayout(IRB, ProvDesc, ElemTy, CurrByteOffset, ClearGaps);
       CurrProvOffset = IRB.CreateAdd(CurrProvOffset, ProvOffset);
     }
     return CurrProvOffset;
@@ -426,8 +427,8 @@ Value *BorrowSanitizer::getProvenanceDesc(
       Value *CurrByteOffset =
           IRB.CreateMul(ConstantInt::get(IntptrTy, Idx), ElemSize);
       CurrByteOffset = IRB.CreateAdd(ByteOffset, CurrByteOffset);
-      auto *ProvOffset = getProvenanceDesc(IRB, ProvDesc, AT->getElementType(),
-                                           CurrByteOffset, ClearGaps);
+      auto *ProvOffset = getProvenanceLayout(
+          IRB, ProvDesc, AT->getElementType(), CurrByteOffset, ClearGaps);
       CurrProvOffset = IRB.CreateAdd(CurrProvOffset, ProvOffset);
     }
     return CurrProvOffset;
@@ -632,7 +633,6 @@ void BorrowSanitizer::createUserspaceApi(Module &M,
 }
 
 namespace {
-
 // A pointer's provenance value.
 //
 // Each pointer has provenance, indicating its permission to access
@@ -661,24 +661,26 @@ public:
                              ElementCount Elems = ElementCount::getFixed(1));
 };
 
-struct ProvenanceKey {
-  Value *V;
-  unsigned long Offset;
-  ProvenanceKey(Value *V) : V(V), Offset(0) {}
-  ProvenanceKey(Value *V, unsigned long Offset) : V(V), Offset(Offset) {}
-};
-
 struct ProvenanceMap {
   DenseMap<Value *, SmallDenseMap<unsigned, Provenance>> Inner;
 
 public:
-  Provenance *find(ProvenanceKey Key) {
-    auto InnerIt = Inner.find(Key.V);
+  struct Key {
+    Value *V;
+    unsigned long Offset;
+    Key(Value *V) : V(V), Offset(0) {}
+    Key(Value *V, unsigned long Offset) : V(V), Offset(Offset) {}
+  };
+
+  Provenance &operator[](Key K) { return Inner[K.V][K.Offset]; }
+
+  Provenance *find(Key K) {
+    auto InnerIt = Inner.find(K.V);
     if (InnerIt == Inner.end())
       return nullptr;
 
     auto &SubMap = InnerIt->second;
-    auto SubIt = SubMap.find(Key.Offset);
+    auto SubIt = SubMap.find(K.Offset);
     if (SubIt == SubMap.end())
       return nullptr;
 
@@ -687,20 +689,18 @@ public:
 
   void transfer(Value *Src, Value *Dest) {
     auto It = Inner.find(Src);
-    if (It != Inner.end()) {
-      SmallDenseMap<unsigned, Provenance> *DestMap = &Inner[Dest];
-      for (const auto &[Idx, Prov] : It->second) {
-        (*DestMap)[Idx] = Prov;
-      }
+    if (It == Inner.end())
+      return;
+
+    SmallDenseMap<unsigned, Provenance> SrcMap = It->second;
+    auto &DestMap = Inner[Dest];
+    for (const auto &[Idx, Prov] : SrcMap) {
+      DestMap[Idx] = Prov;
     }
   }
 
-  void set(ProvenanceKey Key, Provenance Prov) {
-    Inner[Key.V][Key.Offset] = Prov;
-  }
-
-  std::optional<Provenance> get(ProvenanceKey Key) {
-    if (Provenance *Prov = this->find(Key)) {
+  std::optional<Provenance> get(Key K) {
+    if (Provenance *Prov = this->find(K)) {
       return *Prov;
     }
     return std::nullopt;
@@ -1145,7 +1145,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // A vector containing yet-to-be resolved provenance values for PHI nodes.
   // The first element in the pair, the provenance "key", consists of a
   // pointer to the PHINode and the index into its provenance.
-  SmallVector<std::pair<ProvenanceKey, Provenance>> ProvPHINodes;
+  SmallVector<std::pair<ProvenanceMap::Key, Provenance>> ProvPHINodes;
 
   // A vector containing every retag intrinsic invocation. Since these are
   // "dummy" function calls, they need to be erased before the pass has
@@ -1356,7 +1356,7 @@ private:
   // Will fail with an error if anything other than a scalar provenance value is
   // present. If no provenance has been assigned yet, then return a wildcard
   // provenance value.
-  Provenance assertProvenanceScalar(BasicBlock *BB, ProvenanceKey Key) {
+  Provenance assertProvenanceScalar(BasicBlock *BB, ProvenanceMap::Key Key) {
     std::optional<Provenance> OptProv = getProvenance(BB, Key);
     if (OptProv.has_value()) {
       Provenance Prov = OptProv.value();
@@ -1370,7 +1370,7 @@ private:
   }
 
   Provenance assertProvenance(IRBuilder<> &IRB, ElementCount Elems,
-                              ProvenanceKey Key) {
+                              ProvenanceMap::Key Key) {
     BasicBlock *BB = IRB.GetInsertBlock();
     return assertProvenance(IRB, BB, Elems, Key);
   }
@@ -1381,7 +1381,7 @@ private:
   // but do not care whether it's a vector or scalar. Checks for consistency
   // against a given provenance component.
   Provenance assertProvenance(IRBuilder<> &IRB, BasicBlock *BB,
-                              ElementCount Elems, ProvenanceKey Key) {
+                              ElementCount Elems, ProvenanceMap::Key Key) {
     std::optional<Provenance> OptProv = getProvenance(BB, Key);
     if (OptProv.has_value()) {
       Provenance Prov = OptProv.value();
@@ -1399,7 +1399,8 @@ private:
   // does not check that the provenance value being returned is consistent with
   // the caller's assumption about whether or not a scalar or vector provenance
   // value is required.
-  std::optional<Provenance> getProvenance(BasicBlock *BB, ProvenanceKey Key) {
+  std::optional<Provenance> getProvenance(BasicBlock *BB,
+                                          ProvenanceMap::Key Key) {
     if (Provenance *Prov = BaseProvMap.find(Key)) {
       return *Prov;
     }
@@ -1433,8 +1434,8 @@ private:
     return std::nullopt;
   }
 
-  void setProvenance(ProvenanceKey Key, Provenance Prov) {
-    BaseProvMap.set(Key, Prov);
+  void setProvenance(ProvenanceMap::Key Key, Provenance Prov) {
+    BaseProvMap[Key] = Prov;
   }
 
   void storeProvenance(IRBuilder<> &IRB, Provenance Prov, Value *Base,
@@ -1566,7 +1567,7 @@ private:
         Info.Alignment = ParamAlign.value_or(BS.DL->getABITypeAlign(Ty));
 
         for (auto &Desc :
-             BS.getProvenanceDesc(EntryIRB, Ty, /*ClearGaps=*/DiffABI)) {
+             BS.getProvenanceLayout(EntryIRB, Ty, /*ClearGaps=*/DiffABI)) {
           Value *NumProv = EntryIRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
           NumParamProv = EntryIRB.CreateAdd(NumParamProv, NumProv);
           Info.Fields.push_back({NumParamProv, Desc});
@@ -1575,7 +1576,7 @@ private:
         ByValAllocs.push_back(Prov);
       } else {
 
-        SmallVector<ProvenanceField> ProvDesc = BS.getProvenanceDesc(
+        SmallVector<ProvenanceField> ProvDesc = BS.getProvenanceLayout(
             EntryIRB, Arg.getType(), /*ClearGaps=*/DiffABI);
         for (auto &Desc : ProvDesc) {
           Value *NumProv = EntryIRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
@@ -1799,7 +1800,7 @@ private:
       Type *ArgTy = IsByVal ? CB.getParamByValType(i) : Arg->getType();
 
       SmallVector<ProvenanceField> ProvDesc =
-          BS.getProvenanceDesc(Before, ArgTy, /*ClearGaps=*/DiffABI);
+          BS.getProvenanceLayout(Before, ArgTy, /*ClearGaps=*/DiffABI);
 
       for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
         Value *NumProv = Before.CreateElementCount(BS.IntptrTy, Desc.Elems);
@@ -1893,7 +1894,7 @@ private:
     SmallVector<Value *> ReturnProvPtrs;
 
     SmallVector<ProvenanceField> ReturnDesc =
-        BS.getProvenanceDesc(Before, CB.getType());
+        BS.getProvenanceLayout(Before, CB.getType());
 
     // Only sized return types have provenance
     if (CB.getType()->isSized()) {
@@ -2006,7 +2007,7 @@ private:
     for (int Idx = 0; Idx < NumOutputs; Idx++) {
       Value *Operand = CB.getOperand(Idx);
       SmallVector<ProvenanceField> Components =
-          BS.getProvenanceDesc(IRB, Operand->getType());
+          BS.getProvenanceLayout(IRB, Operand->getType());
       for (const auto &[Idx, Comp] : llvm::enumerate(Components)) {
         setProvenance({Operand, Idx}, Provenance::omnivalid(BS));
       }
@@ -2041,7 +2042,7 @@ private:
     IRBuilder<> IRB(&PN);
     unsigned NumIncoming = PN.getNumIncomingValues();
     SmallVector<ProvenanceField> Components =
-        BS.getProvenanceDesc(IRB, PN.getType());
+        BS.getProvenanceLayout(IRB, PN.getType());
     for (auto [Idx, Comp] : llvm::enumerate(Components)) {
       Provenance Prov =
           createProvenancePHI(IRB, Comp, predecessors(PN.getParent()));
@@ -2153,7 +2154,7 @@ private:
         IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeStoreSize(LI.getType()));
 
     SmallVector<ProvenanceField> Components =
-        BS.getProvenanceDesc(IRB, LI.getType());
+        BS.getProvenanceLayout(IRB, LI.getType());
 
     Value *Base = LI.getPointerOperand();
     for (const auto &[Idx, Comp] : llvm::enumerate(Components)) {
@@ -2192,7 +2193,7 @@ private:
 
     Type *Ty = Val->getType();
     SmallVector<std::pair<ProvenanceField, Provenance>> FieldValues;
-    SmallVector<ProvenanceField> Fields = BS.getProvenanceDesc(AfterIRB, Ty);
+    SmallVector<ProvenanceField> Fields = BS.getProvenanceLayout(AfterIRB, Ty);
     for (const auto &[Idx, Desc] : llvm::enumerate(Fields)) {
       Provenance Prov = assertProvenance(AfterIRB, Desc.Elems, {Val, Idx});
       FieldValues.push_back({Desc, Prov});
@@ -2333,7 +2334,7 @@ private:
       for (unsigned CurrIdx = 0; CurrIdx < Idx; ++CurrIdx) {
         Type *ElemType = ST->getElementType(CurrIdx);
         SmallVector<ProvenanceField> ProvDesc =
-            BS.getProvenanceDesc(IRB, ElemType);
+            BS.getProvenanceLayout(IRB, ElemType);
         Offset += ProvDesc.size();
       }
       return {ST->getElementType(Idx), Offset};
@@ -2341,7 +2342,7 @@ private:
 
     if (auto *AT = dyn_cast<ArrayType>(Ty)) {
       SmallVector<ProvenanceField> ProvDesc =
-          BS.getProvenanceDesc(IRB, AT->getElementType());
+          BS.getProvenanceLayout(IRB, AT->getElementType());
       return {AT->getElementType(), ProvDesc.size() * Idx};
     }
 
@@ -2353,7 +2354,7 @@ private:
     Value *AggregateSrc = EI.getAggregateOperand();
 
     SmallVector<ProvenanceField> DestProvDesc =
-        BS.getProvenanceDesc(IRB, EI.getType());
+        BS.getProvenanceLayout(IRB, EI.getType());
 
     Type *CurrType = AggregateSrc->getType();
     uint64_t StartIdx = 0;
@@ -2376,7 +2377,7 @@ private:
     BaseProvMap.transfer(II.getAggregateOperand(), &II);
     Value *ToInsert = II.getInsertedValueOperand();
     SmallVector<ProvenanceField> SrcProvDesc =
-        BS.getProvenanceDesc(IRB, ToInsert->getType());
+        BS.getProvenanceLayout(IRB, ToInsert->getType());
 
     Type *CurrType = II.getType();
     uint64_t StartIdx = 0;
@@ -2396,7 +2397,7 @@ private:
   void visitSelectInst(SelectInst &SI) {
     IRBuilder<> IRB(&SI);
     SmallVector<ProvenanceField> ProvDesc =
-        BS.getProvenanceDesc(IRB, SI.getType());
+        BS.getProvenanceLayout(IRB, SI.getType());
 
     for (auto [Idx, Desc] : llvm::enumerate(ProvDesc)) {
       if (Desc.Elems.isVector()) {
@@ -2441,7 +2442,7 @@ private:
     if (RetVal) {
       SmallVector<Value *> ReturnProvPtrs;
       SmallVector<ProvenanceField> ProvDesc =
-          BS.getProvenanceDesc(IRB, RetVal->getType());
+          BS.getProvenanceLayout(IRB, RetVal->getType());
       if (!ProvDesc.empty()) {
         Value *FrameTop = ShadowStack.getOrInitFrameHeaderTop(IRB);
         Value *NumReturnProv = ConstantInt::get(BS.IntptrTy, 0);
