@@ -670,6 +670,8 @@ public:
   void addIncoming(BasicBlock *IncomingBlock, Provenance &IncomingProv);
   static Provenance omnivalid(BorrowSanitizer &BS,
                               ElementCount Elems = ElementCount::getFixed(1));
+  static Provenance invalid(BorrowSanitizer &BS,
+                            ElementCount Elems = ElementCount::getFixed(1));
   static Provenance wildcard(BorrowSanitizer &BS,
                              ElementCount Elems = ElementCount::getFixed(1));
 };
@@ -739,6 +741,15 @@ Provenance Provenance::omnivalid(BorrowSanitizer &BS, ElementCount Elems) {
     Value *Zero = ConstantInt::get(BS.IntptrTy, 0);
     Value *InvalidPtr = ConstantPointerNull::get(BS.PtrTy);
     return Provenance(Zero, InvalidPtr, Elems);
+  }
+  report_fatal_error("Vector provenance is not supported yet");
+}
+
+Provenance Provenance::invalid(BorrowSanitizer &BS, ElementCount Elems) {
+  if (Elems.isScalar()) {
+    Value *One = ConstantInt::get(BS.IntptrTy, 1);
+    Value *InvalidPtr = ConstantPointerNull::get(BS.PtrTy);
+    return Provenance(One, InvalidPtr, Elems);
   }
   report_fatal_error("Vector provenance is not supported yet");
 }
@@ -1409,6 +1420,10 @@ private:
     if (Provenance *Prov = BaseProvMap.find(Key)) {
       return *Prov;
     }
+    // We return invalid provenance for null pointers.
+    if (auto *CI = dyn_cast<ConstantPointerNull>(Key.V)) {
+      return Provenance::invalid(BS);
+    }
     if (Argument *Arg = dyn_cast<Argument>(Key.V)) {
       // We always need to load the provenance for arguments right at the
       // beginning of the function. Otherwise, subsequent function calls could
@@ -1486,6 +1501,14 @@ private:
   void storeProvenanceWithReferenceCount(IRBuilder<> &IRB, Value *TagPtr,
                                          Value *InfoPtr, Provenance Prov,
                                          AtomicOrdering Ordering) {
+    // We always need to increment first, in case both the source and
+    // destination are the same provenance value. If we decrement the
+    // provenance in the destination first, then the garbage collector
+    // may see a zero reference count and deinitialize the provenance
+    // that we are about to store.
+    if (Prov != Provenance::omnivalid(BS)) {
+      IRB.CreateCall(BS.BsanFuncRcInc, {Prov.Tag, Prov.Info});
+    }
     // We only decrement on nonatomic loads. This leaks provenance exposed to
     // atomic operations, which is necessary to support them without locking.
     if (Ordering == AtomicOrdering::NotAtomic) {
@@ -1493,9 +1516,7 @@ private:
           loadProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Ordering);
       IRB.CreateCall(BS.BsanFuncRcDec, {Old.Tag, Old.Info});
     }
-    if (Prov != Provenance::omnivalid(BS)) {
-      IRB.CreateCall(BS.BsanFuncRcInc, {Prov.Tag, Prov.Info});
-    }
+
     storeProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Prov, Ordering);
   }
 

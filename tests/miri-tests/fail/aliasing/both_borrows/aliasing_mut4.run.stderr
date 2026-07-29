@@ -1,8 +1,13 @@
 error: Undefined Behavior: write access through <TAG>(StrongProtector) at ALLOC[0x0] is forbidden
+   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/aliasing_mut4.rs:LL:CC
+   |
+LL | y.set(1);
+   |   ^
+    = note: the above line calls library code, where the error was detected:
    --> RUSTLIB/core/src/mem/mod.rs:LL:CC
    |
 LL | crate::intrinsics::write_via_move(dest, src);
-   |
+   |                                         ^
     = help: the accessed tag <TAG>(StrongProtector) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
     = help: this foreign write access would cause the protected tag <TAG>(StrongProtector) (currently Frozen) to become Disabled
     = help: protected tags must never be Disabled
@@ -10,12 +15,12 @@ help: the accessed tag <TAG>(StrongProtector) was created here
    --> RUSTLIB/core/src/mem/mod.rs:LL:CC
    |
 LL | pub const fn replace<T>(dest: &mut T, src: T) -> T {
-   |
+   | ^
 help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Frozen
    --> bsan/tests/miri-tests/fail/aliasing/both_borrows/aliasing_mut4.rs:LL:CC
    |
 LL | fn safe(x: &i32, y: &mut Cell<i32>) {
-   |
+   | ^
 
 stack backtrace:
 0: core::mem::replace
@@ -24,3 +29,5 @@ stack backtrace:
  at RUSTLIB/core/src/cell.rs:LL:CC
 2: <core::cell::Cell<i32>>::set
  at RUSTLIB/core/src/cell.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

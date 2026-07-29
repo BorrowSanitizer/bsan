@@ -2,25 +2,25 @@ error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x0]
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/parent_read_freezes_raw_mut.rs:LL:CC
    |
 LL | *ptr = 0; //miri: ~ ERROR: /write access through .* is forbidden/
-   |
+   | ^
    = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/parent_read_freezes_raw_mut.rs:LL:CC
    |
 LL | let mref = &mut root;
-   |
+   |            ^
 help: the accessed tag <TAG>(unprotected) later transitioned to Unique due to a child write access at offsets [0x0..0x1]
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/parent_read_freezes_raw_mut.rs:LL:CC
    |
 LL | *ptr = 0; // Write
-   |
-help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
+   | ^
+   = help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
 help: the accessed tag <TAG>(unprotected) later transitioned to Frozen due to a reborrow (acting as a foreign read access) at offsets [0x0..0x1]
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/parent_read_freezes_raw_mut.rs:LL:CC
    |
 LL | assert_eq!(root, 0); // Parent Read
-   |
-help: this transition corresponds to a loss of write permissions
+   | ^
+   = help: this transition corresponds to a loss of write permissions
 
 stack backtrace:
 0: parent_read_freezes_raw_mut::main
@@ -29,3 +29,5 @@ stack backtrace:
  at RUSTLIB/core/src/ops/function.rs:LL:CC
 2: std::sys::backtrace::__rust_begin_short_backtrace
  at RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

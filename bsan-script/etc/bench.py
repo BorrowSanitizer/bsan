@@ -42,7 +42,10 @@ MIRI_COMMON_FLAGS = (
 # (to the extent possible).
 MIRI = {
     "name": "miri-tb",
-    "env": {"MIRIFLAGS": f"-Zmiri-tree-borrows {MIRI_COMMON_FLAGS}"},
+    "env": {
+        "MIRIFLAGS": f"-Zmiri-tree-borrows {MIRI_COMMON_FLAGS}",
+        "RUSTFLAGS": "-Cdebug-assertions=off",
+    },
 }
 
 # Miri with Tree Borrows disabled. This is as close to "just interpret" as

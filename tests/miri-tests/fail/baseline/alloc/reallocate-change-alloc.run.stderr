@@ -2,7 +2,7 @@ error: Undefined Behavior: trying to access an allocation that has been freed.
  --> bsan/tests/miri-tests/fail/baseline/alloc/reallocate-change-alloc.rs:LL:CC
    |
 LL | let _z = *x; //miri: ~ ERROR: has been freed
-   |
+   |          ^
 
 stack backtrace:
 0: reallocate_change_alloc::main
@@ -11,3 +11,5 @@ stack backtrace:
  at RUSTLIB/core/src/ops/function.rs:LL:CC
 2: std::sys::backtrace::__rust_begin_short_backtrace
  at RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

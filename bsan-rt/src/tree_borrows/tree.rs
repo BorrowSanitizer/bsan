@@ -1,4 +1,6 @@
-// Ported from Miri (commit:072a9fa) with edits: removed ProvenanceExtra & VisitProvenance
+// Ported from Miri (commit:072a9fa) with edits: removed `ProvenanceExtra` & `VisitProvenance`
+// - added `EagerTree` and `LazyTree`
+// - adapted GC functions for shadow memory reference counter
 //! In this file we handle the "Tree" part of Tree Borrows, i.e. all tree
 //! traversal functions, optimizations to trim branches, and keeping track of
 //! the relative position of the access to each node being updated. This of course
@@ -13,6 +15,7 @@
 
 // use alloc::boxed::Box;
 use core::ops::Range;
+use core::sync::atomic::Ordering::Relaxed;
 use core::{cmp, fmt, mem};
 
 use smallvec::SmallVec;
@@ -28,7 +31,8 @@ use super::refcount::RefCount;
 use super::tree_visitor::{ChildrenVisitMode, ContinueTraversal, NodeAppArgs, TreeVisitor};
 use super::wildcard::{ExposedCache, WildcardAccessLevel};
 use crate::errors::UBResult;
-use crate::helpers::{AllocRange, FxHashSet, Size};
+use crate::global::TREE_GC_MIN_NODES;
+use crate::helpers::{AllocRange, Size};
 use crate::sanitizer_common::Span;
 use crate::tree_borrows::{GlobalState, ProtectorKind};
 use crate::*;
@@ -68,6 +72,141 @@ pub(crate) struct LocationState {
     /// For correctness, this must not be too strong, and the recorded idempotent foreign access
     /// of all children must be at least as strong as this. For performance, it should be as strong as possible.
     idempotent_foreign_access: IdempotentForeignAccess,
+}
+
+/// The state of the full tree for a particular location: for all nodes, the local permissions
+/// of that node, and the tracking for wildcard accesses.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocationTree {
+    /// Maps a tag to a perm, with possible lazy initialization.
+    ///
+    /// NOTE: not all tags registered in `Tree::nodes` are necessarily in all
+    /// ranges of `perms`, because `perms` is in part lazily initialized.
+    /// Just because `nodes.get(key)` is `Some(_)` does not mean you can safely
+    /// `unwrap` any `perm.get(key)`.
+    ///
+    /// We do uphold the fact that `keys(perms)` is a subset of `keys(nodes)`
+    pub perms: UniValMap<LocationState>,
+    /// Caches information about the relatedness of nodes for a wildcard access.
+    pub exposed_cache: ExposedCache,
+}
+/// Tree structure with both parents and children since we want to be
+/// able to traverse the tree efficiently in both directions.
+#[derive(Clone, Debug)]
+pub struct EagerTree {
+    /// Mapping from tags to keys. The key obtained can then be used in
+    /// any of the `UniValMap` relative to this allocation, i.e.
+    /// `nodes`, `LocationTree::perms` and `LocationTree::exposed_cache`
+    /// of the same `Tree`.
+    /// The parent-child relationship in `Node` is encoded in terms of these same
+    /// keys, so traversing the entire tree needs exactly one access to
+    /// `tag_mapping`.
+    pub(crate) tag_mapping: UniKeyMap<BorTag>,
+    /// All nodes of this tree.
+    pub(super) nodes: UniValMap<Node>,
+    /// Associates with each location its state and wildcard access tracking.
+    pub(super) locations: DedupRangeMap<LocationTree>,
+    /// Contains both the root of the main tree as well as the roots of the wildcard subtrees.
+    ///
+    /// If we reborrow a reference which has wildcard provenance, then we do not know where in
+    /// the tree to attach them. Instead we create a new additional tree for this allocation
+    /// with this new reference as a root. We call this additional tree a wildcard subtree.
+    ///
+    /// The actual structure should be a single tree but with wildcard provenance we approximate
+    /// this with this ordered set of trees. Each wildcard subtree is the direct child of *some* exposed
+    /// tag (that is smaller than the root), but we do not know which. This also means that it can only be the
+    /// child of a tree that comes before it in the vec ensuring we don't have any cycles in our
+    /// approximated tree.
+    ///
+    /// Sorted according to `BorTag` from low to high. This also means the main root is `root[0]`.
+    ///
+    /// Has array size 2 because that still ensures the minimum size for SmallVec.
+    pub(super) roots: SmallVec<[UniIndex; 2]>,
+}
+
+/// A tree that is lazily initialized: starts as `Uninit` (storing only the root tag, size, and
+/// span needed to construct the real `Tree` on demand), and transitions to `Init` the first
+/// time a child is added via `new_child`. All operations on a single-node tree short-circuit
+/// without ever allocating the underlying `Tree`.
+#[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
+pub enum LazyTree {
+    Uninit { root_tag: BorTag, size: Size, span: Span, refcount: RefCount },
+    Init(EagerTree),
+}
+
+impl LazyTree {
+    pub fn new(root_tag: BorTag, size: Size, span: Span) -> Self {
+        LazyTree::Uninit { root_tag, size, span, refcount: RefCount::new() }
+    }
+
+    /// Forces the tree into the `Init` state, constructing the underlying `Tree` if needed.
+    fn ensure_init(&mut self) {
+        if let LazyTree::Uninit { root_tag, size, span, refcount } = self {
+            let mut tree = EagerTree::new(*root_tag, *size, *span);
+            let root_idx = tree.tag_mapping.get(root_tag).unwrap();
+            tree.nodes.get_mut(root_idx).unwrap().refcount = refcount.clone();
+            *self = LazyTree::Init(tree);
+        }
+    }
+}
+
+/// A node in the borrow tree. Each node is uniquely identified by a tag via
+/// the `nodes` map of `Tree`.
+#[derive(Clone, Debug)]
+pub struct Node {
+    /// The tag of this node.
+    pub tag: BorTag,
+    /// All tags except the root have a parent tag.
+    pub parent: Option<UniIndex>,
+    /// If the pointer was reborrowed, it has children.
+    // FIXME: bench to compare this to FxHashSet and to other SmallVec sizes
+    pub children: SmallVec<[UniIndex; 4]>,
+    /// Either `Reserved`,  `Frozen`, or `Disabled`, it is the permission this tag will
+    /// lazily be initialized to on the first access.
+    /// It is only ever `Disabled` for a tree root, since the root is initialized to `Unique` by
+    /// its own separate mechanism.
+    default_initial_perm: Permission,
+    /// The default initial (strongest) idempotent foreign access.
+    /// This participates in the invariant for `LocationState::idempotent_foreign_access`
+    /// in cases where there is no location state yet. See `foreign_access_skipping.rs`,
+    /// and `LocationState::idempotent_foreign_access` for more information
+    default_initial_idempotent_foreign_access: IdempotentForeignAccess,
+    /// Whether a wildcard access could happen through this node.
+    pub is_exposed: bool,
+    /// Number of live references to this node. Always accessed under the
+    /// allocation's tree `Mutex`.
+    pub refcount: RefCount,
+    /// Some extra information useful only for debugging purposes.
+    pub debug_info: NodeDebugInfo,
+}
+
+impl Node {
+    pub fn default_location_state(&self) -> LocationState {
+        LocationState::new_non_accessed(
+            self.default_initial_perm,
+            self.default_initial_idempotent_foreign_access,
+        )
+    }
+}
+
+/// Relative position of the access
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccessRelatedness {
+    /// The access happened either through the node itself or one of
+    /// its transitive children.
+    LocalAccess,
+    /// The access happened through this nodes ancestor or through
+    /// a sibling/cousin/uncle/etc.
+    ForeignAccess,
+}
+
+impl AccessRelatedness {
+    /// Check that access is either Ancestor or Distant, i.e. not
+    /// a transitive child (initial pointer included).
+    pub fn is_foreign(self) -> bool {
+        matches!(self, AccessRelatedness::ForeignAccess)
+    }
 }
 
 impl LocationState {
@@ -262,85 +401,6 @@ impl fmt::Display for LocationState {
         Ok(())
     }
 }
-/// The state of the full tree for a particular location: for all nodes, the local permissions
-/// of that node, and the tracking for wildcard accesses.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LocationTree {
-    /// Maps a tag to a perm, with possible lazy initialization.
-    ///
-    /// NOTE: not all tags registered in `Tree::nodes` are necessarily in all
-    /// ranges of `perms`, because `perms` is in part lazily initialized.
-    /// Just because `nodes.get(key)` is `Some(_)` does not mean you can safely
-    /// `unwrap` any `perm.get(key)`.
-    ///
-    /// We do uphold the fact that `keys(perms)` is a subset of `keys(nodes)`
-    pub perms: UniValMap<LocationState>,
-    /// Caches information about the relatedness of nodes for a wildcard access.
-    pub exposed_cache: ExposedCache,
-}
-/// Tree structure with both parents and children since we want to be
-/// able to traverse the tree efficiently in both directions.
-#[derive(Clone, Debug)]
-pub struct EagerTree {
-    /// Mapping from tags to keys. The key obtained can then be used in
-    /// any of the `UniValMap` relative to this allocation, i.e.
-    /// `nodes`, `LocationTree::perms` and `LocationTree::exposed_cache`
-    /// of the same `Tree`.
-    /// The parent-child relationship in `Node` is encoded in terms of these same
-    /// keys, so traversing the entire tree needs exactly one access to
-    /// `tag_mapping`.
-    pub(crate) tag_mapping: UniKeyMap<BorTag>,
-    /// All nodes of this tree.
-    pub(super) nodes: UniValMap<Node>,
-    /// Associates with each location its state and wildcard access tracking.
-    pub(super) locations: DedupRangeMap<LocationTree>,
-    /// Contains both the root of the main tree as well as the roots of the wildcard subtrees.
-    ///
-    /// If we reborrow a reference which has wildcard provenance, then we do not know where in
-    /// the tree to attach them. Instead we create a new additional tree for this allocation
-    /// with this new reference as a root. We call this additional tree a wildcard subtree.
-    ///
-    /// The actual structure should be a single tree but with wildcard provenance we approximate
-    /// this with this ordered set of trees. Each wildcard subtree is the direct child of *some* exposed
-    /// tag (that is smaller than the root), but we do not know which. This also means that it can only be the
-    /// child of a tree that comes before it in the vec ensuring we don't have any cycles in our
-    /// approximated tree.
-    ///
-    /// Sorted according to `BorTag` from low to high. This also means the main root is `root[0]`.
-    ///
-    /// Has array size 2 because that still ensures the minimum size for SmallVec.
-    pub(super) roots: SmallVec<[UniIndex; 2]>,
-}
-
-/// A node in the borrow tree. Each node is uniquely identified by a tag via
-/// the `nodes` map of `Tree`.
-#[derive(Clone, Debug)]
-pub struct Node {
-    /// The tag of this node.
-    pub tag: BorTag,
-    /// All tags except the root have a parent tag.
-    pub parent: Option<UniIndex>,
-    /// If the pointer was reborrowed, it has children.
-    // FIXME: bench to compare this to FxHashSet and to other SmallVec sizes
-    pub children: SmallVec<[UniIndex; 4]>,
-    /// Either `Reserved`,  `Frozen`, or `Disabled`, it is the permission this tag will
-    /// lazily be initialized to on the first access.
-    /// It is only ever `Disabled` for a tree root, since the root is initialized to `Unique` by
-    /// its own separate mechanism.
-    default_initial_perm: Permission,
-    /// The default initial (strongest) idempotent foreign access.
-    /// This participates in the invariant for `LocationState::idempotent_foreign_access`
-    /// in cases where there is no location state yet. See `foreign_access_skipping.rs`,
-    /// and `LocationState::idempotent_foreign_access` for more information
-    default_initial_idempotent_foreign_access: IdempotentForeignAccess,
-    /// Whether a wildcard access could happen through this node.
-    pub is_exposed: bool,
-    /// Number of live references to this node. Always accessed under the
-    /// allocation's tree `Mutex`.
-    pub refcount: RefCount,
-    /// Some extra information useful only for debugging purposes.
-    pub debug_info: NodeDebugInfo,
-}
 
 impl EagerTree {
     /// Create a new tree, with only a root pointer.
@@ -389,9 +449,7 @@ impl EagerTree {
         };
         Self { roots: SmallVec::from_slice(&[root_idx]), nodes, locations, tag_mapping }
     }
-}
 
-impl EagerTree {
     /// Restores the SIFA "children are stronger"/"parents are weaker" invariant after a retag:
     /// reduce the SIFA of `current` and its parents to be no stronger than `strongest_allowed`.
     /// See `foreign_access_skipping.rs` and [`Tree::new_child`].
@@ -436,97 +494,59 @@ impl EagerTree {
             }
         }
     }
-}
 
-#[allow(unused)]
-/// Integration with Miri's garbage collector
-impl EagerTree {
-    /// Checks if a node is useless and should be GC'ed.
-    /// A node is useless if it has no children and also the tag is no longer live.
-    fn is_useless(&self, idx: UniIndex, live: &FxHashSet<BorTag>) -> bool {
-        let node = self.nodes.get(idx).unwrap();
-        node.children.is_empty() && !live.contains(&node.tag)
-    }
-
-    /// Like [`Self::is_useless`], but takes a set of *dead* tags instead of
-    /// *live* ones.
-    fn is_useless_dead(&self, idx: UniIndex, dead: &FxHashSet<BorTag>) -> bool {
-        let node = self.nodes.get(idx).unwrap();
-        node.refcount.get() == 0 && node.children.is_empty() && dead.contains(&node.tag)
-    }
-
-    /// Checks whether a node can be replaced by its only child.
-    /// If so, returns the index of said only child.
-    /// If not, returns none.
-    fn can_be_replaced_by_single_child(
-        &self,
-        idx: UniIndex,
-        live: &FxHashSet<BorTag>,
-    ) -> Option<UniIndex> {
-        let node = self.nodes.get(idx).unwrap();
-
-        let [child_idx] = node.children[..] else { return None };
-
-        // We never want to replace the root node, as it is also kept in `root_ptr_tags`.
-        if live.contains(&node.tag) || node.parent.is_none() {
-            return None;
-        }
-        // Since protected nodes are never GC'd (see `borrow_tracker::FrameExtra::visit_provenance`),
-        // we know that `node` is not protected because otherwise `live` would
-        // have contained `node.tag`.
-        let child = self.nodes.get(child_idx).unwrap();
-        // Check that for that one child, `can_be_replaced_by_child` holds for the permission
-        // on all locations.
-        for (_range, loc) in self.locations.iter_all() {
-            let parent_perm = loc
-                .perms
-                .get(idx)
-                .map(|x| x.permission)
-                .unwrap_or_else(|| node.default_initial_perm);
-            let child_perm = loc
-                .perms
-                .get(child_idx)
-                .map(|x| x.permission)
-                .unwrap_or_else(|| child.default_initial_perm);
-            if !parent_perm.can_be_replaced_by_child(child_perm) {
-                return None;
-            }
-        }
-
-        Some(child_idx)
-    }
-
-    /// Like [`Self::can_be_replaced_by_single_child`], but for the dead-tag GC path.
+    /// Checks whether a dead node can be replaced by its only child.
+    /// If so, returns the index of said only child. If not, returns none.
     /// The caller iterates the dead tags directly, so `idx` is already known to be dead
     /// and there is no membership check — only the shape and permission conditions remain.
-    fn can_be_replaced_by_single_child_dead(&self, idx: UniIndex) -> Option<UniIndex> {
+    fn can_be_replaced_by_single_child(&self, idx: UniIndex) -> bool {
         let node = self.nodes.get(idx).unwrap();
+        // A root is never replaced by its children
+        if node.parent.is_none() {
+            return false;
+        }
+        // Must match single child case
+        let [child_idx] = node.children[..] else { return false };
 
-        let [child_idx] = node.children[..] else { return None };
-
-        // Since protected nodes are never GC'd (see `borrow_tracker::FrameExtra::visit_provenance`),
-        // they are never added to the dead set, so reaching this point (where `node.tag` is
-        // in `dead`) guarantees that `node` is not protected.
-        let child = self.nodes.get(child_idx).unwrap();
         // Check that for that one child, `can_be_replaced_by_child` holds for the permission
         // on all locations.
-        for (_range, loc) in self.locations.iter_all() {
-            let parent_perm = loc
-                .perms
-                .get(idx)
-                .map(|x| x.permission)
-                .unwrap_or_else(|| node.default_initial_perm);
+        let child = self.nodes.get(child_idx).unwrap();
+        return self.locations.iter_all().all(|(_range, loc)| {
+            let parent_perm =
+                loc.perms.get(idx).map(|x| x.permission).unwrap_or(node.default_initial_perm);
             let child_perm = loc
                 .perms
                 .get(child_idx)
                 .map(|x| x.permission)
-                .unwrap_or_else(|| child.default_initial_perm);
-            if !parent_perm.can_be_replaced_by_child(child_perm) {
-                return None;
-            }
+                .unwrap_or(child.default_initial_perm);
+            parent_perm.can_be_replaced_by_child(child_perm)
+        });
+    }
+
+    /// Like [`Self::can_be_replaced_by_single_child`], but for a node with more than one
+    /// child. This requires the stronger [`Permission::can_be_replaced_by_children`] check, and
+    /// it must hold for every child at every location
+    fn can_be_replaced_by_children(&self, idx: UniIndex) -> bool {
+        let node = self.nodes.get(idx).unwrap();
+        // A root is never replaced by its children
+        if node.parent.is_none() {
+            return false;
         }
 
-        Some(child_idx)
+        let children: SmallVec<[(UniIndex, Permission); 4]> = node
+            .children
+            .iter()
+            .map(|&child_idx| (child_idx, self.nodes.get(child_idx).unwrap().default_initial_perm))
+            .collect();
+        self.locations.iter_all().all(|(_range, loc)| {
+            let parent_perm =
+                loc.perms.get(idx).map(|x| x.permission).unwrap_or(node.default_initial_perm);
+            children.iter().all(|&(child_idx, child_default)| {
+                let child_perm =
+                    loc.perms.get(child_idx).map(|x| x.permission).unwrap_or(child_default);
+                parent_perm.can_be_replaced_by_children(child_perm)
+            })
+        })
     }
 
     /// Properly removes a node.
@@ -548,79 +568,8 @@ impl EagerTree {
         self.tag_mapping.remove(&node.tag);
     }
 
-    /// Traverses the entire tree looking for useless tags.
-    /// Removes from the tree all useless child nodes of root.
-    /// It will not delete the root itself.
-    ///
-    /// NOTE: This leaves in the middle of the tree tags that are unreachable but have
-    /// reachable children. There is a potential for compacting the tree by reassigning
-    /// children of dead tags to the nearest live parent, but it must be done with care
-    /// not to remove UB.
-    ///
-    /// Example: Consider the tree `root - parent - child`, with `parent: Frozen` and
-    /// `child: Reserved`. This tree can exist. If we blindly delete `parent` and reassign
-    /// `child` to be a direct child of `root` then Writes to `child` are now permitted
-    /// whereas they were not when `parent` was still there.
-    fn remove_useless_children(&mut self, root: UniIndex, live: &FxHashSet<BorTag>) {
-        // To avoid stack overflows, we roll our own stack.
-        // Each element in the stack consists of the current tag, and the number of the
-        // next child to be processed.
-
-        // The other functions are written using the `TreeVisitorStack`, but that does not work here
-        // since we need to 1) do a post-traversal and 2) remove nodes from the tree.
-        // Since we do a post-traversal (by deleting nodes only after handling all children),
-        // we also need to be a bit smarter than "pop node, push all children."
-        let mut stack = vec![(root, 0)];
-        while let Some((tag, nth_child)) = stack.last_mut() {
-            let node = self.nodes.get(*tag).unwrap();
-            if *nth_child < node.children.len() {
-                // Visit the child by pushing it to the stack.
-                // Also increase `nth_child` so that when we come back to the `tag` node, we
-                // look at the next child.
-                let next_child = node.children[*nth_child];
-                *nth_child += 1;
-                stack.push((next_child, 0));
-                continue;
-            } else {
-                // We have processed all children of `node`, so now it is time to process `node` itself.
-                // First, get the current children of `node`. To appease the borrow checker,
-                // we have to temporarily move the list out of the node, and then put the
-                // list of remaining children back in.
-                let mut children_of_node =
-                    mem::take(&mut self.nodes.get_mut(*tag).unwrap().children);
-                // Remove all useless children.
-                children_of_node.retain_mut(|idx| {
-                    if self.is_useless(*idx, live) {
-                        // Delete `idx` node everywhere else.
-                        self.remove_useless_node(*idx);
-                        // And delete it from children_of_node.
-                        false
-                    } else {
-                        if let Some(nextchild) = self.can_be_replaced_by_single_child(*idx, live) {
-                            // `nextchild` is our grandchild, and will become our direct child.
-                            // Delete the in-between node, `idx`.
-                            self.remove_useless_node(*idx);
-                            // Set the new child's parent.
-                            self.nodes.get_mut(nextchild).unwrap().parent = Some(*tag);
-                            // Save the new child in children_of_node.
-                            *idx = nextchild;
-                        }
-                        // retain it
-                        true
-                    }
-                });
-                // Put back the now-filtered vector.
-                self.nodes.get_mut(*tag).unwrap().children = children_of_node;
-
-                // We are done, the parent can continue.
-                stack.pop();
-                continue;
-            }
-        }
-    }
-
-    /// Like [`Self::remove_useless_children`], but takes a slice of *dead* tags to remove
-    /// instead of a set of *live* tags to keep. See [`AllocState::remove_dead_tags`].
+    /// Removes from the tree the nodes for the given *dead* tags, wherever
+    /// possible. See [`AllocState::remove_dead_tags`].
     ///
     /// This cleanup must be bottom-up; a dead node can only be deleted as a leaf once its
     /// dead descendants are gone, so we must process a node before its parent. Since
@@ -632,14 +581,15 @@ impl EagerTree {
     /// Each entry in `dead_tags` is zeroed out (set to [`BorTag::omnivalid`]) once its tag
     /// no longer needs to be tracked: either the node was removed, or it is guaranteed to
     /// re-enter a zero-count table before it can next become prunable. Entries left nonzero
-    /// are dead nodes that could not be pruned yet (they still have multiple reachable
-    /// children); the caller must keep them pending for a future GC pass.
-    fn remove_useless_children_dead(&mut self, dead_tags: &mut [BorTag]) {
-        // debug_assert!(
-        //     dead_tags.is_sorted(),
-        //     "remove_useless_children_dead requires ascending-sorted tags"
-        // );
-
+    /// are dead nodes that could not be pruned yet
+    ///
+    /// Roots only ever leave the tree as leaves; a dead root with children is never
+    /// replaced by them. Since a child's tag is always greater than its parent's,
+    /// promoting a child into `self.roots` could break the ascending-tag order of
+    /// `roots`, which [`LocationTree::perform_access`] and the wildcard consistency
+    /// checks rely on. This retains at most one dead root per tree, and only until its
+    /// subtree dies (or is compacted away), at which point it is removed as a leaf.
+    fn remove_useless_children(&mut self, dead_tags: &mut [BorTag]) {
         // Iterating through dead_tags in reverse (descending tag order)
         for entry in dead_tags.iter_mut().rev() {
             let tag = *entry;
@@ -664,52 +614,70 @@ impl EagerTree {
                 continue;
             }
 
-            // `parent` is an Option<UniIndex>: if it is None, then `node` is a root,
-            // otherwise it is a child of some parent
+            // `parent` is an Option<UniIndex>: if it is None, then `node` is a root
             let parent = node.parent;
 
-            // Node is a leaf
-            if node.children.is_empty() {
-                // Drop the leaf from its parent's child list, then delete it everywhere else
-                // If it is a root, remove it from `self.roots`
-                match parent {
-                    Some(parent_idx) => {
-                        let children = &mut self.nodes.get_mut(parent_idx).unwrap().children;
-                        let pos = children.iter().position(|&c| c == idx).unwrap();
-                        children.remove(pos);
+            // Branches are mutually exclusive on child count: `can_be_replaced_by_single_child`
+            // only yields `Some` for exactly one child, and `can_be_replaced_by_children` only
+            // holds for more than one, so we can dispatch on the number of children.
+            match node.children.len() {
+                // Node is a leaf
+                0 => {
+                    // Drop the leaf from its parent's child list, then delete it everywhere else
+                    // If it is a root, remove it from `self.roots`
+                    match parent {
+                        Some(parent_idx) => {
+                            let children = &mut self.nodes.get_mut(parent_idx).unwrap().children;
+                            let pos = children.iter().position(|&c| c == idx).unwrap();
+                            children.swap_remove(pos);
+                        }
+                        None => {
+                            let pos = self.roots.iter().position(|&r| r == idx).unwrap();
+                            self.roots.remove(pos);
+                        }
                     }
-                    None => {
-                        let pos = self.roots.iter().position(|&r| r == idx).unwrap();
-                        self.roots.remove(pos);
-                    }
+                    self.remove_useless_node(idx);
+                    *entry = BorTag::omnivalid();
                 }
-                self.remove_useless_node(idx);
-                *entry = BorTag::omnivalid();
-            }
-            // Node has exactly one child
-            else if let Some(child_idx) = self.can_be_replaced_by_single_child_dead(idx) {
-                // Replace a node with its only child, if it is a root then we promote the child
-                // to a root
-                match parent {
-                    Some(parent_idx) => {
-                        let children = &mut self.nodes.get_mut(parent_idx).unwrap().children;
-                        let pos = children.iter().position(|&c| c == idx).unwrap();
-                        children[pos] = child_idx;
+                // Node has exactly one child (and, per the guard above, a parent)
+                1 => {
+                    if self.can_be_replaced_by_single_child(idx) {
+                        // Replace the node with its only child.
+                        let child_idx = node.children[0];
+                        let parent_idx = parent.unwrap();
+                        let siblings = &mut self.nodes.get_mut(parent_idx).unwrap().children;
+                        let pos = siblings.iter().position(|&c| c == idx).unwrap();
+                        siblings[pos] = child_idx;
+                        self.nodes.get_mut(child_idx).unwrap().parent = parent;
+                        self.remove_useless_node(idx);
+                        *entry = BorTag::omnivalid();
                     }
-                    None => {
-                        let pos = self.roots.iter().position(|&r| r == idx).unwrap();
-                        self.roots[pos] = child_idx;
-                    }
+                    // Otherwise, the dead node could not be pruned this pass.
                 }
-                self.nodes.get_mut(child_idx).unwrap().parent = parent;
-                self.remove_useless_node(idx);
-                *entry = BorTag::omnivalid();
+                // Node has more than one child. If every child can soundly replace it, compact it
+                // by reparenting all of its children onto its parent.
+                _ => {
+                    if self.can_be_replaced_by_children(idx) {
+                        let parent_idx = parent.unwrap();
+                        // Move `idx`'s children out so we can reparent them
+                        let children = mem::take(&mut self.nodes.get_mut(idx).unwrap().children);
+                        // Point every grandchild at the grandparent.
+                        for i in 0..children.len() {
+                            self.nodes.get_mut(children[i]).unwrap().parent = Some(parent_idx);
+                        }
+                        // Replace `idx` in the grandparent's child list with all of its children.
+                        let siblings = &mut self.nodes.get_mut(parent_idx).unwrap().children;
+                        let pos = siblings.iter().position(|&c| c == idx).unwrap();
+                        siblings.swap_remove(pos);
+                        for i in 0..children.len() {
+                            siblings.push(children[i]);
+                        }
+                        self.remove_useless_node(idx);
+                        *entry = BorTag::omnivalid();
+                    }
+                    // Otherwise, the dead node could not be pruned this pass.
+                }
             }
-            // Otherwise, the dead node has more than one reachable child. Leave its
-            // entry nonzero so that the caller retains it for a future GC pass.
-
-            // TODO: Consider cases where there are multiple descendants of a parent
-            // node with varying permissions
         }
     }
 }
@@ -1036,62 +1004,6 @@ impl LocationTree {
         Ok(())
     }
 }
-
-impl Node {
-    pub fn default_location_state(&self) -> LocationState {
-        LocationState::new_non_accessed(
-            self.default_initial_perm,
-            self.default_initial_idempotent_foreign_access,
-        )
-    }
-}
-
-/// A tree that is lazily initialized: starts as `Uninit` (storing only the root tag, size, and
-/// span needed to construct the real `Tree` on demand), and transitions to `Init` the first
-/// time a child is added via `new_child`. All operations on a single-node tree short-circuit
-/// without ever allocating the underlying `Tree`.
-#[derive(Clone, Debug)]
-#[allow(clippy::large_enum_variant)]
-pub enum LazyTree {
-    Uninit { root_tag: BorTag, size: Size, span: Span, refcount: RefCount },
-    Init(EagerTree),
-}
-
-impl LazyTree {
-    pub fn new(root_tag: BorTag, size: Size, span: Span) -> Self {
-        LazyTree::Uninit { root_tag, size, span, refcount: RefCount::new() }
-    }
-
-    /// Forces the tree into the `Init` state, constructing the underlying `Tree` if needed.
-    fn ensure_init(&mut self) {
-        if let LazyTree::Uninit { root_tag, size, span, refcount } = self {
-            let mut tree = EagerTree::new(*root_tag, *size, *span);
-            let root_idx = tree.tag_mapping.get(root_tag).unwrap();
-            tree.nodes.get_mut(root_idx).unwrap().refcount = refcount.clone();
-            *self = LazyTree::Init(tree);
-        }
-    }
-}
-
-/// Relative position of the access
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AccessRelatedness {
-    /// The access happened either through the node itself or one of
-    /// its transitive children.
-    LocalAccess,
-    /// The access happened through this nodes ancestor or through
-    /// a sibling/cousin/uncle/etc.
-    ForeignAccess,
-}
-
-impl AccessRelatedness {
-    /// Check that access is either Ancestor or Distant, i.e. not
-    /// a transitive child (initial pointer included).
-    pub fn is_foreign(self) -> bool {
-        matches!(self, AccessRelatedness::ForeignAccess)
-    }
-}
-
 /// The public interface shared by all tree implementations.
 /// Consumers outside this module interact with the tree exclusively
 /// through this trait; the underlying implementations are
@@ -1137,8 +1049,6 @@ pub trait AllocState: Clone {
         span: Span,
     ) -> UBResult<()>;
     fn expose_tag(&mut self, tag: BorTag, protected: bool);
-    #[allow(dead_code)]
-    fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>);
     #[allow(dead_code)]
     fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool;
 }
@@ -1232,14 +1142,17 @@ impl AllocState for LazyTree {
             tree.expose_tag(tag, protected);
         }
     }
-    fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
-        if let LazyTree::Init(tree) = self {
-            tree.remove_unreachable_tags(live_tags);
-        }
-    }
     fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool {
         match self {
-            LazyTree::Init(tree) => tree.remove_dead_tags(dead_tags),
+            LazyTree::Init(tree) => {
+                // Small trees are not worth pruning; skip them and leave their
+                // tags pending. Once the tree grows past the threshold, it
+                // becomes prunable (and freeable, if it empties out entirely).
+                if tree.tag_mapping.len() <= TREE_GC_MIN_NODES.load(Relaxed) {
+                    return false;
+                }
+                tree.remove_dead_tags(dead_tags)
+            }
             LazyTree::Uninit { root_tag, refcount, .. } => {
                 // A tree in the Uninit state only has a single node (the root). If
                 // this node is in the dead list with a zero reference count, then the
@@ -1253,9 +1166,11 @@ impl AllocState for LazyTree {
     fn increment(&self, tag: BorTag) -> bool {
         match self {
             LazyTree::Uninit { root_tag, refcount, .. } => {
-                // In the Uninit state the only node is the root, we add an debug_assert instead
-                debug_assert!(*root_tag == tag);
-                refcount.increment_nonatomic()
+                if *root_tag == tag {
+                    refcount.increment_nonatomic()
+                } else {
+                    false
+                }
             }
             LazyTree::Init(tree) => tree.increment(tag),
         }
@@ -1263,8 +1178,11 @@ impl AllocState for LazyTree {
     fn decrement(&self, tag: BorTag) -> bool {
         match self {
             LazyTree::Uninit { root_tag, refcount, .. } => {
-                debug_assert!(*root_tag == tag);
-                refcount.decrement_nonatomic()
+                if *root_tag == tag {
+                    refcount.decrement_nonatomic()
+                } else {
+                    false
+                }
             }
             LazyTree::Init(tree) => tree.decrement(tag),
         }
@@ -1532,14 +1450,8 @@ impl AllocState for EagerTree {
         }
     }
 
-    fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
-        for i in 0..(self.roots.len()) {
-            self.remove_useless_children(self.roots[i], live_tags);
-        }
-        self.locations.merge_adjacent_thorough();
-    }
     fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool {
-        self.remove_useless_children_dead(dead_tags);
+        self.remove_useless_children(dead_tags);
         self.locations.merge_adjacent_thorough();
         self.roots.is_empty()
     }

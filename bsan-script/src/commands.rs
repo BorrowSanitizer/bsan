@@ -184,6 +184,7 @@ impl Command {
         let miri_should_fail = count_rs(&path!(root / "tests" / "miri-tests" / "should-fail"))?;
         let total_pass = pass + miri_pass + miri_should_pass;
         let total_fail = fail + miri_fail + miri_should_fail;
+        let total = total_pass + total_fail;
 
         println!();
         println!(
@@ -221,6 +222,13 @@ impl Command {
         if should_fail_root.exists() {
             print_tree(&should_fail_root, "  ")?;
         }
+
+        println!(
+            "{}/{} ({}) of tests are covered.",
+            total - miri_should_fail - miri_should_pass,
+            total,
+            fmt_percent(total - miri_should_fail - miri_should_pass, total)
+        );
 
         Ok(())
     }
@@ -260,11 +268,17 @@ fn run_tests(env: &mut BsanEnv, config: TestConfig) -> Result<(), anyhow::Error>
         cmd!(env.sh, "rm -rf {dep_cache}").quiet().run()?;
     }
     env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
+
     env.in_mode(Mode::Release, |env| {
         let args = &[];
         let mut env_guards = vec![];
         let cargo_bsan = env.build_artifact(CargoBsan, args)?;
-        let rust_runtime = env.build_artifact(BsanRt, args)?;
+
+        // We want release mode to ensure a reasonable level of performance, but
+        // we also want debug assertions enabled, too.
+        let rust_runtime = env.with_flags("RUSTFLAGS", &["-Cdebug-assertions=on"], |env| {
+            env.build_artifact(BsanRt, args)
+        })?;
         let llvm_runtime = env.build_artifact(CompilerRt, args)?;
 
         let pass = env.build_artifact(BsanPass, args)?;
@@ -502,7 +516,14 @@ impl Buildable for BsanRt {
     fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
         let llvm_objcopy = env.target_binary("llvm-objcopy");
         let rust_runtime = env.with_flags("RUSTFLAGS", RT_FLAGS, |env| {
-            env.build("bsan-rt", args)?;
+            let mut args: Vec<String> = args.iter().cloned().collect();
+            // We need to build the standard library from source so that we propagate
+            // `-Cpanic=abort` to `core` and `alloc`. Otherwise, we will use the prebuilt
+            // versions of these libraries, which use `-Cpanic=unwind`. This means that
+            // the symbol `rust_eh_personality` will be included, undefined, in the final
+            // static library.
+            args.push("-Zbuild-std=core,alloc".to_string());
+            env.build("bsan-rt", &args)?;
             Ok(env.assert_artifact(&self.artifact(env)))
         })?;
 

@@ -1,14 +1,19 @@
 error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x4] is forbidden
+   --> bsan/tests/fail-dep/mirilli/blitsort-sys.rs:LL:CC
+   |
+LL | blitsort(
+   | ^
+    = note: the above line calls library code, where the error was detected:
    --> CARGO_REGISTRY/.../blitsort.rs:LL:CC
    |
 LL | parity_merge_two(swap, array, x, y, ptl, ptr, pts, cmp);
-   |
+   | ^
     = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
    --> RUSTLIB/core/src/slice/mod.rs:LL:CC
    |
 LL | pub const fn as_ptr(&self) -> *const T {
-   |
+   | ^
 
 stack backtrace:
 0: parity_swap_four32
@@ -17,3 +22,5 @@ stack backtrace:
  at CARGO_REGISTRY/.../blitsort.rs:LL:CC
 2: tail_swap32
  at CARGO_REGISTRY/.../blitsort.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

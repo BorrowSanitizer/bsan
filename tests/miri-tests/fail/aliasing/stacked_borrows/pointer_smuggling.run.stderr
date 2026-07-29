@@ -2,19 +2,19 @@ error: Undefined Behavior: read access through <TAG>(unprotected) at ALLOC[0x0] 
   --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/pointer_smuggling.rs:LL:CC
    |
 LL | let _x = unsafe { *PTR }; //miri: ~ ERROR: /read access .* tag does not exist in the borrow stack/
-   |
+   |                   ^
    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child read access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
   --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/pointer_smuggling.rs:LL:CC
    |
 LL | fn fun1(x: &mut u8) {
-   |
+   | ^
 help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x0..0x1]
   --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/pointer_smuggling.rs:LL:CC
    |
 LL | *val = 2; // this invalidates any raw ptrs `fun1` might have created.
-   |
-help: this transition corresponds to a loss of read and write permissions
+   | ^
+   = help: this transition corresponds to a loss of read and write permissions
 
 stack backtrace:
 0: pointer_smuggling::fun2
@@ -23,3 +23,5 @@ stack backtrace:
  at bsan/tests/miri-tests/fail/aliasing/stacked_borrows/pointer_smuggling.rs:LL:CC
 2: <fn() as core::ops::function::FnOnce<()>>::call_once
  at RUSTLIB/core/src/ops/function.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

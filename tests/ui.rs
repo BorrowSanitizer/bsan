@@ -89,8 +89,12 @@ fn bsan_config(
                     program: path_from_env("CARGO_BSAN"),
                     // There is no `cargo bsan build` so we just use `cargo bsan run`.
                     args: ["bsan", "run"].into_iter().map(Into::into).collect(),
-                    // Reset `RUSTFLAGS` to work around <https://github.com/rust-lang/rust/pull/119574#issuecomment-1876878344>.
-                    envs: vec![("RUSTFLAGS".into(), None)],
+                    envs: vec![
+                        // Reset `RUSTFLAGS` to work around <https://github.com/rust-lang/rust/pull/119574#issuecomment-1876878344>
+                        ("RUSTFLAGS".into(), None),
+                        // force libz-sys to build bundled zlib from source
+                        ("LIBZ_SYS_STATIC".into(), Some("1".into())),
+                    ],
                     ..CommandBuilder::cargo()
                 },
                 crate_manifest_path: Path::new("tests/deps").join("Cargo.toml"),

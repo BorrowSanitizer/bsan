@@ -12,3 +12,6 @@ BSAN_FLAG(uptr, stacktrace_max_len, 3,
 BSAN_FLAG(uptr, visits_per_gc, 150000,
           "Trigger a garbage collection request after this many retags."
           "0 disables the garbage collector.")
+BSAN_FLAG(uptr, tree_gc_min_nodes, 64,
+          "Only prune borrow trees with more than this many nodes."
+          "0 makes every initialized tree prunable.")

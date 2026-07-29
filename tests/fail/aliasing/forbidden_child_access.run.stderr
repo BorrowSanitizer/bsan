@@ -2,19 +2,19 @@ error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x0] is 
  --> bsan/tests/fail/aliasing/forbidden_child_access.rs:LL:CC
    |
 LL | std::hint::black_box(r1);
-   |
+   |                      ^
   = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow (acting as a child read access)
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
  --> bsan/tests/fail/aliasing/forbidden_child_access.rs:LL:CC
    |
 LL | let r1 = unsafe { &mut *ptr };
-   |
+   |                   ^
 help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x0..0x4]
  --> bsan/tests/fail/aliasing/forbidden_child_access.rs:LL:CC
    |
 LL | *r2 += 1;
-   |
-help: this transition corresponds to a loss of read and write permissions
+   | ^
+  = help: this transition corresponds to a loss of read and write permissions
 
 stack backtrace:
 0: forbidden_child_access::main
@@ -23,3 +23,5 @@ stack backtrace:
  at RUSTLIB/core/src/ops/function.rs:LL:CC
 2: std::sys::backtrace::__rust_begin_short_backtrace
  at RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

@@ -6,6 +6,7 @@ use std::fmt;
 
 use super::super::exhaustive::{precondition, Exhaustive};
 use super::*;
+use crate::helpers::FxHashSet;
 
 impl Exhaustive for LocationState {
     fn exhaustive() -> Box<dyn Iterator<Item = Self>> {
@@ -138,6 +139,77 @@ fn tree_compacting_is_sound() {
                         as_protected(child_protected),
                         nc.permission()
                     )
+                }
+            }
+        }
+    }
+}
+
+/// Like [`tree_compacting_is_sound`], but for compacting a node with *more than one* child, where
+/// all children are reparented onto the grandparent (see [`Permission::can_be_replaced_by_children`]).
+///
+/// The extra difficulty over the single-child case is that the parent and a given child no longer
+/// see every access with the same relatedness: an access through a *sibling* of the child is
+/// `LocalAccess` to the parent but `ForeignAccess` to the child. So we quantify over independent
+/// `parent_rel`/`child_rel` pairs. The one impossible combination is `(foreign parent, local
+/// child)`: a child is a descendant of the parent, so any access local to the child is local to
+/// the parent too.
+///
+/// UB preservation only needs to hold when the child is *on the access path* (`child_rel` local).
+/// When the child is foreign, the access travels through some other child, which is itself checked
+/// against the parent and still enforces the parent's UB after compaction — so a parent-only UB
+/// there is fine.
+#[test]
+#[rustfmt::skip]
+fn tree_multi_child_compacting_is_sound() {
+    // The parent is unprotected.
+    let parent_protected = false;
+    for ([parent, child], child_protected) in <([LocationState; 2], bool)>::exhaustive() {
+        if child_protected {
+            precondition!(child.compatible_with_protector())
+        }
+        precondition!(parent.permission().can_be_replaced_by_children(child.permission()));
+        for (kind, [parent_rel, child_rel]) in <(AccessKind, [AccessRelatedness; 2])>::exhaustive() {
+            // A child is a descendant of the parent, so it cannot be local to the child while
+            // foreign to the parent.
+            precondition!(!(parent_rel.is_foreign() && !child_rel.is_foreign()));
+            let new_parent = parent.perform_access_no_fluff(kind, parent_rel, parent_protected);
+            let new_child = child.perform_access_no_fluff(kind, child_rel, child_protected);
+            match (new_parent, new_child) {
+                (Some(np), Some(nc)) => {
+                    assert!(
+                        np.permission().can_be_replaced_by_children(nc.permission()),
+                        "`can_be_replaced_by_children` is not a simulation: on a {} {} to a {} parent and a {} {} {}{} child, the parent becomes {}, the child becomes {}, and these are not in simulation!",
+                        as_foreign_or_child(parent_rel),
+                        kind,
+                        parent.permission(),
+                        as_foreign_or_child(child_rel),
+                        as_lazy_or_accessed(child.accessed()),
+                        child.permission(),
+                        as_protected(child_protected),
+                        np.permission(),
+                        nc.permission()
+                    )
+                }
+                (_, None) => {
+                    // the child produced UB, this is fine no matter what the parent does
+                }
+                (None, Some(nc)) => {
+                    // Only a soundness problem when the child is on the access path. When the child
+                    // is foreign, some sibling carries the access and still enforces this UB.
+                    if !child_rel.is_foreign() {
+                        panic!(
+                            "`can_be_replaced_by_children` does not have the UB property: on a {} {} to a(n) {} parent and a(n) {} {} {}{} child, only the parent causes UB, while the child becomes {}, and it is not allowed for only the parent to cause UB!",
+                            as_foreign_or_child(parent_rel),
+                            kind,
+                            parent.permission(),
+                            as_foreign_or_child(child_rel),
+                            as_lazy_or_accessed(child.accessed()),
+                            child.permission(),
+                            as_protected(child_protected),
+                            nc.permission()
+                        )
+                    }
                 }
             }
         }
@@ -784,7 +856,10 @@ fn new_tree(root: BorTag) -> EagerTree {
 }
 
 fn add_child(tree: &mut EagerTree, parent: BorTag, child: BorTag) {
-    let perm = Permission::new_frozen();
+    add_child_perm(tree, parent, child, Permission::new_frozen());
+}
+
+fn add_child_perm(tree: &mut EagerTree, parent: BorTag, child: BorTag, perm: Permission) {
     let sifa = perm.strongest_idempotent_foreign_access(false);
     let inside_perms = DedupRangeMap::new(
         Size::from_bytes(ALLOC_BYTES),
@@ -810,7 +885,10 @@ fn dead_leaf_is_removed_and_zeroed() {
 }
 
 #[test]
-fn dead_node_with_multiple_children_is_retained() {
+fn dead_node_with_multiple_children_is_compacted() {
+    // A dead interior node whose children can all soundly replace it (here Frozen parent,
+    // Frozen children) is compacted: its children are reparented onto the grandparent and the
+    // node is pruned immediately, even though it has more than one child.
     let mut tree = new_tree(t(10));
     add_child(&mut tree, t(10), t(11));
     add_child(&mut tree, t(11), t(12));
@@ -822,8 +900,32 @@ fn dead_node_with_multiple_children_is_retained() {
     let empty = tree.remove_dead_tags(&mut dead);
 
     assert!(!empty);
-    // The dead node has two live children, so it cannot be pruned yet. Its
-    // slot must stay nonzero so that the caller keeps it pending.
+    // The dead node was removed; its slot is zeroed so the caller drops it.
+    assert_eq!(dead, [BorTag::omnivalid()]);
+    assert!(!tree.contains_tag(t(11)));
+    // The two children survive, now reparented onto the root.
+    assert!(tree.contains_tag(t(12)));
+    assert!(tree.contains_tag(t(13)));
+    assert_eq!(tree.node_count(), 3);
+}
+
+#[test]
+fn dead_node_with_incompatible_children_is_retained() {
+    // When some child cannot replace the dead node (here Frozen parent, `ReservedFrz` children),
+    // compaction is unsound, so the node is retained for a future pass.
+    let mut tree = new_tree(t(10));
+    add_child(&mut tree, t(10), t(11));
+    add_child_perm(&mut tree, t(11), t(12), Permission::new_reserved_frz());
+    add_child_perm(&mut tree, t(11), t(13), Permission::new_reserved_frz());
+    tree.increment(t(12));
+    tree.increment(t(13));
+
+    let mut dead = [t(11)];
+    let empty = tree.remove_dead_tags(&mut dead);
+
+    assert!(!empty);
+    // The dead node cannot be pruned yet. Its slot must stay nonzero so the caller keeps it
+    // pending.
     assert_eq!(dead, [t(11)]);
     assert!(tree.contains_tag(t(11)));
     assert_eq!(tree.node_count(), 4);
@@ -833,18 +935,21 @@ fn dead_node_with_multiple_children_is_retained() {
 fn retained_tag_is_pruned_once_children_die() {
     let mut tree = new_tree(t(10));
     add_child(&mut tree, t(10), t(11));
-    add_child(&mut tree, t(11), t(12));
-    add_child(&mut tree, t(11), t(13));
+    // `ReservedFrz` children block compaction of the Frozen parent, so it is retained rather
+    // than compacted while they are alive.
+    add_child_perm(&mut tree, t(11), t(12), Permission::new_reserved_frz());
+    add_child_perm(&mut tree, t(11), t(13), Permission::new_reserved_frz());
     tree.increment(t(12));
     tree.increment(t(13));
 
-    // First GC pass: the dead parent is blocked by its two live children.
+    // First GC pass: the dead parent is blocked by its two live, non-replacing children.
     let mut dead = [t(11)];
     assert!(!tree.remove_dead_tags(&mut dead));
     assert_eq!(dead, [t(11)]);
 
-    // The children die, re-entering a ZCT. The next pass merges them with
-    // the retained tag (the pending set keeps tags in ascending order).
+    // The children die, re-entering a ZCT. The next pass removes them as leaves, and the
+    // retained parent then becomes a childless leaf and is pruned too (the pending set keeps
+    // tags in ascending order).
     tree.decrement(t(12));
     tree.decrement(t(13));
     let mut dead = [t(11), t(12), t(13)];
@@ -854,4 +959,58 @@ fn retained_tag_is_pruned_once_children_die() {
     assert_eq!(dead, [BorTag::omnivalid(); 3]);
     assert_eq!(tree.node_count(), 1);
     assert!(tree.contains_tag(t(10)));
+}
+
+/// Maps `tree.roots` to their tags, in vec order.
+fn root_tags(tree: &EagerTree) -> Vec<BorTag> {
+    tree.roots.iter().map(|&idx| tree.nodes.get(idx).unwrap().tag).collect()
+}
+
+#[test]
+fn dead_root_with_children_is_retained() {
+    // A dead root is never replaced by its child, since promoting the child into `roots`
+    // could break its ascending-tag order. Here the main root's only child (tag 30) has a
+    // larger tag than the wildcard subtree root (tag 20), so the pre-guard promotion would
+    // have produced roots [30, 20].
+    let mut tree = new_tree(t(10));
+    add_child(&mut tree, BorTag::wildcard(), t(20));
+    add_child(&mut tree, t(10), t(30));
+    tree.increment(t(20));
+    tree.increment(t(30));
+
+    let mut dead = [t(10)];
+    let empty = tree.remove_dead_tags(&mut dead);
+
+    assert!(!empty);
+    // The root cannot be pruned while it has a child; it must stay pending.
+    assert_eq!(dead, [t(10)]);
+    assert!(tree.contains_tag(t(10)));
+    assert_eq!(root_tags(&tree), [t(10), t(20)]);
+}
+
+#[test]
+fn dead_root_is_pruned_as_leaf_once_subtree_dies() {
+    let mut tree = new_tree(t(10));
+    add_child(&mut tree, BorTag::wildcard(), t(20));
+    add_child(&mut tree, t(10), t(30));
+    tree.increment(t(20));
+    tree.increment(t(30));
+
+    // First pass: the dead root is retained while its child is alive.
+    let mut dead = [t(10)];
+    assert!(!tree.remove_dead_tags(&mut dead));
+    assert_eq!(dead, [t(10)]);
+    assert_eq!(root_tags(&tree), [t(10), t(20)]);
+
+    // The wildcard root and the child die. The next pass removes both as leaves, which
+    // turns the main root into a leaf that is removed in the same pass, leaving `roots`
+    // empty so the caller can reclaim the tree.
+    tree.decrement(t(20));
+    tree.decrement(t(30));
+    let mut dead = [t(10), t(20), t(30)];
+    let empty = tree.remove_dead_tags(&mut dead);
+
+    assert!(empty, "every root was removed as a leaf");
+    assert_eq!(dead, [BorTag::omnivalid(); 3]);
+    assert_eq!(tree.node_count(), 0);
 }

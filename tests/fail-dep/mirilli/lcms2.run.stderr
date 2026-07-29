@@ -1,14 +1,19 @@
 error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x20] is forbidden
+  --> bsan/tests/fail-dep/mirilli/lcms2.rs:LL:CC
+   |
+LL | assert!(m.set_text("Hello 世界！", Locale::none()));
+   |           ^
+   = note: the above line calls library code, where the error was detected:
   --> CARGO_REGISTRY/.../cmsnamed.rs:LL:CC
    |
 LL | mlu ->MemPool  = NewPtr;
-   |
+   |                ^
    = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
   --> CARGO_REGISTRY/.../lib.rs:LL:CC
    |
 LL | fn as_ptr(&self) -> *mut Self::CType {
-   |
+   | ^
 
 stack backtrace:
 0: GrowMLUpool
@@ -17,3 +22,5 @@ stack backtrace:
  at CARGO_REGISTRY/.../cmsnamed.rs:LL:CC
 2: cmsMLUsetWide
  at CARGO_REGISTRY/.../cmsnamed.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

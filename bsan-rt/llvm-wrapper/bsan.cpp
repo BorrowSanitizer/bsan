@@ -18,6 +18,19 @@
 
 using namespace __sanitizer;
 
+// We link against the Rust component of our runtime
+// via weak symbols. Unless we intervene, the linker
+// will always discard the Rust component, because
+// strong dependencies are necessary to "pull" a symbol
+// from a static archive. To avoid this situation, we
+// define a dedicated, unused "anchor" symbol on the Rust
+// side to create a strong link between the two components.
+// When we run BorrowSanitizer in no-op mode, we define
+// this symbol manually by passing a flag to the linker.
+extern "C" void __bsan_rust_runtime_anchor(void);
+USED static void (*const bsan_rust_runtime_anchor)(void) =
+    &__bsan_rust_runtime_anchor;
+
 // Interface globals.
 // Stores the function pointer of a possibly
 // uninstrumented callee. We can check this against
@@ -75,6 +88,9 @@ bool bsan_inited = false;
 // Is the initializer for the runtime executing?
 bool bsan_init_running = false;
 
+// Path substrings that identify a file as belonging to a dependency/toolchain
+static const char *const kLibraryPathMarkers[] = {".cargo/", ".rustup/",
+                                                  "cargo/", "rustup/"};
 // Allocates a new borrow tag.
 BorTag NewBorTag() {
   return atomic_fetch_add(&__bsan_bor_tag_ctr, 1, memory_order_relaxed);
@@ -118,6 +134,17 @@ Provenance *GetRetValSlot(uptr idx) {
 // Clears the provenance from the given stack slot.
 void ClearSlot(uptr Idx) { *GetParamSlot(Idx) = OMNIVALID; }
 
+// Prints a note suggesting users raise stacktrace_max_len when the trace was
+// truncated. The unwind in HANDLE_ERROR is bounded by GetStackTraceLen(), so a
+// trace that fills that buffer was (almost certainly) cut short.
+static void MaybeWarnTruncated(StackTrace &stack) {
+  if (stack.size >= GetStackTraceLen())
+    Printf("\nnote: stack trace was truncated after %zu frames; set "
+           "stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) "
+           "to capture more.\n",
+           (uptr)(stack.size - 1));
+}
+
 // Prints a stack trace, using Rust's formatting.
 void PrintStackTrace(StackTrace &stack) {
   Printf("stack backtrace:\n");
@@ -128,6 +155,7 @@ void PrintStackTrace(StackTrace &stack) {
     Printf("\nwarning: Symbolizer not found. Please add llvm-symbolizer"
            " to your PATH or set BSAN_SYMBOLIZER for source code info "
            "(recommended).\n");
+    MaybeWarnTruncated(stack);
     return;
   }
   InternalScopedString frame_desc;
@@ -145,6 +173,50 @@ void PrintStackTrace(StackTrace &stack) {
       frame_desc.clear();
     }
   }
+  MaybeWarnTruncated(stack);
+}
+
+// Returns true if the file path belongs to a dependency or toolchain library.
+static bool IsLibraryFile(const char *file) {
+  if (!file || *file == '\0')
+    return true;
+  for (const char *marker : kLibraryPathMarkers) {
+    if (internal_strstr(file, marker))
+      return true;
+  }
+  return false;
+}
+
+// Returns true if any frame at this PC resolves to a user code file.
+static bool HasUserInlineFrame(const SymbolizedStack *frame) {
+  for (const SymbolizedStack *cur = frame; cur; cur = cur->next) {
+    if (!IsLibraryFile(cur->info.file))
+      return true;
+  }
+  return false;
+}
+
+// Locates the first user-code frame for the primary error location.
+// Bounded above by __rust_begin_short_backtrace.
+// Returns 0 when the symbolizer is unavailable or no user frame is found.
+uptr FindUserFramePc(uptr pc, uptr bp) {
+  if (GetEnv("BSAN_SYMBOLIZER") == nullptr)
+    return 0;
+  UNINITIALIZED BufferedStackTrace stack;
+  stack.Unwind(pc, bp, nullptr, true, kStackTraceMax);
+  for (uptr i = 1; i < stack.size; ++i) {
+    SymbolizedStackHolder sym(
+        Symbolizer::GetOrInit()->SymbolizePC(stack.trace[i]));
+    const SymbolizedStack *frame = sym.get();
+    if (!frame)
+      continue;
+    if (frame->info.function &&
+        internal_strstr(frame->info.function, "__rust_begin_short_backtrace"))
+      break;
+    if (HasUserInlineFrame(frame))
+      return stack.trace[i];
+  }
+  return 0;
 }
 
 bool CallerIsInstrumented(void *sym) {
@@ -168,6 +240,9 @@ bool CallerIsInstrumented(void *sym) {
 
 } // namespace __bsan
 
+SANITIZER_WEAK_ATTRIBUTE
+void __bsan_format_pending_ub(uptr) {}
+
 void __sanitizer::BufferedStackTrace::UnwindImpl(uptr pc, uptr bp,
                                                  void *context,
                                                  bool request_fast,
@@ -185,8 +260,6 @@ void __sanitizer::BufferedStackTrace::UnwindImpl(uptr pc, uptr bp,
   else
     Unwind(max_depth, pc, 0, context, 0, 0, false);
 }
-
-// Interface.
 
 using namespace __bsan;
 
@@ -275,7 +348,8 @@ void __bsan_validate_retval(void *prev_marker, Provenance *frame, uptr len) {
 }
 
 // Symbolize a single PC into file:line:column, writing the file path into
-// the provided buffer. Returns 1 on success, 0 otherwise.
+// the provided buffer. Returns 0 on failure, 1 when the frame resolves to
+// user code, and 2 when every candidate frame is internal library code
 SANITIZER_INTERFACE_ATTRIBUTE
 u32 __bsan_symbolize_pc(uptr pc, char *file_buf, uptr file_buf_len, u32 *line,
                         u32 *column) {
@@ -287,19 +361,32 @@ u32 __bsan_symbolize_pc(uptr pc, char *file_buf, uptr file_buf_len, u32 *line,
   if (!res) {
     return 0;
   }
-  const char *fname = res->info.file;
-  if (!fname) {
+  // The chain lists inline frames innermost first.
+  // Prefer the first frame that is not library code
+  const __sanitizer::SymbolizedStack *best = nullptr;
+  for (const __sanitizer::SymbolizedStack *cur = res; cur; cur = cur->next) {
+    if (!cur->info.file)
+      continue;
+    if (!best)
+      best = cur;
+    if (!IsLibraryFile(cur->info.file)) {
+      best = cur;
+      break;
+    }
+  }
+  if (!best) {
     res->ClearAll();
     return 0;
   }
 
-  __sanitizer::internal_strlcpy(file_buf, fname, file_buf_len);
+  __sanitizer::internal_strlcpy(file_buf, best->info.file, file_buf_len);
   if (line)
-    *line = res->info.line;
+    *line = best->info.line;
   if (column)
-    *column = res->info.column;
+    *column = best->info.column;
+  u32 result = IsLibraryFile(best->info.file) ? 2 : 1;
   res->ClearAll();
-  return 1;
+  return result;
 }
 
 // Read the entire file at path into the buffer.
