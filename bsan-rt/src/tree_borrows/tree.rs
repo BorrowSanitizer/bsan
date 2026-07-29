@@ -1157,7 +1157,13 @@ impl AllocState for LazyTree {
     }
     fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool {
         match self {
-            LazyTree::Init(tree) => tree.remove_dead_tags(dead_tags),
+            LazyTree::Init(tree) => {
+                // Only *compaction* of dead interior nodes is skipped on small trees
+                let compact = tree.tag_mapping.len() > TREE_GC_MIN_NODES.load(Relaxed);
+                tree.remove_useless_children(dead_tags, compact);
+                tree.locations.merge_adjacent_thorough();
+                tree.roots.is_empty()
+            },
             LazyTree::Uninit { root_tag, refcount, .. } => {
                 // A tree in the Uninit state only has a single node (the root). If
                 // this node is in the dead list with a zero reference count, then the
