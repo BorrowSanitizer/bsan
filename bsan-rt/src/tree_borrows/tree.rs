@@ -1163,7 +1163,7 @@ impl AllocState for LazyTree {
                 tree.remove_useless_children(dead_tags, compact);
                 tree.locations.merge_adjacent_thorough();
                 tree.roots.is_empty()
-            },
+            }
             LazyTree::Uninit { root_tag, refcount, .. } => {
                 // A tree in the Uninit state only has a single node (the root). If
                 // this node is in the dead list with a zero reference count, then the
