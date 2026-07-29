@@ -31,7 +31,7 @@ use super::refcount::RefCount;
 use super::tree_visitor::{ChildrenVisitMode, ContinueTraversal, NodeAppArgs, TreeVisitor};
 use super::wildcard::{ExposedCache, WildcardAccessLevel};
 use crate::errors::UBResult;
-use crate::global::TREE_GC_MIN_NODES;
+use crate::global::{MAX_COMPACTED_CHILDREN, TREE_GC_MIN_NODES};
 use crate::helpers::{AllocRange, Size};
 use crate::sanitizer_common::Span;
 use crate::tree_borrows::{GlobalState, ProtectorKind};
@@ -530,6 +530,11 @@ impl EagerTree {
         let node = self.nodes.get(idx).unwrap();
         // A root is never replaced by its children
         if node.parent.is_none() {
+            return false;
+        }
+        // Reparenting a very wide node checks every child at every location, and pushes all of
+        // them onto the parent's child list. Skip it rather than pay for it.
+        if node.children.len() > MAX_COMPACTED_CHILDREN.load(Relaxed) {
             return false;
         }
 
