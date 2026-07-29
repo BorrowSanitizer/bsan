@@ -434,13 +434,21 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description="Benchmark relative execution time",
         usage=(
-            "%(prog)s <crates> <target> <output_json> <output_csv>"
+            "%(prog)s [--crate NAME ...] <crates> <target> <output_json> <output_csv>"
         ),
     )
     parser.add_argument("crates_json", type=Path)
     parser.add_argument("target", type=str)
     parser.add_argument("output_json", type=Path)
     parser.add_argument("output_csv", type=Path)
+    parser.add_argument(
+        "--crate",
+        action="append",
+        dest="only",
+        metavar="NAME",
+        help="Only benchmark the named crate from <crates> (repeatable). "
+             "Used to shard the benchmark suite one crate per CI job.",
+    )
 
     args = parser.parse_args(argv)
     for tool in ["cargo", "hyperfine"]:
@@ -450,10 +458,18 @@ def main(argv: list[str]) -> int:
     if not crates_json.is_file():
         sys.exit(f"Error: invalid config file: {crates_json}")
 
+    configs = json.loads(crates_json.read_text())
+    if args.only:
+        wanted = set(args.only)
+        configs = [cfg for cfg in configs if cfg.get("name") in wanted]
+        missing = wanted - {cfg.get("name") for cfg in configs}
+        if missing:
+            sys.exit(f"Error: crate(s) not found in {crates_json}: {', '.join(sorted(missing))}")
+
     all_results = {}
     with tempfile.TemporaryDirectory() as scratch_str:
         scratch = Path(scratch_str)
-        for cfg in json.loads(crates_json.read_text()):
+        for cfg in configs:
             cfg_results = process_config(cfg, args.target, scratch)
             all_results.setdefault("relative", [])
             all_results["relative"] += cfg_results["relative"]
