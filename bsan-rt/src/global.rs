@@ -20,6 +20,10 @@ pub static DISABLE_NODE_DEBUG_INFO: AtomicBool = AtomicBool::new(false);
 /// the pre-init default and is replaced by the flag's default (64) in `bsan_flags.inc`.
 pub static TREE_GC_MIN_NODES: AtomicUsize = AtomicUsize::new(0);
 
+/// Upper bound on how many children can be resulted from compaction of a single node.
+/// The pre-init default and is replaced by the flag's default (16) in `bsan_flags.inc`.
+pub static MAX_COMPACTED_CHILDREN: AtomicUsize = AtomicUsize::new(usize::MAX);
+
 /// Thread-local slot for a boxed `(UBInfo, Span)` set by `handle_error` and
 /// consumed by `__bsan_format_pending_ub` once the C++ side has captured the
 /// stack and located the first user-code frame.
@@ -30,6 +34,7 @@ unsafe extern "C" {
     fn __bsan_abort() -> !;
     fn __bsan_disable_node_debug_info() -> bool;
     fn __bsan_tree_gc_min_nodes() -> usize;
+    fn __bsan_max_compacted_children() -> usize;
 }
 
 /// Called from the `HANDLE_ERROR` C++ macro after the stack trace has been
@@ -316,6 +321,7 @@ pub unsafe fn init_global_ctx() {
         (*GLOBAL_CTX.0.get()).write(GlobalCtx::new());
         DISABLE_NODE_DEBUG_INFO.store(__bsan_disable_node_debug_info(), Ordering::Relaxed);
         TREE_GC_MIN_NODES.store(__bsan_tree_gc_min_nodes(), Ordering::Relaxed);
+        MAX_COMPACTED_CHILDREN.store(__bsan_max_compacted_children(), Ordering::Relaxed);
     }
 }
 
