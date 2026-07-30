@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785427976761,
+  "lastUpdate": 1785429681615,
   "repoUrl": "https://github.com/BorrowSanitizer/bsan",
   "entries": {
     "Benchmarks": [
@@ -10462,6 +10462,222 @@ window.BENCHMARK_DATA = {
             "value": 0.007956853328525203,
             "unit": "Mean Relative Execution Time",
             "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-tb\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.9.1\", \"crate\": \"bit-vec\", \"max\": 0.010224520820414418, \"min\": 0.006148146592437173}"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "icmccorm@cs.cmu.edu",
+            "name": "Ian McCormack",
+            "username": "icmccorm"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1e1bb8e5f4ca77abc6d7e6ac3dcce521b12e65fa",
+          "message": "Miscellaneous refactoring of the instrumentation pass (#300)\n\n* Switch to `CycleInfo` instead of `LoopInfo`.\n\n* Miscellaneous refactoring.",
+          "timestamp": "2026-07-30T11:36:19-04:00",
+          "tree_id": "96d5d58dd33d6cf2ff7d2a5bd9f3324440c25b0c",
+          "url": "https://github.com/BorrowSanitizer/bsan/commit/1e1bb8e5f4ca77abc6d7e6ac3dcce521b12e65fa"
+        },
+        "date": 1785429681144,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "hashbrown@0.17.0 - aarch64-unknown-linux-gnu",
+            "value": 376.20988410440975,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"native\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 1249.4134767859691, \"min\": 278.90286621645424}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - aarch64-unknown-linux-gnu",
+            "value": 0.11683214312929675,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"miri-tb\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 0.254485915743496, \"min\": 0.10218755814559882}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - aarch64-unknown-linux-gnu",
+            "value": 7.283526748168774,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"native\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 11.855281247383774, \"min\": 6.0573206175199745}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - aarch64-unknown-linux-gnu",
+            "value": 0.002311245801854828,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-tb\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 0.0027351835928912005, \"min\": 0.002060141139132608}"
+          },
+          {
+            "name": "rand@0.10.1 - aarch64-unknown-linux-gnu",
+            "value": 705.3742726852445,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"native\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.10.1\", \"crate\": \"rand\", \"max\": 30763.27620023107, \"min\": 303.76788277514015}"
+          },
+          {
+            "name": "rand@0.10.1 - aarch64-unknown-linux-gnu",
+            "value": 0.149368330151825,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"miri-tb\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.10.1\", \"crate\": \"rand\", \"max\": 2.787941996760485, \"min\": 0.10935380188664036}"
+          },
+          {
+            "name": "rand@0.10.1 - aarch64-unknown-linux-gnu",
+            "value": 7.3172479466575515,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"native\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.10.1\", \"crate\": \"rand\", \"max\": 23.21569504664063, \"min\": 6.051653176269535}"
+          },
+          {
+            "name": "rand@0.10.1 - aarch64-unknown-linux-gnu",
+            "value": 0.0024615595359215015,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-tb\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.10.1\", \"crate\": \"rand\", \"max\": 0.0032736913582172467, \"min\": 0.0020363957888596793}"
+          },
+          {
+            "name": "bit-vec@0.9.1 - aarch64-unknown-linux-gnu",
+            "value": 3182.909328434208,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"native\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.9.1\", \"crate\": \"bit-vec\", \"max\": 162158.5377698301, \"min\": 295.7660108123617}"
+          },
+          {
+            "name": "bit-vec@0.9.1 - aarch64-unknown-linux-gnu",
+            "value": 0.4326400684849114,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"miri-tb\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.9.1\", \"crate\": \"bit-vec\", \"max\": 15.315872785419941, \"min\": 0.13870397591662825}"
+          },
+          {
+            "name": "bit-vec@0.9.1 - aarch64-unknown-linux-gnu",
+            "value": 8.149461235739366,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"native\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.9.1\", \"crate\": \"bit-vec\", \"max\": 22.618298146791407, \"min\": 6.388859159020623}"
+          },
+          {
+            "name": "bit-vec@0.9.1 - aarch64-unknown-linux-gnu",
+            "value": 0.003700198750672694,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-tb\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.9.1\", \"crate\": \"bit-vec\", \"max\": 0.004865826929196673, \"min\": 0.0019260813758224088}"
+          },
+          {
+            "name": "matchers@0.2.0 - aarch64-unknown-linux-gnu",
+            "value": 3938.733832655264,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"native\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.2.0\", \"crate\": \"matchers\", \"max\": 7851.348958586579, \"min\": 663.6732206532878}"
+          },
+          {
+            "name": "matchers@0.2.0 - aarch64-unknown-linux-gnu",
+            "value": 0.4616805872500377,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"miri-tb\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.2.0\", \"crate\": \"matchers\", \"max\": 0.7653124587134356, \"min\": 0.24634219231415982}"
+          },
+          {
+            "name": "matchers@0.2.0 - aarch64-unknown-linux-gnu",
+            "value": 18.404229151819134,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"native\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.2.0\", \"crate\": \"matchers\", \"max\": 25.77984049560994, \"min\": 10.527019653402649}"
+          },
+          {
+            "name": "matchers@0.2.0 - aarch64-unknown-linux-gnu",
+            "value": 0.003193347337608363,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-tb\", \"target\": \"aarch64-unknown-linux-gnu\", \"version\": \"0.2.0\", \"crate\": \"matchers\", \"max\": 0.004409688613057354, \"min\": 0.002124197707750215}"
+          },
+          {
+            "name": "bit-vec@0.9.1 - x86_64-unknown-linux-gnu",
+            "value": 1939.7293184028824,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"native\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.9.1\", \"crate\": \"bit-vec\", \"max\": 89028.3891980397, \"min\": 300.8520715556693}"
+          },
+          {
+            "name": "bit-vec@0.9.1 - x86_64-unknown-linux-gnu",
+            "value": 0.3753562129576172,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"miri-tb\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.9.1\", \"crate\": \"bit-vec\", \"max\": 8.706565061225685, \"min\": 0.18120047824654822}"
+          },
+          {
+            "name": "bit-vec@0.9.1 - x86_64-unknown-linux-gnu",
+            "value": 15.618707952471283,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"native\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.9.1\", \"crate\": \"bit-vec\", \"max\": 87.3578551810199, \"min\": 10.106768612355802}"
+          },
+          {
+            "name": "bit-vec@0.9.1 - x86_64-unknown-linux-gnu",
+            "value": 0.008024341776977311,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-tb\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.9.1\", \"crate\": \"bit-vec\", \"max\": 0.010674557522921985, \"min\": 0.007294925633128005}"
+          },
+          {
+            "name": "rand@0.10.1 - x86_64-unknown-linux-gnu",
+            "value": 754.9936388764722,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"native\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.10.1\", \"crate\": \"rand\", \"max\": 34871.49964772153, \"min\": 218.73133451758363}"
+          },
+          {
+            "name": "rand@0.10.1 - x86_64-unknown-linux-gnu",
+            "value": 0.1840017502415759,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"miri-tb\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.10.1\", \"crate\": \"rand\", \"max\": 2.476253220877785, \"min\": 0.12744631245186883}"
+          },
+          {
+            "name": "rand@0.10.1 - x86_64-unknown-linux-gnu",
+            "value": 13.068464840544086,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"native\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.10.1\", \"crate\": \"rand\", \"max\": 126.41329104820602, \"min\": 7.073898378073977}"
+          },
+          {
+            "name": "rand@0.10.1 - x86_64-unknown-linux-gnu",
+            "value": 0.005316655723378562,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-tb\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.10.1\", \"crate\": \"rand\", \"max\": 0.008976709412620118, \"min\": 0.004537671947042105}"
+          },
+          {
+            "name": "matchers@0.2.0 - x86_64-unknown-linux-gnu",
+            "value": 4366.12432740488,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"native\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.2.0\", \"crate\": \"matchers\", \"max\": 8823.29702079633, \"min\": 732.8771034135294}"
+          },
+          {
+            "name": "matchers@0.2.0 - x86_64-unknown-linux-gnu",
+            "value": 0.5431147695070693,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"miri-tb\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.2.0\", \"crate\": \"matchers\", \"max\": 0.856559114316416, \"min\": 0.3156195554447211}"
+          },
+          {
+            "name": "matchers@0.2.0 - x86_64-unknown-linux-gnu",
+            "value": 47.921687415186135,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"native\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.2.0\", \"crate\": \"matchers\", \"max\": 77.90960156946915, \"min\": 18.467241864360435}"
+          },
+          {
+            "name": "matchers@0.2.0 - x86_64-unknown-linux-gnu",
+            "value": 0.007662846057502633,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-tb\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.2.0\", \"crate\": \"matchers\", \"max\": 0.008678117423807427, \"min\": 0.006864888576894297}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - x86_64-unknown-linux-gnu",
+            "value": 408.5927886244158,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"native\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 1434.741842064068, \"min\": 326.65231829840826}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - x86_64-unknown-linux-gnu",
+            "value": 0.14528738024411952,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"full\", \"baseline\": \"miri-tb\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 0.292493294879744, \"min\": 0.12960032473573393}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - x86_64-unknown-linux-gnu",
+            "value": 12.976973933528065,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"native\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 34.64290268214189, \"min\": 10.231874450127245}"
+          },
+          {
+            "name": "hashbrown@0.17.0 - x86_64-unknown-linux-gnu",
+            "value": 0.0046737020311323355,
+            "unit": "Mean Relative Execution Time",
+            "extra": "{\"mode\": \"no-op\", \"baseline\": \"miri-tb\", \"target\": \"x86_64-unknown-linux-gnu\", \"version\": \"0.17.0\", \"crate\": \"hashbrown\", \"max\": 0.00706246688611283, \"min\": 0.004010863548426908}"
           }
         ]
       }
