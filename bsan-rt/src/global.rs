@@ -20,11 +20,8 @@ pub static DISABLE_NODE_DEBUG_INFO: AtomicBool = AtomicBool::new(false);
 /// the pre-init default and is replaced by the flag's default (64) in `bsan_flags.inc`.
 pub static TREE_GC_MIN_NODES: AtomicUsize = AtomicUsize::new(0);
 
-/// Upper bound on how many children a dead node may have and still be compacted away by
-/// reparenting them onto its parent; this initial value is only the pre-init default and is
-/// replaced by the flag's default (1024) in `bsan_flags.inc`. It is `usize::MAX` so that
-/// contexts which never initialize the flags (unit tests) leave compaction unrestricted
-/// rather than disabling it.
+/// Upper bound on how many children can be resulted from compaction of a single node.
+/// The pre-init default and is replaced by the flag's default (16) in `bsan_flags.inc`.
 pub static MAX_COMPACTED_CHILDREN: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 /// Thread-local slot for a boxed `(UBInfo, Span)` set by `handle_error` and
