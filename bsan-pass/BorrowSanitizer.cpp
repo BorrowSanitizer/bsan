@@ -50,18 +50,24 @@ static cl::opt<bool> ClHandleAsmConservative(
 
 static cl::opt<bool> ClDisableStackInstrumentation(
     "bsan-disable-stack-instrumentation",
-    cl::desc("Disable instrumentation of stack allocations (allocas and byval "
-             "arguments). Accesses through pointers to the stack are never "
-             "checked."),
+    cl::desc("Disable instrumentation of alloca stack allocations. Accesses "
+             "through pointers to the stack are never checked."),
     cl::Hidden, cl::init(false));
 
+// Resolves a boolean flag from its command-line option or an environment
+// variable override, returning true if either is set.
+//
 // rustc parses `-Cllvm-args` before loading plugins passed via
 // `-Zllvm-plugins`, so our options are not registered yet at parse time. The
-// environment provides an alternative channel for setting this option when
-// the pass is loaded through rustc instead of `opt`.
+// environment provides an alternative channel for setting an option when the
+// pass is loaded through rustc instead of `opt`.
+static bool flagEnabled(const cl::opt<bool> &Opt, const char *EnvVar) {
+  return Opt || std::getenv(EnvVar) != nullptr;
+}
+
 static bool disableStackInstrumentation() {
-  return ClDisableStackInstrumentation ||
-         std::getenv("BSAN_DISABLE_STACK_INSTRUMENTATION") != nullptr;
+  return flagEnabled(ClDisableStackInstrumentation,
+                     "BSAN_DISABLE_STACK_INSTRUMENTATION");
 }
 
 static AtomicOrdering addAcquireOrdering(AtomicOrdering A) {
@@ -1591,13 +1597,11 @@ private:
         Info.Arg = &Arg;
         Info.Size = Size;
 
-        if (!disableStackInstrumentation()) {
-          Provenance Prov = createAllocaMetadata(EntryIRB);
-          initAllocaMetadata(EntryIRB, &Arg, Size, Prov);
-          setProvenance(&Arg, Prov);
-          Info.AllocProv = Prov;
-          ByValAllocs.push_back(Prov);
-        }
+        // The implicit stack allocation backing a byval argument is not
+        // instrumented: we never create allocation metadata for the callee's
+        // private copy, so accesses through it are not tracked as a stack
+        // allocation. Field provenance is still copied below so pointers
+        // passed by value keep their provenance.
 
         // If a `byval` parameter does not have an explicit alignment, then
         // we use the alignment of the type. As specified in the LLVM guide:
@@ -1673,10 +1677,6 @@ private:
       }
       copyProvenance(EntryIRB, Info.Arg, Fields, Info.Size, Info.Alignment,
                      AtomicOrdering::NotAtomic);
-      if (!disableStackInstrumentation()) {
-        Value *Slot = ShadowStack.getStackAllocSlot(EntryIRB);
-        storeProvenance(EntryIRB, Info.AllocProv, Slot);
-      }
     }
 
     // We push additional slots into the frame header for
