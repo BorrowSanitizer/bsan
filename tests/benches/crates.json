@@ -1,5 +1,5 @@
 [
-   {
+    {
         "name": "hashbrown",
         "version": "0.17.0",
         "exclude": [
@@ -14,11 +14,35 @@
         "name": "matchers",
         "version": "0.2.0"
     },
-   {
-      "name": "bit-vec",
-      "version": "0.9.1",
-      "exclude": [
+    {
+        "name": "bit-vec",
+        "version": "0.9.1",
+        "exclude": [
             "tests::test_bit_vec_iterator"
-      ]
-   }
+        ]
+    },
+    {
+        "name": "log",
+        "version": "0.4.29"
+    },
+    {
+        "name": "either",
+        "version": "1.15.0"
+    },
+    {
+        "name": "ppv-lite86",
+        "version": "0.2.21"
+    },
+    {
+        "name": "scopeguard",
+        "version": "1.2.0"
+    },
+    {
+        "name": "socket2",
+        "version": "0.6.2"
+    },
+    {
+        "name": "thread_local",
+        "version": "1.1.9"
+    }
 ]
