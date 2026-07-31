@@ -1151,6 +1151,11 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // invoke instructions involving uninstrumented functions.
   AllocaInst *MarkerAlloca = nullptr;
 
+  // Memory intrinsics that have been replaced by a call to the runtime. Their
+  // removal is deferred until after checks have been inserted, because each one
+  // is the insertion point for the checks guarding its own access.
+  SmallVector<MemIntrinsic *, 4> ReplacedMemIntrinsics;
+
 public:
   BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
                          const TargetLibraryInfo &TLI, DominatorTree &DT,
@@ -1165,16 +1170,29 @@ public:
     DTU.flush();
     Cycles.compute(F);
 
-    BasicBlock *EntryBlock = &F.getEntryBlock();
-    IRBuilder<> EntryIRB(EntryBlock, EntryBlock->getFirstNonPHIIt());
-
     Plan.build();
 
+    BasicBlock *EntryBlock = &F.getEntryBlock();
+    IRBuilder<> EntryIRB(EntryBlock, EntryBlock->getFirstNonPHIIt());
     initStack(EntryIRB);
 
     for (Instruction *I : Plan.instructions()) {
       InstVisitor<BorrowSanitizerVisitor>::visit(*I);
     }
+
+    for (const CheckInfo &CI : Plan.checks()) {
+      Value *AccessSize = CI.getAccessSize(BS.IntptrTy);
+      IRBuilder<> IRB(CI.InsertPt);
+      if (CI.AccessKind == CheckInfo::Read) {
+        insertReadCheck(IRB, CI.Target, AccessSize);
+      } else {
+        insertWriteCheck(IRB, CI.Target, AccessSize);
+      }
+    }
+
+    for (MemIntrinsic *MI : ReplacedMemIntrinsics)
+      MI->eraseFromParent();
+    ReplacedMemIntrinsics.clear();
 
     patchShadowPHINodes();
     ShadowStack.patchStackSlots(DT);
@@ -1590,7 +1608,7 @@ private:
     for (auto [Idx, AI] : llvm::enumerate(Plan.allocas())) {
       Provenance Prov = createAllocaMetadata(EntryIRB);
       NextNodeIRBuilder IRB(AI);
-      if (Plan.hasLifetimeStart(AI)) {
+      if (!Plan.hasLifetimeStart(AI)) {
         Value *AllocaSize = BS.getAllocaSizeBytes(IRB, AI);
         initAllocaMetadata(IRB, AI, AllocaSize, Prov);
       }
@@ -2047,30 +2065,25 @@ private:
   }
 
   void visitMemSetInst(MemSetInst &I) {
-    IRBuilder<> IRB(&I);
+    NextNodeIRBuilder IRB(&I);
     Value *Val = IRB.CreateIntCast(I.getValue(), IRB.getInt32Ty(), false);
     Value *Size = IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false);
-    insertWriteCheck(IRB, I.getDest(), Size);
     IRB.CreateCall(BS.BsanFuncMemSet, {I.getDest(), Val, Size});
-    I.eraseFromParent();
+    ReplacedMemIntrinsics.push_back(&I);
   }
 
   void visitMemMoveInst(MemMoveInst &I) {
-    IRBuilder<> IRB(&I);
+    NextNodeIRBuilder IRB(&I);
     Value *Size = IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false);
-    insertReadCheck(IRB, I.getSource(), Size);
-    insertWriteCheck(IRB, I.getDest(), Size);
     IRB.CreateCall(BS.BsanFuncMemMove, {I.getDest(), I.getSource(), Size});
-    I.eraseFromParent();
+    ReplacedMemIntrinsics.push_back(&I);
   }
 
   void visitMemCpyInst(MemCpyInst &I) {
-    IRBuilder<> IRB(&I);
+    NextNodeIRBuilder IRB(&I);
     Value *Size = IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false);
-    insertReadCheck(IRB, I.getSource(), Size);
-    insertWriteCheck(IRB, I.getDest(), Size);
     IRB.CreateCall(BS.BsanFuncMemCpy, {I.getDest(), I.getSource(), Size});
-    I.eraseFromParent();
+    ReplacedMemIntrinsics.push_back(&I);
   }
 
   void insertReadCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size) {
@@ -2095,10 +2108,6 @@ private:
       return;
 
     IRBuilder<> IRB(&LI);
-    Value *Ptr = LI.getPointerOperand();
-
-    Value *Size =
-        IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeStoreSize(LI.getType()));
 
     SmallVector<ProvenanceField> Components =
         BS.getProvenanceLayout(IRB, LI.getType());
@@ -2113,25 +2122,14 @@ private:
                                                  Comp.Elems, LI.getOrdering());
       setProvenance({&LI, Idx}, Prov);
     }
-    insertReadCheck(IRB, Ptr, Size);
   }
 
   void visitStoreInst(StoreInst &SI) {
-    IRBuilder<> BeforeIRB(&SI);
     Value *Ptr, *Val;
     Ptr = SI.getPointerOperand();
     Val = SI.getValueOperand();
 
-    // Insert a write check for the store size of the type.
-    // This may be different than the size of the type itself.
-    // An `i48` is a legal integer type in LLVM, but would typically
-    // be stored as an `i64`.
-    TypeSize TypeStoreSize = BS.DL->getTypeStoreSize(Val->getType());
-    Value *ValStoreSize = BeforeIRB.CreateTypeSize(BS.IntptrTy, TypeStoreSize);
-    insertWriteCheck(BeforeIRB, Ptr, ValStoreSize);
-
-    // If the write check succeeds, then we need to propagate provenance
-    // through the store instruction. This includes clearing provenance
+    // In addition to propagating provenance, we also need to clear provenance
     // from memory locations that are clobbered by non-pointer stores.
     // This is necessary for accurate reference counting and to
     // make sure that pointers that are cast from integers via load / store
