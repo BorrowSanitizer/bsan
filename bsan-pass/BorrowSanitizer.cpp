@@ -2371,8 +2371,10 @@ private:
     if (ShadowStack.wasUsed()) {
       Value *NumStackAllocs =
           ShadowStack.getNumStackAllocSlots(IRB, BS.IntptrTy);
-      Value *NumProtectors = ShadowStack.getOutgoingOffset(Cycles, IRB, BS.IntptrTy, true);
-      Value *MaxNumProtectors = ConstantInt::get(BS.IntptrTy, Plan.getNumFnEntryRetags());
+      Value *NumProtectors =
+          ShadowStack.getOutgoingOffset(Cycles, IRB, BS.IntptrTy, true);
+      Value *MaxNumProtectors =
+          ConstantInt::get(BS.IntptrTy, Plan.getNumFnEntryRetags());
 
       Value *FrameHeaderBottom = ShadowStack.getOrInitFrameHeaderBottom(IRB);
       Value *OffsetSlots = IRB.CreateSub(MaxNumProtectors, NumProtectors);
