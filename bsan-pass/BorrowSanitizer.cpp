@@ -1,4 +1,5 @@
 #include "BorrowSanitizerPass.h"
+#include "InstrumentationPlan.h"
 #include "Retag.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/GlobalsModRef.h"
@@ -1100,18 +1101,14 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // Cached analysis results
   const TargetLibraryInfo *TLI;
   DominatorTree &DT;
+
   CycleInfo Cycles;
-  const StackSafetyGlobalInfo &SSGI;
+
+  InstrumentationPlan Plan;
 
   // The end of the prologue of the function, where we initialize our
   // instrumentation. This is a call to llvm.donothing.
   Instruction *FnPrologueEnd;
-
-  // The static allocations that we will instrument.
-  SmallVector<AllocaInst *, 8> StaticAllocaVec;
-
-  // The static allocations that have a `lifetime.start` intrinsic.
-  SmallDenseSet<AllocaInst *> HasLifetimeStart;
 
   // A map from Arguments to (byte offset, provenance count) pairs, indicating
   // the offset from the top of the header where the argument's provenane is
@@ -1147,14 +1144,6 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // pointer to the PHINode and the index into its provenance.
   SmallVector<std::pair<ProvenanceMap::Key, Provenance>> ProvPHINodes;
 
-  // A vector containing every retag intrinsic invocation. Since these are
-  // "dummy" function calls, they need to be erased before the pass has
-  // finished.
-  SmallVector<CallBase *> Retags;
-
-  // The number of function-entry retags that occurred.
-  unsigned NumFnEntryRetags = 0;
-
   ShadowStackAllocator ShadowStack;
   Value *FrameVariadicTop = nullptr;
 
@@ -1162,11 +1151,16 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // invoke instructions involving uninstrumented functions.
   AllocaInst *MarkerAlloca = nullptr;
 
+  // Memory intrinsics that have been replaced by a call to the runtime. Their
+  // removal is deferred until after checks have been inserted, because each one
+  // is the insertion point for the checks guarding its own access.
+  SmallVector<MemIntrinsic *, 4> ReplacedMemIntrinsics;
+
 public:
   BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
                          const TargetLibraryInfo &TLI, DominatorTree &DT,
                          const StackSafetyGlobalInfo &SSGI)
-      : F(F), BS(BS), C(BS.C), TLI(&TLI), DT(DT), SSGI(SSGI),
+      : F(F), BS(BS), C(BS.C), TLI(&TLI), DT(DT), Plan(F, BS.DL, DT, SSGI),
         ShadowStack(BS.ProvenanceSize, BS.ProvStackTLS) {}
   bool run() {
     DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Lazy);
@@ -1176,61 +1170,32 @@ public:
     DTU.flush();
     Cycles.compute(F);
 
+    Plan.build();
+
     BasicBlock *EntryBlock = &F.getEntryBlock();
     IRBuilder<> EntryIRB(EntryBlock, EntryBlock->getFirstNonPHIIt());
-    SmallVector<Instruction *, 64> Instructions;
-
-    for (BasicBlock *BB : depth_first<BasicBlock *>(&F.getEntryBlock())) {
-      for (Instruction &I : *BB) {
-        if (I.getMetadata(LLVMContext::MD_nosanitize))
-          continue;
-        if (I.getOpcode() == Instruction::Alloca) {
-          auto &AI = static_cast<AllocaInst &>(I);
-          // SafeStack marks an alloca as safe when it is never exposed to an
-          // unknown source of memory effects. Such allocas cannot be subject
-          // to the aliasing violations our retags would detect, so we ignore
-          // them entirely instead of tracking and checking their accesses.
-          if (BS.shouldInstrumentAlloca(AI) && AI.isStaticAlloca() &&
-              !SSGI.isSafe(AI))
-            StaticAllocaVec.push_back(&AI);
-          continue;
-        }
-        if (auto *CB = dyn_cast<CallBase>(&I)) {
-          if (IsRetag(CB)) {
-            Retags.push_back(CB);
-            if (IsFnEntryRetag(CB))
-              NumFnEntryRetags += 1;
-          }
-          if (auto *LI = dyn_cast<LifetimeIntrinsic>(CB)) {
-            AllocaInst *AI = findAllocaForValue(LI->getArgOperand(0), true);
-            if (AI && BS.shouldInstrumentAlloca(*AI) && !SSGI.isSafe(*AI)) {
-              if (CB->getIntrinsicID() == Intrinsic::lifetime_start) {
-                HasLifetimeStart.insert(AI);
-              }
-            } else {
-              continue;
-            }
-          }
-        }
-        Instructions.push_back(&I);
-      }
-    }
-
     initStack(EntryIRB);
 
-    for (Instruction *I : Instructions) {
+    for (Instruction *I : Plan.instructions()) {
       InstVisitor<BorrowSanitizerVisitor>::visit(*I);
     }
 
+    for (const CheckInfo &CI : Plan.checks()) {
+      Value *AccessSize = CI.getAccessSize(BS.IntptrTy);
+      IRBuilder<> IRB(CI.InsertPt);
+      if (CI.AccessKind == CheckInfo::Read) {
+        insertReadCheck(IRB, CI.Target, AccessSize);
+      } else {
+        insertWriteCheck(IRB, CI.Target, AccessSize);
+      }
+    }
+
+    for (MemIntrinsic *MI : ReplacedMemIntrinsics)
+      MI->eraseFromParent();
+    ReplacedMemIntrinsics.clear();
+
     patchShadowPHINodes();
     ShadowStack.patchStackSlots(DT);
-
-    for (CallBase *CB : Retags) {
-      if (CB->getType()->isPointerTy()) {
-        CB->replaceAllUsesWith(CB->getOperand(0));
-      }
-      CB->eraseFromParent();
-    }
     return true;
   }
 
@@ -1640,10 +1605,10 @@ private:
 
     // We push additional slots into the frame header for
     // static allocas.
-    for (auto [Idx, AI] : llvm::enumerate(StaticAllocaVec)) {
+    for (auto [Idx, AI] : llvm::enumerate(Plan.allocas())) {
       Provenance Prov = createAllocaMetadata(EntryIRB);
       NextNodeIRBuilder IRB(AI);
-      if (!HasLifetimeStart.contains(AI)) {
+      if (!Plan.hasLifetimeStart(AI)) {
         Value *AllocaSize = BS.getAllocaSizeBytes(IRB, AI);
         initAllocaMetadata(IRB, AI, AllocaSize, Prov);
       }
@@ -1656,7 +1621,7 @@ private:
     // for function-entry retags. The total number of function
     // entry retags is variable, because function entry retags can
     // happen across different branches.
-    ShadowStack.allocateFnEntryRegion(EntryIRB, NumFnEntryRetags);
+    ShadowStack.allocateFnEntryRegion(EntryIRB, Plan.getNumFnEntryRetags());
 
     // We have initialized the frame header, but we have not updated the frame
     // pointer to reflect it.
@@ -2100,30 +2065,25 @@ private:
   }
 
   void visitMemSetInst(MemSetInst &I) {
-    IRBuilder<> IRB(&I);
+    NextNodeIRBuilder IRB(&I);
     Value *Val = IRB.CreateIntCast(I.getValue(), IRB.getInt32Ty(), false);
     Value *Size = IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false);
-    insertWriteCheck(IRB, I.getDest(), Size);
     IRB.CreateCall(BS.BsanFuncMemSet, {I.getDest(), Val, Size});
-    I.eraseFromParent();
+    ReplacedMemIntrinsics.push_back(&I);
   }
 
   void visitMemMoveInst(MemMoveInst &I) {
-    IRBuilder<> IRB(&I);
+    NextNodeIRBuilder IRB(&I);
     Value *Size = IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false);
-    insertReadCheck(IRB, I.getSource(), Size);
-    insertWriteCheck(IRB, I.getDest(), Size);
     IRB.CreateCall(BS.BsanFuncMemMove, {I.getDest(), I.getSource(), Size});
-    I.eraseFromParent();
+    ReplacedMemIntrinsics.push_back(&I);
   }
 
   void visitMemCpyInst(MemCpyInst &I) {
-    IRBuilder<> IRB(&I);
+    NextNodeIRBuilder IRB(&I);
     Value *Size = IRB.CreateIntCast(I.getLength(), BS.IntptrTy, false);
-    insertReadCheck(IRB, I.getSource(), Size);
-    insertWriteCheck(IRB, I.getDest(), Size);
     IRB.CreateCall(BS.BsanFuncMemCpy, {I.getDest(), I.getSource(), Size});
-    I.eraseFromParent();
+    ReplacedMemIntrinsics.push_back(&I);
   }
 
   void insertReadCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size) {
@@ -2148,10 +2108,6 @@ private:
       return;
 
     IRBuilder<> IRB(&LI);
-    Value *Ptr = LI.getPointerOperand();
-
-    Value *Size =
-        IRB.CreateTypeSize(BS.IntptrTy, BS.DL->getTypeStoreSize(LI.getType()));
 
     SmallVector<ProvenanceField> Components =
         BS.getProvenanceLayout(IRB, LI.getType());
@@ -2166,25 +2122,14 @@ private:
                                                  Comp.Elems, LI.getOrdering());
       setProvenance({&LI, Idx}, Prov);
     }
-    insertReadCheck(IRB, Ptr, Size);
   }
 
   void visitStoreInst(StoreInst &SI) {
-    IRBuilder<> BeforeIRB(&SI);
     Value *Ptr, *Val;
     Ptr = SI.getPointerOperand();
     Val = SI.getValueOperand();
 
-    // Insert a write check for the store size of the type.
-    // This may be different than the size of the type itself.
-    // An `i48` is a legal integer type in LLVM, but would typically
-    // be stored as an `i64`.
-    TypeSize TypeStoreSize = BS.DL->getTypeStoreSize(Val->getType());
-    Value *ValStoreSize = BeforeIRB.CreateTypeSize(BS.IntptrTy, TypeStoreSize);
-    insertWriteCheck(BeforeIRB, Ptr, ValStoreSize);
-
-    // If the write check succeeds, then we need to propagate provenance
-    // through the store instruction. This includes clearing provenance
+    // In addition to propagating provenance, we also need to clear provenance
     // from memory locations that are clobbered by non-pointer stores.
     // This is necessary for accurate reference counting and to
     // make sure that pointers that are cast from integers via load / store
@@ -2428,7 +2373,8 @@ private:
           ShadowStack.getNumStackAllocSlots(IRB, BS.IntptrTy);
       Value *NumProtectors =
           ShadowStack.getOutgoingOffset(Cycles, IRB, BS.IntptrTy, true);
-      Value *MaxNumProtectors = ConstantInt::get(BS.IntptrTy, NumFnEntryRetags);
+      Value *MaxNumProtectors =
+          ConstantInt::get(BS.IntptrTy, Plan.getNumFnEntryRetags());
 
       Value *FrameHeaderBottom = ShadowStack.getOrInitFrameHeaderBottom(IRB);
       Value *OffsetSlots = IRB.CreateSub(MaxNumProtectors, NumProtectors);
