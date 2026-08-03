@@ -38,7 +38,7 @@ jobs:
           echo "toolchain=nightly-$nightly_date"
           echo "rust_sha=$rust_sha"
           echo "llvm_sha=$llvm_sha"
-          echo "tag=clang-${llvm_sha:0:9}"
+          echo "tag=clang-${llvm_sha:0:7}"
         } >> "$GITHUB_OUTPUT"
   build:
     needs: resolve
@@ -62,15 +62,10 @@ jobs:
           sudo apt-get install -y cmake ninja-build lld
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: |
-            bsan-script/etc/clang.sh
+          sparse-checkout: bsan-script/etc/clang.sh
           sparse-checkout-cone-mode: false
       - name: Build
-        run: ./bsan-script/etc/clang.sh \
-          ${{ needs.resolve.outputs.llvm_sha }} \
-          ${{ needs.resolve.outputs.rust_sha }} \
-          ${{ matrix.config.target }} \
-          ${{ needs.resolve.outputs.tag }}
+        run: ./bsan-script/etc/clang.sh ${{ needs.resolve.outputs.llvm_sha }} ${{ needs.resolve.outputs.rust_sha }} ${{ matrix.config.target }} ${{ needs.resolve.outputs.tag }}
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
