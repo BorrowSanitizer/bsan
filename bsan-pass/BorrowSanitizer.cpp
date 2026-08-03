@@ -140,6 +140,34 @@ static const MemoryMapParams kLinuxAArch64MemoryMapParams = {
 };
 
 namespace {
+
+/// A helper class that handles instrumentation of VarArg
+/// functions on a particular platform (borrowed from MSAN).
+///
+/// Implementations are expected to insert the instrumentation
+/// necessary to propagate argument shadow through VarArg function
+/// calls. Visit* methods are called during an InstVisitor pass over
+/// the function, and should avoid creating new basic blocks. A new
+/// instance of this class is created for each instrumented function.
+struct VarArgHelper {
+  virtual ~VarArgHelper() = default;
+
+  /// Visit a CallBase.
+  virtual void visitCallBase(CallBase &CB, IRBuilder<> &IRB) = 0;
+
+  /// Visit a va_start call.
+  virtual void visitVAStartInst(VAStartInst &I) = 0;
+
+  /// Visit a va_copy call.
+  virtual void visitVACopyInst(VACopyInst &I) = 0;
+
+  /// Finalize function instrumentation.
+  ///
+  /// This method is called after visiting all interesting (see above)
+  /// instructions in a function.
+  virtual void finalizeInstrumentation() = 0;
+};
+
 // A component of a type that carries provenance information.
 struct ProvenanceField {
   // The offset where this field is located.
@@ -230,6 +258,9 @@ private:
   /// Thread-local variable containing the number of provenance values
   /// for variable arguments.
   Value *VarArgCounterTLS = nullptr;
+
+  /// Thread-local array containing the provenance of variadic arguments.
+  Value *VarArgTLS = nullptr;
 
   /// Thread-local variable containing the shadow stack pointer.
   Value *ProvStackTLS = nullptr;
@@ -629,6 +660,7 @@ void BorrowSanitizer::createUserspaceApi(Module &M,
   IRBuilder<> IRB(*C);
   MarkerTLS = getOrInsertTLSGlobal(M, BSAN("marker"), PtrTy);
   VarArgCounterTLS = getOrInsertTLSGlobal(M, BSAN("var_arg_ctr"), IntptrTy);
+  VarArgTLS = getOrInsertTLSGlobal(M, BSAN("var_arg_tls"), IntptrTy);
   ProvStackTLS = getOrInsertTLSGlobal(M, BSAN("shadow_stack"), PtrTy);
   BorTagCounter = getOrInsertGlobal(M, BSAN("bor_tag_ctr"), IntptrTy);
 }
@@ -2427,6 +2459,548 @@ private:
     popFrame(IRB, I, I.getValue());
   }
 };
+
+/*
+struct VarArgHelperBase : public VarArgHelper {
+  Function &F;
+  MemorySanitizer &MS;
+  MemorySanitizerVisitor &MSV;
+  SmallVector<CallInst *, 16> VAStartInstrumentationList;
+  const unsigned VAListTagSize;
+
+  VarArgHelperBase(Function &F, MemorySanitizer &MS,
+                   MemorySanitizerVisitor &MSV, unsigned VAListTagSize)
+      : F(F), MS(MS), MSV(MSV), VAListTagSize(VAListTagSize) {}
+
+  Value *getShadowAddrForVAArgument(IRBuilder<> &IRB, unsigned ArgOffset) {
+    Value *Base = IRB.CreatePointerCast(MS.VAArgTLS, MS.IntptrTy);
+    return IRB.CreateAdd(Base, ConstantInt::get(MS.IntptrTy, ArgOffset));
+  }
+
+  /// Compute the shadow address for a given va_arg.
+  Value *getShadowPtrForVAArgument(IRBuilder<> &IRB, unsigned ArgOffset) {
+    return IRB.CreatePtrAdd(
+        MS.VAArgTLS, ConstantInt::get(MS.IntptrTy, ArgOffset), "_msarg_va_s");
+  }
+
+  /// Compute the shadow address for a given va_arg.
+  Value *getShadowPtrForVAArgument(IRBuilder<> &IRB, unsigned ArgOffset,
+                                   unsigned ArgSize) {
+    // Make sure we don't overflow __msan_va_arg_tls.
+    if (ArgOffset + ArgSize > kParamTLSSize)
+      return nullptr;
+    return getShadowPtrForVAArgument(IRB, ArgOffset);
+  }
+
+  /// Compute the origin address for a given va_arg.
+  Value *getOriginPtrForVAArgument(IRBuilder<> &IRB, int ArgOffset) {
+    // getOriginPtrForVAArgument() is always called after
+    // getShadowPtrForVAArgument(), so __msan_va_arg_origin_tls can never
+    // overflow.
+    return IRB.CreatePtrAdd(MS.VAArgOriginTLS,
+                            ConstantInt::get(MS.IntptrTy, ArgOffset),
+                            "_msarg_va_o");
+  }
+
+  void CleanUnusedTLS(IRBuilder<> &IRB, Value *ShadowBase,
+                      unsigned BaseOffset) {
+    // The tails of __msan_va_arg_tls is not large enough to fit full
+    // value shadow, but it will be copied to backup anyway. Make it
+    // clean.
+    if (BaseOffset >= kParamTLSSize)
+      return;
+    Value *TailSize =
+        ConstantInt::getSigned(IRB.getInt32Ty(), kParamTLSSize - BaseOffset);
+    IRB.CreateMemSet(ShadowBase, ConstantInt::getNullValue(IRB.getInt8Ty()),
+                     TailSize, Align(8));
+  }
+
+  void unpoisonVAListTagForInst(IntrinsicInst &I) {
+    IRBuilder<> IRB(&I);
+    Value *VAListTag = I.getArgOperand(0);
+    const Align Alignment = Align(8);
+    auto [ShadowPtr, OriginPtr] = MSV.getShadowOriginPtr(
+        VAListTag, IRB, IRB.getInt8Ty(), Alignment, /*isStore*/ true);
+// Unpoison the whole __va_list_tag.
+IRB.CreateMemSet(ShadowPtr, Constant::getNullValue(IRB.getInt8Ty()),
+                 VAListTagSize, Alignment, false);
+}
+
+void visitVAStartInst(VAStartInst &I) override {
+  if (F.getCallingConv() == CallingConv::Win64)
+    return;
+  VAStartInstrumentationList.push_back(&I);
+  unpoisonVAListTagForInst(I);
+}
+
+void visitVACopyInst(VACopyInst &I) override {
+  if (F.getCallingConv() == CallingConv::Win64)
+    return;
+  unpoisonVAListTagForInst(I);
+}
+}
+;
+
+/// AMD64-specific implementation of VarArgHelper.
+struct VarArgAMD64Helper : public VarArgHelperBase {
+  // An unfortunate workaround for asymmetric lowering of va_arg stuff.
+  // See a comment in visitCallBase for more details.
+  static const unsigned AMD64GpEndOffset = 48; // AMD64 ABI Draft 0.99.6 p3.5.7
+  static const unsigned AMD64FpEndOffsetSSE = 176;
+  // If SSE is disabled, fp_offset in va_list is zero.
+  static const unsigned AMD64FpEndOffsetNoSSE = AMD64GpEndOffset;
+
+  unsigned AMD64FpEndOffset;
+  AllocaInst *VAArgTLSCopy = nullptr;
+  AllocaInst *VAArgTLSOriginCopy = nullptr;
+  Value *VAArgOverflowSize = nullptr;
+
+  enum ArgKind { AK_GeneralPurpose, AK_FloatingPoint, AK_Memory };
+
+  VarArgAMD64Helper(Function &F, MemorySanitizer &MS,
+                    MemorySanitizerVisitor &MSV)
+      : VarArgHelperBase(F, MS, MSV, /*VAListTagSize=*/24) {
+    AMD64FpEndOffset = AMD64FpEndOffsetSSE;
+    for (const auto &Attr : F.getAttributes().getFnAttrs()) {
+      if (Attr.isStringAttribute() &&
+          (Attr.getKindAsString() == "target-features")) {
+        if (Attr.getValueAsString().contains("-sse"))
+          AMD64FpEndOffset = AMD64FpEndOffsetNoSSE;
+        break;
+      }
+    }
+  }
+
+  ArgKind classifyArgument(Value *arg) {
+    // A very rough approximation of X86_64 argument classification rules.
+    Type *T = arg->getType();
+    if (T->isX86_FP80Ty())
+      return AK_Memory;
+    if (T->isFPOrFPVectorTy())
+      return AK_FloatingPoint;
+    if (T->isIntegerTy() && T->getPrimitiveSizeInBits() <= 64)
+      return AK_GeneralPurpose;
+    if (T->isPointerTy())
+      return AK_GeneralPurpose;
+    return AK_Memory;
+  }
+
+  // For VarArg functions, store the argument shadow in an ABI-specific format
+  // that corresponds to va_list layout.
+  // We do this because Clang lowers va_arg in the frontend, and this pass
+  // only sees the low level code that deals with va_list internals.
+  // A much easier alternative (provided that Clang emits va_arg instructions)
+  // would have been to associate each live instance of va_list with a copy of
+  // MSanParamTLS, and extract shadow on va_arg() call in the argument list
+  // order.
+  void visitCallBase(CallBase &CB, IRBuilder<> &IRB) override {
+    unsigned GpOffset = 0;
+    unsigned FpOffset = AMD64GpEndOffset;
+    unsigned OverflowOffset = AMD64FpEndOffset;
+    const DataLayout &DL = F.getDataLayout();
+
+    for (const auto &[ArgNo, A] : llvm::enumerate(CB.args())) {
+      bool IsFixed = ArgNo < CB.getFunctionType()->getNumParams();
+      bool IsByVal = CB.paramHasAttr(ArgNo, Attribute::ByVal);
+      if (IsByVal) {
+        // ByVal arguments always go to the overflow area.
+        // Fixed arguments passed through the overflow area will be stepped
+        // over by va_start, so don't count them towards the offset.
+        if (IsFixed)
+          continue;
+        assert(A->getType()->isPointerTy());
+        Type *RealTy = CB.getParamByValType(ArgNo);
+        uint64_t ArgSize = DL.getTypeAllocSize(RealTy);
+        uint64_t AlignedSize = alignTo(ArgSize, 8);
+        unsigned BaseOffset = OverflowOffset;
+        Value *ShadowBase = getShadowPtrForVAArgument(IRB, OverflowOffset);
+        Value *OriginBase = nullptr;
+        if (MS.TrackOrigins)
+          OriginBase = getOriginPtrForVAArgument(IRB, OverflowOffset);
+        OverflowOffset += AlignedSize;
+
+        if (OverflowOffset > kParamTLSSize) {
+          CleanUnusedTLS(IRB, ShadowBase, BaseOffset);
+          continue; // We have no space to copy shadow there.
+        }
+
+        Value *ShadowPtr, *OriginPtr;
+        std::tie(ShadowPtr, OriginPtr) =
+            MSV.getShadowOriginPtr(A, IRB, IRB.getInt8Ty(), kShadowTLSAlignment,
+                                   /*isStore*/ false);
+        IRB.CreateMemCpy(ShadowBase, kShadowTLSAlignment, ShadowPtr,
+                         kShadowTLSAlignment, ArgSize);
+        if (MS.TrackOrigins)
+          IRB.CreateMemCpy(OriginBase, kShadowTLSAlignment, OriginPtr,
+                           kShadowTLSAlignment, ArgSize);
+      } else {
+        ArgKind AK = classifyArgument(A);
+        if (AK == AK_GeneralPurpose && GpOffset >= AMD64GpEndOffset)
+          AK = AK_Memory;
+        if (AK == AK_FloatingPoint && FpOffset >= AMD64FpEndOffset)
+          AK = AK_Memory;
+        Value *ShadowBase, *OriginBase = nullptr;
+        switch (AK) {
+        case AK_GeneralPurpose:
+          ShadowBase = getShadowPtrForVAArgument(IRB, GpOffset);
+          if (MS.TrackOrigins)
+            OriginBase = getOriginPtrForVAArgument(IRB, GpOffset);
+          GpOffset += 8;
+          assert(GpOffset <= kParamTLSSize);
+          break;
+        case AK_FloatingPoint:
+          ShadowBase = getShadowPtrForVAArgument(IRB, FpOffset);
+          if (MS.TrackOrigins)
+            OriginBase = getOriginPtrForVAArgument(IRB, FpOffset);
+          FpOffset += 16;
+          assert(FpOffset <= kParamTLSSize);
+          break;
+        case AK_Memory:
+          if (IsFixed)
+            continue;
+          uint64_t ArgSize = DL.getTypeAllocSize(A->getType());
+          uint64_t AlignedSize = alignTo(ArgSize, 8);
+          unsigned BaseOffset = OverflowOffset;
+          ShadowBase = getShadowPtrForVAArgument(IRB, OverflowOffset);
+          if (MS.TrackOrigins) {
+            OriginBase = getOriginPtrForVAArgument(IRB, OverflowOffset);
+          }
+          OverflowOffset += AlignedSize;
+          if (OverflowOffset > kParamTLSSize) {
+            // We have no space to copy shadow there.
+            CleanUnusedTLS(IRB, ShadowBase, BaseOffset);
+            continue;
+          }
+        }
+        // Take fixed arguments into account for GpOffset and FpOffset,
+        // but don't actually store shadows for them.
+        // TODO(glider): don't call get*PtrForVAArgument() for them.
+        if (IsFixed)
+          continue;
+        Value *Shadow = MSV.getShadow(A);
+        IRB.CreateAlignedStore(Shadow, ShadowBase, kShadowTLSAlignment);
+        if (MS.TrackOrigins) {
+          Value *Origin = MSV.getOrigin(A);
+          TypeSize StoreSize = DL.getTypeStoreSize(Shadow->getType());
+          MSV.paintOrigin(IRB, Origin, OriginBase, StoreSize,
+                          std::max(kShadowTLSAlignment, kMinOriginAlignment));
+        }
+      }
+    }
+    Constant *OverflowSize =
+        ConstantInt::get(IRB.getInt64Ty(), OverflowOffset - AMD64FpEndOffset);
+    IRB.CreateStore(OverflowSize, MS.VAArgOverflowSizeTLS);
+  }
+
+  void finalizeInstrumentation() override {
+    assert(!VAArgOverflowSize && !VAArgTLSCopy &&
+           "finalizeInstrumentation called twice");
+    if (!VAStartInstrumentationList.empty()) {
+      // If there is a va_start in this function, make a backup copy of
+      // va_arg_tls somewhere in the function entry block.
+      IRBuilder<> IRB(MSV.FnPrologueEnd);
+      VAArgOverflowSize =
+          IRB.CreateLoad(IRB.getInt64Ty(), MS.VAArgOverflowSizeTLS);
+      Value *CopySize = IRB.CreateAdd(
+          ConstantInt::get(MS.IntptrTy, AMD64FpEndOffset), VAArgOverflowSize);
+      VAArgTLSCopy = IRB.CreateAlloca(Type::getInt8Ty(*MS.C), CopySize);
+      VAArgTLSCopy->setAlignment(kShadowTLSAlignment);
+      IRB.CreateMemSet(VAArgTLSCopy, Constant::getNullValue(IRB.getInt8Ty()),
+                       CopySize, kShadowTLSAlignment, false);
+
+      Value *SrcSize = IRB.CreateBinaryIntrinsic(
+          Intrinsic::umin, CopySize,
+          ConstantInt::get(MS.IntptrTy, kParamTLSSize));
+      IRB.CreateMemCpy(VAArgTLSCopy, kShadowTLSAlignment, MS.VAArgTLS,
+                       kShadowTLSAlignment, SrcSize);
+      if (MS.TrackOrigins) {
+        VAArgTLSOriginCopy = IRB.CreateAlloca(Type::getInt8Ty(*MS.C), CopySize);
+        VAArgTLSOriginCopy->setAlignment(kShadowTLSAlignment);
+        IRB.CreateMemCpy(VAArgTLSOriginCopy, kShadowTLSAlignment,
+                         MS.VAArgOriginTLS, kShadowTLSAlignment, SrcSize);
+      }
+    }
+
+    // Instrument va_start.
+    // Copy va_list shadow from the backup copy of the TLS contents.
+    for (CallInst *OrigInst : VAStartInstrumentationList) {
+      NextNodeIRBuilder IRB(OrigInst);
+      Value *VAListTag = OrigInst->getArgOperand(0);
+
+      Value *RegSaveAreaPtrPtr =
+          IRB.CreatePtrAdd(VAListTag, ConstantInt::get(MS.IntptrTy, 16));
+      Value *RegSaveAreaPtr = IRB.CreateLoad(MS.PtrTy, RegSaveAreaPtrPtr);
+      Value *RegSaveAreaShadowPtr, *RegSaveAreaOriginPtr;
+      const Align Alignment = Align(16);
+      std::tie(RegSaveAreaShadowPtr, RegSaveAreaOriginPtr) =
+          MSV.getShadowOriginPtr(RegSaveAreaPtr, IRB, IRB.getInt8Ty(),
+                                 Alignment, /*isStore*/ true);
+      IRB.CreateMemCpy(RegSaveAreaShadowPtr, Alignment, VAArgTLSCopy, Alignment,
+                       AMD64FpEndOffset);
+      if (MS.TrackOrigins)
+        IRB.CreateMemCpy(RegSaveAreaOriginPtr, Alignment, VAArgTLSOriginCopy,
+                         Alignment, AMD64FpEndOffset);
+      Value *OverflowArgAreaPtrPtr =
+          IRB.CreatePtrAdd(VAListTag, ConstantInt::get(MS.IntptrTy, 8));
+      Value *OverflowArgAreaPtr =
+          IRB.CreateLoad(MS.PtrTy, OverflowArgAreaPtrPtr);
+      Value *OverflowArgAreaShadowPtr, *OverflowArgAreaOriginPtr;
+      std::tie(OverflowArgAreaShadowPtr, OverflowArgAreaOriginPtr) =
+          MSV.getShadowOriginPtr(OverflowArgAreaPtr, IRB, IRB.getInt8Ty(),
+                                 Alignment, /*isStore*/ true);
+      Value *SrcPtr = IRB.CreateConstGEP1_32(IRB.getInt8Ty(), VAArgTLSCopy,
+                                             AMD64FpEndOffset);
+      IRB.CreateMemCpy(OverflowArgAreaShadowPtr, Alignment, SrcPtr, Alignment,
+                       VAArgOverflowSize);
+      if (MS.TrackOrigins) {
+        SrcPtr = IRB.CreateConstGEP1_32(IRB.getInt8Ty(), VAArgTLSOriginCopy,
+                                        AMD64FpEndOffset);
+        IRB.CreateMemCpy(OverflowArgAreaOriginPtr, Alignment, SrcPtr, Alignment,
+                         VAArgOverflowSize);
+      }
+    }
+  }
+};
+
+/// AArch64-specific implementation of VarArgHelper.
+struct VarArgAArch64Helper : public VarArgHelperBase {
+  static const unsigned kAArch64GrArgSize = 64;
+  static const unsigned kAArch64VrArgSize = 128;
+
+  static const unsigned AArch64GrBegOffset = 0;
+  static const unsigned AArch64GrEndOffset = kAArch64GrArgSize;
+  // Make VR space aligned to 16 bytes.
+  static const unsigned AArch64VrBegOffset = AArch64GrEndOffset;
+  static const unsigned AArch64VrEndOffset =
+      AArch64VrBegOffset + kAArch64VrArgSize;
+  static const unsigned AArch64VAEndOffset = AArch64VrEndOffset;
+
+  AllocaInst *VAArgTLSCopy = nullptr;
+  Value *VAArgOverflowSize = nullptr;
+
+  enum ArgKind { AK_GeneralPurpose, AK_FloatingPoint, AK_Memory };
+
+  VarArgAArch64Helper(Function &F, MemorySanitizer &MS,
+                      MemorySanitizerVisitor &MSV)
+      : VarArgHelperBase(F, MS, MSV, /*VAListTagSize=*/32) {}
+
+  // A very rough approximation of aarch64 argument classification rules.
+  std::pair<ArgKind, uint64_t> classifyArgument(Type *T) {
+    if (T->isIntOrPtrTy() && T->getPrimitiveSizeInBits() <= 64)
+      return {AK_GeneralPurpose, 1};
+    if (T->isFloatingPointTy() && T->getPrimitiveSizeInBits() <= 128)
+      return {AK_FloatingPoint, 1};
+
+    if (T->isArrayTy()) {
+      auto R = classifyArgument(T->getArrayElementType());
+      R.second *= T->getScalarType()->getArrayNumElements();
+      return R;
+    }
+
+    if (const FixedVectorType *FV = dyn_cast<FixedVectorType>(T)) {
+      auto R = classifyArgument(FV->getScalarType());
+      R.second *= FV->getNumElements();
+      return R;
+    }
+
+    LLVM_DEBUG(errs() << "Unknown vararg type: " << *T << "\n");
+    return {AK_Memory, 0};
+  }
+
+  // The instrumentation stores the argument shadow in a non ABI-specific
+  // format because it does not know which argument is named (since Clang,
+  // like x86_64 case, lowers the va_args in the frontend and this pass only
+  // sees the low level code that deals with va_list internals).
+  // The first seven GR registers are saved in the first 56 bytes of the
+  // va_arg tls arra, followed by the first 8 FP/SIMD registers, and then
+  // the remaining arguments.
+  // Using constant offset within the va_arg TLS array allows fast copy
+  // in the finalize instrumentation.
+  void visitCallBase(CallBase &CB, IRBuilder<> &IRB) override {
+    unsigned GrOffset = AArch64GrBegOffset;
+    unsigned VrOffset = AArch64VrBegOffset;
+    unsigned OverflowOffset = AArch64VAEndOffset;
+
+    const DataLayout &DL = F.getDataLayout();
+    for (const auto &[ArgNo, A] : llvm::enumerate(CB.args())) {
+      bool IsFixed = ArgNo < CB.getFunctionType()->getNumParams();
+      auto [AK, RegNum] = classifyArgument(A->getType());
+      if (AK == AK_GeneralPurpose &&
+          (GrOffset + RegNum * 8) > AArch64GrEndOffset)
+        AK = AK_Memory;
+      if (AK == AK_FloatingPoint &&
+          (VrOffset + RegNum * 16) > AArch64VrEndOffset)
+        AK = AK_Memory;
+      Value *Base;
+      switch (AK) {
+      case AK_GeneralPurpose:
+        Base = getShadowPtrForVAArgument(IRB, GrOffset);
+        GrOffset += 8 * RegNum;
+        break;
+      case AK_FloatingPoint:
+        Base = getShadowPtrForVAArgument(IRB, VrOffset);
+        VrOffset += 16 * RegNum;
+        break;
+      case AK_Memory:
+        // Don't count fixed arguments in the overflow area - va_start will
+        // skip right over them.
+        if (IsFixed)
+          continue;
+        uint64_t ArgSize = DL.getTypeAllocSize(A->getType());
+        uint64_t AlignedSize = alignTo(ArgSize, 8);
+        unsigned BaseOffset = OverflowOffset;
+        Base = getShadowPtrForVAArgument(IRB, BaseOffset);
+        OverflowOffset += AlignedSize;
+        if (OverflowOffset > kParamTLSSize) {
+          // We have no space to copy shadow there.
+          CleanUnusedTLS(IRB, Base, BaseOffset);
+          continue;
+        }
+        break;
+      }
+      // Count Gp/Vr fixed arguments to their respective offsets, but don't
+      // bother to actually store a shadow.
+      if (IsFixed)
+        continue;
+      IRB.CreateAlignedStore(MSV.getShadow(A), Base, kShadowTLSAlignment);
+    }
+    Constant *OverflowSize =
+        ConstantInt::get(IRB.getInt64Ty(), OverflowOffset - AArch64VAEndOffset);
+    IRB.CreateStore(OverflowSize, MS.VAArgOverflowSizeTLS);
+  }
+
+  // Retrieve a va_list field of 'void*' size.
+  Value *getVAField64(IRBuilder<> &IRB, Value *VAListTag, int offset) {
+    Value *SaveAreaPtrPtr =
+        IRB.CreatePtrAdd(VAListTag, ConstantInt::get(MS.IntptrTy, offset));
+    return IRB.CreateLoad(Type::getInt64Ty(*MS.C), SaveAreaPtrPtr);
+  }
+
+  // Retrieve a va_list field of 'int' size.
+  Value *getVAField32(IRBuilder<> &IRB, Value *VAListTag, int offset) {
+    Value *SaveAreaPtr =
+        IRB.CreatePtrAdd(VAListTag, ConstantInt::get(MS.IntptrTy, offset));
+    Value *SaveArea32 = IRB.CreateLoad(IRB.getInt32Ty(), SaveAreaPtr);
+    return IRB.CreateSExt(SaveArea32, MS.IntptrTy);
+  }
+
+  void finalizeInstrumentation() override {
+    assert(!VAArgOverflowSize && !VAArgTLSCopy &&
+           "finalizeInstrumentation called twice");
+    if (!VAStartInstrumentationList.empty()) {
+      // If there is a va_start in this function, make a backup copy of
+      // va_arg_tls somewhere in the function entry block.
+      IRBuilder<> IRB(MSV.FnPrologueEnd);
+      VAArgOverflowSize =
+          IRB.CreateLoad(IRB.getInt64Ty(), MS.VAArgOverflowSizeTLS);
+      Value *CopySize = IRB.CreateAdd(
+          ConstantInt::get(MS.IntptrTy, AArch64VAEndOffset), VAArgOverflowSize);
+      VAArgTLSCopy = IRB.CreateAlloca(Type::getInt8Ty(*MS.C), CopySize);
+      VAArgTLSCopy->setAlignment(kShadowTLSAlignment);
+      IRB.CreateMemSet(VAArgTLSCopy, Constant::getNullValue(IRB.getInt8Ty()),
+                       CopySize, kShadowTLSAlignment, false);
+
+      Value *SrcSize = IRB.CreateBinaryIntrinsic(
+          Intrinsic::umin, CopySize,
+          ConstantInt::get(MS.IntptrTy, kParamTLSSize));
+      IRB.CreateMemCpy(VAArgTLSCopy, kShadowTLSAlignment, MS.VAArgTLS,
+                       kShadowTLSAlignment, SrcSize);
+    }
+
+    Value *GrArgSize = ConstantInt::get(MS.IntptrTy, kAArch64GrArgSize);
+    Value *VrArgSize = ConstantInt::get(MS.IntptrTy, kAArch64VrArgSize);
+
+    // Instrument va_start, copy va_list shadow from the backup copy of
+    // the TLS contents.
+    for (CallInst *OrigInst : VAStartInstrumentationList) {
+      NextNodeIRBuilder IRB(OrigInst);
+
+      Value *VAListTag = OrigInst->getArgOperand(0);
+
+      // The variadic ABI for AArch64 creates two areas to save the incoming
+      // argument registers (one for 64-bit general register xn-x7 and another
+      // for 128-bit FP/SIMD vn-v7).
+      // We need then to propagate the shadow arguments on both regions
+      // 'va::__gr_top + va::__gr_offs' and 'va::__vr_top + va::__vr_offs'.
+      // The remaining arguments are saved on shadow for 'va::stack'.
+      // One caveat is it requires only to propagate the non-named arguments,
+      // however on the call site instrumentation 'all' the arguments are
+      // saved. So to copy the shadow values from the va_arg TLS array
+      // we need to adjust the offset for both GR and VR fields based on
+      // the __{gr,vr}_offs value (since they are stores based on incoming
+      // named arguments).
+      Type *RegSaveAreaPtrTy = IRB.getPtrTy();
+
+      // Read the stack pointer from the va_list.
+      Value *StackSaveAreaPtr =
+          IRB.CreateIntToPtr(getVAField64(IRB, VAListTag, 0), RegSaveAreaPtrTy);
+
+      // Read both the __gr_top and __gr_off and add them up.
+      Value *GrTopSaveAreaPtr = getVAField64(IRB, VAListTag, 8);
+      Value *GrOffSaveArea = getVAField32(IRB, VAListTag, 24);
+
+      Value *GrRegSaveAreaPtr = IRB.CreateIntToPtr(
+          IRB.CreateAdd(GrTopSaveAreaPtr, GrOffSaveArea), RegSaveAreaPtrTy);
+
+      // Read both the __vr_top and __vr_off and add them up.
+      Value *VrTopSaveAreaPtr = getVAField64(IRB, VAListTag, 16);
+      Value *VrOffSaveArea = getVAField32(IRB, VAListTag, 28);
+
+      Value *VrRegSaveAreaPtr = IRB.CreateIntToPtr(
+          IRB.CreateAdd(VrTopSaveAreaPtr, VrOffSaveArea), RegSaveAreaPtrTy);
+
+      // It does not know how many named arguments is being used and, on the
+      // callsite all the arguments were saved.  Since __gr_off is defined as
+      // '0 - ((8 - named_gr) * 8)', the idea is to just propagate the variadic
+      // argument by ignoring the bytes of shadow from named arguments.
+      Value *GrRegSaveAreaShadowPtrOff =
+          IRB.CreateAdd(GrArgSize, GrOffSaveArea);
+
+      Value *GrRegSaveAreaShadowPtr =
+          MSV.getShadowOriginPtr(GrRegSaveAreaPtr, IRB, IRB.getInt8Ty(),
+                                 Align(8), /*isStore*/ true)
+              .first;
+
+      Value *GrSrcPtr =
+          IRB.CreateInBoundsPtrAdd(VAArgTLSCopy, GrRegSaveAreaShadowPtrOff);
+      Value *GrCopySize = IRB.CreateSub(GrArgSize, GrRegSaveAreaShadowPtrOff);
+
+      IRB.CreateMemCpy(GrRegSaveAreaShadowPtr, Align(8), GrSrcPtr, Align(8),
+                       GrCopySize);
+
+      // Again, but for FP/SIMD values.
+      Value *VrRegSaveAreaShadowPtrOff =
+          IRB.CreateAdd(VrArgSize, VrOffSaveArea);
+
+      Value *VrRegSaveAreaShadowPtr =
+          MSV.getShadowOriginPtr(VrRegSaveAreaPtr, IRB, IRB.getInt8Ty(),
+                                 Align(8), /*isStore*/ true)
+              .first;
+
+      Value *VrSrcPtr = IRB.CreateInBoundsPtrAdd(
+          IRB.CreateInBoundsPtrAdd(VAArgTLSCopy,
+                                   IRB.getInt32(AArch64VrBegOffset)),
+          VrRegSaveAreaShadowPtrOff);
+      Value *VrCopySize = IRB.CreateSub(VrArgSize, VrRegSaveAreaShadowPtrOff);
+
+      IRB.CreateMemCpy(VrRegSaveAreaShadowPtr, Align(8), VrSrcPtr, Align(8),
+                       VrCopySize);
+
+      // And finally for remaining arguments.
+      Value *StackSaveAreaShadowPtr =
+          MSV.getShadowOriginPtr(StackSaveAreaPtr, IRB, IRB.getInt8Ty(),
+                                 Align(16), /*isStore*/ true)
+              .first;
+
+      Value *StackSrcPtr = IRB.CreateInBoundsPtrAdd(
+          VAArgTLSCopy, IRB.getInt32(AArch64VAEndOffset));
+
+      IRB.CreateMemCpy(StackSaveAreaShadowPtr, Align(16), StackSrcPtr,
+                       Align(16), VAArgOverflowSize);
+    }
+  }
+};
+*/
 
 } // end anonymous namespace
 
