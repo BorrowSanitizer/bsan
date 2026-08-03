@@ -1,3 +1,7 @@
+# We need a version of `clang` that matches out nightly toolchain
+# to ensure compatibility between Rust, Clang, and our LLVM pass plugin.
+# This workflow uses Rust's nightly CI artifacts to build and distribute
+# clang and its headers, without having to rebuilt LLVM.
 name: clang
 on:
   workflow_dispatch:
@@ -10,9 +14,15 @@ jobs:
   resolve:
     runs-on: ubuntu-latest
     outputs:
+      # the name of the latest nightly toolchain
       toolchain: ${{ steps.nightly.outputs.toolchain }}
-      rust_sha: ${{ steps.llvm.outputs.rust_sha }}
-      llvm_sha: ${{ steps.llvm.outputs.llvm_sha }}
+      # the sha of the latest nightly toolchain
+      rust_sha: ${{ steps.nightly.outputs.rust_sha }}
+      # the sha of the llvm project submodule of the
+      # latest nightly toolchain
+      llvm_sha: ${{ steps.nightly.outputs.llvm_sha }}
+      # the name of the release artifact
+      tag: ${{ steps.nightly.outputs.tag }}
     steps:
     - name: Fetch nightly release info
       id: nightly
@@ -21,15 +31,50 @@ jobs:
       run: |
         set -euo pipefail
         base=https://static.rust-lang.org/dist
-    
         nightly_date=$(curl -sSfL "$base/channel-rust-nightly-date.txt")
         rust_sha=$(curl -sSfL "$base/$nightly_date/channel-rust-nightly-git-commit-hash.txt")
         llvm_sha=$(gh api "repos/rust-lang/rust/contents/src/llvm-project?ref=$rust_sha" --jq .sha)
-    
         {
           echo "toolchain=nightly-$nightly_date"
-          echo "rust-sha=$rust_sha"
-          echo "llvm-sha=$llvm_sha"
+          echo "rust_sha=$rust_sha"
+          echo "llvm_sha=$llvm_sha"
+          echo "tag=clang-${llvm_sha:0:9}"
         } >> "$GITHUB_OUTPUT"
-    
-        echo "nightly-$nightly_date -> rustc $rust_sha -> llvm $llvm_sha"
+  build:
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.config.os }}
+    name: ${{ matrix.config.target }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build lld
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            ./bsan-script/etc/clang.sh
+          sparse-checkout-cone-mode: false
+      - name: Build
+        run: ./bsan-script/etc/clang.sh \
+          ${{ needs.resolve.outputs.llvm_sha }} \
+          ${{ needs.resolve.outputs.rust_sha }} \
+          ${{ matrix.config.target }} \
+          ${{ needs.resolve.outputs.tag }}
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.resolve.outputs.tag }}-${{ matrix.config.target }}
+          path: ${{ needs.resolve.outputs.tag }}.tar.xz
+          if-no-files-found: error
+          retention-days: 1
