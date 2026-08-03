@@ -2,7 +2,11 @@
 set -euo pipefail
 
 # This script builds clang from source by reusing build artifacts
-# from rust-dev.
+# from `rust-dev``. This script is intentionally flaky - it relies on the
+# current layout of the `rust-dev` archive, and manually generates headers
+# required for building clang. We expect to execute this semi-regularly, as
+# Rust's nightly LLVM is updated, so we can accommodate some failures. This
+# entire process can be avoided once 
 
 if [[ $# -ne 4 ]]; then
     echo "usage: $0 <llvm-sha> <rust-sha> <target> <output>"
@@ -40,7 +44,7 @@ check_dependencies() {
     return 0
 }
 
-check_dependencies git cmake ninja ccache lld curl || exit 1
+check_dependencies git cmake ninja lld curl || exit 1
 
 TMP_DIR=$(mktemp -d)
 cd "$TMP_DIR"
