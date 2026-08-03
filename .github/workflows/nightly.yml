@@ -1,0 +1,35 @@
+name: clang
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: "clang-${{ github.ref }}"
+  cancel-in-progress: true
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      toolchain: ${{ steps.nightly.outputs.toolchain }}
+      rust_sha: ${{ steps.llvm.outputs.rust_sha }}
+      llvm_sha: ${{ steps.llvm.outputs.llvm_sha }}
+    steps:
+    - name: Fetch nightly release info
+      id: nightly
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        manifest=$(curl -sSfL https://static.rust-lang.org/dist/channel-rust-nightly.toml)
+        date=$(printf '%s\n' "$manifest" | sed -n 's/^date = "\(.*\)"$/\1/p' | head -n1)
+        rust_sha=$(printf '%s\n' "$manifest" | awk '
+          /^\[pkg\.rust\]$/ { f = 1 }
+          f && /^git_commit_hash = / { gsub(/"/, "", $3); print $3; exit }')
+        llvm_sha=$(gh api "repos/rust-lang/rust/contents/src/llvm-project?ref=$rust_sha" --jq .sha)
+        {
+          echo "toolchain=nightly-$date"
+          echo "rust-sha=$rust_sha"
+          echo "llvm-sha=$llvm_sha"
+        } >> "$GITHUB_OUTPUT"
+        echo "nightly-$date -> rustc $rust_sha -> llvm $llvm_sha"
+      
