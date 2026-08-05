@@ -51,7 +51,7 @@ struct AtExitRecord {
 
 const Provenance OMNIVALID = {0, nullptr};
 
-static constexpr uptr kTLSSize = 100;
+static constexpr uptr kParamTLSSize = 800;
 static constexpr uptr kMinProvAlignment = 8;
 
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance

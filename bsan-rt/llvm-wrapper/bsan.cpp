@@ -48,15 +48,20 @@ THREADLOCAL void *__bsan_marker = nullptr;
 // access to its function pointer.
 static void *kTrustedMarker = (void *)1;
 
-// The number of provenance values corresponding to variadic
-// arguments being passed to the current function
+// The number of variadic arguments that a function
+// expects to receive.
 SANITIZER_INTERFACE_ATTRIBUTE
-THREADLOCAL uptr __bsan_var_arg_ctr = 0;
+THREADLOCAL uptr __bsan_var_arg_overflow = 0;
 
-// A thread-local array used to store the provenance of
-// variadic arguments.
+// A thread-local array used to store the tag
+// component of variadic arguments.
 SANITIZER_INTERFACE_ATTRIBUTE
-THREADLOCAL Provenance __bsan_var_arg_tls[kTLSSize];
+THREADLOCAL u8 __bsan_var_arg_tag_tls[kParamTLSSize];
+
+// A thread-local array used to store the info
+// component of variadic arguments.
+SANITIZER_INTERFACE_ATTRIBUTE
+THREADLOCAL u8 __bsan_var_arg_info_tls[kParamTLSSize];
 
 // Pointer to the start of the current frame within the shadow
 // stack, which stores the provenance of pointers that are on
@@ -331,7 +336,6 @@ void __bsan_validate_params(void *current_fn, Provenance *frame_start,
     for (uptr i = 0; i < len; ++i) {
       frame_start[i] = OMNIVALID;
     }
-    __bsan_var_arg_ctr = 0;
   }
   __bsan_marker = 0;
 }
