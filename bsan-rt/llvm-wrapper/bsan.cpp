@@ -56,7 +56,7 @@ THREADLOCAL uptr __bsan_var_arg_ctr = 0;
 // A thread-local array used to store the provenance of
 // variadic arguments.
 SANITIZER_INTERFACE_ATTRIBUTE
-THREADLOCAL Provenance __bsan_var_arg_tls[kTlsSize];
+THREADLOCAL Provenance __bsan_var_arg_tls[kTLSSize];
 
 // Pointer to the start of the current frame within the shadow
 // stack, which stores the provenance of pointers that are on
