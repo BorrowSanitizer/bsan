@@ -277,8 +277,6 @@ void CopyShadow(void *dest, const void *src, uptr size) {
 
 void JoinShadow(void *dest, const void *s_shadow, const void *s_origin,
                 uptr s_size) {
-  if (!MEM_IS_APP(dest))
-    return;
   // This operation relies on our instrumentation pass
   // to ensure that the source and size are aligned.
   uptr d_aligned;
