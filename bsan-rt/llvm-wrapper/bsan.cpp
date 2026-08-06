@@ -321,6 +321,16 @@ void *__bsan_mark(void *callee) {
   return prev_marker;
 }
 
+/// A general-purpose utility for copying shadow memory. 
+/// Receives precomputed shadow addresses for the source,
+/// and stores the shadow to the given destination, adjusting
+/// reference counts as necessary. Used to support variadic
+/// functions. 
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_shadow_copy(void *dest, void *src_tag, void *src_info) {
+
+}
+
 /// Clears the parameter provenance array if the frame pointer of the
 /// caller of the current function does not match the boundary marker,
 /// indicating that we crossed into uninstrumented code. If it does match the

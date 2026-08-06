@@ -129,12 +129,13 @@ struct MemoryMapParams {
 struct ProvenancePtr {
   Value *ShadowPtr = nullptr;
   Value *OriginPtr = nullptr;
+  bool UpdateRefCt = false;
   ProvenancePtr() {}
-  ProvenancePtr(Value *Shadow, Value *Origin)
+  ProvenancePtr(Value *Shadow, Value *Origin, bool UpdateRefCt)
       : ShadowPtr(Shadow), OriginPtr(Origin) {}
   ProvenancePtr ptradd(IRBuilder<> &IRB, Value *Offset) {
     return ProvenancePtr(::ptradd(IRB, ShadowPtr, Offset),
-                         ::ptradd(IRB, OriginPtr, Offset));
+                         ::ptradd(IRB, OriginPtr, Offset), UpdateRefCt);
   }
 
   void memcpy(IRBuilder<> &IRB, ProvenancePtr Src, Align CpyAlign,
@@ -321,13 +322,9 @@ private:
   /// Runtime function for clearing a range within shadow memory.
   FunctionCallee BsanFuncShadowClear;
 
-  /// Runtime function for copying a range within shadow memory.
-  /// This is useful for when the source or destination of a 
-  /// copy is a TLS array, or the shadow stack, which does not
-  /// need reference count updates, and might be split across
-  /// different regions that are not connected via the shadow
-  /// mapping. The memintrinsic helpers above will defer to
-  /// this function as necessary. 
+  /// Runtime function for copying provenance, split across 
+  /// two disjoint regions of memory, into the shadow for a given address.
+  /// Used to support variadic functions.
   FunctionCallee BsanFuncShadowCopy;
 
   /// Runtime function for incrementing the reference count associated
@@ -644,6 +641,9 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   BsanFuncShadowClear = M.getOrInsertFunction(BSAN("shadow_clear"), AL,
                                               IRB.getVoidTy(), PtrTy, IntptrTy);
+
+  BsanFuncShadowCopy = M.getOrInsertFunction(BSAN("shadow_copy"), AL,
+                                              IRB.getVoidTy(), PtrTy, PtrTy, PtrTy);
 
   BsanFuncReserveStackSlot =
       M.getOrInsertFunction(BSAN("reserve_stack_slot"),
@@ -1338,8 +1338,16 @@ private:
     return OffsetLong;
   }
 
-  ProvenancePtr getProvenancePtr(IRBuilder<> &IRB, Value *Addr,
-                                 MaybeAlign Alignment = kMinProvAlignment) {
+  ProvenancePtr getMainProvenancePtr(IRBuilder<> &IRB, Value *Base, MaybeAlign Alignment = kMinProvAlignment) {
+    Value *ZeroIdx = ConstantInt::get(IRB.getInt64Ty(), 0);
+    Value *TagPtr = Base;
+    Value *InfoPtr =
+        IRB.CreateGEP(BS.ProvenanceTy, Base,
+                      {ZeroIdx, ConstantInt::get(IRB.getInt32Ty(), 1)});
+    return ProvenancePtr(TagPtr, InfoPtr, Base);
+  }
+  
+  ProvenancePtr getShadowProvenancePtr(IRBuilder<> &IRB, Value *Addr, MaybeAlign Alignment = kMinProvAlignment) {
     VectorType *VectTy = dyn_cast<VectorType>(Addr->getType());
     if (!VectTy) {
       assert(Addr->getType()->isPointerTy());
@@ -1364,7 +1372,9 @@ private:
     Value *OriginPtr = IRB.CreateIntToPtr(
         OriginLong, getPtrToShadowPtrType(IntptrTy, BS.PtrTy));
 
-    return ProvenancePtr(ShadowPtr, OriginPtr);
+    // We always want to update reference counts when we
+    // store to shadow memory. 
+    return ProvenancePtr(ShadowPtr, OriginPtr, true);
   }
 
   Provenance loadProvenanceFromShadow(
@@ -1372,7 +1382,7 @@ private:
       ElementCount Elems = ElementCount::getFixed(1),
       AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
     if (Elems.isScalar()) {
-      auto ProvenancePtr = getProvenancePtr(IRB, Base, Alignment);
+      auto ProvenancePtr = getShadowProvenancePtr(IRB, Base, Alignment);
       Provenance Prov =
           loadProvenanceAlignedPairwise(IRB, ProvenancePtr, Ordering);
       Value *Slot = allocStackSlot(IRB, false);
@@ -1508,7 +1518,7 @@ private:
       report_fatal_error("Vectors are not supported.");
     } else {
       Value *TagPtr, *InfoPtr;
-      ProvenancePtr Ptr = getProvenancePtr(IRB, ObjAddr, Alignment);
+      ProvenancePtr Ptr = getShadowProvenancePtr(IRB, ObjAddr, Alignment);
       storeProvenanceWithReferenceCount(IRB, Ptr, Prov, Ordering);
     }
   }
@@ -1671,7 +1681,7 @@ private:
       }
 
       ProvenancePtr ShadowPtr =
-          getProvenancePtr(EntryIRB, Info.Arg, Info.Alignment);
+          getShadowProvenancePtr(EntryIRB, Info.Arg, Info.Alignment);
       copyProvenance(EntryIRB, ShadowPtr, Fields, Info.Size, Info.Alignment,
                      AtomicOrdering::NotAtomic);
 
@@ -2210,7 +2220,7 @@ private:
     // make sure that pointers that are cast from integers via load / store
     // type punning receive omnivalid provenance.
     NextNodeIRBuilder AfterIRB(&SI);
-    ProvenancePtr ShadowPtr = getProvenancePtr(AfterIRB, Ptr, SI.getAlign());
+    ProvenancePtr ShadowPtr = getShadowProvenancePtr(AfterIRB, Ptr, SI.getAlign());
     copyProvenance(AfterIRB, ShadowPtr, Val, SI.getAlign(), SI.getOrdering());
   }
 
@@ -2301,8 +2311,7 @@ private:
       for (uint64_t I = 0; I < NumSlots; ++I) {
         Value *Idx = ConstantInt::get(BS.IntptrTy, I * SlotSize);
         ProvenancePtr SlotPtr = Dest.ptradd(IRB, Idx);
-        storeProvenanceWithReferenceCount(IRB, SlotPtr,
-                                          Provenance::omnivalid(BS), Ordering);
+        storeProvenance(IRB, SlotPtr, Provenance::omnivalid(BS), Ordering);
       }
     } else {
       report_fatal_error("Unfixed!");
@@ -2312,7 +2321,7 @@ private:
   // Clears the provenance for the given range.
   void clearProvenance(IRBuilder<> &IRB, Value *Base, Value *Size,
                        MaybeAlign Alignment, AtomicOrdering Ordering) {
-    ProvenancePtr ShadowPtr = getProvenancePtr(IRB, Base, Alignment);
+    ProvenancePtr ShadowPtr = getShadowProvenancePtr(IRB, Base, Alignment);
     clearProvenance(IRB, ShadowPtr, Size, Alignment, Ordering);
   }
 
@@ -2541,21 +2550,20 @@ struct VarArgHelperBase : public VarArgHelper {
     return {TagAddr, InfoAddr};
   }
 
-  ProvenancePtr getProvenancePtrForVAArgument(IRBuilder<> &IRB,
+  ProvenancePtr getShadowPtrForVAArgument(IRBuilder<> &IRB,
                                               unsigned ArgOffset) {
     unsigned ArgOffsetAligned = alignTo(ArgOffset, kMinProvAlignment);
-    ProvenancePtr Base(BS.VAArgTagTLS, BS.VAArgInfoTLS);
+    ProvenancePtr Base(BS.VAArgTagTLS, BS.VAArgInfoTLS, false);
     return Base.ptradd(IRB, ConstantInt::get(BS.IntptrTy, ArgOffsetAligned));
   }
 
   /// Compute the shadow address for a given va_arg.
-  ProvenancePtr getProvenancePtrForVAArgument(IRBuilder<> &IRB,
+  ProvenancePtr getShadowPtrForVAArgument(IRBuilder<> &IRB,
                                               unsigned ArgOffset,
                                               unsigned ArgSize) {
     // Make sure we don't overflow __msan_va_arg_tls.
-    if (ArgOffset + ArgSize > kParamTLSSize)
-      return ProvenancePtr(nullptr, nullptr);
-    return getProvenancePtrForVAArgument(IRB, ArgOffset);
+    assert(ArgOffset + ArgSize <= kParamTLSSize);
+    return getShadowPtrForVAArgument(IRB, ArgOffset);
   }
 
   void cleanUnusedTLS(IRBuilder<> &IRB, ProvenancePtr Ptr,
@@ -2569,9 +2577,10 @@ struct VarArgHelperBase : public VarArgHelper {
     Value *TailSize =
         ConstantInt::getSigned(IRB.getInt32Ty(), kParamTLSSize - BaseOffset);
 
+    // We can use memset here, because we are clearing TLS, which is rooted
+    // elsewhere on the shadow stack.
     IRB.CreateMemSet(Ptr.ShadowPtr, ConstantInt::getNullValue(IRB.getInt8Ty()),
                      TailSize, Align(8));
-
     IRB.CreateMemSet(Ptr.OriginPtr, ConstantInt::getNullValue(IRB.getInt8Ty()),
                      TailSize, Align(8));
   }
@@ -2581,6 +2590,7 @@ struct VarArgHelperBase : public VarArgHelper {
     Value *VAListTag = I.getArgOperand(0);
     const Align Alignment = Align(8);
     Value *Size = ConstantInt::get(BS.IntptrTy, VAListTagSize);
+    // Here, we're clearing shadow, so we need to adjust reference counts.
     BSV.clearProvenance(IRB, VAListTag, Size, Alignment,
                         AtomicOrdering::NotAtomic);
   }
@@ -2668,7 +2678,7 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
         unsigned BaseOffset = OverflowOffset;
 
         ProvenancePtr DestPtr =
-            getProvenancePtrForVAArgument(IRB, OverflowOffset);
+            getShadowPtrForVAArgument(IRB, OverflowOffset);
         OverflowOffset += AlignedSize;
 
         if (OverflowOffset > kParamTLSSize) {
@@ -2676,7 +2686,7 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
           continue; // We have no space to copy shadow there.
         }
 
-        ProvenancePtr SrcPtr = BSV.getProvenancePtr(IRB, A, kMinProvAlignment);
+        ProvenancePtr SrcPtr = BSV.getShadowProvenancePtr(IRB, A, kMinProvAlignment);
 
         // We are copying provenance into a parameter TLS array. We maintain
         // the invariant that any provenance value within a TLS array is rooted
@@ -2696,12 +2706,12 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
         ProvenancePtr Ptr;
         switch (AK) {
         case AK_GeneralPurpose:
-          Ptr = getProvenancePtrForVAArgument(IRB, GpOffset);
+          Ptr = getShadowPtrForVAArgument(IRB, GpOffset);
           GpOffset += 8;
           assert(GpOffset <= kParamTLSSize);
           break;
         case AK_FloatingPoint:
-          Ptr = getProvenancePtrForVAArgument(IRB, FpOffset);
+          Ptr = getShadowPtrForVAArgument(IRB, FpOffset);
           FpOffset += 16;
           assert(FpOffset <= kParamTLSSize);
           break;
@@ -2711,7 +2721,7 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
           uint64_t ArgSize = DL.getTypeAllocSize(A->getType());
           uint64_t AlignedSize = alignTo(ArgSize, kMinProvAlignment);
           unsigned BaseOffset = OverflowOffset;
-          Ptr = getProvenancePtrForVAArgument(IRB, OverflowOffset);
+          Ptr = getShadowPtrForVAArgument(IRB, OverflowOffset);
           OverflowOffset += AlignedSize;
           if (OverflowOffset > kParamTLSSize) {
             // We have no space to copy shadow there.
@@ -2728,7 +2738,6 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
         // Like above, we are copying into a TLS array, so there's
         // no need to adjust the reference count.
         // TLS <- shadow, needs a reference count.
-
         BSV.copyProvenance(IRB, Ptr, A, kMinProvAlignment);
       }
     }
@@ -2751,26 +2760,19 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
 
       VAArgTLSTagCopy = IRB.CreateAlloca(Type::getInt8Ty(*BS.C), CopySize);
       VAArgTLSTagCopy->setAlignment(kMinProvAlignment);
-
+      
       VAArgTLSInfoCopy = IRB.CreateAlloca(Type::getInt8Ty(*BS.C), CopySize);
       VAArgTLSInfoCopy->setAlignment(kMinProvAlignment);
-
-      // Shadow <- null, needs a reference count.
-      IRB.CreateMemSet(VAArgTLSTagCopy, Constant::getNullValue(IRB.getInt8Ty()),
-                       CopySize, kMinProvAlignment, false);
-
-      IRB.CreateMemSet(VAArgTLSInfoCopy,
-                       Constant::getNullValue(IRB.getInt8Ty()), CopySize,
-                       kMinProvAlignment, false);
 
       Value *SrcSize = IRB.CreateBinaryIntrinsic(
           Intrinsic::umin, CopySize,
           ConstantInt::get(BS.IntptrTy, kParamTLSSize));
 
-      // Shadow <- TLS, needs a reference count.
+      // This is an exceedingly rare situation: we are copying shadow
+      // values into main memory! We can treat this just like TLS, and
+      // skip adjusting reference counts. 
       IRB.CreateMemCpy(VAArgTLSTagCopy, kMinProvAlignment, BS.VAArgTagTLS,
                        kMinProvAlignment, SrcSize);
-
       IRB.CreateMemCpy(VAArgTLSInfoCopy, kMinProvAlignment, BS.VAArgInfoTLS,
                        kMinProvAlignment, SrcSize);
     }
@@ -2779,41 +2781,26 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
     // Copy `va_list` shadow from the backup copy of the TLS contents.
     for (CallInst *OrigInst : VAStartInstrumentationList) {
       NextNodeIRBuilder IRB(OrigInst);
-
       Value *VAListTag = OrigInst->getArgOperand(0);
       Value *RegSaveAreaPtrPtr =
           IRB.CreatePtrAdd(VAListTag, ConstantInt::get(BS.IntptrTy, 16));
       Value *RegSaveAreaPtr = IRB.CreateLoad(BS.PtrTy, RegSaveAreaPtrPtr);
 
-      const Align Alignment = Align(16);
-
-      ProvenancePtr RegSavePtr =
-          BSV.getProvenancePtr(IRB, RegSaveAreaPtr, Alignment);
-
-      // Shadow <- TLS, needs a reference count.
-      IRB.CreateMemCpy(RegSavePtr.ShadowPtr, Alignment, VAArgTLSTagCopy,
-                       Alignment, AMD64FpEndOffset);
-      IRB.CreateMemCpy(RegSavePtr.OriginPtr, Alignment, VAArgTLSInfoCopy,
-                       Alignment, AMD64FpEndOffset);
+      ConstantInt *RegSaveSize = ConstantInt::get(BS.IntptrTy, AMD64FpEndOffset);
+      IRB.CreateCall(BS.BsanFuncShadowCopy, {RegSaveAreaPtr, VAArgTLSTagCopy, VAArgTLSInfoCopy, RegSaveSize});
 
       Value *OverflowArgAreaPtrPtr =
           IRB.CreatePtrAdd(VAListTag, ConstantInt::get(BS.IntptrTy, 8));
       Value *OverflowArgAreaPtr =
           IRB.CreateLoad(BS.PtrTy, OverflowArgAreaPtrPtr);
 
-      ProvenancePtr OverflowPtr =
-          BSV.getProvenancePtr(IRB, OverflowArgAreaPtr, Alignment);
-
-      Value *TagSrcPtr = IRB.CreateConstGEP1_32(
+      ConstantInt *OverflowSize = ConstantInt::get(BS.IntptrTy, VAArgOverflowSize);
+      Value *TagOverflowPtr = IRB.CreateConstGEP1_32(
           IRB.getInt8Ty(), VAArgTLSTagCopy, AMD64FpEndOffset);
-      Value *InfoSrcPtr = IRB.CreateConstGEP1_32(
+      Value *InfoOverflowPtr = IRB.CreateConstGEP1_32(
           IRB.getInt8Ty(), VAArgTLSInfoCopy, AMD64FpEndOffset);
 
-      // Shadow <- Shadow, needs a reference count.
-      IRB.CreateMemCpy(OverflowPtr.ShadowPtr, Alignment, TagSrcPtr, Alignment,
-                       VAArgOverflowSize);
-      IRB.CreateMemCpy(OverflowPtr.OriginPtr, Alignment, InfoSrcPtr, Alignment,
-                       VAArgOverflowSize);
+      IRB.CreateCall(BS.BsanFuncShadowCopy, {RegSaveAreaPtr, TagOverflowPtr, InfoOverflowPtr, OverflowSize});
     }
   }
 };
