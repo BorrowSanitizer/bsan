@@ -85,12 +85,10 @@ impl Mode {
 #[derive(Serialize, Deserialize)]
 pub struct BsanConfig {
     pub artifact_url: String,
-    pub tag: String,
-    pub sha: String,
-    pub version: String,
     pub dependencies: Vec<String>,
     pub targets: Vec<String>,
-    pub llvm_branch: String,
+    pub rust_sha: String,
+    pub llvm_sha: String,
     pub llvm_url: String,
 }
 
@@ -99,12 +97,6 @@ impl BsanConfig {
         let contents: String = std::fs::read_to_string(path)?;
         let contents: BsanConfig = toml::from_str(&contents)?;
         Ok(contents)
-    }
-
-    fn save(&self, path: &Path) -> Result<()> {
-        let contents: String = toml::to_string(self)?;
-        std::fs::write(path, contents)?;
-        Ok(())
     }
 }
 
@@ -141,7 +133,7 @@ impl BsanEnv {
             skip,
             install_from,
         )?;
-        config.save(&config_path)?;
+
 
         let build_dir = path!(root_dir / "target");
         // Hard-code the target dir, since we rely on all binaries ending up in the same spot.

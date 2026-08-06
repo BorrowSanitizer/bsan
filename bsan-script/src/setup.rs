@@ -46,7 +46,7 @@ fn ensure_toolchain(
     // bail out.
     let metadata = if let Ok(meta) = version_meta(sh, TOOLCHAIN_NAME)
         && let Some(ref commit_hash) = meta.commit_hash
-        && commit_hash == &config.sha
+        && commit_hash == &config.rust_sha
         && local_dir.is_none()
     {
         if active_toolchain()? != TOOLCHAIN_NAME {
@@ -94,16 +94,14 @@ fn install_toolchain(
     cmd!(sh, "rustup toolchain uninstall {TOOLCHAIN_NAME}").quiet().run()?;
 
     let target = &host.host;
-    let version = &config.version;
-    let archive_postfix: String = version.to_string();
-    let artifact_url = path!(&config.artifact_url / &config.tag);
+    let artifact_url = path!(&config.artifact_url / config.rust_sha);
     let help_on_error = "Failed to download the custom Rust toolchain.";
 
     let tmp_dir = sh.create_temp_dir()?;
 
     let download_unpack_install = |prefix: &str, needs_target: bool| -> Result<()> {
         // Download the .tar.xz file
-        let mut tar_file_name = format!("{prefix}-{archive_postfix}");
+        let mut tar_file_name = format!("{prefix}-nightly");
         if needs_target {
             tar_file_name = format!("{tar_file_name}-{target}");
         }
@@ -133,10 +131,6 @@ fn install_toolchain(
     download_unpack_install("rust-src", false)?;
 
     let meta = version_meta(sh, TOOLCHAIN_NAME)?;
-    config.sha =
-        meta.commit_hash.clone().expect("Unable to resolve commit hash for latest toolchain.");
-    config.version = meta.semver.to_string();
-
     cmd!(sh, "rustup override set {TOOLCHAIN_NAME}").quiet().run()?;
     Ok(meta)
 }
@@ -169,25 +163,25 @@ pub fn ensure_llvm_cmake(
     let tmp_dir = tmp_dir.path();
 
     let url = &config.llvm_url;
-    let branch = &config.llvm_branch;
+    let sha = &config.llvm_sha;
     let lockfile = path!(toolchain_dir / ".llvm.lock");
 
-    if !(lockfile.exists() && fs::read_to_string(&lockfile)?.eq(branch)) {
-        cmd!(sh, "git clone -n --depth=1 --filter=tree:0 --branch={branch} {url} {tmp_dir}")
+    if !(lockfile.exists() && fs::read_to_string(&lockfile)?.eq(sha)) {
+        let _tmp = sh.push_dir(&tmp_dir);
+        cmd!(sh, "git init -q .").run()?;
+        cmd!(sh, "git remote add origin {url}").run()?;
+
+        cmd!(sh, "git sparse-checkout set --no-cone --stdin")
+            .stdin(sh.read_file(&llvm_sparse)?)
             .run()?;
 
-        let mut sparse_checkout = path!(&tmp_dir / ".git/info");
-        fs::create_dir_all(&sparse_checkout)?;
-        sparse_checkout.push("sparse-checkout");
+        cmd!(sh, "git fetch -q --depth=1 --filter=tree:0 origin {sha}").run()?;
+        cmd!(sh, "git checkout -q FETCH_HEAD").run()?;
 
-        cmd!(sh, "ln -s {llvm_sparse} {sparse_checkout}").run()?;
-
-        cmd!(sh, "git -C {tmp_dir} sparse-checkout init").run()?;
-        cmd!(sh, "git -C {tmp_dir} checkout").run()?;
-        cmd!(sh, "cp -fr {tmp_dir}/llvm {toolchain_dir}").run()?;
-        cmd!(sh, "cp -fr {tmp_dir}/cmake {toolchain_dir}").run()?;
-
-        fs::write(lockfile, branch)?;
+        for subdir in ["llvm", "cmake"] {
+            cmd!(sh, "cp -fr {subdir} {toolchain_dir}").run()?;
+        }
+        fs::write(lockfile, sha)?;
     }
 
     let link_source = path!(root_dir / "bsan-rt" / "llvm-wrapper");
