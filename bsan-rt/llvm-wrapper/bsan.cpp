@@ -321,14 +321,15 @@ void *__bsan_mark(void *callee) {
   return prev_marker;
 }
 
-/// A general-purpose utility for copying shadow memory. 
-/// Receives precomputed shadow addresses for the source,
-/// and stores the shadow to the given destination, adjusting
-/// reference counts as necessary. Used to support variadic
-/// functions. 
+/// A general-purpose utility for copying shadow memory.
+/// Receives precomputed shadow addresses for the source and
+/// destination. Adjusts the reference counts of the destination.
+/// Used to support variadic functions. All pointers must be aligned
+/// to the size of a provenance value, by construction of the instrumentation
+/// pass.
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_shadow_copy(void *dest, void *src_tag, void *src_info) {
-
+void __bsan_shadow_join(void *dest, void *src_tag, void *src_info, uptr size) {
+  JoinShadow(dest, src_tag, src_info, size);
 }
 
 /// Clears the parameter provenance array if the frame pointer of the
@@ -522,6 +523,14 @@ void __bsan_rc_dec(BorTag Tag, AllocInfo *Info) {
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_shadow_clear(void *dest, uptr size) { ClearShadow(dest, size); }
+
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_shadow_clear_aligned(void *dest_shadow, void *dest_origin,
+                                 uptr size) {
+  if (!MEM_IS_SHADOW(dest_shadow))
+    return;
+  ClearShadowAligned((uptr)dest_shadow, (uptr)dest_origin, size);
+}
 
 SANITIZER_WEAK_ATTRIBUTE
 AllocInfo *__bsan_reserve_stack_slot_impl();

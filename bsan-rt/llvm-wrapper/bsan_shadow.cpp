@@ -230,13 +230,9 @@ void CopyAligned(void *dest, const void *src, uptr size) {
   internal_memcpy((void *)d_aligned, (const void *)s_aligned, s_size);
 }
 
-ALWAYS_INLINE static void UpdateShadowSlot(uptr d_aligned, uptr s_aligned,
+ALWAYS_INLINE static void UpdateShadowSlot(uptr d_shadow, uptr d_origin,
+                                           uptr s_shadow, uptr s_origin,
                                            uptr offset) {
-  uptr d_shadow = MEM_TO_SHADOW(d_aligned);
-  uptr d_origin = MEM_TO_ORIGIN(d_aligned);
-  uptr s_shadow = MEM_TO_SHADOW(s_aligned);
-  uptr s_origin = MEM_TO_ORIGIN(s_aligned);
-
   AllocInfo **dest_info = reinterpret_cast<AllocInfo **>(d_origin + offset);
   AllocInfo **source_info = reinterpret_cast<AllocInfo **>(s_origin + offset);
 
@@ -270,8 +266,34 @@ void CopyShadow(void *dest, const void *src, uptr size) {
   AlignPtr8((uptr)dest, d_aligned);
   AlignRange8((uptr)src, size, s_aligned, s_size);
 
+  uptr d_shadow = MEM_TO_SHADOW(d_aligned);
+  uptr d_origin = MEM_TO_ORIGIN(d_aligned);
+  uptr s_shadow = MEM_TO_SHADOW(s_aligned);
+  uptr s_origin = MEM_TO_ORIGIN(s_aligned);
+
   for (uptr offset = 0; offset < s_size; offset += step)
-    UpdateShadowSlot(d_aligned, s_aligned, offset);
+    UpdateShadowSlot(d_shadow, d_origin, s_shadow, s_origin, offset);
+}
+
+void JoinShadow(void *dest, const void *s_shadow, const void *s_origin,
+                uptr s_size) {
+  if (!MEM_IS_APP(dest))
+    return;
+  // This operation relies on our instrumentation pass
+  // to ensure that the source and size are aligned.
+  uptr d_aligned;
+  AlignPtr8((uptr)dest, d_aligned);
+
+  uptr d_shadow = MEM_TO_SHADOW(d_aligned);
+  uptr d_origin = MEM_TO_ORIGIN(d_aligned);
+
+  uptr s_shadow_addr = (uptr)s_shadow;
+  uptr s_origin_addr = (uptr)s_origin;
+
+  const uptr step = kMinProvAlignment;
+
+  for (uptr offset = 0; offset < s_size; offset += step)
+    UpdateShadowSlot(d_shadow, d_origin, s_shadow_addr, s_origin_addr, offset);
 }
 
 void MoveShadow(void *dest, const void *src, uptr size) {
@@ -292,12 +314,17 @@ void MoveShadow(void *dest, const void *src, uptr size) {
   if (d_aligned == s_aligned)
     return;
 
+  uptr d_shadow = MEM_TO_SHADOW(d_aligned);
+  uptr d_origin = MEM_TO_ORIGIN(d_aligned);
+  uptr s_shadow = MEM_TO_SHADOW(s_aligned);
+  uptr s_origin = MEM_TO_ORIGIN(s_aligned);
+
   if (d_aligned < s_aligned) {
     for (uptr offset = 0; offset < s_size; offset += step)
-      UpdateShadowSlot(d_aligned, s_aligned, offset);
+      UpdateShadowSlot(d_shadow, d_origin, s_shadow, s_origin, offset);
   } else {
     for (uptr offset = s_size - step;; offset -= step) {
-      UpdateShadowSlot(d_aligned, s_aligned, offset);
+      UpdateShadowSlot(d_shadow, d_origin, s_shadow, s_origin, offset);
       // signed so must break at 0
       if (offset == 0)
         break;
@@ -314,9 +341,15 @@ void ClearShadow(void *dest, uptr size) {
   uptr shadow_start = MEM_TO_SHADOW(d_aligned);
   uptr origin_start = MEM_TO_ORIGIN(d_aligned);
 
+  ClearShadowAligned(shadow_start, origin_start, d_size);
+}
+
+void ClearShadowAligned(uptr shadow_start, uptr origin_start,
+                        uptr size_aligned) {
+
   const uptr step = kMinProvAlignment;
 
-  for (uptr offset = 0; offset < d_size; offset += step) {
+  for (uptr offset = 0; offset < size_aligned; offset += step) {
     BorTag *tag_ptr = reinterpret_cast<BorTag *>(shadow_start + offset);
     AllocInfo **info_ptr =
         reinterpret_cast<AllocInfo **>(origin_start + offset);

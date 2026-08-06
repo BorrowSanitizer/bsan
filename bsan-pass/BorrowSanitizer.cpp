@@ -126,22 +126,44 @@ struct MemoryMapParams {
   uint64_t OriginBase;
 };
 
-struct ProvenancePtr {
+// A static or dynamic offset as a number
+// of provenance slots.
+struct ProvenanceOffset {
+  Value *Val;
+  ProvenanceOffset() {}
+  ProvenanceOffset(Value *Val) : Val(Val) {
+    if (auto *CI = dyn_cast<ConstantInt>(Val)) {
+      assert(CI->getAlignValue() == kMinProvAlignment);
+    }
+  }
+  ProvenanceOffset(Type *Ty, unsigned Bytes) {
+    assert(alignTo(Bytes, kMinProvAlignment) == Bytes);
+    Val = ConstantInt::get(Ty, Bytes);
+  }
+};
+
+// A pointer to a location where a provenance value can be stored.
+// This location must be aligned to the size of a provenance value.
+struct ProvenanceDest {
+  // Pointers to where each component of a provenance value is stored.
   Value *ShadowPtr = nullptr;
   Value *OriginPtr = nullptr;
+  // If we store a provenance value into shadow memory, then we need
+  // to update the reference counts of the provenance being stored, and
+  // the provenance being clobbered by the store. However, we also use
+  // main memory to store provenance values, when we pass them as
+  // parameters to functions and as variadic arguments. In these cases
+  // we can guarantee that the provenance values are "rooted" elsewhere
+  // on the shadow stack, so we do not need to update reference counts.
+  // We can use this struct for each situation, setting the following
+  // flag to control the desired behavior.
   bool UpdateRefCt = false;
-  ProvenancePtr() {}
-  ProvenancePtr(Value *Shadow, Value *Origin, bool UpdateRefCt)
-      : ShadowPtr(Shadow), OriginPtr(Origin) {}
-  ProvenancePtr ptradd(IRBuilder<> &IRB, Value *Offset) {
-    return ProvenancePtr(::ptradd(IRB, ShadowPtr, Offset),
-                         ::ptradd(IRB, OriginPtr, Offset), UpdateRefCt);
-  }
-
-  void memcpy(IRBuilder<> &IRB, ProvenancePtr Src, Align CpyAlign,
-              Value *CpySize) {
-    IRB.CreateMemCpy(ShadowPtr, CpyAlign, Src.ShadowPtr, CpyAlign, CpySize);
-    IRB.CreateMemCpy(OriginPtr, CpyAlign, Src.OriginPtr, CpyAlign, CpySize);
+  ProvenanceDest() {}
+  ProvenanceDest(Value *Shadow, Value *Origin, bool UpdateRefCt)
+      : ShadowPtr(Shadow), OriginPtr(Origin), UpdateRefCt(UpdateRefCt) {}
+  ProvenanceDest ptradd(IRBuilder<> &IRB, ProvenanceOffset Offset) {
+    return ProvenanceDest(::ptradd(IRB, ShadowPtr, Offset.Val),
+                          ::ptradd(IRB, OriginPtr, Offset.Val), UpdateRefCt);
   }
 };
 
@@ -320,12 +342,12 @@ private:
   FunctionCallee BsanFuncMemCpy;
 
   /// Runtime function for clearing a range within shadow memory.
-  FunctionCallee BsanFuncShadowClear;
+  FunctionCallee BsanFuncShadowClearAligned;
 
-  /// Runtime function for copying provenance, split across 
+  /// Runtime function for copying provenance, split across
   /// two disjoint regions of memory, into the shadow for a given address.
   /// Used to support variadic functions.
-  FunctionCallee BsanFuncShadowCopy;
+  FunctionCallee BsanFuncShadowJoin;
 
   /// Runtime function for incrementing the reference count associated
   /// with a provenance value.
@@ -378,6 +400,19 @@ private:
                              SmallVector<ProvenanceField> &ProvDesc,
                              Type *CurrentTy, Value *ByteOffset,
                              bool ClearGaps = false);
+
+  ProvenanceOffset alignDownToSlot(IRBuilder<> &IRB, Value *V) {
+    const uint64_t ProvAlign = kMinProvAlignment.value();
+    Value *Rounded =
+        IRB.CreateAnd(V, ConstantInt::get(IntptrTy, ~(ProvAlign - 1)));
+    return ProvenanceOffset(Rounded);
+  }
+
+  ProvenanceOffset alignUpToSlot(IRBuilder<> &IRB, Value *V) {
+    const uint64_t ProvAlign = kMinProvAlignment.value();
+    return alignDownToSlot(
+        IRB, IRB.CreateAdd(V, ConstantInt::get(IntptrTy, ProvAlign - 1)));
+  }
 };
 } // end anonymous namespace
 
@@ -639,11 +674,12 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncMemSet = M.getOrInsertFunction(BSAN("memset"), AL, IRB.getVoidTy(),
                                          PtrTy, Int32Ty, IntptrTy);
 
-  BsanFuncShadowClear = M.getOrInsertFunction(BSAN("shadow_clear"), AL,
-                                              IRB.getVoidTy(), PtrTy, IntptrTy);
+  BsanFuncShadowClearAligned =
+      M.getOrInsertFunction(BSAN("shadow_clear_aligned"), AL, IRB.getVoidTy(),
+                            PtrTy, PtrTy, IntptrTy);
 
-  BsanFuncShadowCopy = M.getOrInsertFunction(BSAN("shadow_copy"), AL,
-                                              IRB.getVoidTy(), PtrTy, PtrTy, PtrTy);
+  BsanFuncShadowJoin = M.getOrInsertFunction(
+      BSAN("shadow_join"), AL, IRB.getVoidTy(), PtrTy, PtrTy, PtrTy, IntptrTy);
 
   BsanFuncReserveStackSlot =
       M.getOrInsertFunction(BSAN("reserve_stack_slot"),
@@ -671,6 +707,7 @@ void BorrowSanitizer::createUserspaceApi(Module &M,
 
   VAArgOverflowSizeTLS =
       getOrInsertTLSGlobal(M, BSAN("var_arg_overflow"), IntptrTy);
+
   VAArgTagTLS = getOrInsertTLSGlobal(M, BSAN("var_arg_tag_tls"), PtrTy);
   VAArgInfoTLS = getOrInsertTLSGlobal(M, BSAN("var_arg_info_tls"), PtrTy);
 
@@ -869,7 +906,6 @@ class SlotAllocator {
 
 private:
   friend struct ShadowStackAllocator;
-
   // The integer type used to track the number of slots.
   Type *Ty = nullptr;
   // We track the total number of stack slots used by this
@@ -971,7 +1007,7 @@ private:
 };
 
 // BorrowSanitizer uses a shadow stack to track the provenance values
-// that are accessible in memory, and to pass provenance between functions.
+// that are accessible in memory and to pass provenance between functions.
 // The shadow stack has multiple regions, and each has a different purpose.
 //
 // |-----------------------|  <-- FrameHeaderTop
@@ -1178,6 +1214,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   friend struct VarArgHelperBase;
   friend struct VarArgAMD64Helper;
   friend struct VarArgAArch64Helper;
+
   BorrowSanitizer &BS;
   Function &F;
   LLVMContext *C;
@@ -1338,16 +1375,18 @@ private:
     return OffsetLong;
   }
 
-  ProvenancePtr getMainProvenancePtr(IRBuilder<> &IRB, Value *Base, MaybeAlign Alignment = kMinProvAlignment) {
+  ProvenanceDest getMainProvenancePtr(IRBuilder<> &IRB, Value *Base) {
     Value *ZeroIdx = ConstantInt::get(IRB.getInt64Ty(), 0);
     Value *TagPtr = Base;
     Value *InfoPtr =
         IRB.CreateGEP(BS.ProvenanceTy, Base,
                       {ZeroIdx, ConstantInt::get(IRB.getInt32Ty(), 1)});
-    return ProvenancePtr(TagPtr, InfoPtr, Base);
+    return ProvenanceDest(TagPtr, InfoPtr, false);
   }
-  
-  ProvenancePtr getShadowProvenancePtr(IRBuilder<> &IRB, Value *Addr, MaybeAlign Alignment = kMinProvAlignment) {
+
+  ProvenanceDest
+  getShadowProvenancePtr(IRBuilder<> &IRB, Value *Addr,
+                         MaybeAlign Alignment = kMinProvAlignment) {
     VectorType *VectTy = dyn_cast<VectorType>(Addr->getType());
     if (!VectTy) {
       assert(Addr->getType()->isPointerTy());
@@ -1373,8 +1412,8 @@ private:
         OriginLong, getPtrToShadowPtrType(IntptrTy, BS.PtrTy));
 
     // We always want to update reference counts when we
-    // store to shadow memory. 
-    return ProvenancePtr(ShadowPtr, OriginPtr, true);
+    // store to shadow memory.
+    return ProvenanceDest(ShadowPtr, OriginPtr, true);
   }
 
   Provenance loadProvenanceFromShadow(
@@ -1382,11 +1421,11 @@ private:
       ElementCount Elems = ElementCount::getFixed(1),
       AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
     if (Elems.isScalar()) {
-      auto ProvenancePtr = getShadowProvenancePtr(IRB, Base, Alignment);
-      Provenance Prov =
-          loadProvenanceAlignedPairwise(IRB, ProvenancePtr, Ordering);
+      auto ShadowPtr = getShadowProvenancePtr(IRB, Base, Alignment);
+      Provenance Prov = loadProvenanceAlignedPairwise(IRB, ShadowPtr, Ordering);
       Value *Slot = allocStackSlot(IRB, false);
-      storeProvenance(IRB, Prov, Slot);
+      ProvenanceDest SlotPtr = getMainProvenancePtr(IRB, Slot);
+      storeProvenance(IRB, SlotPtr, Prov);
       return Prov;
     }
     report_fatal_error("Vectors are not supported.");
@@ -1493,37 +1532,7 @@ private:
     BaseProvMap[Key] = Prov;
   }
 
-  void storeProvenance(IRBuilder<> &IRB, Provenance Prov, Value *Base,
-                       AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
-    if (Prov.Elems.isVector()) {
-      report_fatal_error("Vector provenance is not supported yet");
-    }
-    Value *ZeroIdx = ConstantInt::get(IRB.getInt64Ty(), 0);
-    Value *TagPtr = Base;
-    Value *InfoPtr =
-        IRB.CreateGEP(BS.ProvenanceTy, Base,
-                      {ZeroIdx, ConstantInt::get(IRB.getInt32Ty(), 1)});
-    storeProvenanceAlignedPairwise(IRB, TagPtr, InfoPtr, Prov, Ordering);
-  }
-
-  // Stores a provenance value into shadow memory, starting at the given object
-  // address. The alignment provided is used to determine whether the shadow
-  // address needs to be manually aligned, or if it is already at the correct
-  // alignment.
-  void
-  storeProvenanceToShadow(IRBuilder<> &IRB, Value *ObjAddr, Align Alignment,
-                          Provenance Prov,
-                          AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
-    if (Prov.Elems.isVector()) {
-      report_fatal_error("Vectors are not supported.");
-    } else {
-      Value *TagPtr, *InfoPtr;
-      ProvenancePtr Ptr = getShadowProvenancePtr(IRB, ObjAddr, Alignment);
-      storeProvenanceWithReferenceCount(IRB, Ptr, Prov, Ordering);
-    }
-  }
-
-  Provenance loadProvenanceAlignedPairwise(IRBuilder<> &IRB, ProvenancePtr Ptr,
+  Provenance loadProvenanceAlignedPairwise(IRBuilder<> &IRB, ProvenanceDest Ptr,
                                            AtomicOrdering Ordering) {
     return loadProvenanceAlignedPairwise(IRB, Ptr.ShadowPtr, Ptr.OriginPtr,
                                          Ordering);
@@ -1543,42 +1552,32 @@ private:
     return Provenance(Tag, Info);
   }
 
-  void storeProvenanceWithReferenceCount(IRBuilder<> &IRB, ProvenancePtr Dest,
-                                         Provenance Prov,
-                                         AtomicOrdering Ordering) {
-    // We always need to increment first, in case both the source and
-    // destination are the same provenance value. If we decrement the
-    // provenance in the destination first, then the garbage collector
-    // may see a zero reference count and deinitialize the provenance
-    // that we are about to store.
-    if (Prov != Provenance::omnivalid(BS)) {
-      IRB.CreateCall(BS.BsanFuncRcInc, {Prov.Tag, Prov.Info});
+  void storeProvenance(IRBuilder<> &IRB, ProvenanceDest Dest, Provenance Prov,
+                       AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
+    if (Prov.Elems.isVector()) {
+      report_fatal_error("Vector provenance is not supported yet");
     }
-    // We only decrement on nonatomic loads. This leaks provenance exposed to
-    // atomic operations, which is necessary to support them without locking.
-    if (Ordering == AtomicOrdering::NotAtomic) {
-      Provenance Old = loadProvenanceAlignedPairwise(IRB, Dest, Ordering);
-      IRB.CreateCall(BS.BsanFuncRcDec, {Old.Tag, Old.Info});
+    if (Dest.UpdateRefCt) {
+      // We always need to increment first, in case both the source and
+      // destination are the same provenance value. If we decrement the
+      // provenance in the destination first, then the garbage collector
+      // may see a zero reference count and deinitialize the provenance
+      // that we are about to store.
+      if (Prov != Provenance::omnivalid(BS)) {
+        IRB.CreateCall(BS.BsanFuncRcInc, {Prov.Tag, Prov.Info});
+      }
+      // We only decrement on nonatomic store. This leaks provenance values that
+      // are exposed to atomic operations, which is necessary to support atomics
+      // without locking.
+      if (Ordering == AtomicOrdering::NotAtomic) {
+        Provenance Old = loadProvenanceAlignedPairwise(IRB, Dest, Ordering);
+        IRB.CreateCall(BS.BsanFuncRcDec, {Old.Tag, Old.Info});
+      }
     }
 
-    storeProvenanceAlignedPairwise(IRB, Dest, Prov, Ordering);
-  }
-
-  void storeProvenanceAlignedPairwise(IRBuilder<> &IRB, ProvenancePtr Ptr,
-                                      Provenance Prov,
-                                      AtomicOrdering Ordering) {
-    return storeProvenanceAlignedPairwise(IRB, Ptr.ShadowPtr, Ptr.OriginPtr,
-                                          Prov, Ordering);
-  }
-
-  // Stores a provenance value into shadow memory pairwise at the specified
-  // addresses. Each address must be aligned to the word size.
-  void storeProvenanceAlignedPairwise(IRBuilder<> &IRB, Value *TagPtr,
-                                      Value *InfoPtr, Provenance Prov,
-                                      AtomicOrdering Ordering) {
-    IRB.CreateAlignedStore(Prov.Tag, TagPtr, kMinProvAlignment)
+    IRB.CreateAlignedStore(Prov.Tag, Dest.ShadowPtr, kMinProvAlignment)
         ->setAtomic(Ordering);
-    IRB.CreateAlignedStore(Prov.Info, InfoPtr, kMinProvAlignment)
+    IRB.CreateAlignedStore(Prov.Info, Dest.OriginPtr, kMinProvAlignment)
         ->setAtomic(Ordering);
   }
 
@@ -1680,13 +1679,14 @@ private:
         Fields.push_back({Desc, Prov});
       }
 
-      ProvenancePtr ShadowPtr =
+      ProvenanceDest ShadowPtr =
           getShadowProvenancePtr(EntryIRB, Info.Arg, Info.Alignment);
-      copyProvenance(EntryIRB, ShadowPtr, Fields, Info.Size, Info.Alignment,
+      copyProvenance(EntryIRB, ShadowPtr, Fields, Info.Size,
                      AtomicOrdering::NotAtomic);
 
       Value *Slot = ShadowStack.getStackAllocSlot(EntryIRB);
-      storeProvenance(EntryIRB, Info.AllocProv, Slot);
+      auto SlotPtr = getMainProvenancePtr(EntryIRB, Slot);
+      storeProvenance(EntryIRB, SlotPtr, Info.AllocProv);
     }
 
     // We push additional slots into the frame header for
@@ -1700,7 +1700,8 @@ private:
       }
       setProvenance(AI, Prov);
       Value *Slot = ShadowStack.getStackAllocSlot(EntryIRB);
-      storeProvenance(EntryIRB, Prov, Slot);
+      auto SlotPtr = getMainProvenancePtr(EntryIRB, Slot);
+      storeProvenance(EntryIRB, SlotPtr, Prov);
     }
 
     // We also need a dedicated region of the shadow stack
@@ -1763,7 +1764,9 @@ private:
                     RI.PinArray, PinArrayLen, SrcProv.Tag, SrcProv.Info, Slot,
                     IRB.getInt1(false)});
     Provenance RetaggedProv = loadProvenanceAligned(IRB, Slot);
-    storeProvenanceToShadow(IRB, Operand, OperandAlign, RetaggedProv);
+
+    auto ShadowPtr = getShadowProvenancePtr(IRB, Operand, OperandAlign);
+    storeProvenance(IRB, ShadowPtr, RetaggedProv);
   }
 
   void instrumentRetagReg(CallBase &CB) {
@@ -1903,7 +1906,8 @@ private:
 
       for (auto [ByteOffset, Prov] : ParamOffsets) {
         Value *Slot = ptrsub(Before, StackOffset, ByteOffset);
-        storeProvenance(Before, Prov, Slot);
+        auto SlotPtr = getMainProvenancePtr(Before, Slot);
+        storeProvenance(Before, SlotPtr, Prov);
       }
     }
 
@@ -2220,12 +2224,12 @@ private:
     // make sure that pointers that are cast from integers via load / store
     // type punning receive omnivalid provenance.
     NextNodeIRBuilder AfterIRB(&SI);
-    ProvenancePtr ShadowPtr = getShadowProvenancePtr(AfterIRB, Ptr, SI.getAlign());
-    copyProvenance(AfterIRB, ShadowPtr, Val, SI.getAlign(), SI.getOrdering());
+    ProvenanceDest ShadowPtr =
+        getShadowProvenancePtr(AfterIRB, Ptr, SI.getAlign());
+    copyProvenance(AfterIRB, ShadowPtr, Val, SI.getOrdering());
   }
 
-  void copyProvenance(IRBuilder<> &IRB, ProvenancePtr Dest, Value *Val,
-                      Align Align,
+  void copyProvenance(IRBuilder<> &IRB, ProvenanceDest Dest, Value *Val,
                       AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
     Type *Ty = Val->getType();
 
@@ -2240,89 +2244,94 @@ private:
     TypeSize StoreSize = BS.DL->getTypeStoreSize(Ty);
     Value *TotalSize = IRB.CreateTypeSize(BS.IntptrTy, StoreSize);
 
-    copyProvenance(IRB, Dest, FieldValues, TotalSize, Align, Ordering);
+    copyProvenance(IRB, Dest, FieldValues, TotalSize, Ordering);
   }
 
-  void copyProvenance(IRBuilder<> &IRB, ProvenancePtr Dest,
+  void copyProvenance(IRBuilder<> &IRB, ProvenanceDest Dest,
                       ArrayRef<std::pair<ProvenanceField, Provenance>> ProvDesc,
-                      Value *TotalSize, Align CopyAlign,
+                      Value *TotalSize,
                       AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
+
     Value *Cursor = ConstantInt::get(BS.IntptrTy, 0);
-    SmallVector<std::tuple<Value *, Value *>> SlotsToClear;
+    SmallVector<std::tuple<ProvenanceOffset, ProvenanceOffset>> SlotsToClear;
 
     for (const auto &[Desc, Prov] : ProvDesc) {
-      Align FieldAlign = commonAlignment(Desc.FieldAlign, CopyAlign.value());
-      Value *GapSize = ConstantInt::get(BS.IntptrTy, 0);
+      Align FieldAlign =
+          commonAlignment(Desc.FieldAlign, kMinProvAlignment.value());
 
-      // If our cursor is less than this field's offset, then there's a gap to
-      // clear.
       if (Cursor != Desc.ByteOffset) {
-        GapSize = IRB.CreateSub(Desc.ByteOffset, Cursor);
-        if (FieldAlign < kMinProvAlignment) {
-          // Round down so we don't clear a slot that we are about to overwrite
-          // anyway.
-          if (auto *CI = dyn_cast<ConstantInt>(GapSize)) {
-            uint64_t GapSizeDown =
-                (CI->getZExtValue() & ~(kMinProvAlignment.value() - 1));
-            GapSize = ConstantInt::get(BS.IntptrTy, GapSizeDown);
-          }
+        // There is a gap between provenance values within the layout
+        // of the type
+        Value *GapSize = IRB.CreateSub(Desc.ByteOffset, Cursor);
+        ProvenanceOffset GapSizeRounded;
+
+        if (FieldAlign == kMinProvAlignment) {
+          // The field is already slot aligned. It will be
+          // disjoint from the slots covered by the gap.
+          GapSizeRounded = BS.alignUpToSlot(IRB, GapSize);
+        } else {
+          // The field straddles two slots. It will clobber
+          // the last slot of the gap, so we want to round the
+          // gap size down.
+          GapSizeRounded = BS.alignDownToSlot(IRB, GapSize);
         }
+        ProvenanceOffset GapStart = BS.alignDownToSlot(IRB, Cursor);
+
         if (!match(GapSize, m_Zero()))
-          SlotsToClear.push_back(std::make_tuple(Cursor, GapSize));
+          SlotsToClear.push_back(std::make_tuple(GapStart, GapSize));
       }
 
-      ProvenancePtr ObjAddr = Dest.ptradd(IRB, Desc.ByteOffset);
-      storeProvenanceWithReferenceCount(IRB, ObjAddr, Prov, Ordering);
+      ProvenanceOffset AlignedOffset = BS.alignDownToSlot(IRB, Desc.ByteOffset);
+      ProvenanceDest ObjAddr = Dest.ptradd(IRB, AlignedOffset);
+      storeProvenance(IRB, ObjAddr, Prov, Ordering);
 
       Cursor = IRB.CreateNUWAdd(Desc.ByteOffset, Desc.ByteWidth);
     }
 
-    // Clear any trailing gap between the last field and the end of the range.
-    Value *FinalGapSize = IRB.CreateSub(TotalSize, Cursor);
-    if (!match(FinalGapSize, m_Zero()))
-      SlotsToClear.push_back(std::make_tuple(Cursor, FinalGapSize));
+    ProvenanceOffset FinalGapStart = BS.alignDownToSlot(IRB, Cursor);
+    ProvenanceOffset FinalGapSize =
+        BS.alignUpToSlot(IRB, IRB.CreateSub(TotalSize, Cursor));
+
+    if (!match(FinalGapSize.Val, m_Zero()))
+      SlotsToClear.push_back(std::make_tuple(FinalGapStart, FinalGapSize));
 
     for (auto &[Offset, GapSize] : SlotsToClear) {
-      ProvenancePtr BaseAddr = Dest.ptradd(IRB, Offset);
-      MaybeAlign GapAlign = std::nullopt;
-      if (auto *CI = dyn_cast<ConstantInt>(Offset))
-        GapAlign = commonAlignment(CopyAlign, CI->getZExtValue());
-      clearProvenance(IRB, BaseAddr, GapSize, GapAlign, Ordering);
+      ProvenanceDest BaseAddr = Dest.ptradd(IRB, Offset);
+      clearProvenance(IRB, BaseAddr, GapSize, Ordering);
     }
   }
 
-  void clearProvenance(IRBuilder<> &IRB, ProvenancePtr Dest, Value *Size,
-                       MaybeAlign Alignment, AtomicOrdering Ordering) {
-    ConstantInt *CI = dyn_cast<ConstantInt>(Size);
-    if (!CI)
-      report_fatal_error("Scalable vectors are not supported!");
-
-    uint64_t Bytes = CI->getZExtValue();
-    if (Bytes == 0)
-      return;
-
+  void clearProvenance(IRBuilder<> &IRB, ProvenanceDest Dest,
+                       ProvenanceOffset Size,
+                       AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
     const uint64_t SlotSize = kMinProvAlignment.value();
-    uint64_t AlignedBytes = alignTo(Bytes, SlotSize);
-
-    const uint64_t MaxInlineSlots = 8;
-    uint64_t NumSlots = AlignedBytes / SlotSize;
-
-    if (NumSlots <= MaxInlineSlots) {
-      for (uint64_t I = 0; I < NumSlots; ++I) {
-        Value *Idx = ConstantInt::get(BS.IntptrTy, I * SlotSize);
-        ProvenancePtr SlotPtr = Dest.ptradd(IRB, Idx);
-        storeProvenance(IRB, SlotPtr, Provenance::omnivalid(BS), Ordering);
+    const uint64_t MaxInlineSlots = 4;
+    if (auto *CI = dyn_cast<ConstantInt>(Size.Val)) {
+      uint64_t Bytes = CI->getZExtValue();
+      if (Bytes == 0)
+        return;
+      uint64_t NumSlots = Bytes / SlotSize;
+      if (NumSlots <= MaxInlineSlots) {
+        for (uint64_t I = 0; I < NumSlots; ++I) {
+          ProvenanceOffset SlotOffset(BS.IntptrTy, I * SlotSize);
+          ProvenanceDest SlotPtr = Dest.ptradd(IRB, SlotOffset);
+          storeProvenance(IRB, SlotPtr, Provenance::omnivalid(BS), Ordering);
+        }
+        return;
       }
-    } else {
-      report_fatal_error("Unfixed!");
-      // IRB.CreateCall(BS.BsanFuncShadowClear, {nullptr, Size});
     }
-  }
-  // Clears the provenance for the given range.
-  void clearProvenance(IRBuilder<> &IRB, Value *Base, Value *Size,
-                       MaybeAlign Alignment, AtomicOrdering Ordering) {
-    ProvenancePtr ShadowPtr = getShadowProvenancePtr(IRB, Base, Alignment);
-    clearProvenance(IRB, ShadowPtr, Size, Alignment, Ordering);
+
+    if (Dest.UpdateRefCt) {
+      IRB.CreateCall(BS.BsanFuncShadowClearAligned,
+                     {Dest.ShadowPtr, Dest.OriginPtr, Size.Val});
+
+    } else {
+      // We only need to clear tag values, since they gate the validity
+      // of a provenance value.
+      IRB.CreateMemSet(Dest.ShadowPtr,
+                       ConstantInt::getNullValue(IRB.getInt8Ty()), Size.Val,
+                       kMinProvAlignment);
+    }
   }
 
   void visitGetElementPtrInst(GetElementPtrInst &I) {
@@ -2495,9 +2504,10 @@ private:
         }
         IRB.CreateStore(ReturnProvPtrs.back(), BS.ProvStackTLS);
         for (const auto &[Idx, Ptr] : llvm::enumerate(ReturnProvPtrs)) {
+          auto MainPtr = getMainProvenancePtr(IRB, Ptr);
           Provenance Prov =
               assertProvenance(IRB, ProvDesc[Idx].Elems, {RetVal, Idx});
-          storeProvenance(IRB, Prov, Ptr);
+          storeProvenance(IRB, MainPtr, Prov);
         }
         return;
       }
@@ -2523,10 +2533,12 @@ private:
   }
 };
 
-// Our variadic handling is a direct port of what
-// MemorySanitizer does. All architecture-specific
-// decisions are derived from MemorySanitizer's
-// original implementation.
+// Our variadic handling is a direct port from
+// MemorySanitizer. All architecture-specific
+// decisions, and the overall design, is derived
+// from MemorySanitizer. However, unlike MemorySanitizer,
+// we always copy the "origin" values, because provenance
+// is two words.
 struct VarArgHelperBase : public VarArgHelper {
   Function &F;
   BorrowSanitizer &BS;
@@ -2550,35 +2562,32 @@ struct VarArgHelperBase : public VarArgHelper {
     return {TagAddr, InfoAddr};
   }
 
-  ProvenancePtr getShadowPtrForVAArgument(IRBuilder<> &IRB,
-                                              unsigned ArgOffset) {
-    unsigned ArgOffsetAligned = alignTo(ArgOffset, kMinProvAlignment);
-    ProvenancePtr Base(BS.VAArgTagTLS, BS.VAArgInfoTLS, false);
-    return Base.ptradd(IRB, ConstantInt::get(BS.IntptrTy, ArgOffsetAligned));
+  ProvenanceDest getShadowPtrForVAArgument(IRBuilder<> &IRB,
+                                           unsigned ArgOffset) {
+    ProvenanceDest Base(BS.VAArgTagTLS, BS.VAArgInfoTLS, false);
+    return Base.ptradd(IRB, ProvenanceOffset(BS.IntptrTy, ArgOffset));
   }
 
   /// Compute the shadow address for a given va_arg.
-  ProvenancePtr getShadowPtrForVAArgument(IRBuilder<> &IRB,
-                                              unsigned ArgOffset,
-                                              unsigned ArgSize) {
+  ProvenanceDest getShadowPtrForVAArgument(IRBuilder<> &IRB, unsigned ArgOffset,
+                                           unsigned ArgSize) {
     // Make sure we don't overflow __msan_va_arg_tls.
     assert(ArgOffset + ArgSize <= kParamTLSSize);
     return getShadowPtrForVAArgument(IRB, ArgOffset);
   }
 
-  void cleanUnusedTLS(IRBuilder<> &IRB, ProvenancePtr Ptr,
+  void cleanUnusedTLS(IRBuilder<> &IRB, ProvenanceDest Ptr,
                       unsigned BaseOffset) {
     // The tails of `__msan_va_arg_tls` is not large enough to fit full
-    // value shadow, but it will be copied to backup anyway. Make it
-    // clean.
+    // value shadow, but it will be copied to backup anyway. Make it clean.
     if (BaseOffset >= kParamTLSSize)
       return;
 
     Value *TailSize =
         ConstantInt::getSigned(IRB.getInt32Ty(), kParamTLSSize - BaseOffset);
 
-    // We can use memset here, because we are clearing TLS, which is rooted
-    // elsewhere on the shadow stack.
+    // We can use memset here because we are clearing TLS. Any provenance
+    // is rooted elsewhere on the shadow stack.
     IRB.CreateMemSet(Ptr.ShadowPtr, ConstantInt::getNullValue(IRB.getInt8Ty()),
                      TailSize, Align(8));
     IRB.CreateMemSet(Ptr.OriginPtr, ConstantInt::getNullValue(IRB.getInt8Ty()),
@@ -2588,11 +2597,11 @@ struct VarArgHelperBase : public VarArgHelper {
   void clearVAListTagForInst(IntrinsicInst &I) {
     IRBuilder<> IRB(&I);
     Value *VAListTag = I.getArgOperand(0);
-    const Align Alignment = Align(8);
-    Value *Size = ConstantInt::get(BS.IntptrTy, VAListTagSize);
+
+    ProvenanceOffset Offset(BS.IntptrTy, VAListTagSize);
+    ProvenanceDest Shadow = BSV.getShadowProvenancePtr(IRB, VAListTag);
     // Here, we're clearing shadow, so we need to adjust reference counts.
-    BSV.clearProvenance(IRB, VAListTag, Size, Alignment,
-                        AtomicOrdering::NotAtomic);
+    BSV.clearProvenance(IRB, Shadow, Offset, AtomicOrdering::NotAtomic);
   }
 
   void visitVAStartInst(VAStartInst &I) override {
@@ -2617,6 +2626,11 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
   // If SSE is disabled, fp_offset in va_list is zero.
   static const unsigned kAMD64FpEndOffsetNoSSE = kAMD64GpEndOffset;
 
+  // On AMD64 platforms, variadic arguments are passed into two
+  // regions of memory. The first region has a statically known size,
+  // which is computed into `AMD64FpEndOffset` below. The second
+  // region is adjacent, and holds any "overflow" beyond the static region.
+  // It has a dynamic size.
   unsigned AMD64FpEndOffset;
   AllocaInst *VAArgTLSTagCopy = nullptr;
   AllocaInst *VAArgTLSInfoCopy = nullptr;
@@ -2653,9 +2667,9 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
   }
 
   // For VarArg functions, store the argument shadow in an ABI-specific format
-  // that corresponds to va_list layout.
-  // We do this because Clang lowers va_arg in the frontend, and this pass
-  // only sees the low level code that deals with va_list internals.
+  // that corresponds to `va_list` layout.
+  // We do this because Clang lowers `va_arg` in the frontend, and this pass
+  // only sees the low level code that deals with `va_list` internals.
   void visitCallBase(CallBase &CB, IRBuilder<> &IRB) override {
     unsigned GpOffset = 0;
     unsigned FpOffset = kAMD64GpEndOffset;
@@ -2667,8 +2681,8 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
       bool IsByVal = CB.paramHasAttr(ArgNo, Attribute::ByVal);
       if (IsByVal) {
         // ByVal arguments always go to the overflow area.
-        // Fixed arguments passed through the overflow area will be stepped
-        // over by va_start, so don't count them towards the offset.
+        // Fixed arguments passed through the overflow area will be
+        // stepped over by `va_start`, so don't count them towards the offset.
         if (IsFixed)
           continue;
         assert(A->getType()->isPointerTy());
@@ -2676,9 +2690,7 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
         uint64_t ArgSize = DL.getTypeAllocSize(RealTy);
         uint64_t AlignedSize = alignTo(ArgSize, 8);
         unsigned BaseOffset = OverflowOffset;
-
-        ProvenancePtr DestPtr =
-            getShadowPtrForVAArgument(IRB, OverflowOffset);
+        ProvenanceDest DestPtr = getShadowPtrForVAArgument(IRB, OverflowOffset);
         OverflowOffset += AlignedSize;
 
         if (OverflowOffset > kParamTLSSize) {
@@ -2686,59 +2698,57 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
           continue; // We have no space to copy shadow there.
         }
 
-        ProvenancePtr SrcPtr = BSV.getShadowProvenancePtr(IRB, A, kMinProvAlignment);
+        ProvenanceDest SrcPtr =
+            BSV.getShadowProvenancePtr(IRB, A, kMinProvAlignment);
 
-        // We are copying provenance into a parameter TLS array. We maintain
-        // the invariant that any provenance value within a TLS array is rooted
-        // somewhere else on the shadow stack, so we do not need to adjust
-        // reference counts here.
-
+        // We are copying provenance into the variadic TLS array. Any provenance
+        // value within a TLS array is rooted somewhere else on the shadow
+        // stack, so we do not need to adjust reference counts.
         IRB.CreateMemCpy(DestPtr.ShadowPtr, kMinProvAlignment, SrcPtr.ShadowPtr,
                          kMinProvAlignment, ArgSize);
         IRB.CreateMemCpy(DestPtr.OriginPtr, kMinProvAlignment, SrcPtr.OriginPtr,
                          kMinProvAlignment, ArgSize);
+
       } else {
         ArgKind AK = classifyArgument(A);
         if (AK == AK_GeneralPurpose && GpOffset >= kAMD64GpEndOffset)
           AK = AK_Memory;
         if (AK == AK_FloatingPoint && FpOffset >= AMD64FpEndOffset)
           AK = AK_Memory;
-        ProvenancePtr Ptr;
+        ProvenanceDest Ptr;
+        unsigned Offset = 0;
+
         switch (AK) {
         case AK_GeneralPurpose:
-          Ptr = getShadowPtrForVAArgument(IRB, GpOffset);
+          Offset = GpOffset;
           GpOffset += 8;
           assert(GpOffset <= kParamTLSSize);
           break;
         case AK_FloatingPoint:
-          Ptr = getShadowPtrForVAArgument(IRB, FpOffset);
+          Offset = FpOffset;
           FpOffset += 16;
           assert(FpOffset <= kParamTLSSize);
           break;
         case AK_Memory:
           if (IsFixed)
             continue;
+
           uint64_t ArgSize = DL.getTypeAllocSize(A->getType());
           uint64_t AlignedSize = alignTo(ArgSize, kMinProvAlignment);
           unsigned BaseOffset = OverflowOffset;
-          Ptr = getShadowPtrForVAArgument(IRB, OverflowOffset);
+          Offset = OverflowOffset;
           OverflowOffset += AlignedSize;
           if (OverflowOffset > kParamTLSSize) {
+            Ptr = getShadowPtrForVAArgument(IRB, Offset);
             // We have no space to copy shadow there.
             cleanUnusedTLS(IRB, Ptr, BaseOffset);
             continue;
           }
         }
-        // Take fixed arguments into account for GpOffset and FpOffset,
-        // but don't actually store shadows for them.
-        // TODO(glider): don't call get*PtrForVAArgument() for them.
         if (IsFixed)
           continue;
-
-        // Like above, we are copying into a TLS array, so there's
-        // no need to adjust the reference count.
-        // TLS <- shadow, needs a reference count.
-        BSV.copyProvenance(IRB, Ptr, A, kMinProvAlignment);
+        Ptr = getShadowPtrForVAArgument(IRB, Offset);
+        BSV.copyProvenance(IRB, Ptr, A);
       }
     }
     Constant *OverflowSize =
@@ -2760,7 +2770,7 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
 
       VAArgTLSTagCopy = IRB.CreateAlloca(Type::getInt8Ty(*BS.C), CopySize);
       VAArgTLSTagCopy->setAlignment(kMinProvAlignment);
-      
+
       VAArgTLSInfoCopy = IRB.CreateAlloca(Type::getInt8Ty(*BS.C), CopySize);
       VAArgTLSInfoCopy->setAlignment(kMinProvAlignment);
 
@@ -2769,8 +2779,10 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
           ConstantInt::get(BS.IntptrTy, kParamTLSSize));
 
       // This is an exceedingly rare situation: we are copying shadow
-      // values into main memory! We can treat this just like TLS, and
-      // skip adjusting reference counts. 
+      // values into main memory, that isn't TLS. We do not need to increment
+      // the reference counts of the provenance values that we are storing,
+      // because they originate from anchored TLS. We can also skip decrementing
+      // reference counts for the values being overwritten.
       IRB.CreateMemCpy(VAArgTLSTagCopy, kMinProvAlignment, BS.VAArgTagTLS,
                        kMinProvAlignment, SrcSize);
       IRB.CreateMemCpy(VAArgTLSInfoCopy, kMinProvAlignment, BS.VAArgInfoTLS,
@@ -2786,34 +2798,275 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
           IRB.CreatePtrAdd(VAListTag, ConstantInt::get(BS.IntptrTy, 16));
       Value *RegSaveAreaPtr = IRB.CreateLoad(BS.PtrTy, RegSaveAreaPtrPtr);
 
-      ConstantInt *RegSaveSize = ConstantInt::get(BS.IntptrTy, AMD64FpEndOffset);
-      IRB.CreateCall(BS.BsanFuncShadowCopy, {RegSaveAreaPtr, VAArgTLSTagCopy, VAArgTLSInfoCopy, RegSaveSize});
+      Value *RegSaveSize = ConstantInt::get(BS.IntptrTy, AMD64FpEndOffset);
+      IRB.CreateCall(BS.BsanFuncShadowJoin, {RegSaveAreaPtr, VAArgTLSTagCopy,
+                                             VAArgTLSInfoCopy, RegSaveSize});
 
       Value *OverflowArgAreaPtrPtr =
           IRB.CreatePtrAdd(VAListTag, ConstantInt::get(BS.IntptrTy, 8));
       Value *OverflowArgAreaPtr =
           IRB.CreateLoad(BS.PtrTy, OverflowArgAreaPtrPtr);
 
-      ConstantInt *OverflowSize = ConstantInt::get(BS.IntptrTy, VAArgOverflowSize);
       Value *TagOverflowPtr = IRB.CreateConstGEP1_32(
           IRB.getInt8Ty(), VAArgTLSTagCopy, AMD64FpEndOffset);
       Value *InfoOverflowPtr = IRB.CreateConstGEP1_32(
           IRB.getInt8Ty(), VAArgTLSInfoCopy, AMD64FpEndOffset);
 
-      IRB.CreateCall(BS.BsanFuncShadowCopy, {RegSaveAreaPtr, TagOverflowPtr, InfoOverflowPtr, OverflowSize});
+      IRB.CreateCall(BS.BsanFuncShadowJoin,
+                     {OverflowArgAreaPtr, TagOverflowPtr, InfoOverflowPtr,
+                      VAArgOverflowSize});
     }
   }
 };
 
-struct VarArgAArch64Helper : VarArgHelperBase {
+struct VarArgAArch64Helper : public VarArgHelperBase {
+  static const unsigned kAArch64GrArgSize = 64;
+  static const unsigned kAArch64VrArgSize = 128;
+
+  static const unsigned kAArch64GrBegOffset = 0;
+  static const unsigned kAArch64GrEndOffset = kAArch64GrArgSize;
+  // Make VR space aligned to 16 bytes.
+  static const unsigned kAArch64VrBegOffset = kAArch64GrEndOffset;
+  static const unsigned kAArch64VrEndOffset =
+      kAArch64VrBegOffset + kAArch64VrArgSize;
+  static const unsigned kAArch64VAEndOffset = kAArch64VrEndOffset;
+
+  AllocaInst *VAArgTLSTagCopy = nullptr;
+  AllocaInst *VAArgTLSInfoCopy = nullptr;
+
+  Value *VAArgOverflowSize = nullptr;
+
+  enum ArgKind { AK_GeneralPurpose, AK_FloatingPoint, AK_Memory };
 
   VarArgAArch64Helper(Function &F, BorrowSanitizer &BS,
                       BorrowSanitizerVisitor &BSV)
       : VarArgHelperBase(F, BS, BSV, /*VAListTagSize=*/32) {}
 
-  void visitCallBase(CallBase &CB, IRBuilder<> &IRB) override {}
+  // A very rough approximation of aarch64 argument classification rules.
+  std::pair<ArgKind, uint64_t> classifyArgument(Type *T) {
+    if (T->isIntOrPtrTy() && T->getPrimitiveSizeInBits() <= 64)
+      return {AK_GeneralPurpose, 1};
+    if (T->isFloatingPointTy() && T->getPrimitiveSizeInBits() <= 128)
+      return {AK_FloatingPoint, 1};
 
-  void finalizeInstrumentation() override {}
+    if (T->isArrayTy()) {
+      auto R = classifyArgument(T->getArrayElementType());
+      R.second *= T->getScalarType()->getArrayNumElements();
+      return R;
+    }
+
+    if (const FixedVectorType *FV = dyn_cast<FixedVectorType>(T)) {
+      auto R = classifyArgument(FV->getScalarType());
+      R.second *= FV->getNumElements();
+      return R;
+    }
+
+    return {AK_Memory, 0};
+  }
+
+  // Retrieve a va_list field of 'void*' size.
+  Value *getVAField64(IRBuilder<> &IRB, Value *VAListTag, int Offset) {
+    Value *SaveAreaPtrPtr =
+        IRB.CreatePtrAdd(VAListTag, ConstantInt::get(BS.IntptrTy, Offset));
+    return IRB.CreateLoad(Type::getInt64Ty(*BS.C), SaveAreaPtrPtr);
+  }
+
+  // Retrieve a va_list field of 'int' size.
+  Value *getVAField32(IRBuilder<> &IRB, Value *VAListTag, int Offset) {
+    Value *SaveAreaPtr =
+        IRB.CreatePtrAdd(VAListTag, ConstantInt::get(BS.IntptrTy, Offset));
+    Value *SaveArea32 = IRB.CreateLoad(IRB.getInt32Ty(), SaveAreaPtr);
+    return IRB.CreateSExt(SaveArea32, BS.IntptrTy);
+  }
+
+  // The instrumentation stores the argument shadow in a non ABI-specific
+  // format because it does not know which argument is named (since Clang,
+  // like x86_64 case, lowers the va_args in the frontend and this pass only
+  // sees the low level code that deals with va_list internals).
+  // The first seven GR registers are saved in the first 56 bytes of the
+  // va_arg tls array, followed by the first 8 FP/SIMD registers, and then
+  // the remaining arguments.
+  // Using constant offset within the va_arg TLS array allows fast copy
+  // in the finalize instrumentation.
+  void visitCallBase(CallBase &CB, IRBuilder<> &IRB) override {
+    unsigned GrOffset = kAArch64GrBegOffset;
+    unsigned VrOffset = kAArch64VrBegOffset;
+    unsigned OverflowOffset = kAArch64VAEndOffset;
+
+    const DataLayout &DL = F.getDataLayout();
+    for (const auto &[ArgNo, A] : llvm::enumerate(CB.args())) {
+      bool IsFixed = ArgNo < CB.getFunctionType()->getNumParams();
+
+      auto [AK, RegNum] = classifyArgument(A->getType());
+      if (AK == AK_GeneralPurpose &&
+          (GrOffset + RegNum * 8) > kAArch64GrEndOffset)
+        AK = AK_Memory;
+      if (AK == AK_FloatingPoint &&
+          (VrOffset + RegNum * 16) > kAArch64VrEndOffset)
+        AK = AK_Memory;
+
+      unsigned Offset;
+      switch (AK) {
+      case AK_GeneralPurpose:
+        Offset = GrOffset;
+        GrOffset += 8 * RegNum;
+        break;
+      case AK_FloatingPoint:
+        Offset = VrOffset;
+        VrOffset += 16 * RegNum;
+        break;
+      case AK_Memory:
+        // Don't count fixed arguments in the overflow area - va_start will
+        // skip right over them.
+        if (IsFixed)
+          continue;
+        uint64_t ArgSize = DL.getTypeAllocSize(A->getType());
+        uint64_t AlignedSize = alignTo(ArgSize, 8);
+        unsigned BaseOffset = OverflowOffset;
+        Offset = BaseOffset;
+        OverflowOffset += AlignedSize;
+        if (OverflowOffset > kParamTLSSize) {
+          auto Base = getShadowPtrForVAArgument(IRB, BaseOffset);
+          // We have no space to copy shadow there.
+          cleanUnusedTLS(IRB, Base, BaseOffset);
+          continue;
+        }
+        break;
+      }
+      // Count Gp/Vr fixed arguments to their respective offsets, but don't
+      // bother to actually store a shadow.
+      if (IsFixed)
+        continue;
+
+      auto Ptr = getShadowPtrForVAArgument(IRB, Offset);
+      BSV.copyProvenance(IRB, Ptr, A);
+    }
+    Constant *OverflowSize = ConstantInt::get(
+        IRB.getInt64Ty(), OverflowOffset - kAArch64VAEndOffset);
+    IRB.CreateStore(OverflowSize, BS.VAArgOverflowSizeTLS);
+  }
+
+  void finalizeInstrumentation() override {
+    assert(!VAArgOverflowSize && !VAArgTLSInfoCopy &&
+           "finalizeInstrumentation called twice");
+
+    if (!VAStartInstrumentationList.empty()) {
+      // If there is a va_start in this function, make a backup copy of
+      // va_arg_tls somewhere in the function entry block.
+      IRBuilder<> IRB(BSV.FnPrologueEnd);
+
+      VAArgOverflowSize =
+          IRB.CreateLoad(IRB.getInt64Ty(), BS.VAArgOverflowSizeTLS);
+
+      Value *CopySize =
+          IRB.CreateAdd(ConstantInt::get(BS.IntptrTy, kAArch64VAEndOffset),
+                        VAArgOverflowSize);
+
+      VAArgTLSTagCopy = IRB.CreateAlloca(Type::getInt8Ty(*BS.C), CopySize);
+      VAArgTLSTagCopy->setAlignment(kMinProvAlignment);
+
+      VAArgTLSInfoCopy = IRB.CreateAlloca(Type::getInt8Ty(*BS.C), CopySize);
+      VAArgTLSInfoCopy->setAlignment(kMinProvAlignment);
+
+      Value *SrcSize = IRB.CreateBinaryIntrinsic(
+          Intrinsic::umin, CopySize,
+          ConstantInt::get(BS.IntptrTy, kParamTLSSize));
+
+      IRB.CreateMemCpy(VAArgTLSTagCopy, kMinProvAlignment, BS.VAArgTagTLS,
+                       kMinProvAlignment, SrcSize);
+      IRB.CreateMemCpy(VAArgTLSInfoCopy, kMinProvAlignment, BS.VAArgInfoTLS,
+                       kMinProvAlignment, SrcSize);
+    }
+
+    Value *GrArgSize = ConstantInt::get(BS.IntptrTy, kAArch64GrArgSize);
+    Value *VrArgSize = ConstantInt::get(BS.IntptrTy, kAArch64VrArgSize);
+
+    // Instrument va_start, copy va_list shadow from the backup copy of
+    // the TLS contents.
+    for (CallInst *OrigInst : VAStartInstrumentationList) {
+      NextNodeIRBuilder IRB(OrigInst);
+
+      Value *VAListTag = OrigInst->getArgOperand(0);
+
+      // The variadic ABI for AArch64 creates two areas to save the incoming
+      // argument registers (one for 64-bit general register xn-x7 and another
+      // for 128-bit FP/SIMD vn-v7).
+      // We need then to propagate the shadow arguments on both regions
+      // 'va::__gr_top + va::__gr_offs' and 'va::__vr_top + va::__vr_offs'.
+      // The remaining arguments are saved on shadow for 'va::stack'.
+      // One caveat is it requires only to propagate the non-named arguments,
+      // however on the call site instrumentation 'all' the arguments are
+      // saved. So to copy the shadow values from the va_arg TLS array
+      // we need to adjust the offset for both GR and VR fields based on
+      // the __{gr,vr}_offs value (since they are stores based on incoming
+      // named arguments).
+      Type *RegSaveAreaPtrTy = IRB.getPtrTy();
+
+      // Read the stack pointer from the va_list.
+      Value *StackSaveAreaPtr =
+          IRB.CreateIntToPtr(getVAField64(IRB, VAListTag, 0), RegSaveAreaPtrTy);
+
+      // Read both the __gr_top and __gr_off and add them up.
+      Value *GrTopSaveAreaPtr = getVAField64(IRB, VAListTag, 8);
+      Value *GrOffSaveArea = getVAField32(IRB, VAListTag, 24);
+
+      Value *GrRegSaveAreaPtr = IRB.CreateIntToPtr(
+          IRB.CreateAdd(GrTopSaveAreaPtr, GrOffSaveArea), RegSaveAreaPtrTy);
+
+      // Read both the __vr_top and __vr_off and add them up.
+      Value *VrTopSaveAreaPtr = getVAField64(IRB, VAListTag, 16);
+      Value *VrOffSaveArea = getVAField32(IRB, VAListTag, 28);
+
+      Value *VrRegSaveAreaPtr = IRB.CreateIntToPtr(
+          IRB.CreateAdd(VrTopSaveAreaPtr, VrOffSaveArea), RegSaveAreaPtrTy);
+
+      // It does not know how many named arguments is being used and, on the
+      // callsite all the arguments were saved.  Since __gr_off is defined as
+      // '0 - ((8 - named_gr) * 8)', the idea is to just propagate the variadic
+      // argument by ignoring the bytes of shadow from named arguments.
+      Value *GrRegSaveAreaShadowPtrOff =
+          IRB.CreateAdd(GrArgSize, GrOffSaveArea);
+
+      Value *GrSrcTagPtr =
+          IRB.CreateInBoundsPtrAdd(VAArgTLSTagCopy, GrRegSaveAreaShadowPtrOff);
+      Value *GrSrcInfoPtr =
+          IRB.CreateInBoundsPtrAdd(VAArgTLSInfoCopy, GrRegSaveAreaShadowPtrOff);
+
+      Value *GrCopySize = IRB.CreateSub(GrArgSize, GrRegSaveAreaShadowPtrOff);
+
+      IRB.CreateCall(BS.BsanFuncShadowJoin,
+                     {GrRegSaveAreaPtr, GrSrcTagPtr, GrSrcInfoPtr, GrCopySize});
+
+      // Again, but for FP/SIMD values.
+      Value *VrRegSaveAreaShadowPtrOff =
+          IRB.CreateAdd(VrArgSize, VrOffSaveArea);
+
+      Value *VrTagSrcPtr = IRB.CreateInBoundsPtrAdd(
+          IRB.CreateInBoundsPtrAdd(VAArgTLSTagCopy,
+                                   IRB.getInt32(kAArch64VrBegOffset)),
+          VrRegSaveAreaShadowPtrOff);
+
+      Value *VrInfoSrcPtr = IRB.CreateInBoundsPtrAdd(
+          IRB.CreateInBoundsPtrAdd(VAArgTLSInfoCopy,
+                                   IRB.getInt32(kAArch64VrBegOffset)),
+          VrRegSaveAreaShadowPtrOff);
+
+      Value *VrCopySize = IRB.CreateSub(VrArgSize, VrRegSaveAreaShadowPtrOff);
+
+      IRB.CreateCall(BS.BsanFuncShadowJoin,
+                     {VrRegSaveAreaPtr, VrTagSrcPtr, VrInfoSrcPtr, VrCopySize});
+
+      Value *StackTagSrcPtr = IRB.CreateInBoundsPtrAdd(
+          VAArgTLSTagCopy, IRB.getInt32(kAArch64VAEndOffset));
+
+      Value *StackInfoSrcPtr = IRB.CreateInBoundsPtrAdd(
+          VAArgTLSTagCopy, IRB.getInt32(kAArch64VAEndOffset));
+
+      IRB.CreateCall(BS.BsanFuncShadowJoin,
+                     {StackSaveAreaPtr, StackTagSrcPtr, StackInfoSrcPtr,
+                      VAArgOverflowSize});
+    }
+  }
 };
 
 /// A no-op implementation of VarArgHelper.
