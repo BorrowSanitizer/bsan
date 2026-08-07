@@ -2261,9 +2261,14 @@ private:
     Value *Cursor = ConstantInt::get(BS.IntptrTy, 0);
     SmallVector<std::tuple<ProvenanceOffset, ProvenanceOffset>> SlotsToClear;
 
+    // We are given an address that is aligned to the size of a provenance
+    // value, but the size of the type that we are storing might not be aligned.
+
+    Align FieldAlign = kMinProvAlignment;
+
     for (const auto &[Desc, Prov] : ProvDesc) {
-      Align FieldAlign =
-          commonAlignment(Desc.FieldAlign, kMinProvAlignment.value());
+
+      FieldAlign = commonAlignment(Desc.FieldAlign, kMinProvAlignment.value());
 
       if (Cursor != Desc.ByteOffset) {
         // There is a gap between provenance values within the layout
@@ -2276,11 +2281,12 @@ private:
           // disjoint from the slots covered by the gap.
           GapSizeRounded = ProvenanceOffset::alignUp(IRB, GapSize);
         } else {
-          // The field straddles two slots. It will clobber
-          // the last slot of the gap, so we want to round the
-          // gap size down.
+          // The field covers two slots, so we round down. Otherwise,
+          // when we store the next field, we will write to the same
+          // slot that we just cleared!
           GapSizeRounded = ProvenanceOffset::alignDown(IRB, GapSize);
         }
+
         auto GapStart = ProvenanceOffset::alignDown(IRB, Cursor);
 
         if (!match(GapSize, m_Zero()))
@@ -2294,6 +2300,10 @@ private:
       Cursor = IRB.CreateNUWAdd(Desc.ByteOffset, Desc.ByteWidth);
     }
 
+    // When we are in the middle of a type, we round the gap size down,
+    // to avoid clearing a slot that will be immediately overwritten by
+    // the next field. At this point, there are no other fields. We can
+    // clear everything from the current cursor onward.
     auto FinalGapStart = ProvenanceOffset::alignDown(IRB, Cursor);
     auto FinalGapSize =
         ProvenanceOffset::alignUp(IRB, IRB.CreateSub(TotalSize, Cursor));
