@@ -338,14 +338,12 @@ void __bsan_shadow_join(void *dest, void *src_tag, void *src_info, uptr size) {
 /// the return value.
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_validate_params(void *current_fn, uptr len) {
-  bool trusted = (__bsan_marker && (__bsan_marker == current_fn ||
-                                    __bsan_marker == kTrustedMarker));
+  bool trusted = CallerIsInstrumented(current_fn);
   if (!trusted) {
     for (uptr i = 0; i < len; ++i) {
       __bsan_param_tls[i] = OMNIVALID;
     }
   }
-  __bsan_marker = 0;
 }
 
 /// Ensures that the provenance array for the return value is valid.
