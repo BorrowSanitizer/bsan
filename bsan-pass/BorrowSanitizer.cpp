@@ -649,7 +649,7 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncMark = M.getOrInsertFunction(BSAN("mark"), AL, PtrTy, PtrTy);
 
   BsanFuncValidateParams = M.getOrInsertFunction(
-      BSAN("validate_params"), AL, IRB.getVoidTy(), PtrTy, IntptrTy);
+      BSAN("validate_params"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, IntptrTy);
 
   BsanFuncValidateRetval = M.getOrInsertFunction(
       BSAN("validate_retval"), AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
@@ -738,6 +738,8 @@ struct VarArgHelper {
   /// This method is called after visiting all interesting (see above)
   /// instructions in a function.
   virtual void finalizeInstrumentation() = 0;
+
+  virtual uint64_t getFixedRegionSize() = 0;
 };
 
 struct BorrowSanitizerVisitor;
@@ -1659,7 +1661,11 @@ private:
     // omnivalid provenance.
     if (needsBoundaryValidation(&F)) {
       if (!BS.shouldTrustFunction(TLI, &F)) {
-        EntryIRB.CreateCall(BS.BsanFuncValidateParams, {&F, NumParamProv});
+        uint64_t VarArgSize = F.isVarArg() ? VAHelper->getFixedRegionSize() : 0;
+        uint64_t VarArgLen = alignTo(VarArgSize, kMinProvAlignment) / 8;
+        Value *VarArgLenVal = ConstantInt::get(BS.IntptrTy, VarArgLen);
+        EntryIRB.CreateCall(BS.BsanFuncValidateParams,
+                            {&F, NumParamProv, VarArgLenVal});
       }
     }
 
@@ -2653,6 +2659,8 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
     }
   }
 
+  uint64_t getFixedRegionSize() override { return AMD64FpEndOffset; }
+
   ArgKind classifyArgument(Value *Arg) {
     // A very rough approximation of X86_64 argument classification rules.
     Type *T = Arg->getType();
@@ -2852,6 +2860,8 @@ struct VarArgAArch64Helper : public VarArgHelperBase {
   VarArgAArch64Helper(Function &F, BorrowSanitizer &BS,
                       BorrowSanitizerVisitor &BSV)
       : VarArgHelperBase(F, BS, BSV, /*VAListTagSize=*/32) {}
+
+  uint64_t getFixedRegionSize() override { return kAArch64VAEndOffset; }
 
   // A very rough approximation of aarch64 argument classification rules.
   std::pair<ArgKind, uint64_t> classifyArgument(Type *T) {
@@ -3097,6 +3107,8 @@ struct VarArgNoOpHelper : public VarArgHelper {
   void visitVACopyInst(VACopyInst &I) override {}
 
   void finalizeInstrumentation() override {}
+
+  uint64_t getFixedRegionSize() override { return 0; }
 };
 
 } // end anonymous namespace
