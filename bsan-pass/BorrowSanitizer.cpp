@@ -137,7 +137,7 @@ struct ProvenanceOffset {
   ProvenanceOffset() {}
   ProvenanceOffset(Value *Val) : Val(Val) {
     if (auto *CI = dyn_cast<ConstantInt>(Val)) {
-      assert(CI->getAlignValue() == kMinProvAlignment);
+      assert(CI->getZExtValue() % kMinProvAlignment.value() == 0);
     }
   }
   ProvenanceOffset(Type *Ty, unsigned Bytes) {
@@ -1093,13 +1093,12 @@ public:
     FrameHeaderBottom = ptrsub(IRB, FnEntryTop, Bytes);
   }
 
-  void initFrameHeader(IRBuilder<> &IRB, Value *NumSlots) {
+  void initFrameHeader(IRBuilder<> &IRB) {
     BasicBlock *EntryBlock =
         &IRB.GetInsertBlock()->getParent()->getEntryBlock();
     IRBuilder<> EntryIRB(EntryBlock, EntryBlock->getFirstNonPHIIt());
     FrameHeaderTop = EntryIRB.CreateLoad(EntryIRB.getPtrTy(), FramePtrSrc);
-    Value *ByteOffset = EntryIRB.CreateMul(NumSlots, SlotSize);
-    FrameHeaderBottom = ptrsub(EntryIRB, FrameHeaderTop, ByteOffset);
+    FrameHeaderBottom = FrameHeaderTop;
   }
 
   std::optional<Value *> getFrameHeaderTop() {
@@ -1111,7 +1110,7 @@ public:
 
   Value *getOrInitFrameHeaderTop(IRBuilder<> &IRB) {
     if (!FrameHeaderTop) {
-      initFrameHeader(IRB, ConstantInt::get(SlotSize->getType(), 0));
+      initFrameHeader(IRB);
     }
     return FrameHeaderTop;
   }
@@ -1132,7 +1131,7 @@ public:
 
   Value *getOrInitFrameHeaderBottom(IRBuilder<> &IRB) {
     if (!FrameHeaderBottom) {
-      initFrameHeader(IRB, ConstantInt::get(SlotSize->getType(), 0));
+      initFrameHeader(IRB);
     }
     return FrameHeaderBottom;
   }
