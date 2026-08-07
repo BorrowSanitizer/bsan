@@ -157,6 +157,19 @@ struct ProvenanceOffset {
     assert(alignTo(Bytes, kMinProvAlignment) == Bytes);
     Val = ConstantInt::get(Ty, Bytes);
   }
+
+  static ProvenanceOffset alignDown(IRBuilder<> &IRB, Value *V) {
+    const uint64_t ProvAlign = kMinProvAlignment.value();
+    Value *Rounded =
+        IRB.CreateAnd(V, ConstantInt::get(V->getType(), ~(ProvAlign - 1)));
+    return ProvenanceOffset(Rounded);
+  }
+
+  static ProvenanceOffset alignUp(IRBuilder<> &IRB, Value *V) {
+    const uint64_t ProvAlign = kMinProvAlignment.value();
+    return alignDown(
+        IRB, IRB.CreateAdd(V, ConstantInt::get(V->getType(), ProvAlign - 1)));
+  }
 };
 
 // A pointer to a location where a provenance value can be stored.
@@ -386,9 +399,8 @@ private:
   /// A default personality function used for exception-handling.
   FunctionCallee DefaultPersonalityFn;
 
-  /// Indicates that the given function is instrumented, or otherwise
-  /// handled such that we can trust its return value without boundary
-  /// validation.
+  /// Indicates that the given function is instrumented, intercepted,
+  /// or otherwise has semantics that we can trust without boundary validation.
   bool shouldTrustFunction(const TargetLibraryInfo *TLI, const Value *V);
 
   /// Indicates if this `alloca` needs to be instrumented.
@@ -397,13 +409,7 @@ private:
   /// Computes the size of an `alloca` in bytes.
   Value *getAllocaSizeBytes(IRBuilder<> &IRB, AllocaInst *AI);
 
-  /// Returns a list of the fields within a type that carry provenance. If
-  /// `ClearGaps` is set, then we treat all integer values larger than a pointer
-  /// as if they carry provenance. This Is necessary to reconcile ABI
-  /// differences between Rust and C++. If we have a singleton struct containing
-  /// a pointer, then in Rust its field will use i64 (if repr(C)). However,
-  /// clang will use `ptr` regardless. This will be resolved once the byte type
-  /// is more broadly supported.
+  /// Returns a list of the fields within a type that carry provenance
   SmallVector<ProvenanceField> getProvenanceLayout(IRBuilder<> &IRB, Type *Ty,
                                                    bool ClearGaps = false);
 
@@ -412,19 +418,6 @@ private:
                              SmallVector<ProvenanceField> &ProvDesc,
                              Type *CurrentTy, Value *ByteOffset,
                              bool ClearGaps = false);
-
-  ProvenanceOffset alignDownToSlot(IRBuilder<> &IRB, Value *V) {
-    const uint64_t ProvAlign = kMinProvAlignment.value();
-    Value *Rounded =
-        IRB.CreateAnd(V, ConstantInt::get(IntptrTy, ~(ProvAlign - 1)));
-    return ProvenanceOffset(Rounded);
-  }
-
-  ProvenanceOffset alignUpToSlot(IRBuilder<> &IRB, Value *V) {
-    const uint64_t ProvAlign = kMinProvAlignment.value();
-    return alignDownToSlot(
-        IRB, IRB.CreateAdd(V, ConstantInt::get(IntptrTy, ProvAlign - 1)));
-  }
 };
 } // end anonymous namespace
 
@@ -1377,6 +1370,9 @@ private:
     return OffsetLong;
   }
 
+  // Returns a destination for a provenance value to be stored within
+  // "main" memory, indicating that reference counts will not be
+  // updated by the store.
   ProvenanceDest getMainProvenancePtr(IRBuilder<> &IRB, Value *Base) {
     Value *ZeroIdx = ConstantInt::get(IRB.getInt64Ty(), 0);
     Value *TagPtr = Base;
@@ -1386,6 +1382,10 @@ private:
     return ProvenanceDest(TagPtr, InfoPtr, false);
   }
 
+  // Returns a destination for a provenance value to be stored within
+  // "shadow" memory. Storing provenance to shadow memory requires
+  // updating the reference counts of the value being stored and the
+  // value being overwritten.
   ProvenanceDest
   getShadowProvenancePtr(IRBuilder<> &IRB, Value *Addr,
                          MaybeAlign Alignment = kMinProvAlignment) {
@@ -1413,11 +1413,11 @@ private:
     Value *OriginPtr = IRB.CreateIntToPtr(
         OriginLong, getPtrToShadowPtrType(IntptrTy, BS.PtrTy));
 
-    // We always want to update reference counts when we
-    // store to shadow memory.
     return ProvenanceDest(ShadowPtr, OriginPtr, true);
   }
 
+  // Loads a provenance value from shadow memory, storing it into a
+  // new slot on the shadow stack.
   Provenance loadProvenanceFromShadow(
       IRBuilder<> &IRB, Value *Base, Align Alignment,
       ElementCount Elems = ElementCount::getFixed(1),
@@ -1578,6 +1578,7 @@ private:
 
     IRB.CreateAlignedStore(Prov.Tag, Dest.ShadowPtr, kMinProvAlignment)
         ->setAtomic(Ordering);
+
     IRB.CreateAlignedStore(Prov.Info, Dest.OriginPtr, kMinProvAlignment)
         ->setAtomic(Ordering);
   }
@@ -1599,7 +1600,7 @@ private:
     // if we had an uninstrumented caller.
     Value *NumParamProv = ConstantInt::get(BS.IntptrTy, 0);
 
-    bool DiffABI = needsBoundaryValidation(&F);
+    bool Validation = needsBoundaryValidation(&F);
     // Iterate over each argument to compute how many provenance slots
     // we need.
     SmallVector<ByValArgInfo> ByValArgs;
@@ -1629,7 +1630,7 @@ private:
         Info.Alignment = ParamAlign.value_or(BS.DL->getABITypeAlign(Ty));
 
         for (auto &Desc :
-             BS.getProvenanceLayout(EntryIRB, Ty, /*ClearGaps=*/DiffABI)) {
+             BS.getProvenanceLayout(EntryIRB, Ty, /*ClearGaps=*/Validation)) {
           Info.Fields.push_back({NumParamProv, Desc});
           Value *NumProv = EntryIRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
           NumParamProv = EntryIRB.CreateAdd(NumParamProv, NumProv);
@@ -1637,7 +1638,7 @@ private:
         ByValArgs.push_back(Info);
       } else {
         SmallVector<ProvenanceField> ProvDesc = BS.getProvenanceLayout(
-            EntryIRB, Arg.getType(), /*ClearGaps=*/DiffABI);
+            EntryIRB, Arg.getType(), /*ClearGaps=*/Validation);
         for (auto &Desc : ProvDesc) {
           ArgumentProvenance[&Arg].push_back({NumParamProv, Desc.Elems});
           Value *NumProv = EntryIRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
@@ -1700,12 +1701,12 @@ private:
 
     // We also need a dedicated region of the shadow stack
     // for function-entry retags. The total number of function
-    // entry retags is variable, because function entry retags can
-    // happen across different branches.
+    // entry retags is variable, because they can happen across
+    // different branches. This is Rust-specific behavior.
     ShadowStack.allocateFnEntryRegion(EntryIRB, Plan.getNumFnEntryRetags());
 
-    // We have initialized the frame header, but we have not updated the frame
-    // pointer to reflect it.
+    // We have initialized the frame header, but we have not updated
+    // the frame pointer to reflect it.
     if (std::optional<Value *> FHB = ShadowStack.getFrameHeaderBottom()) {
       EntryIRB.CreateStore(*FHB, BS.ProvStackTLS);
     }
@@ -1834,11 +1835,11 @@ private:
     // then read the provenance for the return value.
     IRBuilder<> Before(&CB);
 
-    // We need to store the provenance for each argument onto the shadow stack.
-    // First, we calculate the offset for each parameter's provenance.
+    // We store the provenance for each argument into thread-local arrays.
+    // First, we calculate where each fixed parameter's provenance is stored.
     Value *NumParamProv = ConstantInt::get(BS.IntptrTy, 0);
 
-    bool DiffABI = needsBoundaryValidation(Callee);
+    bool Clear = needsBoundaryValidation(Callee);
     SmallVector<std::pair<Value *, Provenance>> ParamOffsets;
     for (const auto &[i, Arg] : llvm::enumerate(CB.args())) {
       // Variadics have special handling.
@@ -1850,7 +1851,7 @@ private:
       Type *ArgTy = IsByVal ? CB.getParamByValType(i) : Arg->getType();
 
       SmallVector<ProvenanceField> ProvDesc =
-          BS.getProvenanceLayout(Before, ArgTy, /*ClearGaps=*/DiffABI);
+          BS.getProvenanceLayout(Before, ArgTy, /*ClearGaps=*/Clear);
 
       for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
 
@@ -1970,8 +1971,9 @@ private:
       // shims (e.g. `__rust_alloc`) which are thin wrappers around the
       // `__rdl_alloc` family of functions. The wrapper shims are left
       // uninstrumented when we run this pass through Rust's LLVM plugin
-      // hooks, so they will clear provenance unless we override the default
-      // behavior here.
+      // hooks, so they will clear provenance unless we skip boundary
+      // validation.
+      // FIXME: Figure out why these functions are skipped over.
       if (BS.shouldTrustFunction(TLI, &CB)) {
         Value *TrustedMarker = ConstantExpr::getIntToPtr(
             ConstantInt::get(BS.IntptrTy, 1), BS.PtrTy);
@@ -2266,29 +2268,29 @@ private:
         if (FieldAlign == kMinProvAlignment) {
           // The field is already slot aligned. It will be
           // disjoint from the slots covered by the gap.
-          GapSizeRounded = BS.alignUpToSlot(IRB, GapSize);
+          GapSizeRounded = ProvenanceOffset::alignUp(IRB, GapSize);
         } else {
           // The field straddles two slots. It will clobber
           // the last slot of the gap, so we want to round the
           // gap size down.
-          GapSizeRounded = BS.alignDownToSlot(IRB, GapSize);
+          GapSizeRounded = ProvenanceOffset::alignDown(IRB, GapSize);
         }
-        ProvenanceOffset GapStart = BS.alignDownToSlot(IRB, Cursor);
+        auto GapStart = ProvenanceOffset::alignDown(IRB, Cursor);
 
         if (!match(GapSize, m_Zero()))
           SlotsToClear.push_back(std::make_tuple(GapStart, GapSize));
       }
 
-      ProvenanceOffset AlignedOffset = BS.alignDownToSlot(IRB, Desc.ByteOffset);
-      ProvenanceDest ObjAddr = Dest.ptradd(IRB, AlignedOffset);
+      auto AlignedOffset = ProvenanceOffset::alignDown(IRB, Desc.ByteOffset);
+      auto ObjAddr = Dest.ptradd(IRB, AlignedOffset);
       storeProvenance(IRB, ObjAddr, Prov, Ordering);
 
       Cursor = IRB.CreateNUWAdd(Desc.ByteOffset, Desc.ByteWidth);
     }
 
-    ProvenanceOffset FinalGapStart = BS.alignDownToSlot(IRB, Cursor);
-    ProvenanceOffset FinalGapSize =
-        BS.alignUpToSlot(IRB, IRB.CreateSub(TotalSize, Cursor));
+    auto FinalGapStart = ProvenanceOffset::alignDown(IRB, Cursor);
+    auto FinalGapSize =
+        ProvenanceOffset::alignUp(IRB, IRB.CreateSub(TotalSize, Cursor));
 
     if (!match(FinalGapSize.Val, m_Zero()))
       SlotsToClear.push_back(std::make_tuple(FinalGapStart, FinalGapSize));
@@ -2987,6 +2989,7 @@ struct VarArgAArch64Helper : public VarArgHelperBase {
 
       IRB.CreateMemCpy(VAArgTLSTagCopy, kMinProvAlignment, BS.VAArgTagTLS,
                        kMinProvAlignment, SrcSize);
+
       IRB.CreateMemCpy(VAArgTLSInfoCopy, kMinProvAlignment, BS.VAArgInfoTLS,
                        kMinProvAlignment, SrcSize);
     }
