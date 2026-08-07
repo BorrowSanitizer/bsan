@@ -58,6 +58,10 @@ static cl::opt<bool> ClHandleAsmConservative(
              "outputs to wildcard Provenance"),
     cl::Hidden, cl::init(true));
 
+static cl::opt<bool> ClInstrumentVariadics(
+    "bsan-variadics", cl::desc("Instrument functions with variadic arguments."),
+    cl::Hidden, cl::init(true));
+
 static AtomicOrdering addAcquireOrdering(AtomicOrdering A) {
   switch (A) {
   case AtomicOrdering::NotAtomic:
@@ -116,6 +120,15 @@ static Constant *getOrInsertGlobal(Module &M, StringRef Name, Type *Ty) {
         M, Ty, false, GlobalVariable::ExternalLinkage, nullptr, Name, nullptr,
         GlobalVariable::NotThreadLocal, std::nullopt, true);
   });
+}
+
+/// Indicates if the given function requires boundary validation (e.g.),
+/// it may be called from an uninstrumented context, or from an instrumented
+/// context that uses a different ABI lowering for parameter types.
+static bool needsBoundaryValidation(const Function *Callee) {
+  return !Callee ||
+         (Callee->isDeclaration() || Callee->hasExternalLinkage() ||
+          Callee->hasExternalWeakLinkage() || Callee->hasAddressTaken());
 }
 
 namespace {
@@ -381,14 +394,6 @@ private:
   /// Indicates if this `alloca` needs to be instrumented.
   bool shouldInstrumentAlloca(const AllocaInst &AI);
 
-  /// Indicates if the given function requires boundary validation.
-  bool needsBoundaryValidation(const Function *Callee);
-
-  /// Indicates whether the given function is a declaration for another function
-  /// outside of this module, which might be using a different ABI-lowering
-  /// for the same type.
-  bool mayHaveDifferentABI(const Function *Callee);
-
   /// Computes the size of an `alloca` in bytes.
   Value *getAllocaSizeBytes(IRBuilder<> &IRB, AllocaInst *AI);
 
@@ -517,16 +522,6 @@ Value *BorrowSanitizer::getProvenanceLayout(
   } break;
   }
   return ConstantInt::get(IntptrTy, 0);
-}
-
-bool BorrowSanitizer::needsBoundaryValidation(const Function *Callee) {
-  return !Callee ||
-         (Callee->isDeclaration() || Callee->hasExternalLinkage() ||
-          Callee->hasExternalWeakLinkage() || Callee->hasAddressTaken());
-}
-
-bool BorrowSanitizer::mayHaveDifferentABI(const Function *Callee) {
-  return !Callee || Callee->isDeclaration();
 }
 
 bool BorrowSanitizer::shouldTrustFunction(const TargetLibraryInfo *TLI,
@@ -1604,7 +1599,7 @@ private:
     // if we had an uninstrumented caller.
     Value *NumParamProv = ConstantInt::get(BS.IntptrTy, 0);
 
-    bool DiffABI = BS.needsBoundaryValidation(&F);
+    bool DiffABI = needsBoundaryValidation(&F);
     // Iterate over each argument to compute how many provenance slots
     // we need.
     SmallVector<ByValArgInfo> ByValArgs;
@@ -1661,7 +1656,7 @@ private:
     // our boundary marker matches the current function's address. If not,
     // we zero-out all of the parameter shadow stack slots, giving them
     // omnivalid provenance.
-    if (BS.needsBoundaryValidation(&F)) {
+    if (needsBoundaryValidation(&F)) {
       if (!BS.shouldTrustFunction(TLI, &F)) {
         EntryIRB.CreateCall(BS.BsanFuncValidateParams, {&F, NumParamProv});
       }
@@ -1843,7 +1838,7 @@ private:
     // First, we calculate the offset for each parameter's provenance.
     Value *NumParamProv = ConstantInt::get(BS.IntptrTy, 0);
 
-    bool DiffABI = BS.needsBoundaryValidation(Callee);
+    bool DiffABI = needsBoundaryValidation(Callee);
     SmallVector<std::pair<Value *, Provenance>> ParamOffsets;
     for (const auto &[i, Arg] : llvm::enumerate(CB.args())) {
       // Variadics have special handling.
@@ -1965,7 +1960,7 @@ private:
     // If we are returning from a possibly-uninstrumented function, then we need
     // need to validate the space on the shadow stack where the return value's
     // provenance is stored.
-    if (BS.needsBoundaryValidation(Callee)) {
+    if (needsBoundaryValidation(Callee)) {
       Value *Marker;
       Value *NullPtr = ConstantPointerNull::get(BS.PtrTy);
       // If this is a function that we can trust (e.g. an allocator)
@@ -2541,7 +2536,8 @@ private:
 // decisions, and the overall design, is derived
 // from MemorySanitizer. However, unlike MemorySanitizer,
 // we always copy the "origin" values, because provenance
-// is two words.
+// is two words. See `VarArgAMD64Helper` for more documentation
+// on the procedure used here. It is a much more representative
 struct VarArgHelperBase : public VarArgHelper {
   Function &F;
   BorrowSanitizer &BS;
@@ -2679,6 +2675,14 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
     unsigned OverflowOffset = AMD64FpEndOffset;
     const DataLayout &DL = F.getDataLayout();
 
+    // We preemptively clear the fixed section of the variadic array.
+    // If there is any disagreement between this emulated instrumentation
+    // and how values are copied in practice, then we want to have false
+    // negatives, not false positives. Overflow is already cleared.
+    IRB.CreateMemSet(BS.VAArgTagTLS, Constant::getNullValue(IRB.getInt8Ty()),
+                     ConstantInt::get(IRB.getInt32Ty(), AMD64FpEndOffset),
+                     kMinProvAlignment);
+
     for (const auto &[ArgNo, A] : llvm::enumerate(CB.args())) {
       bool IsFixed = ArgNo < CB.getFunctionType()->getNumParams();
       bool IsByVal = CB.paramHasAttr(ArgNo, Attribute::ByVal);
@@ -2782,10 +2786,12 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
           ConstantInt::get(BS.IntptrTy, kVarArgTLSSizeBytes));
 
       // This is an exceedingly rare situation: we are copying shadow
-      // values into main memory, that isn't TLS. We do not need to increment
+      // values into main memory that isn't TLS. We do not need to increment
       // the reference counts of the provenance values that we are storing,
       // because they originate from anchored TLS. We can also skip decrementing
-      // reference counts for the values being overwritten.
+      // reference counts for the values being overwritten. This may leak
+      // provenance, depending on how the stack is used in subsequent
+      // instructions, but it is not necessary for soundness.
       IRB.CreateMemCpy(VAArgTLSTagCopy, kMinProvAlignment, BS.VAArgTagTLS,
                        kMinProvAlignment, SrcSize);
       IRB.CreateMemCpy(VAArgTLSInfoCopy, kMinProvAlignment, BS.VAArgInfoTLS,
@@ -2895,6 +2901,10 @@ struct VarArgAArch64Helper : public VarArgHelperBase {
     unsigned GrOffset = kAArch64GrBegOffset;
     unsigned VrOffset = kAArch64VrBegOffset;
     unsigned OverflowOffset = kAArch64VAEndOffset;
+
+    IRB.CreateMemSet(BS.VAArgTagTLS, Constant::getNullValue(IRB.getInt8Ty()),
+                     ConstantInt::get(IRB.getInt32Ty(), kAArch64VAEndOffset),
+                     kMinProvAlignment);
 
     const DataLayout &DL = F.getDataLayout();
     for (const auto &[ArgNo, A] : llvm::enumerate(CB.args())) {
@@ -3090,15 +3100,17 @@ struct VarArgNoOpHelper : public VarArgHelper {
 
 static VarArgHelper *createVarArgHelper(Function &Func, BorrowSanitizer &BS,
                                         BorrowSanitizerVisitor &BSV) {
-  // VarArg handling is only implemented on AMD64 and aarch64.
-  Triple TargetTriple(Func.getParent()->getTargetTriple());
 
-  if (TargetTriple.getArch() == Triple::x86_64)
-    return new VarArgAMD64Helper(Func, BS, BSV);
+  if (ClInstrumentVariadics) {
+    // VarArg handling is only implemented on AMD64 and aarch64.
+    Triple TargetTriple(Func.getParent()->getTargetTriple());
 
-  if (TargetTriple.isAArch64())
-    return new VarArgAArch64Helper(Func, BS, BSV);
+    if (TargetTriple.getArch() == Triple::x86_64)
+      return new VarArgAMD64Helper(Func, BS, BSV);
 
+    if (TargetTriple.isAArch64())
+      return new VarArgAArch64Helper(Func, BS, BSV);
+  }
   return new VarArgNoOpHelper(Func, BS, BSV);
 }
 
