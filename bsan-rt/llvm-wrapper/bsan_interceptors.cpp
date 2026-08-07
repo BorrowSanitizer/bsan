@@ -170,7 +170,7 @@ static void *BsanAllocateMetaIntoStack(void *ptr, SIZE_T size, bool is_inst,
     *slot = BsanAllocateMeta(ptr, size, span);
     CurrentThread()->AcquireProvenance(prov);
   } else {
-    ClearSlot(slot_idx);
+    ClearRetValSlot(slot_idx);
   }
   return ptr;
 }
@@ -307,13 +307,13 @@ void BSanAtExitWrapper() {
     stack.PopBack();
   }
 
-  ClearSlot(0);
+  ClearParamSlot(0);
   ((void (*)())r->func)();
   InternalFree(r);
 }
 
 void BSanCxaAtExitWrapper(void *arg) {
-  ClearSlot(0);
+  ClearParamSlot(0);
   AtExitRecord *r = (AtExitRecord *)arg;
   // libc before 2.27 had race which caused occasional double handler execution
   // https://sourceware.org/ml/libc-alpha/2017-08/msg01204.html
