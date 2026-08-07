@@ -44,9 +44,13 @@ static const unsigned kProvenanceSize = 16;
 static const Align kMinProvAlignment = Align(8);
 
 // The number of bytes that can be
-// stored within a TLS array, for
-// parameters and variadic arguments.
-static const unsigned kParamTLSSize = 800;
+// stored within a TLS array for
+// variadic arguments.
+static const unsigned kVarArgTLSSizeBytes = 800;
+
+// The number of provenance values that can
+// be stored within a TLS array for fixed parameters.
+static const unsigned kParamTLSSizeProv = 100;
 
 static cl::opt<bool> ClHandleAsmConservative(
     "bsan-asm-conservative",
@@ -277,6 +281,9 @@ private:
 
   Type *ProvenanceTy = nullptr;
   Value *ProvenanceSize = nullptr;
+
+  /// Thread-local array used to pass the provenance of parameters.
+  Value *ParamTLS = nullptr;
 
   /// Thread-local variable containing the number of provenance values
   /// for variable arguments.
@@ -654,7 +661,7 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncMark = M.getOrInsertFunction(BSAN("mark"), AL, PtrTy, PtrTy);
 
   BsanFuncValidateParams = M.getOrInsertFunction(
-      BSAN("validate_params"), AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
+      BSAN("validate_params"), AL, IRB.getVoidTy(), PtrTy, IntptrTy);
 
   BsanFuncValidateRetval = M.getOrInsertFunction(
       BSAN("validate_retval"), AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
@@ -710,6 +717,7 @@ void BorrowSanitizer::createUserspaceApi(Module &M,
 
   VAArgTagTLS = getOrInsertTLSGlobal(M, BSAN("var_arg_tag_tls"), PtrTy);
   VAArgInfoTLS = getOrInsertTLSGlobal(M, BSAN("var_arg_info_tls"), PtrTy);
+  ParamTLS = getOrInsertTLSGlobal(M, BSAN("param_tls"), PtrTy);
 
   ProvStackTLS = getOrInsertTLSGlobal(M, BSAN("shadow_stack"), PtrTy);
   BorTagCounter = getOrInsertGlobal(M, BSAN("bor_tag_ctr"), IntptrTy);
@@ -1085,12 +1093,12 @@ public:
     FrameHeaderBottom = ptrsub(IRB, FnEntryTop, Bytes);
   }
 
-  void initFrameHeader(IRBuilder<> &IRB, Value *NumParamProv) {
+  void initFrameHeader(IRBuilder<> &IRB, Value *NumSlots) {
     BasicBlock *EntryBlock =
         &IRB.GetInsertBlock()->getParent()->getEntryBlock();
     IRBuilder<> EntryIRB(EntryBlock, EntryBlock->getFirstNonPHIIt());
     FrameHeaderTop = EntryIRB.CreateLoad(EntryIRB.getPtrTy(), FramePtrSrc);
-    Value *ByteOffset = EntryIRB.CreateMul(NumParamProv, SlotSize);
+    Value *ByteOffset = EntryIRB.CreateMul(NumSlots, SlotSize);
     FrameHeaderBottom = ptrsub(EntryIRB, FrameHeaderTop, ByteOffset);
   }
 
@@ -1515,10 +1523,9 @@ private:
         }
         Value *ArgProvOffset = ProvVec[Key.Offset].first;
         ElementCount Elems = ProvVec[Key.Offset].second;
-        Value *HeaderTop = ShadowStack.getOrInitFrameHeaderTop(EntryIRB);
         Value *ByteOffset =
             EntryIRB.CreateMul(BS.ProvenanceSize, ArgProvOffset);
-        Value *ArgProvenancePtr = ptrsub(EntryIRB, HeaderTop, ByteOffset);
+        Value *ArgProvenancePtr = ptradd(EntryIRB, BS.ParamTLS, ByteOffset);
         Provenance ArgProvenance =
             loadProvenanceAligned(EntryIRB, ArgProvenancePtr, Elems);
         setProvenance(Key, ArgProvenance);
@@ -1629,28 +1636,23 @@ private:
 
         for (auto &Desc :
              BS.getProvenanceLayout(EntryIRB, Ty, /*ClearGaps=*/DiffABI)) {
+          Info.Fields.push_back({NumParamProv, Desc});
           Value *NumProv = EntryIRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
           NumParamProv = EntryIRB.CreateAdd(NumParamProv, NumProv);
-          Info.Fields.push_back({NumParamProv, Desc});
         }
         ByValArgs.push_back(Info);
       } else {
         SmallVector<ProvenanceField> ProvDesc = BS.getProvenanceLayout(
             EntryIRB, Arg.getType(), /*ClearGaps=*/DiffABI);
         for (auto &Desc : ProvDesc) {
+          ArgumentProvenance[&Arg].push_back({NumParamProv, Desc.Elems});
           Value *NumProv = EntryIRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
           NumParamProv = EntryIRB.CreateAdd(NumParamProv, NumProv);
           // We store the shadow stack offset and width of the provenance for
           // each argument, without eagerly loading it.
-          ArgumentProvenance[&Arg].push_back({NumParamProv, Desc.Elems});
         }
       }
     }
-
-    // If our parameters have provenance, then we need to allocate
-    // that many slots within our shadow stack frame's header.
-    if (!match(NumParamProv, m_Zero()))
-      ShadowStack.initFrameHeader(EntryIRB, NumParamProv);
 
     Value *HeaderBottom = ShadowStack.getOrInitFrameHeaderBottom(EntryIRB);
 
@@ -1662,8 +1664,7 @@ private:
     // omnivalid provenance.
     if (BS.needsBoundaryValidation(&F)) {
       if (!BS.shouldTrustFunction(TLI, &F)) {
-        EntryIRB.CreateCall(BS.BsanFuncValidateParams,
-                            {&F, HeaderBottom, NumParamProv});
+        EntryIRB.CreateCall(BS.BsanFuncValidateParams, {&F, NumParamProv});
       }
     }
 
@@ -1672,9 +1673,8 @@ private:
     for (auto &Info : ByValArgs) {
       SmallVector<std::pair<ProvenanceField, Provenance>> Fields;
       for (auto &[SlotOffset, Desc] : Info.Fields) {
-        Value *HeaderTop = ShadowStack.getOrInitFrameHeaderTop(EntryIRB);
         Value *ByteOffset = EntryIRB.CreateMul(BS.ProvenanceSize, SlotOffset);
-        Value *ProvPtr = ptrsub(EntryIRB, HeaderTop, ByteOffset);
+        Value *ProvPtr = ptradd(EntryIRB, BS.ParamTLS, ByteOffset);
         Provenance Prov = loadProvenanceAligned(EntryIRB, ProvPtr, Desc.Elems);
         Fields.push_back({Desc, Prov});
       }
@@ -1846,8 +1846,11 @@ private:
 
     bool DiffABI = BS.needsBoundaryValidation(Callee);
     SmallVector<std::pair<Value *, Provenance>> ParamOffsets;
-
     for (const auto &[i, Arg] : llvm::enumerate(CB.args())) {
+      // Variadics have special handling.
+      bool IsFixed = i < CB.getFunctionType()->getNumParams();
+      if (!IsFixed)
+        break;
 
       bool IsByVal = CB.paramHasAttr(i, Attribute::ByVal);
       Type *ArgTy = IsByVal ? CB.getParamByValType(i) : Arg->getType();
@@ -1856,8 +1859,7 @@ private:
           BS.getProvenanceLayout(Before, ArgTy, /*ClearGaps=*/DiffABI);
 
       for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
-        Value *NumProv = Before.CreateElementCount(BS.IntptrTy, Desc.Elems);
-        NumParamProv = Before.CreateAdd(NumParamProv, NumProv);
+
         Value *ByteOffset = Before.CreateMul(NumParamProv, BS.ProvenanceSize);
         Provenance ProvSrc;
         if (IsByVal) {
@@ -1874,6 +1876,9 @@ private:
           ProvSrc = assertProvenance(Before, Desc.Elems, {Arg, Idx});
         }
         ParamOffsets.push_back(std::make_pair(ByteOffset, ProvSrc));
+
+        Value *NumProv = Before.CreateElementCount(BS.IntptrTy, Desc.Elems);
+        NumParamProv = Before.CreateAdd(NumParamProv, NumProv);
       }
     }
 
@@ -1888,9 +1893,8 @@ private:
       popFrame(Before, CB, nullptr);
     }
 
-    // If we have parameter provenance, then store it to the shadow stack
-    // below the value of the current frame pointer.
-    if (!ParamOffsets.empty() || ShadowStack.getFrameHeaderTop().has_value()) {
+    // If we have parameter provenance, then store it to the TLS array.
+    if (ShadowStack.getFrameHeaderTop().has_value()) {
       Value *StackOffset;
       if (CB.isMustTailCall()) {
         // Now that we've popped the frame, we
@@ -1903,12 +1907,12 @@ private:
         StackOffset = getStackOffset(Before, false);
       }
       Before.CreateStore(StackOffset, BS.ProvStackTLS);
+    }
 
-      for (auto [ByteOffset, Prov] : ParamOffsets) {
-        Value *Slot = ptrsub(Before, StackOffset, ByteOffset);
-        auto SlotPtr = getMainProvenancePtr(Before, Slot);
-        storeProvenance(Before, SlotPtr, Prov);
-      }
+    for (auto [ByteOffset, Prov] : ParamOffsets) {
+      Value *Slot = ptradd(Before, BS.ParamTLS, ByteOffset);
+      auto SlotPtr = getMainProvenancePtr(Before, Slot);
+      storeProvenance(Before, SlotPtr, Prov);
     }
 
     // Skip the epilogue for musttail calls, since
@@ -2572,7 +2576,7 @@ struct VarArgHelperBase : public VarArgHelper {
   ProvenanceDest getShadowPtrForVAArgument(IRBuilder<> &IRB, unsigned ArgOffset,
                                            unsigned ArgSize) {
     // Make sure we don't overflow __msan_va_arg_tls.
-    assert(ArgOffset + ArgSize <= kParamTLSSize);
+    assert(ArgOffset + ArgSize <= kVarArgTLSSizeBytes);
     return getShadowPtrForVAArgument(IRB, ArgOffset);
   }
 
@@ -2580,11 +2584,11 @@ struct VarArgHelperBase : public VarArgHelper {
                       unsigned BaseOffset) {
     // The tails of `__msan_va_arg_tls` is not large enough to fit full
     // value shadow, but it will be copied to backup anyway. Make it clean.
-    if (BaseOffset >= kParamTLSSize)
+    if (BaseOffset >= kVarArgTLSSizeBytes)
       return;
 
-    Value *TailSize =
-        ConstantInt::getSigned(IRB.getInt32Ty(), kParamTLSSize - BaseOffset);
+    Value *TailSize = ConstantInt::getSigned(IRB.getInt32Ty(),
+                                             kVarArgTLSSizeBytes - BaseOffset);
 
     // We can use memset here because we are clearing TLS. Any provenance
     // is rooted elsewhere on the shadow stack.
@@ -2693,7 +2697,7 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
         ProvenanceDest DestPtr = getShadowPtrForVAArgument(IRB, OverflowOffset);
         OverflowOffset += AlignedSize;
 
-        if (OverflowOffset > kParamTLSSize) {
+        if (OverflowOffset > kVarArgTLSSizeBytes) {
           cleanUnusedTLS(IRB, DestPtr, BaseOffset);
           continue; // We have no space to copy shadow there.
         }
@@ -2722,12 +2726,12 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
         case AK_GeneralPurpose:
           Offset = GpOffset;
           GpOffset += 8;
-          assert(GpOffset <= kParamTLSSize);
+          assert(GpOffset <= kVarArgTLSSizeBytes);
           break;
         case AK_FloatingPoint:
           Offset = FpOffset;
           FpOffset += 16;
-          assert(FpOffset <= kParamTLSSize);
+          assert(FpOffset <= kVarArgTLSSizeBytes);
           break;
         case AK_Memory:
           if (IsFixed)
@@ -2738,7 +2742,7 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
           unsigned BaseOffset = OverflowOffset;
           Offset = OverflowOffset;
           OverflowOffset += AlignedSize;
-          if (OverflowOffset > kParamTLSSize) {
+          if (OverflowOffset > kVarArgTLSSizeBytes) {
             Ptr = getShadowPtrForVAArgument(IRB, Offset);
             // We have no space to copy shadow there.
             cleanUnusedTLS(IRB, Ptr, BaseOffset);
@@ -2776,7 +2780,7 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
 
       Value *SrcSize = IRB.CreateBinaryIntrinsic(
           Intrinsic::umin, CopySize,
-          ConstantInt::get(BS.IntptrTy, kParamTLSSize));
+          ConstantInt::get(BS.IntptrTy, kVarArgTLSSizeBytes));
 
       // This is an exceedingly rare situation: we are copying shadow
       // values into main memory, that isn't TLS. We do not need to increment
@@ -2925,7 +2929,7 @@ struct VarArgAArch64Helper : public VarArgHelperBase {
         unsigned BaseOffset = OverflowOffset;
         Offset = BaseOffset;
         OverflowOffset += AlignedSize;
-        if (OverflowOffset > kParamTLSSize) {
+        if (OverflowOffset > kVarArgTLSSizeBytes) {
           auto Base = getShadowPtrForVAArgument(IRB, BaseOffset);
           // We have no space to copy shadow there.
           cleanUnusedTLS(IRB, Base, BaseOffset);
@@ -2970,7 +2974,7 @@ struct VarArgAArch64Helper : public VarArgHelperBase {
 
       Value *SrcSize = IRB.CreateBinaryIntrinsic(
           Intrinsic::umin, CopySize,
-          ConstantInt::get(BS.IntptrTy, kParamTLSSize));
+          ConstantInt::get(BS.IntptrTy, kVarArgTLSSizeBytes));
 
       IRB.CreateMemCpy(VAArgTLSTagCopy, kMinProvAlignment, BS.VAArgTagTLS,
                        kMinProvAlignment, SrcSize);

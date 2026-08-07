@@ -51,7 +51,8 @@ struct AtExitRecord {
 
 const Provenance OMNIVALID = {0, nullptr};
 
-static constexpr uptr kParamTLSSize = 800;
+static constexpr uptr kParamTLSSizeProv = 100;
+static constexpr uptr kVarArgTLSSizeBytes = 800;
 static constexpr uptr kMinProvAlignment = 8;
 
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance
@@ -106,7 +107,9 @@ uptr FindUserFramePc(uptr pc, uptr bp);
 
 Provenance *GetParamSlot(uptr Idx);
 Provenance *GetRetValSlot(uptr Idx);
-void ClearSlot(uptr Idx);
+void ClearParamSlot(uptr Idx);
+void ClearRetValSlot(uptr Idx);
+
 bool CallerIsInstrumented(void *sym);
 
 } // namespace __bsan

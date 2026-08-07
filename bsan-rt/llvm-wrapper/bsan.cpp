@@ -56,12 +56,16 @@ THREADLOCAL uptr __bsan_var_arg_overflow = 0;
 // A thread-local array used to store the tag
 // component of variadic arguments.
 SANITIZER_INTERFACE_ATTRIBUTE
-THREADLOCAL u8 __bsan_var_arg_tag_tls[kParamTLSSize];
+THREADLOCAL u8 __bsan_var_arg_tag_tls[kVarArgTLSSizeBytes];
 
 // A thread-local array used to store the info
 // component of variadic arguments.
 SANITIZER_INTERFACE_ATTRIBUTE
-THREADLOCAL u8 __bsan_var_arg_info_tls[kParamTLSSize];
+THREADLOCAL u8 __bsan_var_arg_info_tls[kVarArgTLSSizeBytes];
+
+// A thread-local array used to store parameter provenance values.
+SANITIZER_INTERFACE_ATTRIBUTE
+THREADLOCAL Provenance __bsan_param_tls[kParamTLSSizeProv];
 
 // Pointer to the start of the current frame within the shadow
 // stack, which stores the provenance of pointers that are on
@@ -130,19 +134,20 @@ u32 GetStackTraceLen() {
 // Returns a pointer to the slot on the shadow stack at the given index.
 // The shadow stack grows downward, so we subtract by the given index
 // plus one to adjust the for the the zero-th slot.
-Provenance *GetParamSlot(uptr idx) { return __bsan_shadow_stack - (idx + 1); }
+Provenance *GetParamSlot(uptr idx) { return &__bsan_param_tls[idx]; }
 
 // Returns a pointer to the slot on the shadow stack at the given index.
 // The shadow stack grows downward, so we subtract by the given index
 // plus one to adjust the for the the zero-th slot.
 Provenance *GetRetValSlot(uptr idx) {
-  Provenance *slot = GetParamSlot(idx);
+  Provenance *slot = __bsan_shadow_stack - (idx + 1);
   __bsan_shadow_stack = slot;
   return slot;
 }
 
 // Clears the provenance from the given stack slot.
-void ClearSlot(uptr Idx) { *GetParamSlot(Idx) = OMNIVALID; }
+void ClearParamSlot(uptr Idx) { *GetParamSlot(Idx) = OMNIVALID; }
+void ClearRetValSlot(uptr Idx) { *GetRetValSlot(Idx) = OMNIVALID; }
 
 // Prints a note suggesting users raise stacktrace_max_len when the trace was
 // truncated. The unwind in HANDLE_ERROR is bounded by GetStackTraceLen(), so a
@@ -233,19 +238,12 @@ bool CallerIsInstrumented(void *sym) {
   if (__bsan_shadow_stack == nullptr) {
     return false;
   }
-  if (__bsan_marker == kTrustedMarker) {
+  bool matches = (__bsan_marker &&
+                  (__bsan_marker == kTrustedMarker || __bsan_marker == sym));
+  if (matches) {
     __bsan_marker = 0;
-    return true;
   }
-  if (__bsan_marker) {
-    bool cond = __bsan_marker == sym;
-    if (cond) {
-      __bsan_marker = 0;
-    }
-    return cond;
-  } else {
-    return true;
-  }
+  return matches;
 }
 
 } // namespace __bsan
@@ -339,13 +337,12 @@ void __bsan_shadow_join(void *dest, void *src_tag, void *src_info, uptr size) {
 /// when we are back within the caller, we can trust the provenance array for
 /// the return value.
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_validate_params(void *current_fn, Provenance *frame_start,
-                            uptr len) {
-  bool trusted =
-      (__bsan_marker == current_fn || __bsan_marker == kTrustedMarker);
+void __bsan_validate_params(void *current_fn, uptr len) {
+  bool trusted = (__bsan_marker && (__bsan_marker == current_fn ||
+                                    __bsan_marker == kTrustedMarker));
   if (!trusted) {
     for (uptr i = 0; i < len; ++i) {
-      frame_start[i] = OMNIVALID;
+      __bsan_param_tls[i] = OMNIVALID;
     }
   }
   __bsan_marker = 0;
