@@ -20,8 +20,10 @@ pub struct BsanEnv {
     pub target_bindir: PathBuf,
     /// The sysroot of the nightly toolchain.
     pub sysroot: PathBuf,
-    /// The build directory
+    /// The build directory containing dependencies and build artifacts.
     pub build_dir: PathBuf,
+    /// The target directory where build artifacts are placed by Cargo.
+    pub target_dir: PathBuf,
     /// The root of the repository checkout we are working in.
     pub root_dir: PathBuf,
     /// The shell we use.
@@ -124,10 +126,16 @@ impl BsanEnv {
 
         let config_path = path!(root_dir / "config.toml");
         let mut config = BsanConfig::from_file(&config_path)?;
+
+
+        let build_dir = path!(root_dir / "build");
+        let target_dir = path!(build_dir / "target");
+        
         let toolchain_config = setup::setup_toolchain(
             &sh,
             &host,
             &mut config,
+            &build_dir,
             &deps_dir,
             &root_dir,
             skip,
@@ -135,9 +143,10 @@ impl BsanEnv {
         )?;
 
 
+
         let build_dir = path!(root_dir / "target");
         // Hard-code the target dir, since we rely on all binaries ending up in the same spot.
-        sh.set_var("CARGO_TARGET_DIR", &build_dir);
+        sh.set_var("CARGO_TARGET_DIR", &target_dir);
 
         let sysroot = active_sysroot()?;
         let target_libdir = active_libdir()?;
@@ -186,6 +195,7 @@ impl BsanEnv {
             sysroot,
             target_bindir,
             build_dir,
+            target_dir,
             root_dir,
             config,
             cargo_extra_flags,
@@ -292,7 +302,7 @@ impl BsanEnv {
 
     pub fn assert_artifact(&self, artifact_name: &str) -> PathBuf {
         let artifact_subdir = self.mode.cargo_output_dir();
-        let build_dir = path!(self.build_dir / artifact_subdir);
+        let build_dir = path!(self.target_dir / artifact_subdir);
         let artifact_path = path!(build_dir / artifact_name);
         if !artifact_path.exists() {
             show_error!(
@@ -337,7 +347,7 @@ impl BsanEnv {
 
     pub fn artifact_dir(&self) -> PathBuf {
         let artifact_subdir = self.mode.cargo_output_dir();
-        path!(self.build_dir / artifact_subdir)
+        path!(self.target_dir / artifact_subdir)
     }
 
     pub fn test(&self, crate_dir: impl AsRef<OsStr>, args: &[String]) -> Result<()> {

@@ -23,13 +23,14 @@ pub fn setup_toolchain(
     sh: &Shell,
     host: &VersionMeta,
     config: &mut BsanConfig,
+    build_dir: &Path,
     toolchain_dir: &Path,
     root_dir: &Path,
     skip_prompt: bool,
     local_dir: Option<PathBuf>,
 ) -> Result<ToolchainConfig> {
     let meta = ensure_toolchain(sh, host, config, toolchain_dir, skip_prompt, local_dir)?;
-    let llvm_cmake = ensure_llvm_cmake(sh, config, toolchain_dir, root_dir)?;
+    let llvm_cmake = ensure_llvm_cmake(sh, config, host, build_dir, root_dir)?;
     Ok(ToolchainConfig { llvm_cmake, meta })
 }
 fn ensure_toolchain(
@@ -143,10 +144,38 @@ pub struct LLVMCmake {
 pub fn ensure_llvm_cmake(
     sh: &Shell,
     config: &BsanConfig,
-    toolchain_dir: &Path,
+    host: &VersionMeta,
+    build_dir: &Path,
     root_dir: &Path,
 ) -> Result<LLVMCmake> {
-    let compiler_rt_src = path!(toolchain_dir / "compiler-rt");
+    let target = &host.host;
+
+    let tmp_dir = sh.create_temp_dir()?;
+    let help_on_error = "Failed to download the custom rust-dev artifacts.";
+    let artifact_url = path!(&config.artifact_url / config.rust_sha);
+
+    let download_unpack_install = |prefix: &str, needs_target: bool| -> Result<()> {
+        // Download the .tar.xz file
+        let mut tar_file_name = format!("{prefix}-nightly");
+        if needs_target {
+            tar_file_name = format!("{tar_file_name}-{target}");
+        }
+        let tar_file = format!("{tar_file_name}.tar.xz");
+
+
+        let tar_path = path!(tmp_dir.path() / tar_file);
+        utils::download_file(sh, &path!(artifact_url / tar_file), &tar_path, help_on_error)?;
+
+
+        // Unpack it into a .tmp subdirectory
+        let out_dir = path!(build_dir / prefix);
+        utils::unpack(&tar_path, &out_dir, "")?;
+        fs::remove_file(&tar_path)?;
+        Ok(())
+    };
+    download_unpack_install("rust-dev",true);
+
+    let compiler_rt_src = path!(build_dir / "compiler-rt");
     if !compiler_rt_src.exists() {
         show_error!(
             "Unable to locate the source for `compiler-rt` within the sysroot for the `bsan` toolchain."
@@ -164,7 +193,7 @@ pub fn ensure_llvm_cmake(
 
     let url = &config.llvm_url;
     let sha = &config.llvm_sha;
-    let lockfile = path!(toolchain_dir / ".llvm.lock");
+    let lockfile = path!(build_dir / ".llvm.lock");
 
     if !(lockfile.exists() && fs::read_to_string(&lockfile)?.eq(sha)) {
         let _tmp = sh.push_dir(&tmp_dir);
@@ -179,18 +208,18 @@ pub fn ensure_llvm_cmake(
         cmd!(sh, "git checkout -q FETCH_HEAD").run()?;
 
         for subdir in ["llvm", "cmake"] {
-            cmd!(sh, "cp -fr {subdir} {toolchain_dir}").run()?;
+            cmd!(sh, "cp -fr {subdir} {build_dir}").run()?;
         }
         fs::write(lockfile, sha)?;
     }
 
     let link_source = path!(root_dir / "bsan-rt" / "llvm-wrapper");
-    let link_target = path!(toolchain_dir / "compiler-rt" / "lib" / "bsan");
+    let link_target = path!(build_dir / "compiler-rt" / "lib" / "bsan");
     if !link_target.exists() {
         cmd!(sh, "ln -fs {link_source} {link_target}").quiet().run()?;
     }
     Ok(LLVMCmake {
-        llvm: path!(toolchain_dir / "llvm" / "cmake"),
-        common: path!(toolchain_dir / "cmake"),
+        llvm: path!(build_dir / "llvm" / "cmake"),
+        common: path!(build_dir / "cmake"),
     })
 }

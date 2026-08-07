@@ -92,7 +92,7 @@ impl Command {
 
         crate::all_components!().iter().try_for_each(|c| c.install(env, &[]))?;
 
-        let cargo_test_path = path!(env.build_dir / "bsan");
+        let cargo_test_path = path!(env.target_dir / "bsan");
         cmd!(env.sh, "rm -rf {cargo_test_path}").run()?;
         cmd!(env.sh, "python3 tests/test-cargo-bsan/run_test.py").run()?;
         Self::stats(env)?;
@@ -114,7 +114,7 @@ impl Command {
     }
 
     fn clean(env: &mut BsanEnv) -> Result<()> {
-        fs::remove_dir_all(&env.build_dir)?;
+        fs::remove_dir_all(&env.target_dir)?;
         Ok(())
     }
 
@@ -144,7 +144,7 @@ impl Command {
 
             let llvm_runtime = env.build_artifact(CompilerRt, &[])?;
             let cargo_bsan = env.build_artifact(CargoBsan, &[])?;
-            let sysroot_dir = path!(&env.build_dir / "sysroot");
+            let sysroot_dir = path!(&env.target_dir / "sysroot");
 
             let env_guards = vec![
                 env.sh.push_env("BSAN_PLUGIN", &plugin),
@@ -258,13 +258,13 @@ struct TestConfig {
 }
 
 fn run_tests(env: &mut BsanEnv, config: TestConfig) -> Result<(), anyhow::Error> {
-    let sysroot_dir = path!(&env.build_dir / "sysroot");
+    let sysroot_dir = path!(&env.target_dir / "sysroot");
     if !config.keep_sysroot {
         cmd!(env.sh, "rm -rf {sysroot_dir}").quiet().run()?;
         // The cached build of the test suite's dependencies goes stale for the
         // same reasons as the sysroot: Cargo does not know to rebuild it when
         // the instrumentation pass changes.
-        let dep_cache = path!(&env.build_dir / "tmp" / "bsan_ui");
+        let dep_cache = path!(&env.target_dir / "tmp" / "bsan_ui");
         cmd!(env.sh, "rm -rf {dep_cache}").quiet().run()?;
     }
     env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
