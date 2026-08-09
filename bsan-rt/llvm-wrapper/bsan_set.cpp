@@ -58,6 +58,11 @@ void BorTagSet::destroy() {
   }
 }
 
+void ConcreteProvenanceSet::insert(AllocInfo *info) {
+  if (info != nullptr) {
+    set_[info] = BorTagSet();
+  }
+}
 void ConcreteProvenanceSet::insert(Provenance prov) {
   if (prov.info != nullptr) {
     set_[prov.info].insert(prov.tag);

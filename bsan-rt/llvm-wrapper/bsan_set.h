@@ -78,6 +78,8 @@ public:
   ConcreteProvenanceSet(const ConcreteProvenanceSet &) = delete;
   ConcreteProvenanceSet &operator=(const ConcreteProvenanceSet &) = delete;
 
+  void insert(AllocInfo *info);
+  void remove(AllocInfo *info);
   void insert(Provenance Prov);
   void remove(Provenance Prov);
 
