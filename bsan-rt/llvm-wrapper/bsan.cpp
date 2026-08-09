@@ -548,17 +548,6 @@ AllocInfo *__bsan_reserve_stack_slot() {
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_destroy_stack_slot_impl(AllocInfo *slot);
-
-SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_destroy_stack_slot(AllocInfo *slot) {
-  if (__bsan_destroy_stack_slot_impl) {
-    InterceptorBarrier barrier;
-    __bsan_destroy_stack_slot_impl(slot);
-  }
-}
-
-SANITIZER_WEAK_ATTRIBUTE
 AllocInfo *__bsan_alloc_impl(void *base_addr, uptr size, BorTag bor_tag,
                              Span pc);
 
@@ -623,8 +612,7 @@ void __bsan_protector_end_impl(BorTag bor_tag, AllocInfo *alloc_info, Span pc);
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_pop_frame(const Provenance *frame_start, uptr prot,
                       uptr alloca_vec_size) {
-  if (__bsan_protector_end_impl && __bsan_destroy_stack_slot_impl &&
-      __bsan_dealloc_stack_impl) {
+  if (__bsan_protector_end_impl && __bsan_dealloc_stack_impl) {
     GET_SPAN;
     InterceptorBarrier barrier;
     for (uptr i = 0; i < prot + alloca_vec_size; i++) {
@@ -633,7 +621,6 @@ void __bsan_pop_frame(const Provenance *frame_start, uptr prot,
         __bsan_protector_end_impl(prov.tag, prov.info, span);
       } else {
         __bsan_dealloc_stack_impl(prov.tag, prov.info, span);
-        __bsan_destroy_stack_slot_impl(prov.info);
       }
     }
   }

@@ -393,9 +393,6 @@ private:
   /// Runtime function for reserving alloca metadata.
   FunctionCallee BsanFuncReserveStackSlot;
 
-  /// Runtime function for deallocating alloca metadata.
-  FunctionCallee BsanFuncDestroyStackSlot;
-
   /// A default personality function used for exception-handling.
   FunctionCallee DefaultPersonalityFn;
 
@@ -679,9 +676,6 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncReserveStackSlot =
       M.getOrInsertFunction(BSAN("reserve_stack_slot"),
                             FunctionType::get(PtrTy, /*isVarArg=*/false), AL);
-
-  BsanFuncDestroyStackSlot = M.getOrInsertFunction(BSAN("destroy_stack_slot"),
-                                                   AL, IRB.getVoidTy(), PtrTy);
 
   BsanFuncExposeProv = M.getOrInsertFunction(BSAN("expose_prov"), AL,
                                              IRB.getVoidTy(), IntptrTy, PtrTy);

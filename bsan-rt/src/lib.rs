@@ -529,9 +529,6 @@ unsafe extern "C-unwind" fn __bsan_rc_inc_impl(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) -> bool {
-    // A null `alloc_info` denotes an empty/cleared shadow slot (e.g. one whose
-    // info was nulled by `ClearShadow` while a stale tag lingered). There is no
-    // allocation to deref, so there is nothing to count.
     if alloc_info.is_null() {
         return false;
     }
@@ -547,8 +544,6 @@ unsafe extern "C-unwind" fn __bsan_rc_dec_impl(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) -> bool {
-    // See `__bsan_rc_inc_impl`: a null `alloc_info` is an empty shadow slot with
-    // no live reference to release.
     if alloc_info.is_null() {
         return false;
     }
@@ -560,14 +555,6 @@ unsafe extern "C-unwind" fn __bsan_rc_dec_impl(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_reserve_stack_slot_impl() -> NonNull<AllocInfo> {
     unsafe { global_ctx().create_alloc_info(AllocInfo::invalid()) }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_destroy_stack_slot_impl(slot: NonNull<AllocInfo>) {
-    let ctx = unsafe { global_ctx() };
-    unsafe {
-        ctx.destroy_alloc_info(slot);
-    }
 }
 
 /// Initializes stack allocation metadata in-place.
