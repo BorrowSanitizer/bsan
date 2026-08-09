@@ -58,7 +58,7 @@ void InstrumentationPlan::collectChecks(Instruction *Inst) {
   Checks.emplace_back(Inst, AccessKind, Ptr, AccessRange(DL, AccessSize));
 }
 
-void InstrumentationPlan::build() {
+void InstrumentationPlan::build(CycleInfo &CI) {
   // Collect each of the instructions might propagate provenance metadata.
   for (BasicBlock *BB : depth_first<BasicBlock *>(&F.getEntryBlock())) {
     for (Instruction &I : *BB) {
@@ -77,8 +77,19 @@ void InstrumentationPlan::build() {
       if (auto *CB = dyn_cast<CallBase>(&I)) {
         if (IsRetag(CB)) {
           Retags.push_back(CB);
-          if (IsFnEntryRetag(CB))
-            NumFnEntryRetags += 1;
+
+          RetagInfo RI(CB);
+          if (RI.isProtected()) {
+            // If we see a function-entry retag within a cyclic subgraph
+            // of the CFG, then we know that a function was inlined.
+            // Protectors do not play well with inlining, so we treat this as
+            // a regular retag.
+            if (CI.getCycle(CB->getParent())) {
+              RI.stripProtector();
+            } else {
+              NumFnEntryRetags += 1;
+            }
+          }
         }
         if (auto *LI = dyn_cast<LifetimeIntrinsic>(CB)) {
           AllocaInst *AI = findAllocaForValue(LI->getArgOperand(0), true);

@@ -1284,7 +1284,7 @@ public:
     DTU.flush();
     Cycles.compute(F);
 
-    Plan.build();
+    Plan.build(Cycles);
 
     BasicBlock *EntryBlock = &F.getEntryBlock();
     IRBuilder<> EntryIRB(EntryBlock, EntryBlock->getFirstNonPHIIt());
