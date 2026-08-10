@@ -14,19 +14,8 @@ use crate::TOOLCHAIN_NAME;
 
 static INSTALL_PROMPT: &str = "You need to install the latest version of our custom Rust toolchain (`bsan`) to build BorrowSanitizer. Continue?";
 
-// The endpoint where Rust CI artifacts are distributed. This is the same URL used
-// by default with `rustup-toolchain-install-master`.
-static RUST_ARTIFACT_URL: &str = "https://ci-artifacts.rust-lang.org/rustc-builds";
-
-// The endpoint where BorrowSanitizer's release artifacts are stored.
-static GH_ARTIFACT_URL: &str =
-    "https://github.com/BorrowSanitizer/nightly-clang/releases/download/";
-
-// Rust's fork of LLVM
-static LLVM_URL: &str = "https://github.com/rust-lang/llvm-project.git";
-
 pub struct ToolchainConfig {
-    pub llvm_dir: PathBuf,
+    pub llvm_cmake: LLVMCmake,
     pub meta: VersionMeta,
 }
 
@@ -40,8 +29,8 @@ pub fn setup_toolchain(
     local_dir: Option<PathBuf>,
 ) -> Result<ToolchainConfig> {
     let meta = ensure_toolchain(sh, host, config, toolchain_dir, skip_prompt, local_dir)?;
-    let llvm_dir = ensure_llvm_cmake(sh, config, toolchain_dir, root_dir)?;
-    Ok(ToolchainConfig { llvm_dir, meta })
+    let llvm_cmake = ensure_llvm_cmake(sh, config, toolchain_dir, root_dir)?;
+    Ok(ToolchainConfig { llvm_cmake, meta })
 }
 fn ensure_toolchain(
     sh: &Shell,
@@ -57,7 +46,7 @@ fn ensure_toolchain(
     // bail out.
     let metadata = if let Ok(meta) = version_meta(sh, TOOLCHAIN_NAME)
         && let Some(ref commit_hash) = meta.commit_hash
-        && commit_hash == &config.rust_sha
+        && commit_hash == &config.sha
         && local_dir.is_none()
     {
         if active_toolchain()? != TOOLCHAIN_NAME {
@@ -69,7 +58,7 @@ fn ensure_toolchain(
     };
 
     // Let's make sure that we have all of the right dependencies
-    for dep in crate::DEPENDENCIES.iter() {
+    for dep in config.dependencies.iter() {
         if which::which(dep).is_err() {
             show_error!("Unable to find `{dep}`, is it installed?");
         }
@@ -80,7 +69,7 @@ fn ensure_toolchain(
     } else {
         // First, check if the current platform is supported.
         let current_target = &host.host;
-        if !crate::TARGETS.contains(&current_target.as_str()) {
+        if !config.targets.contains(&host.host) {
             show_error!("The current target `{current_target}` is not supported.");
         }
         // If we've passed these checks, then let's do the expensive step of
@@ -97,22 +86,24 @@ fn ensure_toolchain(
 
 fn install_toolchain(
     sh: &Shell,
-    version: &VersionMeta,
+    host: &VersionMeta,
     config: &mut BsanConfig,
     toolchain_dir: &Path,
     local_dir: Option<&Path>,
 ) -> Result<VersionMeta> {
     cmd!(sh, "rustup toolchain uninstall {TOOLCHAIN_NAME}").quiet().run()?;
 
-    let target = &version.host;
-    let artifact_url = path!(&RUST_ARTIFACT_URL / config.rust_sha);
+    let target = &host.host;
+    let version = &config.version;
+    let archive_postfix: String = version.to_string();
+    let artifact_url = path!(&config.artifact_url / &config.tag);
     let help_on_error = "Failed to download the custom Rust toolchain.";
 
     let tmp_dir = sh.create_temp_dir()?;
 
     let download_unpack_install = |prefix: &str, needs_target: bool| -> Result<()> {
         // Download the .tar.xz file
-        let mut tar_file_name = format!("{prefix}-nightly");
+        let mut tar_file_name = format!("{prefix}-{archive_postfix}");
         if needs_target {
             tar_file_name = format!("{tar_file_name}-{target}");
         }
@@ -128,7 +119,7 @@ fn install_toolchain(
 
         // Unpack it into a .tmp subdirectory
         let out_dir = path!(tmp_dir.path() / prefix);
-        utils::unpack(&tar_path, &out_dir, None)?;
+        utils::unpack(&tar_path, &out_dir, "")?;
         fs::remove_file(&tar_path)?;
 
         // Install it into the toolchain directory
@@ -140,36 +131,19 @@ fn install_toolchain(
     download_unpack_install("rust", true)?;
     download_unpack_install("rust-dev", true)?;
     download_unpack_install("rust-src", false)?;
-    install_clang(sh, config, version, &toolchain_dir)?;
 
     let meta = version_meta(sh, TOOLCHAIN_NAME)?;
+    config.sha =
+        meta.commit_hash.clone().expect("Unable to resolve commit hash for latest toolchain.");
+    config.version = meta.semver.to_string();
+
     cmd!(sh, "rustup override set {TOOLCHAIN_NAME}").quiet().run()?;
     Ok(meta)
 }
 
-pub fn install_clang(
-    sh: &Shell,
-    config: &BsanConfig,
-    version: &VersionMeta,
-    toolchain_dir: &Path,
-) -> Result<()> {
-    let llvm_sha_tag = &config.llvm_sha.as_str()[0..7];
-    let release_tag = format!("clang-{}", llvm_sha_tag);
-    let endpoint = path!(GH_ARTIFACT_URL / release_tag);
-
-    let target = version.host.as_str();
-    let archive = format!("{release_tag}-{target}.tar.xz");
-
-    let artifact = path!(endpoint / archive);
-    let tmp_dir = sh.create_temp_dir()?;
-    let tar_path = path!(tmp_dir.path() / archive);
-
-    let help_text = "Unable to download BorrowSanitizer's nightly build of Clang.";
-
-    utils::download_file(sh, &artifact, &tar_path, help_text)?;
-    utils::unpack(&tar_path, &toolchain_dir, None)?;
-    fs::remove_file(&tar_path)?;
-    Ok(())
+pub struct LLVMCmake {
+    pub common: PathBuf,
+    pub llvm: PathBuf,
 }
 
 pub fn ensure_llvm_cmake(
@@ -177,7 +151,7 @@ pub fn ensure_llvm_cmake(
     config: &BsanConfig,
     toolchain_dir: &Path,
     root_dir: &Path,
-) -> Result<PathBuf> {
+) -> Result<LLVMCmake> {
     let compiler_rt_src = path!(toolchain_dir / "compiler-rt");
     if !compiler_rt_src.exists() {
         show_error!(
@@ -191,37 +165,38 @@ pub fn ensure_llvm_cmake(
             "Unable to locate sparse checkout config file `llvm-sparse` in `bsan-script/etc/`."
         );
     }
+    let tmp_dir = sh.create_temp_dir()?;
+    let tmp_dir = tmp_dir.path();
 
-    let sha = &config.llvm_sha;
+    let url = &config.llvm_url;
+    let branch = &config.llvm_branch;
     let lockfile = path!(toolchain_dir / ".llvm.lock");
 
-    if !(lockfile.exists() && fs::read_to_string(&lockfile)?.eq(sha)) {
-        let tmp_dir = sh.create_temp_dir()?;
-        let tmp_dir = tmp_dir.path();
-
-        let _tmp = sh.push_dir(tmp_dir);
-        cmd!(sh, "git init -q .").run()?;
-        cmd!(sh, "git remote add origin {LLVM_URL}").run()?;
-
-        cmd!(sh, "git sparse-checkout set --no-cone --stdin")
-            .stdin(sh.read_file(&llvm_sparse)?)
+    if !(lockfile.exists() && fs::read_to_string(&lockfile)?.eq(branch)) {
+        cmd!(sh, "git clone -n --depth=1 --filter=tree:0 --branch={branch} {url} {tmp_dir}")
             .run()?;
 
-        cmd!(sh, "git fetch -q --depth=1 --filter=tree:0 origin {sha}").run()?;
-        cmd!(sh, "git checkout -q FETCH_HEAD").run()?;
+        let mut sparse_checkout = path!(&tmp_dir / ".git/info");
+        fs::create_dir_all(&sparse_checkout)?;
+        sparse_checkout.push("sparse-checkout");
 
-        for subdir in ["llvm", "cmake"] {
-            cmd!(sh, "cp -fr {subdir} {toolchain_dir}").run()?;
-        }
+        cmd!(sh, "ln -s {llvm_sparse} {sparse_checkout}").run()?;
 
-        fs::write(lockfile, sha)?;
+        cmd!(sh, "git -C {tmp_dir} sparse-checkout init").run()?;
+        cmd!(sh, "git -C {tmp_dir} checkout").run()?;
+        cmd!(sh, "cp -fr {tmp_dir}/llvm {toolchain_dir}").run()?;
+        cmd!(sh, "cp -fr {tmp_dir}/cmake {toolchain_dir}").run()?;
+
+        fs::write(lockfile, branch)?;
     }
 
     let link_source = path!(root_dir / "bsan-rt" / "llvm-wrapper");
-    let link_target = path!(compiler_rt_src / "lib" / "bsan");
+    let link_target = path!(toolchain_dir / "compiler-rt" / "lib" / "bsan");
     if !link_target.exists() {
         cmd!(sh, "ln -fs {link_source} {link_target}").quiet().run()?;
     }
-
-    Ok(toolchain_dir.to_path_buf())
+    Ok(LLVMCmake {
+        llvm: path!(toolchain_dir / "llvm" / "cmake"),
+        common: path!(toolchain_dir / "cmake"),
+    })
 }

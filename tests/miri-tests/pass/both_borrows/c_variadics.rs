@@ -1,4 +1,5 @@
 //@run:0
+#![feature(c_variadic)]
 fn main() {
     unsafe extern "C" fn write_with_first_arg(ptr_to_val: *mut i32, _hidden_mut_ref_to_val: ...) {
         // Retagging needs to be disabled for arguments

@@ -13,8 +13,6 @@ mod stats;
 mod utils;
 
 static TOOLCHAIN_NAME: &str = "bsan";
-static DEPENDENCIES: &[&str] = &["cmake", "ninja", "curl", "clang", "clang-tidy", "python3"];
-static TARGETS: &[&str] = &["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"];
 
 #[derive(Clone, Debug, Parser)]
 pub enum Command {

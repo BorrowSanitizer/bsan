@@ -21,9 +21,9 @@ fn rustc_lld(sysroot_target_bindir: &Path) -> PathBuf {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct LlvmTools {
     pub clang: PathBuf,
-    pub libclang_dir: PathBuf,
     pub llvm_symbolizer: PathBuf,
     pub lld: PathBuf,
+    pub llvm_config: PathBuf,
 }
 
 impl LlvmTools {
@@ -32,11 +32,13 @@ impl LlvmTools {
             show_error!("Unable to resolve the LLVM version for the current `rustc`.")
         });
 
+        let llvm_config = assert_host_bin(host_sysroot, "llvm-config");
+        assert_rustc_llvm_version(&llvm_config, &rustc_llvm_version);
+
         let clang = assert_host_bin(host_sysroot, &format!("clang-{}", rustc_llvm_version.major));
         assert_rustc_llvm_version(&clang, &rustc_llvm_version);
 
-        let sysroot_libdir: PathBuf = host_sysroot.lib();
-        let sysroot_target_dir: PathBuf = host_sysroot.target_dir(rustc_version);
+        let sysroot_target_dir = host_sysroot.target_dir(rustc_version);
         let sysroot_target_bindir = sysroot_target_dir.join("bin");
 
         let lld = rustc_lld(&sysroot_target_bindir);
@@ -45,24 +47,43 @@ impl LlvmTools {
         // llvm-symbolizer is versioned independent to LLVM
         let llvm_symbolizer = assert_host_bin(host_sysroot, "llvm-symbolizer");
 
-        LlvmTools { clang, libclang_dir: sysroot_libdir, llvm_symbolizer, lld }
+        LlvmTools { clang, llvm_symbolizer, lld, llvm_config }
     }
 
     pub fn populate_env(&self, cmd: &mut Command) {
         cmd.env("LLVM_SYMBOLIZER", &self.clang);
         cmd.env("LLD", &self.lld);
+        cmd.env("LLVM_CONFIG", &self.lld);
         // bindgen's clang-sys dependency requires these variables
         // to be set so that it uses our clang to parse headers.
-        cmd.env("LIBCLANG_PATH", &self.libclang_dir);
+        cmd.env("LIBCLANG_PATH", self.llvm_libdir());
         cmd.env("CLANG_PATH", &self.clang);
     }
 
     pub fn from_env() -> Self {
-        let libclang_dir = expect_env_path("LIBCLANG_PATH");
         let clang = expect_env_path("CLANG_PATH");
         let llvm_symbolizer = expect_env_path("LLVM_SYMBOLIZER");
         let lld = expect_env_path("LLD");
-        Self { clang, libclang_dir, llvm_symbolizer, lld }
+        let llvm_config = expect_env_path("LLVM_CONFIG");
+        Self { clang, llvm_symbolizer, lld, llvm_config }
+    }
+
+    pub fn llvm_libdir(&self) -> PathBuf {
+        let mut cmd = Command::new(&self.llvm_config);
+        cmd.arg("--libdir");
+
+        let Some(path) = command_output(&mut cmd) else {
+            show_error_cmd!(cmd, "Unable to resolve the LLVM `lib` directory using `llvm-config`.");
+        };
+        let path = PathBuf::from(path);
+        if !path.try_exists().unwrap() {
+            show_error_cmd!(
+                cmd,
+                "The `lib` directory returned by `llvm-config` does not exist: {}",
+                path.display()
+            );
+        }
+        path
     }
 }
 

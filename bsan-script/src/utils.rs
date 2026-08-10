@@ -262,7 +262,7 @@ pub fn download_file(
     Ok(())
 }
 
-pub fn unpack(tarball: &Path, dst: &Path, pattern: Option<&str>) -> Result<()> {
+pub fn unpack(tarball: &Path, dst: &Path, pattern: &str) -> Result<()> {
     if !dst.exists() {
         std::fs::create_dir_all(dst)?;
     }
@@ -285,11 +285,7 @@ pub fn unpack(tarball: &Path, dst: &Path, pattern: Option<&str>) -> Result<()> {
             continue;
         }
         let mut short_path = original_path.strip_prefix(directory_prefix)?;
-
-        if let Some(pattern) = pattern {
-            short_path = short_path.strip_prefix(pattern).unwrap_or(short_path);
-        }
-
+        short_path = short_path.strip_prefix(pattern).unwrap_or(short_path);
         let dst_path = dst.join(short_path);
 
         if !member.unpack_in(dst)? {

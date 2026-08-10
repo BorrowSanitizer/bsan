@@ -3,6 +3,7 @@
 //miri: @[tree]compile-flags: -Zmiri-tree-borrows
 //miri: @compile-flags: -Zmiri-strict-provenance
 #![feature(slice_partition_dedup)]
+#![feature(layout_for_ptr)]
 
 use std::{ptr, slice};
 
