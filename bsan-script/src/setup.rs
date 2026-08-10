@@ -18,8 +18,9 @@ static INSTALL_PROMPT: &str = "You need to install the latest version of our cus
 // by default with `rustup-toolchain-install-master`.
 static RUST_ARTIFACT_URL: &str = "https://ci-artifacts.rust-lang.org/rustc-builds";
 
-// The endpoint where BorrowSanitizer's release artifacts are stored. 
-static GH_ARTIFACT_URL: &str = "https://github.com/BorrowSanitizer/nightly-clang/releases/download/";
+// The endpoint where BorrowSanitizer's release artifacts are stored.
+static GH_ARTIFACT_URL: &str =
+    "https://github.com/BorrowSanitizer/nightly-clang/releases/download/";
 
 // Rust's fork of LLVM
 static LLVM_URL: &str = "https://github.com/rust-lang/llvm-project.git";
@@ -97,14 +98,14 @@ fn ensure_toolchain(
 
 fn install_toolchain(
     sh: &Shell,
-    host: &VersionMeta,
+    version: &VersionMeta,
     config: &mut BsanConfig,
     toolchain_dir: &Path,
     local_dir: Option<&Path>,
 ) -> Result<VersionMeta> {
     cmd!(sh, "rustup toolchain uninstall {TOOLCHAIN_NAME}").quiet().run()?;
 
-    let target = &host.host;
+    let target = &version.host;
     let artifact_url = path!(&RUST_ARTIFACT_URL / config.rust_sha);
     let help_on_error = "Failed to download the custom Rust toolchain.";
 
@@ -139,15 +140,36 @@ fn install_toolchain(
 
     download_unpack_install("rust", true)?;
     download_unpack_install("rust-src", false)?;
+    install_clang(sh, config, version, &toolchain_dir)?;
 
     let meta = version_meta(sh, TOOLCHAIN_NAME)?;
     cmd!(sh, "rustup override set {TOOLCHAIN_NAME}").quiet().run()?;
     Ok(meta)
 }
 
+pub fn install_clang(
+    sh: &Shell,
+    config: &BsanConfig,
+    version: &VersionMeta,
+    toolchain_dir: &Path,
+) -> Result<()> {
+    let llvm_sha_tag = &config.llvm_sha.as_str()[0..7];
+    let release_tag = format!("clang-{}", llvm_sha_tag);
+    let endpoint = path!(GH_ARTIFACT_URL / release_tag);
 
-pub fn install_clang(sh: &Shell, config: &BsanConfig) {
+    let target = version.host.as_str();
+    let archive = format!("{release_tag}-{target}.tar.xz");
 
+    let artifact = path!(endpoint / archive);
+    let tmp_dir = sh.create_temp_dir()?;
+    let tar_path = path!(tmp_dir.path() / archive);
+
+    let help_text = "Unable to download BorrowSanitizer's nightly build of Clang.";
+
+    utils::download_file(sh, &artifact, &tar_path, help_text)?;
+    utils::unpack(&tar_path, &toolchain_dir, None)?;
+    fs::remove_file(&tar_path)?;
+    Ok(())
 }
 
 pub fn ensure_llvm_cmake(
