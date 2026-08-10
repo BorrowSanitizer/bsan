@@ -16,13 +16,16 @@ static INSTALL_PROMPT: &str = "You need to install the latest version of our cus
 
 // The endpoint where Rust CI artifacts are distributed. This is the same URL used
 // by default with `rustup-toolchain-install-master`.
-static ARTIFACT_URL: &str = "https://ci-artifacts.rust-lang.org/rustc-builds";
+static RUST_ARTIFACT_URL: &str = "https://ci-artifacts.rust-lang.org/rustc-builds";
+
+// The endpoint where BorrowSanitizer's release artifacts are stored. 
+static GH_ARTIFACT_URL: &str = "https://github.com/BorrowSanitizer/nightly-clang/releases/download/";
 
 // Rust's fork of LLVM
 static LLVM_URL: &str = "https://github.com/rust-lang/llvm-project.git";
 
 pub struct ToolchainConfig {
-    pub llvm_cmake: LLVMCmake,
+    pub llvm_dir: PathBuf,
     pub meta: VersionMeta,
 }
 
@@ -37,8 +40,8 @@ pub fn setup_toolchain(
     local_dir: Option<PathBuf>,
 ) -> Result<ToolchainConfig> {
     let meta = ensure_toolchain(sh, host, config, toolchain_dir, skip_prompt, local_dir)?;
-    let llvm_cmake = ensure_llvm_cmake(sh, config, host, build_dir, root_dir)?;
-    Ok(ToolchainConfig { llvm_cmake, meta })
+    let llvm_dir = ensure_llvm_cmake(sh, config, host, build_dir, root_dir)?;
+    Ok(ToolchainConfig { llvm_dir, meta })
 }
 fn ensure_toolchain(
     sh: &Shell,
@@ -102,7 +105,7 @@ fn install_toolchain(
     cmd!(sh, "rustup toolchain uninstall {TOOLCHAIN_NAME}").quiet().run()?;
 
     let target = &host.host;
-    let artifact_url = path!(&ARTIFACT_URL / config.rust_sha);
+    let artifact_url = path!(&RUST_ARTIFACT_URL / config.rust_sha);
     let help_on_error = "Failed to download the custom Rust toolchain.";
 
     let tmp_dir = sh.create_temp_dir()?;
@@ -142,9 +145,9 @@ fn install_toolchain(
     Ok(meta)
 }
 
-pub struct LLVMCmake {
-    pub common: PathBuf,
-    pub llvm: PathBuf,
+
+pub fn install_clang(sh: &Shell, config: &BsanConfig) {
+
 }
 
 pub fn ensure_llvm_cmake(
@@ -153,24 +156,21 @@ pub fn ensure_llvm_cmake(
     host: &VersionMeta,
     build_dir: &Path,
     root_dir: &Path,
-) -> Result<LLVMCmake> {
+) -> Result<PathBuf> {
     let dest_path = path!(build_dir / "ci-llvm");
 
     let sha = &config.llvm_sha;
     let lockfile = path!(build_dir / ".llvm.lock");
 
-    let llvm_cmake =
-        LLVMCmake { llvm: path!(dest_path / "llvm" / "cmake"), common: path!(dest_path / "cmake") };
-
     if lockfile.exists() && fs::read_to_string(&lockfile)?.eq(sha) {
-        return Ok(llvm_cmake);
+        return Ok(dest_path);
     }
 
     let target = &host.host;
 
     let tmp_dir = sh.create_temp_dir()?;
     let help_on_error = "Failed to download the custom rust-dev artifacts.";
-    let artifact_url = path!(&ARTIFACT_URL / config.rust_sha);
+    let artifact_url = path!(&RUST_ARTIFACT_URL / config.rust_sha);
 
     let tar_file = format!("rust-dev-nightly-{target}.tar.xz");
     let tar_path = path!(tmp_dir.path() / tar_file);
@@ -215,5 +215,5 @@ pub fn ensure_llvm_cmake(
         cmd!(sh, "ln -fs {link_source} {link_target}").quiet().run()?;
     }
 
-    Ok(llvm_cmake)
+    Ok(dest_path)
 }
