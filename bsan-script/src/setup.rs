@@ -14,6 +14,13 @@ use crate::TOOLCHAIN_NAME;
 
 static INSTALL_PROMPT: &str = "You need to install the latest version of our custom Rust toolchain (`bsan`) to build BorrowSanitizer. Continue?";
 
+// The endpoint where Rust CI artifacts are distributed. This is the same URL used
+// by default with `rustup-toolchain-install-master`.
+static ARTIFACT_URL: &str = "https://ci-artifacts.rust-lang.org/rustc-builds";
+
+// Rust's fork of LLVM
+static LLVM_URL: &str = "https://github.com/rust-lang/llvm-project.git";
+
 pub struct ToolchainConfig {
     pub llvm_cmake: LLVMCmake,
     pub meta: VersionMeta,
@@ -59,7 +66,7 @@ fn ensure_toolchain(
     };
 
     // Let's make sure that we have all of the right dependencies
-    for dep in config.dependencies.iter() {
+    for dep in crate::DEPENDENCIES.iter() {
         if which::which(dep).is_err() {
             show_error!("Unable to find `{dep}`, is it installed?");
         }
@@ -70,7 +77,7 @@ fn ensure_toolchain(
     } else {
         // First, check if the current platform is supported.
         let current_target = &host.host;
-        if !config.targets.contains(&host.host) {
+        if !crate::TARGETS.contains(&current_target.as_str()) {
             show_error!("The current target `{current_target}` is not supported.");
         }
         // If we've passed these checks, then let's do the expensive step of
@@ -95,7 +102,7 @@ fn install_toolchain(
     cmd!(sh, "rustup toolchain uninstall {TOOLCHAIN_NAME}").quiet().run()?;
 
     let target = &host.host;
-    let artifact_url = path!(&config.artifact_url / config.rust_sha);
+    let artifact_url = path!(&ARTIFACT_URL / config.rust_sha);
     let help_on_error = "Failed to download the custom Rust toolchain.";
 
     let tmp_dir = sh.create_temp_dir()?;
@@ -118,7 +125,7 @@ fn install_toolchain(
 
         // Unpack it into a .tmp subdirectory
         let out_dir = path!(tmp_dir.path() / prefix);
-        utils::unpack(&tar_path, &out_dir, "")?;
+        utils::unpack(&tar_path, &out_dir, None)?;
         fs::remove_file(&tar_path)?;
 
         // Install it into the toolchain directory
@@ -128,7 +135,6 @@ fn install_toolchain(
     };
 
     download_unpack_install("rust", true)?;
-    download_unpack_install("rust-dev", true)?;
     download_unpack_install("rust-src", false)?;
 
     let meta = version_meta(sh, TOOLCHAIN_NAME)?;
@@ -148,38 +154,33 @@ pub fn ensure_llvm_cmake(
     build_dir: &Path,
     root_dir: &Path,
 ) -> Result<LLVMCmake> {
+    let dest_path = path!(build_dir / "ci-llvm");
+
+    let sha = &config.llvm_sha;
+    let lockfile = path!(build_dir / ".llvm.lock");
+
+    let llvm_cmake =
+        LLVMCmake { llvm: path!(dest_path / "llvm" / "cmake"), common: path!(dest_path / "cmake") };
+
+    if lockfile.exists() && fs::read_to_string(&lockfile)?.eq(sha) {
+        return Ok(llvm_cmake);
+    }
+
     let target = &host.host;
 
     let tmp_dir = sh.create_temp_dir()?;
     let help_on_error = "Failed to download the custom rust-dev artifacts.";
-    let artifact_url = path!(&config.artifact_url / config.rust_sha);
+    let artifact_url = path!(&ARTIFACT_URL / config.rust_sha);
 
-    let download_unpack_install = |prefix: &str, needs_target: bool| -> Result<()> {
-        // Download the .tar.xz file
-        let mut tar_file_name = format!("{prefix}-nightly");
-        if needs_target {
-            tar_file_name = format!("{tar_file_name}-{target}");
-        }
-        let tar_file = format!("{tar_file_name}.tar.xz");
+    let tar_file = format!("rust-dev-nightly-{target}.tar.xz");
+    let tar_path = path!(tmp_dir.path() / tar_file);
+    utils::download_file(sh, &path!(artifact_url / tar_file), &tar_path, help_on_error)?;
+    utils::unpack(&tar_path, &dest_path, Some("rust-dev"))?;
+    fs::remove_file(&tar_path)?;
 
-
-        let tar_path = path!(tmp_dir.path() / tar_file);
-        utils::download_file(sh, &path!(artifact_url / tar_file), &tar_path, help_on_error)?;
-
-
-        // Unpack it into a .tmp subdirectory
-        let out_dir = path!(build_dir / prefix);
-        utils::unpack(&tar_path, &out_dir, "")?;
-        fs::remove_file(&tar_path)?;
-        Ok(())
-    };
-    download_unpack_install("rust-dev",true);
-
-    let compiler_rt_src = path!(build_dir / "compiler-rt");
+    let compiler_rt_src = path!(dest_path / "compiler-rt");
     if !compiler_rt_src.exists() {
-        show_error!(
-            "Unable to locate the source for `compiler-rt` within the sysroot for the `bsan` toolchain."
-        );
+        show_error!("Unable to locate the source for `compiler-rt`.");
     }
 
     let llvm_sparse = path!(root_dir / "bsan-script" / "etc" / "llvm-sparse");
@@ -191,35 +192,28 @@ pub fn ensure_llvm_cmake(
     let tmp_dir = sh.create_temp_dir()?;
     let tmp_dir = tmp_dir.path();
 
-    let url = &config.llvm_url;
-    let sha = &config.llvm_sha;
-    let lockfile = path!(build_dir / ".llvm.lock");
+    let _tmp = sh.push_dir(&tmp_dir);
+    cmd!(sh, "git init -q .").run()?;
+    cmd!(sh, "git remote add origin {LLVM_URL}").run()?;
 
-    if !(lockfile.exists() && fs::read_to_string(&lockfile)?.eq(sha)) {
-        let _tmp = sh.push_dir(&tmp_dir);
-        cmd!(sh, "git init -q .").run()?;
-        cmd!(sh, "git remote add origin {url}").run()?;
+    cmd!(sh, "git sparse-checkout set --no-cone --stdin")
+        .stdin(sh.read_file(&llvm_sparse)?)
+        .run()?;
 
-        cmd!(sh, "git sparse-checkout set --no-cone --stdin")
-            .stdin(sh.read_file(&llvm_sparse)?)
-            .run()?;
+    cmd!(sh, "git fetch -q --depth=1 --filter=tree:0 origin {sha}").run()?;
+    cmd!(sh, "git checkout -q FETCH_HEAD").run()?;
 
-        cmd!(sh, "git fetch -q --depth=1 --filter=tree:0 origin {sha}").run()?;
-        cmd!(sh, "git checkout -q FETCH_HEAD").run()?;
-
-        for subdir in ["llvm", "cmake"] {
-            cmd!(sh, "cp -fr {subdir} {build_dir}").run()?;
-        }
-        fs::write(lockfile, sha)?;
+    for subdir in ["llvm", "cmake"] {
+        cmd!(sh, "cp -fr {subdir} {dest_path}").run()?;
     }
 
+    fs::write(lockfile, sha)?;
+
     let link_source = path!(root_dir / "bsan-rt" / "llvm-wrapper");
-    let link_target = path!(build_dir / "compiler-rt" / "lib" / "bsan");
+    let link_target = path!(dest_path / "compiler-rt" / "lib" / "bsan");
     if !link_target.exists() {
         cmd!(sh, "ln -fs {link_source} {link_target}").quiet().run()?;
     }
-    Ok(LLVMCmake {
-        llvm: path!(build_dir / "llvm" / "cmake"),
-        common: path!(build_dir / "cmake"),
-    })
+
+    Ok(llvm_cmake)
 }

@@ -1,6 +1,2 @@
-dependencies = ["cmake", "ninja", "curl", "clang", "clang-tidy", "python3"]
-targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
-artifact_url = "https://ci-artifacts.rust-lang.org/rustc-builds"
 rust_sha = "7608eb7b07eaf93f16d7cf5bcb2098eca87503df"
 llvm_sha = "21cf28432798952d942bacc6bcee3a328faa3638"
-llvm_url = "https://github.com/rust-lang/llvm-project.git"

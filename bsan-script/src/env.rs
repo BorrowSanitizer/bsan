@@ -86,12 +86,8 @@ impl Mode {
 
 #[derive(Serialize, Deserialize)]
 pub struct BsanConfig {
-    pub artifact_url: String,
-    pub dependencies: Vec<String>,
-    pub targets: Vec<String>,
     pub rust_sha: String,
     pub llvm_sha: String,
-    pub llvm_url: String,
 }
 
 impl BsanConfig {
@@ -127,10 +123,9 @@ impl BsanEnv {
         let config_path = path!(root_dir / "config.toml");
         let mut config = BsanConfig::from_file(&config_path)?;
 
-
         let build_dir = path!(root_dir / "build");
         let target_dir = path!(build_dir / "target");
-        
+
         let toolchain_config = setup::setup_toolchain(
             &sh,
             &host,
@@ -142,9 +137,6 @@ impl BsanEnv {
             install_from,
         )?;
 
-
-
-        let build_dir = path!(root_dir / "target");
         // Hard-code the target dir, since we rely on all binaries ending up in the same spot.
         sh.set_var("CARGO_TARGET_DIR", &target_dir);
 
@@ -268,7 +260,7 @@ impl BsanEnv {
     }
 
     pub fn host_binary(&self, binary_name: &str) -> PathBuf {
-        if !self.config.dependencies.contains(&binary_name.to_string()) {
+        if !crate::DEPENDENCIES.contains(&binary_name) {
             show_error!(
                 "`{binary_name}` is not available as a host dependency. Try adding it to `config.toml`. "
             );
@@ -290,6 +282,18 @@ impl BsanEnv {
 
     pub fn sysroot_binary(&self, binary_name: &str) -> PathBuf {
         let bin_dir = path!(self.sysroot / "bin");
+        let binary = path!(bin_dir / binary_name);
+        if !binary.exists() {
+            show_error!(
+                "Unable to locate binary `{binary_name}` within the sysroot bindir ({bin_dir:?})."
+            );
+        } else {
+            binary
+        }
+    }
+
+    pub fn ci_llvm_binary(&self, binary_name: &str) -> PathBuf {
+        let bin_dir = path!(self.build_dir / "ci-llvm" / "bin");
         let binary = path!(bin_dir / binary_name);
         if !binary.exists() {
             show_error!(
@@ -403,7 +407,7 @@ impl BsanEnv {
         out_dir: &Path,
         include_dirs: &[PathBuf],
     ) -> Result<cmake::Config> {
-        let llvm_config = self.sysroot_binary("llvm-config");
+        let llvm_config = self.ci_llvm_binary("llvm-config");
         let cxxflags = cmd!(self.sh, "{llvm_config}").arg("--cxxflags").output()?.stdout;
         let cxxflags: String = String::from_utf8(cxxflags)?;
 
