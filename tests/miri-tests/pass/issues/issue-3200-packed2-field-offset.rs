@@ -1,5 +1,4 @@
 //@run:0
-#![feature(layout_for_ptr)]
 use std::mem;
 
 #[repr(packed(4))]
