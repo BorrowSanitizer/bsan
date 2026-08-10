@@ -92,7 +92,7 @@ impl Command {
 
         crate::all_components!().iter().try_for_each(|c| c.install(env, &[]))?;
 
-        let cargo_test_path = path!(env.target_dir / "bsan");
+        let cargo_test_path = path!(env.build_dir / "bsan");
         cmd!(env.sh, "rm -rf {cargo_test_path}").run()?;
         cmd!(env.sh, "python3 tests/test-cargo-bsan/run_test.py").run()?;
         Self::stats(env)?;
@@ -114,7 +114,7 @@ impl Command {
     }
 
     fn clean(env: &mut BsanEnv) -> Result<()> {
-        fs::remove_dir_all(&env.target_dir)?;
+        fs::remove_dir_all(&env.build_dir)?;
         Ok(())
     }
 
@@ -144,7 +144,7 @@ impl Command {
 
             let llvm_runtime = env.build_artifact(CompilerRt, &[])?;
             let cargo_bsan = env.build_artifact(CargoBsan, &[])?;
-            let sysroot_dir = path!(&env.target_dir / "sysroot");
+            let sysroot_dir = path!(&env.build_dir / "sysroot");
 
             let env_guards = vec![
                 env.sh.push_env("BSAN_PLUGIN", &plugin),
@@ -258,13 +258,13 @@ struct TestConfig {
 }
 
 fn run_tests(env: &mut BsanEnv, config: TestConfig) -> Result<(), anyhow::Error> {
-    let sysroot_dir = path!(&env.target_dir / "sysroot");
+    let sysroot_dir = path!(&env.build_dir / "sysroot");
     if !config.keep_sysroot {
         cmd!(env.sh, "rm -rf {sysroot_dir}").quiet().run()?;
         // The cached build of the test suite's dependencies goes stale for the
         // same reasons as the sysroot: Cargo does not know to rebuild it when
         // the instrumentation pass changes.
-        let dep_cache = path!(&env.target_dir / "tmp" / "bsan_ui");
+        let dep_cache = path!(&env.build_dir / "tmp" / "bsan_ui");
         cmd!(env.sh, "rm -rf {dep_cache}").quiet().run()?;
     }
     env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
@@ -448,23 +448,18 @@ struct CompilerRt;
 impl CompilerRt {
     fn cmake(env: &mut BsanEnv) -> Result<Config> {
         let output_dir = path!(env.artifact_dir() / "compiler-rt");
-        let src_dir = path!(env.toolchain_config.llvm_dir / "compiler-rt");
+        let src_dir = path!(env.sysroot / "compiler-rt");
         let crt_include = path!(src_dir / "include");
         let sanitizer_common = path!(src_dir / "lib");
 
-        let llvm_cmake = path!(env.toolchain_config.llvm_dir / "llvm" / "cmake");
-        let cmake_common = path!(env.toolchain_config.llvm_dir / "cmake");
-
         let mut cfg = env.llvm_cmake(&src_dir, &output_dir, &[crt_include, sanitizer_common])?;
-
-        cfg.define("LLVM_MAIN_SRC_DIR", &env.toolchain_config.llvm_dir);
+        cfg.define("LLVM_MAIN_SRC_DIR", &env.sysroot);
         cfg.define("COMPILER_RT_SANITIZERS_TO_BUILD", "bsan");
         cfg.define("COMPILER_RT_HAS_BSAN", "TRUE");
         cfg.define("COMPILER_RT_HAS_LLVMTESTINGSUPPORT", "FALSE");
-        cfg.define("LLVM_COMMON_CMAKE_UTILS", cmake_common);
-        cfg.define("LLVM_CMAKE_DIR", llvm_cmake);
+        cfg.define("LLVM_COMMON_CMAKE_UTILS", &env.toolchain_config.llvm_cmake.common);
+        cfg.define("LLVM_CMAKE_DIR", &env.toolchain_config.llvm_cmake.llvm);
         cfg.define("BSAN_CLANG_FORMAT", env.sysroot_binary("clang-format"));
-
         cfg.build_target(&CompilerRt.artifact(env));
         Ok(cfg)
     }

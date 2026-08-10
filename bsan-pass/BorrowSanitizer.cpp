@@ -1592,8 +1592,7 @@ private:
     // from the rest of its body. This creates a dedicated insertion point for
     // instructions that require the shadow stack to be initialized and
     // need to create values that dominate the body of the function.
-    FnPrologueEnd = static_cast<Instruction *>(
-        TopIRB.CreateIntrinsic(Intrinsic::donothing, {}));
+    FnPrologueEnd = TopIRB.CreateIntrinsic(Intrinsic::donothing, {});
     IRBuilder<> EntryIRB(FnPrologueEnd);
 
     // We need to compute the total number of provenance values that

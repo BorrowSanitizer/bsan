@@ -20,8 +20,8 @@ pub struct BsanEnv {
     pub target_bindir: PathBuf,
     /// The sysroot of the nightly toolchain.
     pub sysroot: PathBuf,
-    /// The target directory where build artifacts are placed by Cargo.
-    pub target_dir: PathBuf,
+    /// The build directory
+    pub build_dir: PathBuf,
     /// The root of the repository checkout we are working in.
     pub root_dir: PathBuf,
     /// The shell we use.
@@ -84,8 +84,14 @@ impl Mode {
 
 #[derive(Serialize, Deserialize)]
 pub struct BsanConfig {
-    pub rust_sha: String,
-    pub llvm_sha: String,
+    pub artifact_url: String,
+    pub tag: String,
+    pub sha: String,
+    pub version: String,
+    pub dependencies: Vec<String>,
+    pub targets: Vec<String>,
+    pub llvm_branch: String,
+    pub llvm_url: String,
 }
 
 impl BsanConfig {
@@ -93,6 +99,12 @@ impl BsanConfig {
         let contents: String = std::fs::read_to_string(path)?;
         let contents: BsanConfig = toml::from_str(&contents)?;
         Ok(contents)
+    }
+
+    fn save(&self, path: &Path) -> Result<()> {
+        let contents: String = toml::to_string(self)?;
+        std::fs::write(path, contents)?;
+        Ok(())
     }
 }
 
@@ -120,9 +132,6 @@ impl BsanEnv {
 
         let config_path = path!(root_dir / "config.toml");
         let mut config = BsanConfig::from_file(&config_path)?;
-
-        let target_dir = path!(root_dir / "target");
-
         let toolchain_config = setup::setup_toolchain(
             &sh,
             &host,
@@ -132,9 +141,11 @@ impl BsanEnv {
             skip,
             install_from,
         )?;
+        config.save(&config_path)?;
 
+        let build_dir = path!(root_dir / "target");
         // Hard-code the target dir, since we rely on all binaries ending up in the same spot.
-        sh.set_var("CARGO_TARGET_DIR", &target_dir);
+        sh.set_var("CARGO_TARGET_DIR", &build_dir);
 
         let sysroot = active_sysroot()?;
         let target_libdir = active_libdir()?;
@@ -182,7 +193,7 @@ impl BsanEnv {
             toolchain_config,
             sysroot,
             target_bindir,
-            target_dir,
+            build_dir,
             root_dir,
             config,
             cargo_extra_flags,
@@ -255,7 +266,7 @@ impl BsanEnv {
     }
 
     pub fn host_binary(&self, binary_name: &str) -> PathBuf {
-        if !crate::DEPENDENCIES.contains(&binary_name) {
+        if !self.config.dependencies.contains(&binary_name.to_string()) {
             show_error!(
                 "`{binary_name}` is not available as a host dependency. Try adding it to `config.toml`. "
             );
@@ -289,7 +300,7 @@ impl BsanEnv {
 
     pub fn assert_artifact(&self, artifact_name: &str) -> PathBuf {
         let artifact_subdir = self.mode.cargo_output_dir();
-        let build_dir = path!(self.target_dir / artifact_subdir);
+        let build_dir = path!(self.build_dir / artifact_subdir);
         let artifact_path = path!(build_dir / artifact_name);
         if !artifact_path.exists() {
             show_error!(
@@ -334,7 +345,7 @@ impl BsanEnv {
 
     pub fn artifact_dir(&self) -> PathBuf {
         let artifact_subdir = self.mode.cargo_output_dir();
-        path!(self.target_dir / artifact_subdir)
+        path!(self.build_dir / artifact_subdir)
     }
 
     pub fn test(&self, crate_dir: impl AsRef<OsStr>, args: &[String]) -> Result<()> {

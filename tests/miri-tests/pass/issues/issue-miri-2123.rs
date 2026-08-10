@@ -1,5 +1,5 @@
 //@run:0
-#![feature(ptr_metadata)]
+#![feature(ptr_metadata, layout_for_ptr)]
 
 use std::{mem, ptr};
 

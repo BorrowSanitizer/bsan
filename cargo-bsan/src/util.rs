@@ -262,10 +262,6 @@ impl Sysroot {
         self.root.join("bin")
     }
 
-    pub fn lib(&self) -> PathBuf {
-        self.root.join("lib")
-    }
-
     pub fn binary(&self, binary: &str) -> Option<PathBuf> {
         let path = self.bin().join(binary);
         path.exists().then_some(path)
