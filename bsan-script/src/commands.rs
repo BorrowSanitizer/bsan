@@ -282,7 +282,7 @@ fn run_tests(env: &mut BsanEnv, config: TestConfig) -> Result<(), anyhow::Error>
         let llvm_runtime = env.build_artifact(CompilerRt, args)?;
 
         let pass = env.build_artifact(BsanPass, args)?;
-        let symbolizer = env.sysroot_binary("llvm-symbolizer");
+        let symbolizer = env.ci_llvm_binary("llvm-symbolizer");
 
         env_guards.push(env.sh.push_env("BSAN_RT_RUST", &rust_runtime));
         env_guards.push(env.sh.push_env("BSAN_RT_LLVM", &llvm_runtime));
