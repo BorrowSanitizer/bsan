@@ -34,14 +34,13 @@ pub fn setup_toolchain(
     sh: &Shell,
     host: &VersionMeta,
     config: &mut BsanConfig,
-    build_dir: &Path,
     toolchain_dir: &Path,
     root_dir: &Path,
     skip_prompt: bool,
     local_dir: Option<PathBuf>,
 ) -> Result<ToolchainConfig> {
     let meta = ensure_toolchain(sh, host, config, toolchain_dir, skip_prompt, local_dir)?;
-    let llvm_dir = ensure_llvm_cmake(sh, config, host, build_dir, root_dir)?;
+    let llvm_dir = ensure_llvm_cmake(sh, config, toolchain_dir, root_dir)?;
     Ok(ToolchainConfig { llvm_dir, meta })
 }
 fn ensure_toolchain(
@@ -139,6 +138,7 @@ fn install_toolchain(
     };
 
     download_unpack_install("rust", true)?;
+    download_unpack_install("rust-dev", true)?;
     download_unpack_install("rust-src", false)?;
     install_clang(sh, config, version, &toolchain_dir)?;
 
@@ -175,34 +175,14 @@ pub fn install_clang(
 pub fn ensure_llvm_cmake(
     sh: &Shell,
     config: &BsanConfig,
-    host: &VersionMeta,
-    build_dir: &Path,
+    toolchain_dir: &Path,
     root_dir: &Path,
 ) -> Result<PathBuf> {
-    let dest_path = path!(build_dir / "ci-llvm");
-
-    let sha = &config.llvm_sha;
-    let lockfile = path!(build_dir / ".llvm.lock");
-
-    if lockfile.exists() && fs::read_to_string(&lockfile)?.eq(sha) {
-        return Ok(dest_path);
-    }
-
-    let target = &host.host;
-
-    let tmp_dir = sh.create_temp_dir()?;
-    let help_on_error = "Failed to download the custom rust-dev artifacts.";
-    let artifact_url = path!(&RUST_ARTIFACT_URL / config.rust_sha);
-
-    let tar_file = format!("rust-dev-nightly-{target}.tar.xz");
-    let tar_path = path!(tmp_dir.path() / tar_file);
-    utils::download_file(sh, &path!(artifact_url / tar_file), &tar_path, help_on_error)?;
-    utils::unpack(&tar_path, &dest_path, Some("rust-dev"))?;
-    fs::remove_file(&tar_path)?;
-
-    let compiler_rt_src = path!(dest_path / "compiler-rt");
+    let compiler_rt_src = path!(toolchain_dir / "compiler-rt");
     if !compiler_rt_src.exists() {
-        show_error!("Unable to locate the source for `compiler-rt`.");
+        show_error!(
+            "Unable to locate the source for `compiler-rt` within the sysroot for the `bsan` toolchain."
+        );
     }
 
     let llvm_sparse = path!(root_dir / "bsan-script" / "etc" / "llvm-sparse");
@@ -211,31 +191,37 @@ pub fn ensure_llvm_cmake(
             "Unable to locate sparse checkout config file `llvm-sparse` in `bsan-script/etc/`."
         );
     }
-    let tmp_dir = sh.create_temp_dir()?;
-    let tmp_dir = tmp_dir.path();
 
-    let _tmp = sh.push_dir(&tmp_dir);
-    cmd!(sh, "git init -q .").run()?;
-    cmd!(sh, "git remote add origin {LLVM_URL}").run()?;
+    let sha = &config.llvm_sha;
+    let lockfile = path!(toolchain_dir / ".llvm.lock");
 
-    cmd!(sh, "git sparse-checkout set --no-cone --stdin")
-        .stdin(sh.read_file(&llvm_sparse)?)
-        .run()?;
+    if !(lockfile.exists() && fs::read_to_string(&lockfile)?.eq(sha)) {
+        let tmp_dir = sh.create_temp_dir()?;
+        let tmp_dir = tmp_dir.path();
 
-    cmd!(sh, "git fetch -q --depth=1 --filter=tree:0 origin {sha}").run()?;
-    cmd!(sh, "git checkout -q FETCH_HEAD").run()?;
+        let _tmp = sh.push_dir(tmp_dir);
+        cmd!(sh, "git init -q .").run()?;
+        cmd!(sh, "git remote add origin {LLVM_URL}").run()?;
 
-    for subdir in ["llvm", "cmake"] {
-        cmd!(sh, "cp -fr {subdir} {dest_path}").run()?;
+        cmd!(sh, "git sparse-checkout set --no-cone --stdin")
+            .stdin(sh.read_file(&llvm_sparse)?)
+            .run()?;
+
+        cmd!(sh, "git fetch -q --depth=1 --filter=tree:0 origin {sha}").run()?;
+        cmd!(sh, "git checkout -q FETCH_HEAD").run()?;
+
+        for subdir in ["llvm", "cmake"] {
+            cmd!(sh, "cp -fr {subdir} {toolchain_dir}").run()?;
+        }
+
+        fs::write(lockfile, sha)?;
     }
 
-    fs::write(lockfile, sha)?;
-
     let link_source = path!(root_dir / "bsan-rt" / "llvm-wrapper");
-    let link_target = path!(dest_path / "compiler-rt" / "lib" / "bsan");
+    let link_target = path!(compiler_rt_src / "lib" / "bsan");
     if !link_target.exists() {
         cmd!(sh, "ln -fs {link_source} {link_target}").quiet().run()?;
     }
 
-    Ok(dest_path)
+    Ok(toolchain_dir.to_path_buf())
 }

@@ -20,8 +20,6 @@ pub struct BsanEnv {
     pub target_bindir: PathBuf,
     /// The sysroot of the nightly toolchain.
     pub sysroot: PathBuf,
-    /// The build directory containing dependencies and build artifacts.
-    pub build_dir: PathBuf,
     /// The target directory where build artifacts are placed by Cargo.
     pub target_dir: PathBuf,
     /// The root of the repository checkout we are working in.
@@ -123,14 +121,12 @@ impl BsanEnv {
         let config_path = path!(root_dir / "config.toml");
         let mut config = BsanConfig::from_file(&config_path)?;
 
-        let build_dir = path!(root_dir / "build");
-        let target_dir = path!(build_dir / "target");
+        let target_dir = path!(root_dir / "target");
 
         let toolchain_config = setup::setup_toolchain(
             &sh,
             &host,
             &mut config,
-            &build_dir,
             &deps_dir,
             &root_dir,
             skip,
@@ -186,7 +182,6 @@ impl BsanEnv {
             toolchain_config,
             sysroot,
             target_bindir,
-            build_dir,
             target_dir,
             root_dir,
             config,
@@ -282,18 +277,6 @@ impl BsanEnv {
 
     pub fn sysroot_binary(&self, binary_name: &str) -> PathBuf {
         let bin_dir = path!(self.sysroot / "bin");
-        let binary = path!(bin_dir / binary_name);
-        if !binary.exists() {
-            show_error!(
-                "Unable to locate binary `{binary_name}` within the sysroot bindir ({bin_dir:?})."
-            );
-        } else {
-            binary
-        }
-    }
-
-    pub fn ci_llvm_binary(&self, binary_name: &str) -> PathBuf {
-        let bin_dir = path!(self.build_dir / "ci-llvm" / "bin");
         let binary = path!(bin_dir / binary_name);
         if !binary.exists() {
             show_error!(
@@ -407,7 +390,7 @@ impl BsanEnv {
         out_dir: &Path,
         include_dirs: &[PathBuf],
     ) -> Result<cmake::Config> {
-        let llvm_config = self.ci_llvm_binary("llvm-config");
+        let llvm_config = self.sysroot_binary("llvm-config");
         let cxxflags = cmd!(self.sh, "{llvm_config}").arg("--cxxflags").output()?.stdout;
         let cxxflags: String = String::from_utf8(cxxflags)?;
 
