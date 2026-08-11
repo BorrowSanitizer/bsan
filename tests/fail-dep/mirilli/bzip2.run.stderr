@@ -26,7 +26,7 @@ stack backtrace:
  at CARGO_REGISTRY/.../bzlib.rs:LL:CC
 1: <bzip2::mem::Compress>::compress
  at CARGO_REGISTRY/.../mem.rs:LL:CC
-2: <bzip2::bufread::BzEncoder<std::io::buffered::bufreader::BufReader<&[u8]>> as std::io::Read>::read
+2: <bzip2::bufread::BzEncoder<alloc::io::buffered::bufreader::BufReader<&[u8]>> as alloc::io::read::Read>::read
  at CARGO_REGISTRY/.../bufread.rs:LL:CC
 
 note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.
