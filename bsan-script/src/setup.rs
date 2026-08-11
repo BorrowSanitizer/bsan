@@ -19,8 +19,7 @@ static INSTALL_PROMPT: &str = "You need to install the latest version of our cus
 static RUST_ARTIFACT_URL: &str = "https://ci-artifacts.rust-lang.org/rustc-builds";
 
 // The endpoint where BorrowSanitizer's release artifacts are stored.
-static GH_ARTIFACT_URL: &str =
-    "https://github.com/BorrowSanitizer/nightly-clang/releases/download/";
+static GH_ARTIFACT_URL: &str = "https://github.com/BorrowSanitizer/bsan/releases/download/";
 
 // Rust's fork of LLVM
 static LLVM_URL: &str = "https://github.com/rust-lang/llvm-project.git";
