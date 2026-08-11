@@ -123,7 +123,16 @@ def run(
 
     The command inherits the current environment.
     """
-    return subprocess.run(cmd, check=True, env=_build_env(kwargs), **kwargs)
+    sys.stderr.flush()
+    try:
+        proc = subprocess.run(cmd, check=True, env=_build_env(kwargs), **kwargs)
+    except subprocess.CalledProcessError as exc:
+        print(
+            f"command failed with exit code {exc.returncode}: {shlex.join(cmd)}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return proc
 def run_capture(
     cmd: list[str],
     **kwargs,
