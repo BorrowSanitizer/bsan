@@ -11,10 +11,6 @@
         "version": "0.10.1"
     },
     {
-        "name": "matchers",
-        "version": "0.2.0"
-    },
-    {
         "name": "bit-vec",
         "version": "0.9.1",
         "exclude": [
