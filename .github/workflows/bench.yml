@@ -8,6 +8,7 @@ on:
       - cargo-bsan/**
       - bsan-script/**
       - tests/benches/**
+      - config.toml
   workflow_dispatch:
   schedule:
     - cron: '0 0 * * *'
