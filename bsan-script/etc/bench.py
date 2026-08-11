@@ -27,7 +27,7 @@ WARMUP = 1
 NATIVE = {
     "name": "native",
     "cmd": ["cargo", "test", "--lib"],
-    "env": {"RUSTFLAGS": "--cfg=bsan --cfg=miri"},
+    "env": {"RUSTFLAGS": "--cfg=bsan --cfg=miri", "TERM": None},
 }
 
 # Flags shared by every Miri configuration. These disable most forms of
@@ -48,22 +48,20 @@ MIRI = {
     },
 }
 
-# Miri with Tree Borrows disabled. This is as close to "just interpret" as
-# we can get. However, the core interpreter will still check for certain forms
-# of UB, like accessese out-of-bounds, use-after-free errors, and uninitialized accesses.
-# MIRI_BASE = {
-#     "name": "miri-base",
-#     "env": {"MIRIFLAGS": f"-Zmiri-disable-stacked-borrows {MIRI_COMMON_FLAGS}"},
-# }
-
 # Every Miri configuration.
 MIRI_CONFIGS = [MIRI]
 
 # BorrowSanitizer configurations.
 BSAN_CONFIGS = [
-    # Full checking
+    # Full checking, skip parsing terminal info.
     {
         "name": "full",
+        "cmd": ["cargo", "bsan", "test", "--lib"],
+        "env": {"RUSTFLAGS": "--cfg=miri", "TERM": None},
+    },
+    # Full checking, parse terminal info.
+    {
+        "name": "full-terminfo",
         "cmd": ["cargo", "bsan", "test", "--lib"],
         "env": {"RUSTFLAGS": "--cfg=miri"},
     },
@@ -73,13 +71,12 @@ BSAN_CONFIGS = [
     {
         "name": "no-op",
         "cmd": ["cargo", "bsan", "test", "--nop", "--lib"],
-        "env": {"RUSTFLAGS": "--cfg=miri"},
+        "env": {"RUSTFLAGS": "--cfg=miri", "TERM": None},
     }
 ]
 
 # Every configuration that requires compiling a native binary.
 ALL_BINARY_CONFIGS = [NATIVE] + BSAN_CONFIGS
-
 
 # Raw timing results are output as a CSV with these headers.
 CSV_HEADERS = [
@@ -110,9 +107,17 @@ class TestHarnessJSON:
         raise StopIteration
 
 def _build_env(kwargs: dict) -> dict:
-    """Creates a copy of the current environment, merged with an `env` mapping from `kwargs`."""
+    """Creates a copy of the current environment, merged with an `env` mapping from `kwargs`.
+
+    If a a value is set to `None` in `kwargs`, then the value will be unset from the environment,
+    instead of being inherited by the parent process.
+    """
     env = os.environ.copy()
-    env.update(kwargs.pop("env", None) or {})
+    for key, value in (kwargs.pop("env", None) or {}).items():
+        if value is None:
+            env.pop(key, None)
+        else:
+            env[key] = value
     return env
 
 def run(
