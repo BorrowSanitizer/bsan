@@ -1,0 +1,172 @@
+# Updates the current nightly version of Rust, creating a
+# pull request for manual validation. This will also build 
+# and distribute a compatible version of clang, as needed.
+name: nightly 
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: "clang-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  init:
+    runs-on: ubuntu-latest
+    outputs:
+      toolchain: ${{ steps.nightly.outputs.toolchain }}
+      rust_sha: ${{ steps.nightly.outputs.rust_sha }}
+      llvm_sha: ${{ steps.nightly.outputs.llvm_sha }}
+      nightly_date: ${{ steps.nightly.outputs.nightly_date }}
+      # the name of the release tag
+      tag: ${{ steps.nightly.outputs.tag }}
+      should_build: ${{ steps.nightly.outputs.should_build }}
+    steps:
+      - name: Fetch nightly release info
+        id: nightly
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          base=https://static.rust-lang.org/dist
+          nightly_date=$(curl -sSfL "$base/channel-rust-nightly-date.txt")
+          rust_sha=$(curl -sSfL "$base/$nightly_date/channel-rust-nightly-git-commit-hash.txt")
+          llvm_sha=$(gh api "repos/rust-lang/rust/contents/src/llvm-project?ref=$rust_sha" --jq .sha)
+          tag="clang/${llvm_sha:0:7}"
+          should_build=false
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            should_build=true
+          fi
+          {
+            echo "toolchain=nightly-$nightly_date"
+            echo "rust_sha=$rust_sha"
+            echo "llvm_sha=$llvm_sha"
+            echo "nightly_date=$nightly_date"
+            echo "tag=clang-${llvm_sha:0:7}"
+            echo "should_build=$should_build"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: ${{ matrix.config.target }}
+    needs: init
+    if: needs.init.outputs.should_build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.config.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build lld
+          
+      - uses: actions/checkout@v4
+        with:
+            sparse-checkout: bsan-script/etc/build-clang.sh
+            sparse-checkout-cone-mode: false
+            
+      - name: Build
+        run: |
+          # We need a version of `clang` that matches nightly Rust toolchain
+          # to ensure compatibility between Rust, Clang, and our LLVM pass plugin.
+          # This workflow uses Rust's nightly CI artifacts to build and distribute
+          # clang and its headers, without having to rebuild LLVM.
+          ./bsan-script/etc/build-clang.sh \
+            ${{ needs.init.outputs.llvm_sha }} \
+            ${{ needs.init.outputs.rust_sha }} \
+            ${{ matrix.config.target }} \
+            ${{ needs.init.outputs.tag }}
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.init.outputs.tag }}-${{ matrix.config.target }}
+          path: ${{ needs.init.outputs.tag }}-${{ matrix.config.target }}.tar.xz
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Publish rolling release
+    needs: [init, build]
+    if: needs.init.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ needs.init.outputs.tag }}-*
+          merge-multiple: true
+
+      - name: Publish
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(*.tar.xz)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No build artifacts found!"
+            exit 1
+          fi
+          llvm_sha="${{ needs.init.outputs.llvm_sha }}"
+          llvm_link="[\`${llvm_sha:0:7}\`]($GITHUB_SERVER_URL/rust-lang/llvm-project/commit/$llvm_sha)"
+          gh release create "${{ needs.init.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "Clang (${llvm_sha:0:7})" \
+            --notes "A build of Clang that shares its LLVM version with nightly Rust ($llvm_link)." \
+            --prerelease \
+            "${files[@]}"
+
+
+  update:
+    name: Open PR
+    needs: [init, build, release]
+    # Run this step if we did not need to build clang,
+    # or if we did, and both the build and release
+    # steps succeeded
+    if: >-
+      ${{ !cancelled()
+        && ((needs.init.outputs.should_build == 'false')
+             || (needs.build.result == 'success' && needs.release.result == 'success'))}}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update config.toml
+        run: |
+          set -euo pipefail
+          {
+            echo "rust_sha = \"${{ needs.init.outputs.rust_sha }}\""
+            echo "llvm_sha = \"${{ needs.init.outputs.llvm_sha }}\""
+          } > config.toml
+      - name: Open PR
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            exit 0
+          fi
+          branch="toolchain/${{ needs.init.outputs.toolchain }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit -am "${{ needs.init.outputs.toolchain }}"
+          git push --force origin "$branch"
+          tag="${{ needs.init.outputs.tag }}"
+          llvm_sha="${{ needs.init.outputs.llvm_sha }}"
+          llvm_link="[\`${llvm_sha:0:7}\`]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$tag)"
+          gh pr create --head "$branch" \
+            --title "Update to \`${{ needs.init.outputs.toolchain }}\`" \
+            --body "Updates the Rust toolchain to \`${{ needs.init.outputs.toolchain }}\`, along with a compatible version of Clang ($llvm_link)."\
+            || echo "PR already exists."
