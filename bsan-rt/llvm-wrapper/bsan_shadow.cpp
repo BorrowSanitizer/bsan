@@ -246,6 +246,17 @@ struct ShadowRange {
       : start(ShadowAddr(range.start)), size(range.size) {}
 };
 
+ALWAYS_INLINE static void ClearShadowSlot(ShadowAddr start, uptr offset) {
+  BorTag *tag_ptr = reinterpret_cast<BorTag *>(start.shadow + offset);
+  AllocInfo **info_ptr = reinterpret_cast<AllocInfo **>(start.origin + offset);
+  // We use the borrow tag as a proxy for the initialization of the
+  // `AllocInfo` component of provenance metadata.
+  if (*tag_ptr != 0) {
+    __bsan_rc_dec(*tag_ptr, *info_ptr);
+    *tag_ptr = 0;
+  }
+}
+
 ALWAYS_INLINE static void UpdateShadowSlot(ShadowAddr dest, ShadowAddr src,
                                            uptr offset) {
   AllocInfo **dest_info = reinterpret_cast<AllocInfo **>(dest.origin + offset);
@@ -270,16 +281,7 @@ void ClearShadowRange(ShadowRange range) {
   const uptr step = kMinProvAlignment;
   ShadowAddr start = range.start;
   for (uptr offset = 0; offset < range.size; offset += step) {
-    BorTag *tag_ptr = reinterpret_cast<BorTag *>(start.shadow + offset);
-    AllocInfo **info_ptr =
-        reinterpret_cast<AllocInfo **>(start.origin + offset);
-
-    // We use the borrow tag as a proxy for the initialization of the
-    // `AllocInfo` component of provenance metadata.
-    if (*tag_ptr != 0) {
-      __bsan_rc_dec(*tag_ptr, *info_ptr);
-      *tag_ptr = 0;
-    }
+    ClearShadowSlot(start, offset);
   }
 }
 
@@ -307,16 +309,29 @@ void TransferShadow(void *dest, const void *src, uptr size, bool disjoint) {
   ShadowRange s_shadow(s_range);
 
   uptr step = kMinProvAlignment;
+  uptr rem = d_aligned.align_rem;
+
+  uptr start_offset = 0;
+  uptr end_offset = s_shadow.size;
+
+  // If we are misaligned, then the first and last shadow
+  // slots need to be cleared.
+  if (rem != 0) {
+    ClearShadowSlot(d_shadow, start_offset);
+    start_offset += step;
+    if (start_offset == end_offset)
+      return;
+    end_offset -= step;
+    ClearShadowSlot(d_shadow, end_offset);
+  }
 
   if (disjoint || d_aligned.addr < s_range.start.addr) {
-    for (uptr offset = 0; offset < s_shadow.size; offset += step)
+    for (uptr offset = start_offset; offset < end_offset; offset += step)
       UpdateShadowSlot(d_shadow, s_shadow.start, offset);
   } else {
-    for (uptr offset = s_shadow.size - step;; offset -= step) {
+    for (uptr offset = end_offset - step; offset > start_offset;
+         offset -= step) {
       UpdateShadowSlot(d_shadow, s_shadow.start, offset);
-      // signed so must break at 0
-      if (offset == 0)
-        break;
     }
   }
 }
