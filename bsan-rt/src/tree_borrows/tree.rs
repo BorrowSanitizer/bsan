@@ -31,7 +31,7 @@ use super::refcount::RefCount;
 use super::tree_visitor::{ChildrenVisitMode, ContinueTraversal, NodeAppArgs, TreeVisitor};
 use super::wildcard::{ExposedCache, WildcardAccessLevel};
 use crate::errors::UBResult;
-use crate::global::{MAX_COMPACTED_CHILDREN, TREE_GC_MIN_NODES};
+use crate::global::{CURRENT_GC_INTERVAL, MAX_COMPACTED_CHILDREN, TREE_GC_MIN_NODES};
 use crate::helpers::{AllocRange, Size};
 use crate::sanitizer_common::Span;
 use crate::tree_borrows::{GlobalState, ProtectorKind};
@@ -188,6 +188,39 @@ impl Node {
             self.default_initial_idempotent_foreign_access,
         )
     }
+}
+
+/// Results of the last garbage collection pass
+pub struct GcStats {
+    pub kept: usize,
+    pub removed: usize,
+}
+
+/// Adjusts `CURRENT_GC_INTERVAL` based on how productive this GC pass was.
+/// Passes finding a larger dead-node fraction than `TARGET_DEAD_RATIO` shrink the
+/// interval (collect sooner) and passes finding less grow it.
+/// The adjustment is damped to at most 2x per pass in either direction.
+/// Eesulting interval is clamped to `[MIN_GC_INTERVAL, MAX_GC_INTERVAL]`.
+fn update_current_gc_interval(stats: &GcStats) {
+    const TARGET_DEAD_RATIO: f64 = 0.5;
+    const MIN_GC_INTERVAL: usize = 1000;
+    const MAX_GC_INTERVAL: usize = 10_000_000;
+
+    let current = CURRENT_GC_INTERVAL.load(Relaxed);
+    if current == 0 {
+        return;
+    }
+
+    let total = stats.kept + stats.removed;
+    if total == 0 {
+        return;
+    }
+
+    let dead_ratio = stats.removed as f64 / total as f64;
+    let adjust = (TARGET_DEAD_RATIO / dead_ratio.max(0.01)).clamp(0.5, 2.0);
+    let new_interval = ((current as f64 * adjust) as usize).clamp(MIN_GC_INTERVAL, MAX_GC_INTERVAL);
+
+    CURRENT_GC_INTERVAL.store(new_interval, Relaxed);
 }
 
 /// Relative position of the access
@@ -602,8 +635,9 @@ impl EagerTree {
     /// `roots`, which [`LocationTree::perform_access`] and the wildcard consistency
     /// checks rely on. This retains at most one dead root per tree, and only until its
     /// subtree dies (or is compacted away), at which point it is removed as a leaf.
-    fn remove_useless_children(&mut self, dead_tags: &mut [BorTag], compact: bool) {
+    fn remove_useless_children(&mut self, dead_tags: &mut [BorTag], compact: bool) -> GcStats {
         // Iterating through dead_tags in reverse (descending tag order)
+        let node_count_before = self.tag_mapping.len();
         for entry in dead_tags.iter_mut().rev() {
             let tag = *entry;
             // A missing entry means the node was already removed; zero out the entry
@@ -692,6 +726,8 @@ impl EagerTree {
                 _ => {}
             }
         }
+        let node_count_after = self.tag_mapping.len();
+        GcStats { kept: node_count_after, removed: node_count_before - node_count_after }
     }
 }
 
@@ -1160,7 +1196,8 @@ impl AllocState for LazyTree {
             LazyTree::Init(tree) => {
                 // Only *compaction* of dead interior nodes is skipped on small trees
                 let compact = tree.tag_mapping.len() > TREE_GC_MIN_NODES.load(Relaxed);
-                tree.remove_useless_children(dead_tags, compact);
+                let gc_stats = tree.remove_useless_children(dead_tags, compact);
+                update_current_gc_interval(&gc_stats);
                 tree.locations.merge_adjacent_thorough();
                 tree.roots.is_empty()
             }
@@ -1464,7 +1501,8 @@ impl AllocState for EagerTree {
     fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool {
         // Only *compaction* of dead interior nodes is skipped on small trees
         let compact = self.tag_mapping.len() > TREE_GC_MIN_NODES.load(Relaxed);
-        self.remove_useless_children(dead_tags, compact);
+        let gc_stats = self.remove_useless_children(dead_tags, compact);
+        update_current_gc_interval(&gc_stats);
         self.locations.merge_adjacent_thorough();
         self.roots.is_empty()
     }

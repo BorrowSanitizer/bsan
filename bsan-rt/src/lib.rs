@@ -628,6 +628,13 @@ unsafe extern "C" fn __bsan_prune(
     }
 }
 
+/// Returns the current GC interval, which is dynamically adjusted based on
+/// how productive each garbage collection pass is.
+#[unsafe(no_mangle)]
+pub extern "C" fn __bsan_current_gc_interval() -> usize {
+    crate::global::CURRENT_GC_INTERVAL.load(core::sync::atomic::Ordering::Relaxed)
+}
+
 /// Deallocates an instance of [AllocInfo]. This instance must
 /// be unreachable from any provenance value in shadow memory.
 #[unsafe(no_mangle)]

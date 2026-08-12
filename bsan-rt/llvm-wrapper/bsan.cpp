@@ -113,9 +113,11 @@ BorTag NewBorTag() {
 // Asks the global context to run the garbage collector once the Rust runtime
 // has reported at least `visits_per_gc` tree-node visits since the last
 // request, then resets the counter. Concurrent requests across threads are
-// coalesced by `RequestGC`.
+// coalesced by `RequestGC`. The interval is dynamically adjusted by Rust based
+// on how productive each GC pass is.
+extern "C" uptr __bsan_current_gc_interval();
 static void MaybeRequestGC() {
-  uptr interval = flags()->visits_per_gc;
+  uptr interval = __bsan_current_gc_interval();
   if (interval == 0)
     return;
   if (atomic_load(&__bsan_visits_since_gc, memory_order_relaxed) >= interval) {

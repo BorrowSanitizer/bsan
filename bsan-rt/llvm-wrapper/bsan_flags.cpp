@@ -129,8 +129,17 @@ SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_tree_gc_min_nodes() {
 SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_max_compacted_children() {
   return __bsan::flags()->max_compacted_children;
 }
+SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_visits_per_gc() {
+  return __bsan::flags()->visits_per_gc;
+}
 }
 
 SANITIZER_INTERFACE_WEAK_DEF(const char *, __bsan_default_options, void) {
   return "";
+}
+
+// Linker-time fallback
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE uptr
+__bsan_current_gc_interval(void) {
+  return __bsan::flags()->visits_per_gc;
 }
