@@ -233,22 +233,25 @@ void CopyAligned(void *dest, const void *src, uptr size) {
 ALWAYS_INLINE static void UpdateShadowSlot(uptr d_shadow, uptr d_origin,
                                            uptr s_shadow, uptr s_origin,
                                            uptr offset) {
-  AllocInfo **dest_info = reinterpret_cast<AllocInfo **>(d_origin + offset);
-  AllocInfo **source_info = reinterpret_cast<AllocInfo **>(s_origin + offset);
+  AllocInfo **dest_info_ptr = reinterpret_cast<AllocInfo **>(d_origin + offset);
+  AllocInfo **source_info_ptr =
+      reinterpret_cast<AllocInfo **>(s_origin + offset);
 
-  BorTag *dest_tag = reinterpret_cast<BorTag *>(d_shadow + offset);
-  BorTag *source_tag = reinterpret_cast<BorTag *>(s_shadow + offset);
+  BorTag *dest_tag_ptr = reinterpret_cast<BorTag *>(d_shadow + offset);
+  BorTag *source_tag_ptr = reinterpret_cast<BorTag *>(s_shadow + offset);
 
-  BorTag src_tag = *source_tag;
-  AllocInfo *src_info = *source_info;
+  BorTag dest_tag = *dest_tag_ptr;
+  BorTag source_tag = *source_tag_ptr;
 
-  if (src_tag != 0)
-    __bsan_rc_inc(src_tag, src_info);
+  if (source_tag != 0)
+    __bsan_rc_inc(source_tag, *source_info_ptr);
   if (dest_tag != 0)
-    __bsan_rc_dec(*dest_tag, *dest_info);
+    __bsan_rc_dec(dest_tag, *dest_info_ptr);
 
-  *dest_tag = src_tag;
-  *dest_info = src_info;
+  *dest_tag_ptr = source_tag;
+
+  if (source_tag != 0)
+    *dest_info_ptr = *source_info_ptr;
 }
 
 void CopyShadow(void *dest, const void *src, uptr size) {
