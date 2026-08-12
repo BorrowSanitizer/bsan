@@ -5,6 +5,7 @@
 #include "sanitizer_common/sanitizer_array_ref.h"
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_dense_map.h"
+#include "sanitizer_common/sanitizer_vector.h"
 
 using __sanitizer::ArrayRef;
 using __sanitizer::DenseMap;
@@ -85,22 +86,25 @@ public:
     set_.forEach([&](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
       visit(KV.first, KV.second);
       KV.second.destroy();
-      set_.erase(KV.first);
       return true;
     });
+    set_.clear();
   }
 
   // Retain only the provenance values that satisfy the given predicate.
   template <typename Fn> void retainIf(Fn retain) {
+    Vector<AllocInfo *> ToErase;
     set_.forEach([&](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
       AllocInfo *info = KV.first;
       KV.second.retainIf([&](BorTag tag) { return retain(info, tag); });
       if (KV.second.size() == 0) {
         KV.second.destroy();
-        set_.erase(info);
+        ToErase.PushBack(info);
       }
       return true;
     });
+    for (unsigned Idx = 0; Idx < ToErase.Size(); ++Idx)
+      set_.erase(ToErase[Idx]);
   }
 
   BorTagSet *find(AllocInfo *Info) {
