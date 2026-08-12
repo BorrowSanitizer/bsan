@@ -532,7 +532,7 @@ void __bsan_shadow_clear_aligned(void *dest_shadow, void *dest_origin,
                                  uptr size) {
   if (!MEM_IS_SHADOW(dest_shadow))
     return;
-  ClearShadowAligned((uptr)dest_shadow, (uptr)dest_origin, size);
+  ClearShadowAligned(dest_shadow, dest_origin, size);
 }
 
 SANITIZER_WEAK_ATTRIBUTE

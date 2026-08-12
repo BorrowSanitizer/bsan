@@ -112,7 +112,7 @@ void JoinShadow(void *dest, const void *src_shadow, const void *src_origin,
 
 void MoveShadow(void *dest, const void *src, uptr size);
 void ClearShadow(void *dest, uptr size);
-void ClearShadowAligned(uptr shadow_start, uptr origin_start,
+void ClearShadowAligned(void *dest_shadow, void *dest_origin,
                         uptr size_aligned);
 void WriteShadow(void *dest, Provenance prov);
 } // namespace __bsan

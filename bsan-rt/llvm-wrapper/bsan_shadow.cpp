@@ -204,41 +204,55 @@ bool InitShadowWithReExec() {
   return InitShadow(init_origins, false);
 }
 
-static void AlignPtr8(uptr addr, uptr &aligned_addr) {
-  aligned_addr = addr & ~7UL;
-}
-static void AlignRange8(uptr addr, uptr size, uptr &aligned_addr,
-                        uptr &aligned_size) {
-  AlignPtr8(addr, aligned_addr);
-  uptr end = (addr + size + 7) & ~7UL;
-  aligned_size = end - aligned_addr;
+static uptr AlignDown(uptr addr) { return addr & ~(kMinProvAlignment - 1); }
+
+static uptr AlignUp(uptr addr) {
+  return AlignDown(addr + (kMinProvAlignment - 1));
 }
 
-void MoveAligned(void *dest, const void *src, uptr size) {
-  uptr d_aligned;
-  uptr s_aligned, s_size;
-  AlignPtr8((uptr)dest, d_aligned);
-  AlignRange8((uptr)src, size, s_aligned, s_size);
-  internal_memmove((void *)d_aligned, (const void *)s_aligned, s_size);
-}
+struct AlignedAddr {
+  uptr addr;
+  uptr align_rem;
+  AlignedAddr(const void *ptr) {
+    addr = AlignDown((uptr)ptr);
+    align_rem = ((uptr)ptr) - addr;
+  }
+};
 
-void CopyAligned(void *dest, const void *src, uptr size) {
-  uptr d_aligned;
-  uptr s_aligned, s_size;
-  AlignPtr8((uptr)dest, d_aligned);
-  AlignRange8((uptr)src, size, s_aligned, s_size);
-  internal_memcpy((void *)d_aligned, (const void *)s_aligned, s_size);
-}
+struct AlignedRange {
+  AlignedAddr start;
+  uptr size;
+  AlignedRange(const void *ptr, uptr len) : start(AlignedAddr(ptr)) {
+    uptr end = AlignUp((uptr)ptr + len);
+    size = end - start.addr;
+  }
+};
 
-ALWAYS_INLINE static void UpdateShadowSlot(uptr d_shadow, uptr d_origin,
-                                           uptr s_shadow, uptr s_origin,
+struct ShadowAddr {
+  uptr shadow = 0;
+  uptr origin = 0;
+  ShadowAddr(uptr shadow, uptr origin) : shadow(shadow), origin(origin) {}
+  ShadowAddr(AlignedAddr aligned) {
+    shadow = MEM_TO_SHADOW(aligned.addr);
+    origin = MEM_TO_ORIGIN(aligned.addr);
+  }
+};
+
+struct ShadowRange {
+  ShadowAddr start;
+  uptr size;
+  ShadowRange(ShadowAddr start, uptr size) : start(start), size(size) {}
+  ShadowRange(AlignedRange range)
+      : start(ShadowAddr(range.start)), size(range.size) {}
+};
+
+ALWAYS_INLINE static void UpdateShadowSlot(ShadowAddr dest, ShadowAddr src,
                                            uptr offset) {
-  AllocInfo **dest_info_ptr = reinterpret_cast<AllocInfo **>(d_origin + offset);
-  AllocInfo **source_info_ptr =
-      reinterpret_cast<AllocInfo **>(s_origin + offset);
+  AllocInfo **dest_info_ptr = reinterpret_cast<AllocInfo **>(dest.origin + offset);
+  AllocInfo **source_info_ptr = reinterpret_cast<AllocInfo **>(src.origin + offset);
 
-  BorTag *dest_tag_ptr = reinterpret_cast<BorTag *>(d_shadow + offset);
-  BorTag *source_tag_ptr = reinterpret_cast<BorTag *>(s_shadow + offset);
+  BorTag *dest_tag_ptr = reinterpret_cast<BorTag *>(dest.shadow + offset);
+  BorTag *source_tag_ptr = reinterpret_cast<BorTag *>(src.shadow + offset);
 
   BorTag dest_tag = *dest_tag_ptr;
   BorTag source_tag = *source_tag_ptr;
@@ -254,106 +268,13 @@ ALWAYS_INLINE static void UpdateShadowSlot(uptr d_shadow, uptr d_origin,
     *dest_info_ptr = *source_info_ptr;
 }
 
-void CopyShadow(void *dest, const void *src, uptr size) {
-  if (!MEM_IS_APP(dest))
-    return;
-  if (!MEM_IS_APP(src))
-    return;
-  if (size == 0)
-    return;
-
+void ClearShadowRange(ShadowRange range) {
   const uptr step = kMinProvAlignment;
-
-  uptr d_aligned;
-  uptr s_aligned, s_size;
-  AlignPtr8((uptr)dest, d_aligned);
-  AlignRange8((uptr)src, size, s_aligned, s_size);
-
-  uptr d_shadow = MEM_TO_SHADOW(d_aligned);
-  uptr d_origin = MEM_TO_ORIGIN(d_aligned);
-  uptr s_shadow = MEM_TO_SHADOW(s_aligned);
-  uptr s_origin = MEM_TO_ORIGIN(s_aligned);
-
-  for (uptr offset = 0; offset < s_size; offset += step)
-    UpdateShadowSlot(d_shadow, d_origin, s_shadow, s_origin, offset);
-}
-
-void JoinShadow(void *dest, const void *s_shadow, const void *s_origin,
-                uptr s_size) {
-  // This operation relies on our instrumentation pass
-  // to ensure that the source and size are aligned.
-  uptr d_aligned;
-  AlignPtr8((uptr)dest, d_aligned);
-
-  uptr d_shadow = MEM_TO_SHADOW(d_aligned);
-  uptr d_origin = MEM_TO_ORIGIN(d_aligned);
-
-  uptr s_shadow_addr = (uptr)s_shadow;
-  uptr s_origin_addr = (uptr)s_origin;
-
-  const uptr step = kMinProvAlignment;
-
-  for (uptr offset = 0; offset < s_size; offset += step)
-    UpdateShadowSlot(d_shadow, d_origin, s_shadow_addr, s_origin_addr, offset);
-}
-
-void MoveShadow(void *dest, const void *src, uptr size) {
-  if (!MEM_IS_APP(dest))
-    return;
-  if (!MEM_IS_APP(src))
-    return;
-  if (size == 0)
-    return;
-
-  const uptr step = kMinProvAlignment;
-
-  uptr d_aligned;
-  uptr s_aligned, s_size;
-  AlignPtr8((uptr)dest, d_aligned);
-  AlignRange8((uptr)src, size, s_aligned, s_size);
-
-  if (d_aligned == s_aligned)
-    return;
-
-  uptr d_shadow = MEM_TO_SHADOW(d_aligned);
-  uptr d_origin = MEM_TO_ORIGIN(d_aligned);
-  uptr s_shadow = MEM_TO_SHADOW(s_aligned);
-  uptr s_origin = MEM_TO_ORIGIN(s_aligned);
-
-  if (d_aligned < s_aligned) {
-    for (uptr offset = 0; offset < s_size; offset += step)
-      UpdateShadowSlot(d_shadow, d_origin, s_shadow, s_origin, offset);
-  } else {
-    for (uptr offset = s_size - step;; offset -= step) {
-      UpdateShadowSlot(d_shadow, d_origin, s_shadow, s_origin, offset);
-      // signed so must break at 0
-      if (offset == 0)
-        break;
-    }
-  }
-}
-
-void ClearShadow(void *dest, uptr size) {
-  if (!MEM_IS_APP(dest))
-    return;
-  uptr d_aligned, d_size;
-  AlignRange8((uptr)dest, size, d_aligned, d_size);
-
-  uptr shadow_start = MEM_TO_SHADOW(d_aligned);
-  uptr origin_start = MEM_TO_ORIGIN(d_aligned);
-
-  ClearShadowAligned(shadow_start, origin_start, d_size);
-}
-
-void ClearShadowAligned(uptr shadow_start, uptr origin_start,
-                        uptr size_aligned) {
-
-  const uptr step = kMinProvAlignment;
-
-  for (uptr offset = 0; offset < size_aligned; offset += step) {
-    BorTag *tag_ptr = reinterpret_cast<BorTag *>(shadow_start + offset);
+  ShadowAddr start = range.start;
+  for (uptr offset = 0; offset < range.size; offset += step) {
+    BorTag *tag_ptr = reinterpret_cast<BorTag *>(start.shadow + offset);
     AllocInfo **info_ptr =
-        reinterpret_cast<AllocInfo **>(origin_start + offset);
+        reinterpret_cast<AllocInfo **>(start.origin + offset);
 
     // We use the borrow tag as a proxy for the initialization of the
     // `AllocInfo` component of provenance metadata.
@@ -364,16 +285,92 @@ void ClearShadowAligned(uptr shadow_start, uptr origin_start,
   }
 }
 
+void TransferShadow(void *dest, const void *src, uptr size, bool disjoint) {
+  if (!MEM_IS_APP(dest))
+    return;
+  if (!MEM_IS_APP(src))
+    return;
+  if (size == 0)
+    return;
+
+  AlignedAddr d_aligned(dest);
+  AlignedRange s_range(src, size);
+
+  if (d_aligned.align_rem != s_range.start.align_rem) {
+    AlignedRange d_range(dest, size);
+    ShadowRange d_shadow(d_range);
+    return ClearShadowRange(d_shadow);
+  }
+
+  if (d_aligned.addr == s_range.start.addr)
+    return;
+
+  ShadowAddr d_shadow(d_aligned);
+  ShadowRange s_shadow(s_range);
+
+  uptr step = kMinProvAlignment;
+
+  if (disjoint || d_aligned.addr < s_range.start.addr) {
+    for (uptr offset = 0; offset < s_shadow.size; offset += step)
+      UpdateShadowSlot(d_shadow, s_shadow.start, offset);
+  } else {
+    for (uptr offset = s_shadow.size - step;; offset -= step) {
+      UpdateShadowSlot(d_shadow, s_shadow.start, offset);
+      // signed so must break at 0
+      if (offset == 0)
+        break;
+    }
+  }
+}
+
+void MoveShadow(void *dest, const void *src, uptr size) {
+  return TransferShadow(dest, src, size, false);
+}
+
+void CopyShadow(void *dest, const void *src, uptr size) {
+  return TransferShadow(dest, src, size, true);
+}
+
+void JoinShadow(void *dest, const void *s_shadow, const void *s_origin,
+                uptr size) {
+  // This operation relies on our instrumentation pass
+  // to ensure that the source and size are aligned.
+  AlignedAddr d_aligned(dest);
+  ShadowAddr d_shadow(d_aligned);
+
+  ShadowAddr s_addr((uptr)s_shadow, (uptr)s_origin);
+  ShadowRange s_range(s_addr, size);
+
+  const uptr step = kMinProvAlignment;
+  for (uptr offset = 0; offset < s_range.size; offset += step)
+    UpdateShadowSlot(d_shadow, s_range.start, offset);
+}
+
+void ClearShadow(void *dest, uptr size) {
+  if (!MEM_IS_APP(dest))
+    return;
+  AlignedRange aligned(dest, size);
+  ShadowRange range(aligned);
+  ClearShadowRange(range);
+}
+
+void ClearShadowAligned(void *dest_shadow, void *dest_origin, uptr size) {
+  // This operation relies on our instrumentation pass
+  // to ensure that the destination and size are aligned.
+  ShadowAddr s_addr((uptr)dest_shadow, (uptr)dest_origin);
+  ShadowRange range(s_addr, size);
+  ClearShadowRange(range);
+}
+
 void WriteShadow(void *dest, Provenance prov) {
   if (!MEM_IS_APP(dest))
     return;
-  uptr d_aligned, d_size;
-  AlignRange8((uptr)dest, 8, d_aligned, d_size);
-  uptr shadow_start = MEM_TO_SHADOW(d_aligned);
-  uptr origin_start = MEM_TO_ORIGIN(d_aligned);
 
-  BorTag *tag_ptr = reinterpret_cast<BorTag *>(shadow_start);
-  AllocInfo **info_ptr = reinterpret_cast<AllocInfo **>(origin_start);
+  AlignedRange aligned(dest, 8);
+  ShadowRange range(aligned);
+
+  BorTag *tag_ptr = reinterpret_cast<BorTag *>(range.start.shadow);
+  AllocInfo **info_ptr = reinterpret_cast<AllocInfo **>(range.start.origin);
 
   if (prov.info != nullptr)
     __bsan_rc_inc(prov.tag, prov.info);
