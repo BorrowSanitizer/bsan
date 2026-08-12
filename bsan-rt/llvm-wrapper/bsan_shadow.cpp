@@ -242,9 +242,9 @@ ALWAYS_INLINE static void UpdateShadowSlot(uptr d_shadow, uptr d_origin,
   BorTag src_tag = *source_tag;
   AllocInfo *src_info = *source_info;
 
-  if (src_info != nullptr)
+  if (src_tag != 0)
     __bsan_rc_inc(src_tag, src_info);
-  if (*dest_info != nullptr)
+  if (dest_tag != 0)
     __bsan_rc_dec(*dest_tag, *dest_info);
 
   *dest_tag = src_tag;
