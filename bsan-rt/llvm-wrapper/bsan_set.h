@@ -82,6 +82,14 @@ public:
 
   // Removes all entries from the set, after executing the
   // given callback for each allocation.
+  void takeFrom(ConcreteProvenanceSet &other) {
+    other.drain([&](AllocInfo *info, BorTagSet &tags) {
+      tags.forEach([&](BorTag tag) { set_[info].insert(tag); });
+    });
+  }
+
+  // Removes all entries from the set, after executing the
+  // given callback for each allocation.
   template <typename Fn> void drain(Fn visit) {
     set_.forEach([&](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
       visit(KV.first, KV.second);

@@ -160,7 +160,7 @@ static Provenance BsanAllocateMeta(void *ptr, SIZE_T size, uptr span) {
   BorTag tag = NewBorTag();
   AllocInfo *info = __bsan_alloc(ptr, size, tag, span);
   Provenance prov = {tag, info};
-  CurrentThread()->AcquireProvenance(prov);
+  CurrentThread()->zct.acquireProvenance(prov);
   return prov;
 }
 
