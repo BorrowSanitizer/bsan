@@ -28,6 +28,15 @@ pub static MAX_COMPACTED_CHILDREN: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// Starts at the `visits_per_gc` flag value and is updated after each GC run.
 pub static CURRENT_GC_INTERVAL: AtomicUsize = AtomicUsize::new(0);
 
+/// Target dead ratio percentage (0-100) for GC interval adjustment.
+pub static TREE_GC_TARGET_DEAD_RATIO_PERCENT: AtomicUsize = AtomicUsize::new(0);
+
+/// Minimum GC interval after dynamic adjustment.
+pub static TREE_GC_MIN_INTERVAL: AtomicUsize = AtomicUsize::new(0);
+
+/// Maximum GC interval after dynamic adjustment.
+pub static TREE_GC_MAX_INTERVAL: AtomicUsize = AtomicUsize::new(0);
+
 /// Thread-local slot for a boxed `(UBInfo, Span)` set by `handle_error` and
 /// consumed by `__bsan_format_pending_ub` once the C++ side has captured the
 /// stack and located the first user-code frame.
@@ -40,6 +49,9 @@ unsafe extern "C" {
     fn __bsan_tree_gc_min_nodes() -> usize;
     fn __bsan_max_compacted_children() -> usize;
     fn __bsan_visits_per_gc() -> usize;
+    fn __bsan_tree_gc_target_dead_ratio_percent() -> usize;
+    fn __bsan_tree_gc_min_interval() -> usize;
+    fn __bsan_tree_gc_max_interval() -> usize;
 }
 
 /// Called from the `HANDLE_ERROR` C++ macro after the stack trace has been
@@ -328,6 +340,10 @@ pub unsafe fn init_global_ctx() {
         TREE_GC_MIN_NODES.store(__bsan_tree_gc_min_nodes(), Ordering::Relaxed);
         MAX_COMPACTED_CHILDREN.store(__bsan_max_compacted_children(), Ordering::Relaxed);
         CURRENT_GC_INTERVAL.store(__bsan_visits_per_gc(), Ordering::Relaxed);
+        TREE_GC_TARGET_DEAD_RATIO_PERCENT
+            .store(__bsan_tree_gc_target_dead_ratio_percent(), Ordering::Relaxed);
+        TREE_GC_MIN_INTERVAL.store(__bsan_tree_gc_min_interval(), Ordering::Relaxed);
+        TREE_GC_MAX_INTERVAL.store(__bsan_tree_gc_max_interval(), Ordering::Relaxed);
     }
 }
 

@@ -132,6 +132,15 @@ SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_max_compacted_children() {
 SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_visits_per_gc() {
   return __bsan::flags()->visits_per_gc;
 }
+SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_tree_gc_target_dead_ratio_percent() {
+  return __bsan::flags()->tree_gc_target_dead_ratio_percent;
+}
+SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_tree_gc_min_interval() {
+  return __bsan::flags()->tree_gc_min_interval;
+}
+SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_tree_gc_max_interval() {
+  return __bsan::flags()->tree_gc_max_interval;
+}
 }
 
 SANITIZER_INTERFACE_WEAK_DEF(const char *, __bsan_default_options, void) {

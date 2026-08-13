@@ -1,11 +1,14 @@
 use core::mem;
 use core::sync::atomic::Ordering::Relaxed;
 
-use crate::global::{CURRENT_GC_INTERVAL, MAX_COMPACTED_CHILDREN};
-use crate::BorTag;
 use super::data_structures::UniIndex;
 use super::perms::Permission;
 use super::tree::EagerTree;
+use crate::global::{
+    CURRENT_GC_INTERVAL, MAX_COMPACTED_CHILDREN, TREE_GC_MAX_INTERVAL, TREE_GC_MIN_INTERVAL,
+    TREE_GC_TARGET_DEAD_RATIO_PERCENT,
+};
+use crate::BorTag;
 
 /// Results of the last garbage collection pass
 pub struct GcStats {
@@ -19,10 +22,6 @@ pub struct GcStats {
 /// to at most 2x per pass in either direction, and the resulting interval is clamped
 /// to `[MIN_GC_INTERVAL, MAX_GC_INTERVAL]`.
 pub fn update_current_gc_interval(stats: &GcStats) {
-    const TARGET_DEAD_RATIO: f64 = 0.5;
-    const MIN_GC_INTERVAL: usize = 1000;
-    const MAX_GC_INTERVAL: usize = 10_000_000;
-
     let current = CURRENT_GC_INTERVAL.load(Relaxed);
     if current == 0 {
         return;
@@ -33,10 +32,14 @@ pub fn update_current_gc_interval(stats: &GcStats) {
         return;
     }
 
+    let target_percent = TREE_GC_TARGET_DEAD_RATIO_PERCENT.load(Relaxed);
+    let target_ratio = (target_percent as f64) / 100.0;
     let dead_ratio = stats.removed as f64 / total as f64;
-    let adjust = (TARGET_DEAD_RATIO / dead_ratio.max(0.01)).clamp(0.5, 2.0);
-    let new_interval = ((current as f64 * adjust) as usize)
-        .clamp(MIN_GC_INTERVAL, MAX_GC_INTERVAL);
+    let adjust = (target_ratio / dead_ratio.max(0.01)).clamp(0.5, 2.0);
+
+    let min_interval = TREE_GC_MIN_INTERVAL.load(Relaxed);
+    let max_interval = TREE_GC_MAX_INTERVAL.load(Relaxed);
+    let new_interval = ((current as f64 * adjust) as usize).clamp(min_interval, max_interval);
 
     CURRENT_GC_INTERVAL.store(new_interval, Relaxed);
 }
@@ -55,11 +58,8 @@ fn can_be_replaced_by_single_child(tree: &EagerTree, idx: UniIndex) -> bool {
     tree.locations.iter_all().all(|(_range, loc)| {
         let parent_perm =
             loc.perms.get(idx).map(|x| x.permission).unwrap_or(node.default_initial_perm);
-        let child_perm = loc
-            .perms
-            .get(child_idx)
-            .map(|x| x.permission)
-            .unwrap_or(child.default_initial_perm);
+        let child_perm =
+            loc.perms.get(child_idx).map(|x| x.permission).unwrap_or(child.default_initial_perm);
         parent_perm.can_be_replaced_by_child(child_perm)
     })
 }

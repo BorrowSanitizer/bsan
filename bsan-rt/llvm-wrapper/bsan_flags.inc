@@ -18,3 +18,10 @@ BSAN_FLAG(uptr, tree_gc_min_nodes, 64,
 BSAN_FLAG(uptr, max_compacted_children, 16,
           "Only compact away a dead node by reparenting its children onto its"
           "parent if doing so leaves the parent with at most this many children.")
+BSAN_FLAG(uptr, tree_gc_target_dead_ratio_percent, 25,
+          "Target percentage of dead nodes during GC (0-100). GC interval adjusts"
+          "to keep dead ratio near this target.")
+BSAN_FLAG(uptr, tree_gc_min_interval, 50000,
+          "Minimum GC interval (number of visits) after dynamic adjustment.")
+BSAN_FLAG(uptr, tree_gc_max_interval, 500000,
+          "Maximum GC interval (number of visits) after dynamic adjustment.")
