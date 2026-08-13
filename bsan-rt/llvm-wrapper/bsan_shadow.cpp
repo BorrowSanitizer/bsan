@@ -91,7 +91,7 @@ static bool InitShadow(bool init_origins, bool dry_run) {
 
   if (!MEM_IS_APP(&__bsan_init)) {
     if (!dry_run)
-      Printf("FATAL: BorrowSanitizer: code %p is out of application range. "
+      Printf("FATAL: BorrowSanitizer: code %p is out of application range."
              "Non-PIE build?\n",
              (void *)&__bsan_init);
     return false;
