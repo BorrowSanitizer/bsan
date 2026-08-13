@@ -60,8 +60,23 @@ public:
   }
 };
 
-bool isRetag(CallBase *CB);
+// Indicates that this is a call to one of
+// BorrowSanitizer's retag intrinsic functions.
+static std::optional<RetagInfo> getRetagInfo(Value *Val) {
+  auto *CB = dyn_cast<CallBase>(Val);
+  if (!CB)
+    return std::nullopt;
 
+  Function *Callee = CB->getCalledFunction();
+
+  bool HasRetagSignature = CB->arg_size() == 5 && Callee &&
+                           Callee->getName().starts_with(RUST_FN("retag"));
+
+  if (HasRetagSignature) {
+    return RetagInfo(CB);
+  }
+  return std::nullopt;
+}
 } // end namespace llvm
 
 #endif

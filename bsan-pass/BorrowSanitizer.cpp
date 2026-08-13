@@ -1750,14 +1750,13 @@ private:
     return ConstantInt::get(BS.IntptrTy, 0);
   }
 
-  void instrumentRetagMem(CallBase &CB) {
+  void instrumentRetagMem(RetagInfo &RI, CallBase &CB) {
     IRBuilder<> IRB(&CB);
     Value *Operand = CB.getOperand(0);
     Align OperandAlign = Operand->getPointerAlignment(*BS.DL);
     Value *SrcAddr = IRB.CreateAlignedLoad(BS.PtrTy, Operand, OperandAlign);
     Provenance SrcProv = loadProvenanceFromShadow(IRB, Operand, OperandAlign);
 
-    RetagInfo RI(&CB);
     Value *ImArrayLen = getLayoutArrayLength(RI.ImArray);
     Value *PinArrayLen = getLayoutArrayLength(RI.PinArray);
     Value *Slot = allocStackSlot(IRB, RI.isProtected());
@@ -1771,11 +1770,10 @@ private:
     storeProvenance(IRB, ShadowPtr, RetaggedProv);
   }
 
-  void instrumentRetagReg(CallBase &CB) {
+  void instrumentRetagReg(RetagInfo &RI, CallBase &CB) {
     IRBuilder<> IRB(&CB);
     Value *Ptr = CB.getOperand(0);
     if (auto Prov = getProvenance(CB.getParent(), Ptr)) {
-      RetagInfo RI(&CB);
       Value *ImArrayLen = getLayoutArrayLength(RI.ImArray);
       Value *PinArrayLen = getLayoutArrayLength(RI.PinArray);
       Value *Dest = allocStackSlot(IRB, RI.isProtected());
@@ -1809,11 +1807,11 @@ private:
 
     Function *Callee = CB.getCalledFunction();
     if (Callee) {
-      if (isRetag(&CB)) {
+      if (auto Info = getRetagInfo(&CB)) {
         if (CB.getType() == BS.PtrTy) {
-          return instrumentRetagReg(CB);
+          return instrumentRetagReg(*Info, CB);
         }
-        return instrumentRetagMem(CB);
+        return instrumentRetagMem(*Info, CB);
       }
     }
 

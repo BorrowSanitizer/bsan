@@ -74,20 +74,17 @@ void InstrumentationPlan::build() {
       }
 
       if (auto *CB = dyn_cast<CallBase>(&I)) {
-        if (isRetag(CB)) {
-          RetagInfo ChildRetag(CB);
-          if (auto *Parent = dyn_cast<CallBase>(CB->getOperand(0))) {
-            if (isRetag(Parent)) {
-              RetagInfo ParentRetag(Parent);
-              if (ParentRetag.canReplace(ChildRetag)) {
-                CB->replaceAllUsesWith(Parent);
-              }
+        if (auto ChildRetag = getRetagInfo(CB)) {
+          if (auto ParentRetag = getRetagInfo(CB->getOperand(0))) {
+            if (ParentRetag->canReplace(*ChildRetag)) {
+              CB->replaceAllUsesWith(CB->getOperand(0));
             }
           }
           Retags.push_back(CB);
-          if (ChildRetag.isProtected())
+          if (ChildRetag->isProtected())
             NumFnEntryRetags += 1;
         }
+
         if (auto *LI = dyn_cast<LifetimeIntrinsic>(CB)) {
           AllocaInst *AI = findAllocaForValue(LI->getArgOperand(0), true);
           if (AI && shouldInstrumentAlloca(*AI)) {
