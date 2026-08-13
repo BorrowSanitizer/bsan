@@ -8,7 +8,7 @@ help: the accessed tag <TAG>(unprotected) was created here, in the initial state
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/pass_invalid_shr_tuple.rs:LL:CC
    |
 LL | let pair_xref = unsafe { (&*xraw0, &*xraw1) };
-   |                          ^
+   |                           ^
 help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x0..0x4]
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/pass_invalid_shr_tuple.rs:LL:CC
    |

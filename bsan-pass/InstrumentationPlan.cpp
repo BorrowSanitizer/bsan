@@ -59,13 +59,12 @@ void InstrumentationPlan::collectChecks(Instruction *Inst) {
 }
 
 void InstrumentationPlan::build() {
-  // Collect each of the instructions might propagate provenance metadata.
+  // Collect each of the instructions that might propagate provenance metadata.
   for (BasicBlock *BB : depth_first<BasicBlock *>(&F.getEntryBlock())) {
     for (Instruction &I : *BB) {
       // Skip instructions that are marked to be ignored by the sanitizers.
       if (I.getMetadata(LLVMContext::MD_nosanitize))
         continue;
-
       // Collect a list of static allocas to instrument.
       if (I.getOpcode() == Instruction::Alloca) {
         auto &AI = static_cast<AllocaInst &>(I);
@@ -75,9 +74,18 @@ void InstrumentationPlan::build() {
       }
 
       if (auto *CB = dyn_cast<CallBase>(&I)) {
-        if (IsRetag(CB)) {
+        if (isRetag(CB)) {
+          RetagInfo ChildRetag(CB);
+          if (auto *Parent = dyn_cast<CallBase>(CB->getOperand(0))) {
+            if (isRetag(Parent)) {
+              RetagInfo ParentRetag(Parent);
+              if (ParentRetag.canReplace(ChildRetag)) {
+                CB->replaceAllUsesWith(Parent);
+              }
+            }
+          }
           Retags.push_back(CB);
-          if (IsFnEntryRetag(CB))
+          if (ChildRetag.isProtected())
             NumFnEntryRetags += 1;
         }
         if (auto *LI = dyn_cast<LifetimeIntrinsic>(CB)) {
