@@ -18,7 +18,6 @@ set(BSAN_SOURCES
 set(BSAN_HEADERS
   BorrowSanitizerPass.h
   InstrumentationPlan.h
-  Retag.h
 )
 
 set(CMAKE_CXX_CLANG_TIDY clang-tidy;-warnings-as-errors=*)

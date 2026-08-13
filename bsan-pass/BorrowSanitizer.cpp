@@ -1,6 +1,5 @@
 #include "BorrowSanitizerPass.h"
 #include "InstrumentationPlan.h"
-#include "Retag.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
