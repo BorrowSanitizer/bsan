@@ -76,14 +76,16 @@ private:
   // Iterates over every thread's shadow stack, creating a set of all reachable
   // provenance values. The last argument is a pointer to the
   // `ConcreteProvenanceSet` being populated.
-  static void CollectProvenance(const uptr, BsanThread *const &thread,
+  static void CollectProvenance(const ThreadId id, BsanThread *const &thread,
                                 void *arg);
 
   // Iterates over every thread's zero-count-table, merging its contents into
   // the set of pending provenance values. We only add values to the pending set
   // if they are not present on any shadow stack. Values that we add to the
   // pending set are also removed from their thread's zero-count-table.
-  static void MergeZeroCounts(const uptr, BsanThread *const &thread, void *arg);
+  static void MergeZeroCountsCallback(const ThreadId id,
+                                      BsanThread *const &thread, void *arg);
+  static void MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct);
 
   // Drains the contents of the pending provenance set, pruning the associated
   // state from the tree for each allocation. Ejects any retired allocation
