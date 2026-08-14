@@ -28,6 +28,7 @@ use super::diagnostics::{
 use super::foreign_access_skipping::IdempotentForeignAccess;
 use super::perms::{AccessKind, PermTransition, Permission};
 use super::refcount::RefCount;
+use super::tree_gc;
 use super::tree_visitor::{ChildrenVisitMode, ContinueTraversal, NodeAppArgs, TreeVisitor};
 use super::wildcard::{ExposedCache, WildcardAccessLevel};
 use crate::errors::UBResult;
@@ -66,7 +67,7 @@ pub(crate) struct LocationState {
     /// Note that the tree root is also always accessed, as if the allocation was a write access.
     accessed: bool,
     /// This pointer's current permission / future initial permission.
-    permission: Permission,
+    pub(crate) permission: Permission,
     /// See `foreign_access_skipping.rs`.
     /// Stores an idempotent foreign access for this location and its children.
     /// For correctness, this must not be too strong, and the recorded idempotent foreign access
@@ -103,9 +104,9 @@ pub struct EagerTree {
     /// `tag_mapping`.
     pub(crate) tag_mapping: UniKeyMap<BorTag>,
     /// All nodes of this tree.
-    pub(super) nodes: UniValMap<Node>,
+    pub(crate) nodes: UniValMap<Node>,
     /// Associates with each location its state and wildcard access tracking.
-    pub(super) locations: DedupRangeMap<LocationTree>,
+    pub(crate) locations: DedupRangeMap<LocationTree>,
     /// Contains both the root of the main tree as well as the roots of the wildcard subtrees.
     ///
     /// If we reborrow a reference which has wildcard provenance, then we do not know where in
@@ -121,7 +122,7 @@ pub struct EagerTree {
     /// Sorted according to `BorTag` from low to high. This also means the main root is `root[0]`.
     ///
     /// Has array size 2 because that still ensures the minimum size for SmallVec.
-    pub(super) roots: SmallVec<[UniIndex; 2]>,
+    pub(crate) roots: SmallVec<[UniIndex; 2]>,
 }
 
 /// A tree that is lazily initialized: starts as `Uninit` (storing only the root tag, size, and
@@ -166,7 +167,7 @@ pub struct Node {
     /// lazily be initialized to on the first access.
     /// It is only ever `Disabled` for a tree root, since the root is initialized to `Unique` by
     /// its own separate mechanism.
-    default_initial_perm: Permission,
+    pub(crate) default_initial_perm: Permission,
     /// The default initial (strongest) idempotent foreign access.
     /// This participates in the invariant for `LocationState::idempotent_foreign_access`
     /// in cases where there is no location state yet. See `foreign_access_skipping.rs`,

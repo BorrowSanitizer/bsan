@@ -12,6 +12,7 @@ mod foreign_access_skipping;
 pub mod perms;
 pub mod refcount;
 pub mod tree;
+pub mod tree_gc;
 mod tree_visitor;
 mod wildcard;
 
