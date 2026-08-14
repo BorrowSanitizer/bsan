@@ -7,12 +7,6 @@ use super::tree::EagerTree;
 use crate::global::MAX_COMPACTED_CHILDREN;
 use crate::BorTag;
 
-/// Results of the last garbage collection pass
-pub struct GcStats {
-    pub kept: usize,
-    pub removed: usize,
-}
-
 /// Checks whether a dead node can be replaced by its only child.
 /// The caller iterates the dead tags directly, so `idx` is already known to be dead
 /// and there is no membership check — only the shape and permission conditions remain.
@@ -103,12 +97,7 @@ fn remove_useless_node(tree: &mut EagerTree, this: UniIndex) {
 /// promoting a child into the roots could break the ascending-tag order of
 /// roots, which other traversals rely on. This retains at most one dead root per tree,
 /// and only until its subtree dies (or is compacted away), at which point it is removed as a leaf.
-pub fn remove_useless_children(
-    tree: &mut EagerTree,
-    dead_tags: &mut [BorTag],
-    compact: bool,
-) -> GcStats {
-    let node_count_before = tree.tag_mapping.len();
+pub fn remove_useless_children(tree: &mut EagerTree, dead_tags: &mut [BorTag], compact: bool) {
     for entry in dead_tags.iter_mut().rev() {
         let tag = *entry;
         let Some(idx) = tree.tag_mapping.get(&tag) else {
@@ -173,6 +162,4 @@ pub fn remove_useless_children(
             _ => {}
         }
     }
-    let node_count_after = tree.tag_mapping.len();
-    GcStats { kept: node_count_after, removed: node_count_before - node_count_after }
 }
