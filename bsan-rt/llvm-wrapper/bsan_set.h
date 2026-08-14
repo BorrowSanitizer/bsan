@@ -21,7 +21,8 @@ namespace __bsan {
 // but it would make the API more cumbersome.
 class BorTagSet {
 public:
-  void insert(BorTag Tag);
+  // Returns true if the tag was not already present, and so the set grew.
+  bool insert(BorTag Tag);
   void erase(BorTag Tag);
   bool contains(BorTag Tag) const;
 
@@ -72,7 +73,8 @@ public:
   ConcreteProvenanceSet(const ConcreteProvenanceSet &) = delete;
   ConcreteProvenanceSet &operator=(const ConcreteProvenanceSet &) = delete;
 
-  void insert(Provenance Prov);
+  // Returns true if the value was not already present, and so the set grew.
+  bool insert(Provenance Prov);
   void remove(Provenance Prov);
 
   void clear();

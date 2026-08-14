@@ -62,8 +62,10 @@ extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __bsan_had_error;
 
 extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uintptr_t __bsan_bor_tag_ctr;
 
-// Tree-node visits accumulated by the Rust runtime since the last GC request.
-extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uintptr_t __bsan_visits_since_gc;
+// The number of provenances added to the zero-count tables since the last
+// completed collection, counted across every table in the process: each live
+// thread's, plus the global one holding tables of threads that have exited.
+extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uintptr_t __bsan_zct_since_gc;
 
 namespace __bsan {
 

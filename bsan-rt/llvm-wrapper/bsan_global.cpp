@@ -1,5 +1,6 @@
 #include "bsan_global.h"
 #include "bsan.h"
+#include "bsan_flags.h"
 #include "bsan_interface_internal.h"
 #include "sanitizer_common/sanitizer_allocator_internal.h"
 #include "sanitizer_common/sanitizer_common.h"
@@ -130,6 +131,8 @@ void GlobalContext::RequestGC() {
     // then somebody else got here first and already ran the GC.
     uptr current_gen = atomic_load(&gc_gen, memory_order_acquire);
     if (gen == current_gen) {
+      // Reset the zct counter
+      atomic_store(&__bsan_zct_since_gc, 0, memory_order_release);
       ConcreteProvenanceSet live;
       Snapshot state(&live, gen);
       {
@@ -142,6 +145,15 @@ void GlobalContext::RequestGC() {
     // Release the lock, allowing the GC to run again.
     atomic_store(&gc_lock, 0, memory_order_release);
   }
+}
+
+void GlobalContext::MaybeRequestGC() {
+  uptr threshold = flags()->zct_per_gc;
+  if (threshold == 0)
+    return;
+  if (atomic_load(&__bsan_zct_since_gc, memory_order_acquire) < threshold)
+    return;
+  RequestGC();
 }
 
 alignas(64) static char gctx[sizeof(GlobalContext)];

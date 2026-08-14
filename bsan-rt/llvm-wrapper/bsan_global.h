@@ -44,6 +44,11 @@ public:
   // try to start the GC, and only one will succeed.
   void RequestGC();
 
+  // Requests a collection once at least `zct_per_gc` values have entered the
+  // zero-count tables since the last completed pass. Cheap enough to call on
+  // every retag: a load and a comparison in the common case.
+  void MaybeRequestGC();
+
 private:
   friend struct ScopedStopTheWorldLock;
   ThreadManager threads_;

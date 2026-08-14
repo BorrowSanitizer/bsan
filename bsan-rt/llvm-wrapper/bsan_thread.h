@@ -46,7 +46,11 @@ public:
     // stores is ordered before the "acquire" load used
     // to check the value in `IsBusy`.
     GCBarrier barrier(*this);
-    zct_.insert(Prov);
+    // If insertion to the ZCT was successful, we count it towards the next GC
+    // pass
+    if (zct_.insert(Prov)) {
+      atomic_fetch_add(&__bsan_zct_since_gc, 1, memory_order_relaxed);
+    }
   }
 
   void drainFrom(ZeroCountTable &other) {

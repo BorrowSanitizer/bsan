@@ -23,16 +23,17 @@ bool BorTagSet::contains(BorTag tag) const {
   return i < tags_.size() && tags_[i] == tag;
 }
 
-void BorTagSet::insert(BorTag tag) {
+bool BorTagSet::insert(BorTag tag) {
   uptr i = lowerBound(tag);
   if (i < tags_.size() && tags_[i] == tag) {
-    return; // Already present.
+    return false; // Already present.
   }
   tags_.push_back(tag);
   for (uptr j = tags_.size() - 1; j > i; --j) {
     tags_[j] = tags_[j - 1];
   }
   tags_[i] = tag;
+  return true;
 }
 
 void BorTagSet::erase(BorTag tag) {
@@ -58,10 +59,11 @@ void BorTagSet::destroy() {
   }
 }
 
-void ConcreteProvenanceSet::insert(Provenance prov) {
-  if (prov.info != nullptr) {
-    set_[prov.info].insert(prov.tag);
+bool ConcreteProvenanceSet::insert(Provenance prov) {
+  if (prov.info == nullptr) {
+    return false;
   }
+  return set_[prov.info].insert(prov.tag);
 }
 
 void ConcreteProvenanceSet::remove(Provenance prov) {

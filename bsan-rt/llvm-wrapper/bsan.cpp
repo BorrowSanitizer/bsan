@@ -89,10 +89,9 @@ THREADLOCAL uptr __bsan_had_error = 0;
 SANITIZER_INTERFACE_ATTRIBUTE
 atomic_uintptr_t __bsan_bor_tag_ctr{3};
 
-// Accumulates the number of tree-node visits performed by the Rust runtime
-// since the last garbage collection request
+// Counts values added to the zero-count tables since the last collection.
 SANITIZER_INTERFACE_ATTRIBUTE
-atomic_uintptr_t __bsan_visits_since_gc{0};
+atomic_uintptr_t __bsan_zct_since_gc{0};
 
 namespace __bsan {
 
@@ -108,23 +107,6 @@ static const char *const kLibraryPathMarkers[] = {".cargo/", ".rustup/",
 // Allocates a new borrow tag.
 BorTag NewBorTag() {
   return atomic_fetch_add(&__bsan_bor_tag_ctr, 1, memory_order_relaxed);
-}
-
-// Asks the global context to run the garbage collector once the Rust runtime
-// has reported at least `visits_per_gc` tree-node visits since the last
-// request, then resets the counter. Concurrent requests across threads are
-// coalesced by `RequestGC`.
-static void MaybeRequestGC() {
-  uptr interval = flags()->visits_per_gc;
-  if (interval == 0)
-    return;
-  uptr visits = atomic_load(&__bsan_visits_since_gc, memory_order_acquire);
-  if (visits < interval)
-    return;
-  // Multiple threads can reach this store, but that's okay, because
-  // our GC allows for multiple simultaneous requests
-  atomic_store(&__bsan_visits_since_gc, 0, memory_order_release);
-  global_ctx()->RequestGC();
 }
 
 // Returns the desired length for the current stack trace.
@@ -465,7 +447,7 @@ void __bsan_retag(void *object_addr, uptr access_size, u8 flags,
     // A retag mints a fresh provenance value with no references yet; record it
     // in this thread's zero-count set as a collection candidate.
     CurrentThread()->zct.acquireProvenance(prov);
-    MaybeRequestGC();
+    global_ctx()->MaybeRequestGC();
   }
 }
 
