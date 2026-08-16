@@ -5,7 +5,7 @@ name: nightly
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 */3 * *'
+    - cron: '0 23 * * sun'
 permissions:
   contents: write
   pull-requests: write
@@ -20,9 +20,17 @@ jobs:
     outputs:
       toolchain: ${{ steps.nightly.outputs.toolchain }}
       rust_sha: ${{ steps.nightly.outputs.rust_sha }}
+      rust_version: ${{ steps.nightly.outputs.rust_version }}
       llvm_sha: ${{ steps.nightly.outputs.llvm_sha }}
       nightly_date: ${{ steps.nightly.outputs.nightly_date }}
-      # the name of the release tag
+      # The name of the release tag (`clang-<LLVM_SHA>-<NIGHTLY_SEMVER>`).
+      # Rust's libLLVM name includes the nightly semver, so we include it
+      # in our release tags so that we can trigger a rebuild, even if the
+      # LLVM sha has not changed. It could be possible to avoid this step and
+      # rename the libLLVM.so dependency (e.g. with patchelf), but that
+      # might not be desirable. If something changes in upstream nightly
+      # such that libLLVM is built differently, but it uses the same source,
+      # then we want those changes, too.
       tag: ${{ steps.nightly.outputs.tag }}
       should_build: ${{ steps.nightly.outputs.should_build }}
     steps:
@@ -36,7 +44,8 @@ jobs:
           nightly_date=$(curl -sSfL "$base/channel-rust-nightly-date.txt")
           rust_sha=$(curl -sSfL "$base/$nightly_date/channel-rust-nightly-git-commit-hash.txt")
           llvm_sha=$(gh api "repos/rust-lang/rust/contents/src/llvm-project?ref=$rust_sha" --jq .sha)
-          tag="clang/${llvm_sha:0:7}"
+          rust_version=$(gh api "repos/rust-lang/rust/contents/src/version?ref=$rust_sha" --jq .content | base64 -d | tr -d '[:space:]')
+          tag="clang-${llvm_sha:0:7}-$rust_version"
           should_build=false
           if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             should_build=true
@@ -46,8 +55,9 @@ jobs:
             echo "rust_sha=$rust_sha"
             echo "llvm_sha=$llvm_sha"
             echo "nightly_date=$nightly_date"
-            echo "tag=clang-${llvm_sha:0:7}"
+            echo "tag=$tag"
             echo "should_build=$should_build"
+            echo "rust_version=$rust_version"
           } >> "$GITHUB_OUTPUT"
 
   build:
@@ -170,5 +180,5 @@ jobs:
           llvm_link="[\`${llvm_sha:0:7}\`]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$tag)"
           gh pr create --head "$branch" \
             --title "Update to \`${{ needs.init.outputs.toolchain }}\`" \
-            --body "Updates the Rust toolchain to \`${{ needs.init.outputs.toolchain }}\`, along with a compatible version of Clang ($llvm_link)."\
+            --body "Updates the Rust toolchain to \`${{ needs.init.outputs.toolchain }}\` (${{ needs.init.outputs.rust_version }}), along with a compatible version of Clang ($llvm_link)."\
             || echo "PR already exists."
