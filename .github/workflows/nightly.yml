@@ -36,7 +36,7 @@ jobs:
           nightly_date=$(curl -sSfL "$base/channel-rust-nightly-date.txt")
           rust_sha=$(curl -sSfL "$base/$nightly_date/channel-rust-nightly-git-commit-hash.txt")
           llvm_sha=$(gh api "repos/rust-lang/rust/contents/src/llvm-project?ref=$rust_sha" --jq .sha)
-          tag="clang/${llvm_sha:0:7}"
+          tag="clang-${llvm_sha:0:7}"
           should_build=false
           if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             should_build=true
@@ -46,7 +46,7 @@ jobs:
             echo "rust_sha=$rust_sha"
             echo "llvm_sha=$llvm_sha"
             echo "nightly_date=$nightly_date"
-            echo "tag=clang-${llvm_sha:0:7}"
+            echo "tag=$tag"
             echo "should_build=$should_build"
           } >> "$GITHUB_OUTPUT"
 
