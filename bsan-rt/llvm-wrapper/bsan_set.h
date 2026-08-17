@@ -1,6 +1,12 @@
 #ifndef BSAN_GC_H
 #define BSAN_GC_H
 
+// We use a variety of custom data structures
+// for BorrowSanitizer's garbage collector. Each
+// relies directly on `InternalMmapVector`, or
+// uses a proxy (e.g. `DenseMap`, which is an
+// `InternalMmapVector` underneath).
+
 #include "bsan.h"
 #include "sanitizer_common/sanitizer_array_ref.h"
 #include "sanitizer_common/sanitizer_common.h"
@@ -101,17 +107,17 @@ public:
 
   // Retain only the provenance values that satisfy the given predicate.
   template <typename Fn> void retainIf(Fn retain) {
-    Vector<AllocInfo *> ToErase;
+    InternalMmapVector<AllocInfo *> ToErase;
     set_.forEach([&](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
       AllocInfo *info = KV.first;
       KV.second.retainIf([&](BorTag tag) { return retain(info, tag); });
       if (KV.second.size() == 0) {
         KV.second.destroy();
-        ToErase.PushBack(info);
+        ToErase.push_back(info);
       }
       return true;
     });
-    for (unsigned Idx = 0; Idx < ToErase.Size(); ++Idx)
+    for (unsigned Idx = 0; Idx < ToErase.size(); ++Idx)
       set_.erase(ToErase[Idx]);
   }
 
