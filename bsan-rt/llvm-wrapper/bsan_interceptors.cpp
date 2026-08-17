@@ -31,6 +31,9 @@ int OnExit() { return 0; }
 
 DECLARE_REAL(void *, malloc, SIZE_T)
 DECLARE_REAL(void, free, void *)
+DECLARE_REAL(void *, memcpy, void *dest, const void *src, SIZE_T n)
+DECLARE_REAL(void *, memset, void *dest, int c, SIZE_T n)
+DECLARE_REAL(void *, memmove, void *dest, const void *src, SIZE_T n)
 
 extern "C" int pthread_attr_init(void *attr);
 extern "C" int pthread_attr_destroy(void *attr);
@@ -269,7 +272,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memset(void *dest, int c, uptr n) {
     internal_memset(dest, c, n);
   } else {
     ENSURE_BSAN_INITED();
-    internal_memset(dest, c, n);
+    REAL(memset)(dest, c, n);
     ClearShadow(dest, n);
   }
 }
@@ -280,7 +283,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memmove(void *dest, const void *src,
     internal_memmove(dest, src, n);
   } else {
     ENSURE_BSAN_INITED();
-    internal_memmove(dest, src, n);
+    REAL(memmove)(dest, src, n);
     MoveShadow(dest, src, n);
   }
 }
@@ -291,7 +294,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memcpy(void *dest, const void *src,
     internal_memcpy(dest, src, n);
   } else {
     ENSURE_BSAN_INITED();
-    internal_memcpy(dest, src, n);
+    REAL(memcpy)(dest, src, n);
     CopyShadow(dest, src, n);
   }
 }
