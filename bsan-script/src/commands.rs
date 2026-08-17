@@ -521,7 +521,7 @@ impl Buildable for BsanRt {
     fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
         let llvm_objcopy = env.target_binary("llvm-objcopy");
         let rust_runtime = env.with_flags("RUSTFLAGS", RT_FLAGS, |env| {
-            let mut args: Vec<String> = args.iter().cloned().collect();
+            let mut args: Vec<String> = args.to_vec();
             // We need to build the standard library from source so that we propagate
             // `-Cpanic=abort` to `core` and `alloc`. Otherwise, we will use the prebuilt
             // versions of these libraries, which use `-Cpanic=unwind`. This means that

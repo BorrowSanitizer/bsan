@@ -52,8 +52,14 @@ fn ensure_toolchain(
 ) -> Result<VersionMeta> {
     // If we have the `bsan` toolchain installed, then we've either already
     // run the setup script, or we're in our Docker container, which has all of
-    // the dependencies that we need. Once we set the active toolchain, we can
-    // bail out.
+    // the dependencies that we need.
+
+    // Let's make sure that we have all of the right dependencies
+    for dep in crate::DEPENDENCIES.iter() {
+        if which::which(dep).is_err() {
+            show_error!("Unable to find `{dep}`, is it installed?");
+        }
+    }
     let metadata = if let Ok(meta) = version_meta(sh, TOOLCHAIN_NAME)
         && let Some(ref commit_hash) = meta.commit_hash
         && commit_hash == &config.rust_sha
@@ -62,20 +68,7 @@ fn ensure_toolchain(
         if active_toolchain()? != TOOLCHAIN_NAME {
             cmd!(sh, "rustup override set {TOOLCHAIN_NAME}").run()?;
         }
-        Some(meta)
-    } else {
-        None
-    };
-
-    // Let's make sure that we have all of the right dependencies
-    for dep in crate::DEPENDENCIES.iter() {
-        if which::which(dep).is_err() {
-            show_error!("Unable to find `{dep}`, is it installed?");
-        }
-    }
-
-    if let Some(meta) = metadata {
-        Ok(meta)
+        meta
     } else {
         // First, check if the current platform is supported.
         let current_target = &host.host;
@@ -86,12 +79,15 @@ fn ensure_toolchain(
         // downloading and installing our custom toolchain.
         skip_prompt = skip_prompt || local_dir.is_some();
         if let Some(PromptResult::Yes) = prompt_user_unless(skip_prompt, INSTALL_PROMPT)? {
+            skip_prompt = true;
             fs::create_dir_all(toolchain_dir)?;
-            install_toolchain(sh, host, config, toolchain_dir, local_dir.as_deref())
+            install_toolchain(sh, host, config, toolchain_dir, local_dir.as_deref())?
         } else {
             std::process::exit(0)
         }
-    }
+    };
+    install_clang(sh, skip_prompt, config, &metadata, toolchain_dir)?;
+    Ok(metadata)
 }
 
 fn install_toolchain(
@@ -139,7 +135,6 @@ fn install_toolchain(
     download_unpack_install("rust", true)?;
     download_unpack_install("rust-dev", true)?;
     download_unpack_install("rust-src", false)?;
-    install_clang(sh, config, version, &toolchain_dir)?;
 
     let meta = version_meta(sh, TOOLCHAIN_NAME)?;
     cmd!(sh, "rustup override set {TOOLCHAIN_NAME}").quiet().run()?;
@@ -148,27 +143,45 @@ fn install_toolchain(
 
 pub fn install_clang(
     sh: &Shell,
+    skip_prompt: bool,
     config: &BsanConfig,
     version: &VersionMeta,
     toolchain_dir: &Path,
 ) -> Result<()> {
+    let rust_version = &version.semver;
+    let rust_semver =
+        format!("{}.{}.{}", rust_version.major, rust_version.minor, rust_version.patch);
     let llvm_sha_tag = &config.llvm_sha.as_str()[0..7];
-    let release_tag = format!("clang-{}", llvm_sha_tag);
-    let endpoint = path!(GH_ARTIFACT_URL / release_tag);
+    let release_tag = format!("clang-{llvm_sha_tag}-{rust_semver}");
 
-    let target = version.host.as_str();
-    let archive = format!("{release_tag}-{target}.tar.xz");
+    let lockfile = path!(toolchain_dir / ".clang.lock");
 
-    let artifact = path!(endpoint / archive);
-    let tmp_dir = sh.create_temp_dir()?;
-    let tar_path = path!(tmp_dir.path() / archive);
+    if lockfile.exists() && fs::read_to_string(&lockfile)?.eq(&release_tag) {
+        return Ok(());
+    }
 
-    let help_text = "Unable to download BorrowSanitizer's nightly build of Clang.";
+    if let Some(PromptResult::Yes) = prompt_user_unless(skip_prompt, INSTALL_PROMPT)? {
+        let endpoint = path!(GH_ARTIFACT_URL / release_tag);
 
-    utils::download_file(sh, &artifact, &tar_path, help_text)?;
-    utils::unpack(&tar_path, &toolchain_dir, None)?;
-    fs::remove_file(&tar_path)?;
-    Ok(())
+        let target = version.host.as_str();
+        let archive = format!("{release_tag}-{target}.tar.xz");
+
+        let artifact = path!(endpoint / archive);
+        let tmp_dir = sh.create_temp_dir()?;
+        let tar_path = path!(tmp_dir.path() / archive);
+
+        let help_text = "Unable to download BorrowSanitizer's nightly build of Clang.";
+
+        utils::download_file(sh, &artifact, &tar_path, help_text)?;
+        utils::unpack(&tar_path, toolchain_dir, None)?;
+        fs::remove_file(&tar_path)?;
+
+        fs::write(lockfile, release_tag)?;
+
+        Ok(())
+    } else {
+        std::process::exit(0)
+    }
 }
 
 pub fn ensure_llvm_cmake(
