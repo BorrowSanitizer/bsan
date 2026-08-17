@@ -849,7 +849,7 @@ Provenance Provenance::omnivalid(BorrowSanitizer &BS, ElementCount Elems) {
 
 Provenance Provenance::invalid(BorrowSanitizer &BS, ElementCount Elems) {
   if (Elems.isScalar()) {
-    Value *One = ConstantInt::get(BS.IntptrTy, 1);
+    Value *One = ConstantInt::get(BS.IntptrTy, 8);
     Value *InvalidPtr = ConstantPointerNull::get(BS.PtrTy);
     return Provenance(One, InvalidPtr, Elems);
   }
@@ -858,7 +858,7 @@ Provenance Provenance::invalid(BorrowSanitizer &BS, ElementCount Elems) {
 
 Provenance Provenance::wildcard(BorrowSanitizer &BS, ElementCount Elems) {
   if (Elems.isScalar()) {
-    Value *Two = ConstantInt::get(BS.IntptrTy, 2);
+    Value *Two = ConstantInt::get(BS.IntptrTy, 16);
     Value *InvalidPtr = ConstantPointerNull::get(BS.PtrTy);
     return Provenance(Two, InvalidPtr, Elems);
   }
@@ -1734,7 +1734,7 @@ private:
 
   Value *newBorrowTag(IRBuilder<> &IRB) {
     return IRB.CreateAtomicRMW(AtomicRMWInst::Add, BS.BorTagCounter,
-                               ConstantInt::get(BS.IntptrTy, 1), std::nullopt,
+                               ConstantInt::get(BS.IntptrTy, 8), std::nullopt,
                                AtomicOrdering::Monotonic);
   }
 

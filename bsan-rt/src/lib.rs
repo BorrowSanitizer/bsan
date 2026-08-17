@@ -188,12 +188,12 @@ impl BorTag {
 
     #[inline]
     pub const fn invalid() -> Self {
-        BorTag(1)
+        BorTag(8)
     }
 
     #[inline]
     pub const fn wildcard() -> Self {
-        BorTag(2)
+        BorTag(16)
     }
 
     #[inline]
@@ -204,7 +204,7 @@ impl BorTag {
 
 impl Default for BorTag {
     fn default() -> Self {
-        BorTag(unsafe { __BSAN_BOR_TAG_CTR.fetch_add(1, Ordering::Relaxed) })
+        BorTag(unsafe { __BSAN_BOR_TAG_CTR.fetch_add(8, Ordering::Relaxed) })
     }
 }
 

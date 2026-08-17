@@ -87,7 +87,7 @@ THREADLOCAL uptr __bsan_had_error = 0;
 // - 1: an invalid tag
 // - 2: a wildcard tag
 SANITIZER_INTERFACE_ATTRIBUTE
-atomic_uintptr_t __bsan_bor_tag_ctr{3};
+atomic_uintptr_t __bsan_bor_tag_ctr{3 * kMinProvAlignment};
 
 // Accumulates the number of tree-node visits performed by the Rust runtime
 // since the last garbage collection request
@@ -107,7 +107,7 @@ static const char *const kLibraryPathMarkers[] = {".cargo/", ".rustup/",
                                                   "cargo/", "rustup/"};
 // Allocates a new borrow tag.
 BorTag NewBorTag() {
-  return atomic_fetch_add(&__bsan_bor_tag_ctr, 1, memory_order_relaxed);
+  return atomic_fetch_add(&__bsan_bor_tag_ctr, 8, memory_order_relaxed);
 }
 
 // Asks the global context to run the garbage collector once the Rust runtime
