@@ -5,13 +5,15 @@
 // BSAN_FLAG(Type, Name, DefaultValue, Description)
 // See COMMON_FLAG in sanitizer_flags.inc for more details.
 
-BSAN_FLAG(bool, disable_node_debug_info, false,
-          "Disable NodeDebugInfo diagnostics from the tree.")
+BSAN_FLAG(bool, node_debug_info, true,
+          "Enable node-level diagnostics from the tree.")
 BSAN_FLAG(uptr, stacktrace_max_len, 3,
           "Maximum number of frames captured for BorrowSanitizer stack traces.")
 BSAN_FLAG(uptr, visits_per_gc, 150000,
           "Trigger a garbage collection request after this many retags."
           "0 disables the garbage collector.")
+BSAN_FLAG(bool, wildcard, true,
+          "Use wildcard provenance semantics.")
 BSAN_FLAG(uptr, tree_gc_min_nodes, 64,
           "Only prune borrow trees with more than this many nodes."
           "0 makes every initialized tree prunable.")

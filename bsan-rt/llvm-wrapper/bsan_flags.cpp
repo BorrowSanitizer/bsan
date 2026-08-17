@@ -90,7 +90,7 @@ static void ProcessFlags() {
   // Flag validation goes here.
 }
 
-void InitializeFlags() {
+void InitializeFlags(SharedSanitizerFlags &shared) {
   InitializeDefaultFlags();
   ProcessFlags();
 
@@ -115,21 +115,15 @@ void InitializeFlags() {
         ApplyFlags();
       });
 #endif
+
+#define COPY_FLAG(name) (shared.name = __bsan::flags()->name)
+  COPY_FLAG(node_debug_info);
+  COPY_FLAG(tree_gc_min_nodes);
+  COPY_FLAG(max_compacted_children);
+  COPY_FLAG(wildcard);
 }
 
 } // namespace __bsan
-
-extern "C" {
-SANITIZER_INTERFACE_ATTRIBUTE bool __bsan_disable_node_debug_info() {
-  return __bsan::flags()->disable_node_debug_info;
-}
-SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_tree_gc_min_nodes() {
-  return __bsan::flags()->tree_gc_min_nodes;
-}
-SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_max_compacted_children() {
-  return __bsan::flags()->max_compacted_children;
-}
-}
 
 SANITIZER_INTERFACE_WEAK_DEF(const char *, __bsan_default_options, void) {
   return "";

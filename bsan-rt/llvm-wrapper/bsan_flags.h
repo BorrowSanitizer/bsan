@@ -20,14 +20,20 @@ struct Flags {
 #define BSAN_FLAG(Type, Name, DefaultValue, Description) Type Name;
 #include "bsan_flags.inc"
 #undef BSAN_FLAG
-
   void SetDefaults();
+};
+
+extern "C" struct SharedSanitizerFlags {
+  bool wildcard;
+  bool node_debug_info;
+  uptr tree_gc_min_nodes;
+  uptr max_compacted_children;
 };
 
 extern Flags bsan_flags_dont_use_directly;
 inline Flags *flags() { return &bsan_flags_dont_use_directly; }
 
-void InitializeFlags();
+void InitializeFlags(SharedSanitizerFlags &shared);
 
 } // namespace __bsan
 

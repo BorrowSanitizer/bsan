@@ -31,7 +31,7 @@ mod errors;
 mod memory;
 
 use crate::helpers::{AllocRange, Size};
-use crate::sanitizer_common::Span;
+use crate::sanitizer_common::{SharedSanitizerFlags, Span};
 use crate::tree_borrows::perms::AccessKind;
 use crate::tree_borrows::tree::AllocStateImpl;
 use crate::tree_borrows::AllocState;
@@ -300,9 +300,9 @@ pub(crate) enum AllocInfoSummary {
 /// function having been executed. We assume the global invariant that
 /// no other API functions will be called prior to that point.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_internal_init() {
+unsafe extern "C-unwind" fn __bsan_internal_init(flags: NonNull<SharedSanitizerFlags>) {
     unsafe {
-        init_global_ctx();
+        init_global_ctx(flags);
     }
 }
 
@@ -376,12 +376,12 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
                 prov,
                 Size::from_addr(ptr),
                 Some(size),
-                |mut bt| bt.retag(retag_info, pc).map(Some),
+                |mut bt| bt.retag(ctx, retag_info, pc).map(Some),
             )
         }
     } else {
         BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(size), |mut bt| {
-            bt.retag(retag_info, pc).map(Some)
+            bt.retag(ctx, retag_info, pc).map(Some)
         })
     }
     .map(|opt| opt.unwrap_or(prov))
@@ -395,9 +395,10 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_protector_end_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo, pc: Span) {
+    let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
     BorrowTracker::for_alloc_weak(prov, |mut bt| {
-        let _ = bt.protector_end(pc);
+        let _ = bt.protector_end(ctx, pc);
     });
 }
 
@@ -421,12 +422,12 @@ unsafe extern "C-unwind" fn __bsan_read_impl(
                 prov,
                 Size::from_addr(ptr),
                 Some(access_size),
-                |mut bt| bt.access(AccessKind::Read, pc),
+                |mut bt| bt.access(ctx, AccessKind::Read, pc),
             )
         }
     } else {
         BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(access_size), |mut bt| {
-            bt.access(AccessKind::Read, pc)
+            bt.access(ctx, AccessKind::Read, pc)
         })
     }
     .unwrap_or_else(|err| ctx.handle_error(err, pc));
@@ -452,12 +453,12 @@ unsafe extern "C-unwind" fn __bsan_write_impl(
                 prov,
                 Size::from_addr(ptr),
                 Some(access_size),
-                |mut bt| bt.access(AccessKind::Write, pc),
+                |mut bt| bt.access(ctx, AccessKind::Write, pc),
             )
         }
     } else {
         BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(access_size), |mut bt| {
-            bt.access(AccessKind::Write, pc)
+            bt.access(ctx, AccessKind::Write, pc)
         })
     }
     .unwrap_or_else(|err| ctx.handle_error(err, pc));
@@ -607,10 +608,11 @@ unsafe extern "C" fn __bsan_prune(
     bor_tags: *mut BorTag,
     len: usize,
 ) -> bool {
+    let global_ctx = unsafe { global_ctx() };
     let alloc: AllocInfoPtr = alloc_info.into();
     let dead_tags = unsafe { slice::from_raw_parts_mut(bor_tags, len) };
     match alloc.tree.lock().as_mut() {
-        Some(tree) => tree.remove_dead_tags(dead_tags),
+        Some(tree) => tree.remove_dead_tags(global_ctx, dead_tags),
         None => {
             // The tree is already deallocated, so we can zero out dead_tags
             dead_tags.fill(BorTag::omnivalid());
