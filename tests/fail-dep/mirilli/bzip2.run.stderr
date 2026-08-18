@@ -2,23 +2,23 @@ error: Undefined Behavior: read access through <TAG>(unprotected) at ALLOC[0x8] 
    --> bsan/tests/fail-dep/mirilli/bzip2.rs:LL:CC
    |
 LL | c.read_to_end(&mut result).unwrap();
-   |
+   |   ^
     = note: the above line calls library code, where the error was detected:
    --> CARGO_REGISTRY/.../bzlib.rs:LL:CC
    |
 LL | if (s->avail_in_expect != s->strm->avail_in)
-   |
+   |                                    ^
     = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child read access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
    --> CARGO_REGISTRY/.../mem.rs:LL:CC
    |
 LL | ffi::BZ2_bzCompressInit(&mut *raw, lvl.level() as c_int, 0, work_factor as c_int),
-   |
+   |                         ^
 help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x8..0xc]
    --> CARGO_REGISTRY/.../mem.rs:LL:CC
    |
 LL | self.inner.raw.avail_in = input.len().min(c_uint::MAX as usize) as c_uint;
-   |
+   | ^
     = help: this transition corresponds to a loss of read and write permissions
 
 stack backtrace:
@@ -26,7 +26,7 @@ stack backtrace:
  at CARGO_REGISTRY/.../bzlib.rs:LL:CC
 1: <bzip2::mem::Compress>::compress
  at CARGO_REGISTRY/.../mem.rs:LL:CC
-2: <bzip2::bufread::BzEncoder<std::io::buffered::bufreader::BufReader<&[u8]>> as std::io::Read>::read
+2: <bzip2::bufread::BzEncoder<alloc::io::buffered::bufreader::BufReader<&[u8]>> as alloc::io::read::Read>::read
  at CARGO_REGISTRY/.../bufread.rs:LL:CC
 
 note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

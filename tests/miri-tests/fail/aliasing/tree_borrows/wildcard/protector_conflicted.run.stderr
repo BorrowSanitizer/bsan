@@ -2,7 +2,7 @@ error: Undefined Behavior: write access through <wildcard> at ALLOC[0x0] is forb
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/protector_conflicted.rs:LL:CC
    |
 LL | unsafe { *wild = 4 }; //miri: ~ ERROR: /write access through <wildcard> at .* is forbidden/
-   |
+   |          ^
    = help: there are no exposed tags which may perform this access here
 
 stack backtrace:

@@ -2,7 +2,7 @@ error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x0]
   --> bsan/tests/fail/aliasing/protected_write.rs:LL:CC
    |
 LL | unsafe { *p = 1 };
-   |
+   |          ^
    = help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
    = help: this foreign write access would cause the protected tag <TAG>(StrongProtector) (currently Reserved) to become Disabled
    = help: protected tags must never be Disabled
@@ -10,12 +10,12 @@ help: the accessed tag <TAG>(unprotected) was created here
   --> bsan/tests/fail/aliasing/protected_write.rs:LL:CC
    |
 LL | let rx = &mut x;
-   |
+   |          ^
 help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
   --> bsan/tests/fail/aliasing/protected_write.rs:LL:CC
    |
 LL | fn foo(_r: &mut i32, p: *mut i32) {
-   |
+   | ^
 
 stack backtrace:
 0: protected_write::foo

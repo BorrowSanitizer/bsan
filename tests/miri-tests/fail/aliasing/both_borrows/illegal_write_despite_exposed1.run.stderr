@@ -2,18 +2,18 @@ error: Undefined Behavior: read access through <TAG>(unprotected) at ALLOC[0x0] 
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_write_despite_exposed1.rs:LL:CC
    |
 LL | let _val = *root2; //miri: ~[tree]| ERROR: /read access through .* is forbidden/
-   |
+   |            ^
    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child read access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_write_despite_exposed1.rs:LL:CC
    |
 LL | let root2 = &*exposed_ptr;
-   |
+   |             ^
 help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x0..0x4]
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_write_despite_exposed1.rs:LL:CC
    |
 LL | *exposed_ptr = 0;
-   |
+   | ^
    = help: this transition corresponds to a loss of read permissions
 
 stack backtrace:

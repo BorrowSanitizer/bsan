@@ -15,3 +15,6 @@ BSAN_FLAG(uptr, visits_per_gc, 150000,
 BSAN_FLAG(uptr, tree_gc_min_nodes, 64,
           "Only prune borrow trees with more than this many nodes."
           "0 makes every initialized tree prunable.")
+BSAN_FLAG(uptr, max_compacted_children, 16,
+          "Only compact away a dead node by reparenting its children onto its"
+          "parent if doing so leaves the parent with at most this many children.")

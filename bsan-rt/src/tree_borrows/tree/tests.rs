@@ -865,8 +865,7 @@ fn add_child_perm(tree: &mut EagerTree, parent: BorTag, child: BorTag, perm: Per
         Size::from_bytes(ALLOC_BYTES),
         LocationState::new_non_accessed(perm, sifa),
     );
-    let result =
-        tree.new_child(Size::ZERO, parent, child, inside_perms, perm, false, Span::dummy());
+    let result = tree.new_child(Size::ZERO, parent, child, inside_perms, perm, None, Span::dummy());
     assert!(result.is_ok());
 }
 

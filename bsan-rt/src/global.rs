@@ -11,15 +11,18 @@ use crate::helpers::FxHashMap;
 use crate::memory::Heap;
 use crate::sanitizer_common::Span;
 use crate::tree_borrows::data_structures::{AccessType, RangeObjectMap};
-use crate::tree_borrows::{AllocStateImpl, ProtectorKind};
+use crate::tree_borrows::AllocStateImpl;
 use crate::*;
 
 pub static DISABLE_NODE_DEBUG_INFO: AtomicBool = AtomicBool::new(false);
 
-/// Only prune borrow trees with more than this many nodes. Initialized from
-/// the `tree_gc_min_nodes` flag; the default mirrors the one in `bsan_flags.inc`.
-pub static TREE_GC_MIN_NODES: AtomicUsize =
-    AtomicUsize::new(crate::tree_borrows::tree::GC_MIN_TREE_SIZE);
+/// Only prune borrow trees with more than this many nodes; this initial value is only
+/// the pre-init default and is replaced by the flag's default (64) in `bsan_flags.inc`.
+pub static TREE_GC_MIN_NODES: AtomicUsize = AtomicUsize::new(0);
+
+/// Upper bound on how many children can be resulted from compaction of a single node.
+/// The pre-init default and is replaced by the flag's default (16) in `bsan_flags.inc`.
+pub static MAX_COMPACTED_CHILDREN: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 /// Thread-local slot for a boxed `(UBInfo, Span)` set by `handle_error` and
 /// consumed by `__bsan_format_pending_ub` once the C++ side has captured the
@@ -31,6 +34,7 @@ unsafe extern "C" {
     fn __bsan_abort() -> !;
     fn __bsan_disable_node_debug_info() -> bool;
     fn __bsan_tree_gc_min_nodes() -> usize;
+    fn __bsan_max_compacted_children() -> usize;
 }
 
 /// Called from the `HANDLE_ERROR` C++ macro after the stack trace has been
@@ -49,49 +53,6 @@ pub unsafe extern "C" fn __bsan_format_pending_ub(user_frame_pc: usize) {
     );
     let mut ctx = ErrorFormatContext::default();
     crate::eprint!("error: {}", ctx.display_ub(ub_info, primary, origin));
-}
-
-#[derive(Default)]
-pub struct ProtectedTags(FxHashMap<BorTag, ProtectorKind>);
-
-impl ProtectedTags {
-    pub fn get_protector_kind(&self, tag: BorTag) -> Option<ProtectorKind> {
-        self.0.get(&tag).copied()
-    }
-
-    pub fn add_protector(&mut self, tag: BorTag, kind: ProtectorKind) {
-        self.0.insert(tag, kind);
-    }
-
-    pub fn remove_protector(&mut self, tag: BorTag) {
-        self.0.remove(&tag);
-    }
-}
-
-pub struct ProtectedTagsRefMut<'a>(RwLockWriteGuard<'a, ProtectedTags>);
-
-impl<'a> Deref for ProtectedTagsRefMut<'a> {
-    type Target = ProtectedTags;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<'a> DerefMut for ProtectedTagsRefMut<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-pub struct ProtectedTagsRef<'a>(RwLockReadGuard<'a, ProtectedTags>);
-
-impl<'a> Deref for ProtectedTagsRef<'a> {
-    type Target = ProtectedTags;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
 }
 
 pub struct ExposedProvenanceRef<'a>(RwLockReadGuard<'a, RangeObjectMap<AllocInfoPtr>>);
@@ -130,7 +91,6 @@ impl<'a> DerefMut for ExposedProvenanceRefMut<'a> {
 /// around explicitly, but it prevents us from relying on implicit global state and limits the spread
 /// of unsafety throughout the library.
 pub struct GlobalCtx {
-    protected_tags: RwLock<ProtectedTags>,
     alloc_metadata_map: Heap<AllocInfo>,
     snapshots: RwLock<FxHashMap<AllocId, AllocStateImpl>>,
     exposed_provenance: RwLock<RangeObjectMap<AllocInfoPtr>>,
@@ -139,7 +99,6 @@ pub struct GlobalCtx {
 impl GlobalCtx {
     fn new() -> Self {
         Self {
-            protected_tags: RwLock::new(ProtectedTags::default()),
             alloc_metadata_map: Heap::new(),
             snapshots: RwLock::new(FxHashMap::default()),
             exposed_provenance: RwLock::new(RangeObjectMap::new()),
@@ -152,14 +111,6 @@ impl GlobalCtx {
 
     pub(crate) unsafe fn destroy_alloc_info(&self, ptr: NonNull<AllocInfo>) {
         unsafe { self.alloc_metadata_map.dealloc(ptr) }
-    }
-
-    pub fn protected_tags<'a>(&'a self) -> ProtectedTagsRef<'a> {
-        ProtectedTagsRef(self.protected_tags.read())
-    }
-
-    pub fn protected_tags_mut<'a>(&'a self) -> ProtectedTagsRefMut<'a> {
-        ProtectedTagsRefMut(self.protected_tags.write())
     }
 
     #[allow(unused)]
@@ -317,6 +268,7 @@ pub unsafe fn init_global_ctx() {
         (*GLOBAL_CTX.0.get()).write(GlobalCtx::new());
         DISABLE_NODE_DEBUG_INFO.store(__bsan_disable_node_debug_info(), Ordering::Relaxed);
         TREE_GC_MIN_NODES.store(__bsan_tree_gc_min_nodes(), Ordering::Relaxed);
+        MAX_COMPACTED_CHILDREN.store(__bsan_max_compacted_children(), Ordering::Relaxed);
     }
 }
 

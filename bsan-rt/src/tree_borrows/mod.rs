@@ -1,7 +1,6 @@
 // This module was ported from Miri (commit:072a9fa) and modified by our team.
 // RetagMode and implicit writes are not implemented yet.
 #![allow(clippy::too_many_arguments)]
-use crate::global::ProtectedTags;
 use crate::tree_borrows::perms::AccessKind;
 use crate::{RetagFlags, RetagInfo};
 
@@ -20,8 +19,6 @@ pub use perms::*;
 
 use self::perms::Permission;
 pub use self::tree::{AllocState, AllocStateImpl, EagerTree, LazyTree};
-
-type GlobalState = ProtectedTags;
 
 /// Policy for a new borrow.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]

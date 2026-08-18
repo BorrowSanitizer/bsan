@@ -151,7 +151,7 @@ impl<T: Heapable> HeapBlock<T> {
         let header = unsafe { self.header.as_ref() };
         header
             .cursor
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |val| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |val| {
                 if val.addr() > header.limit.addr().into() {
                     header.increment_used();
                     // There's more than one element remaining in the block

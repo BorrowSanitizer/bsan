@@ -12,6 +12,59 @@ using namespace __sanitizer;
 
 namespace __bsan {
 
+struct ZeroCountTable {
+  typedef uptr Generation;
+  ~ZeroCountTable() {}
+
+private:
+  // A flag indicating that we are currently adding a value to the zero count
+  // table for this thread. If this flag is set when we stop the world, then we
+  // will skip merging its zero count table into the set of pending provenance
+  // values to garbage collect. We will still examine this thread's
+  // shadow stack to exclude reachable provenance values.
+  atomic_uint8_t busy_{};
+
+  Generation drained_gen_ = 0;
+
+  // Whenever we modify this zero-count table, we need to
+  // ensure that we are only doing so from the context of another table.
+  struct GCBarrier {
+    ZeroCountTable &zct;
+    GCBarrier(ZeroCountTable &zct) : zct(zct) {
+      atomic_store(&zct.busy_, 1, memory_order_release);
+    }
+    ~GCBarrier() { atomic_store(&zct.busy_, 0, memory_order_release); }
+  };
+
+  ConcreteProvenanceSet zct_;
+
+  // Adds a provenance value with a zero reference count
+  // to this table.
+public:
+  void acquireProvenance(Provenance Prov) {
+    // We use a release order here so that each of these
+    // stores is ordered before the "acquire" load used
+    // to check the value in `IsBusy`.
+    GCBarrier barrier(*this);
+    zct_.insert(Prov);
+  }
+
+  void drainFrom(ZeroCountTable &other) {
+    GCBarrier other_barrier(other);
+    GCBarrier this_barrier(*this);
+    zct_.takeFrom(other.zct_);
+  }
+
+  template <typename Fn> void retainIf(Generation gen, Fn retain) {
+    drained_gen_ = gen;
+    zct_.retainIf(retain);
+  }
+
+  Generation lastDrained() { return drained_gen_; }
+
+  bool isBusy() { return atomic_load(&busy_, memory_order_acquire) == 1; }
+};
+
 class BsanThread {
 public:
   // Allocates, but does not initialize an instance of the thread state
@@ -76,20 +129,7 @@ public:
 
   BsanThreadLocalMallocStorage &malloc_storage() { return malloc_storage_; }
 
-  // Adds a provenance value with a zero reference count
-  // to this thread's zero count table. Increments the
-  // "busy" flag to stop the garbage collector from
-  // including the contents of the zero count table, in
-  // case the world is stopped mid-acquire.
-  void AcquireProvenance(Provenance Prov) {
-    atomic_store(&zct_busy_, 1, memory_order_release);
-    zero_count_set_.insert(Prov);
-    atomic_store(&zct_busy_, 0, memory_order_release);
-  }
-
-  bool ZctBusy() const {
-    return atomic_load(&zct_busy_, memory_order_acquire) != 0;
-  }
+  ZeroCountTable zct;
 
 private:
   friend struct GlobalContext;
@@ -107,21 +147,6 @@ private:
   uptr shadow_stack_size_;
 
   BsanThreadLocalMallocStorage malloc_storage_;
-
-  // The set of concrete provenance values that reached
-  // a zero reference count while this thread was executing. This includes
-  // values that were decremented to zero, as well as newly allocated values,
-  // which begin at zero.
-  ConcreteProvenanceSet zero_count_set_;
-
-  // A flag indicating that we are currently adding a value to the zero count
-  // table for this thread. If this flag is set when we stop the world, then we
-  // will skip merging its zero count table into the set of pending provenance
-  // values to garbage collect. We will still examine this thread's
-  // shadow stack to exclude reachable provenance values.
-  atomic_uint8_t zct_busy_{};
-
-  uptr drained_gen_;
 
   // The address of this thread's thread-local allocation
   // containing the current value of its shadow stack
@@ -142,7 +167,7 @@ public:
   // from being visited by the garbage collector, so it needs to
   // happen before we deinitialize any of the other states associated
   // with this thread.
-  void DeregisterThread(ThreadId tid);
+  void DeregisterThread(BsanThread *thread);
 
   void LockThreads() SANITIZER_ACQUIRE() { mtx_.Lock(); }
   void UnlockThreads() SANITIZER_RELEASE() { mtx_.Unlock(); }
@@ -164,6 +189,10 @@ private:
   // A hashmap from each thread's `ThreadId`
   // to its state object.
   ThreadStateMap threads;
+  // When a thread exits, its zero count table needs to be
+  // retained, so that we can clean up any of the provenance
+  // values that it acquired in a future garbage collection pass.
+  ZeroCountTable global_zct;
   // We use an atomic counter to generate new `ThreadIds`.
   // We create a new ID every time a thread is registered.
   atomic_uintptr_t thread_id_ctr{0};

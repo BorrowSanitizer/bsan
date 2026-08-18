@@ -221,12 +221,7 @@ impl Default for BorTag {
 
 impl fmt::Debug for BorTag {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let global = unsafe { global_ctx() };
-        let protector = match global.protected_tags().get_protector_kind(*self) {
-            Some(kind) => &format!("{:?}", kind),
-            None => "unprotected",
-        };
-        write!(f, "<{}>({})", self.0, protector)
+        write!(f, "<{}>", self.0)
     }
 }
 
@@ -392,12 +387,12 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
                 prov,
                 Size::from_addr(ptr),
                 Some(size),
-                |mut bt| bt.retag(ctx, retag_info, pc).map(Some),
+                |mut bt| bt.retag(retag_info, pc).map(Some),
             )
         }
     } else {
         BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(size), |mut bt| {
-            bt.retag(ctx, retag_info, pc).map(Some)
+            bt.retag(retag_info, pc).map(Some)
         })
     }
     .map(|opt| opt.unwrap_or(prov))
@@ -411,14 +406,10 @@ unsafe extern "C-unwind" fn __bsan_retag_impl(
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_protector_end_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo, pc: Span) {
-    let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
     BorrowTracker::for_alloc_weak(prov, |mut bt| {
-        let _ = bt.protector_end(ctx, pc);
+        let _ = bt.protector_end(pc);
     });
-    // We need to remove the protector as a separate action from deallocation,
-    // because you can deallocate something through a protected tag.
-    ctx.protected_tags_mut().remove_protector(bor_tag);
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -441,12 +432,12 @@ unsafe extern "C-unwind" fn __bsan_read_impl(
                 prov,
                 Size::from_addr(ptr),
                 Some(access_size),
-                |mut bt| bt.access(ctx, AccessKind::Read, pc),
+                |mut bt| bt.access(AccessKind::Read, pc),
             )
         }
     } else {
         BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(access_size), |mut bt| {
-            bt.access(ctx, AccessKind::Read, pc)
+            bt.access(AccessKind::Read, pc)
         })
     }
     .unwrap_or_else(|err| ctx.handle_error(err, pc));
@@ -472,12 +463,12 @@ unsafe extern "C-unwind" fn __bsan_write_impl(
                 prov,
                 Size::from_addr(ptr),
                 Some(access_size),
-                |mut bt| bt.access(ctx, AccessKind::Write, pc),
+                |mut bt| bt.access(AccessKind::Write, pc),
             )
         }
     } else {
         BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(access_size), |mut bt| {
-            bt.access(ctx, AccessKind::Write, pc)
+            bt.access(AccessKind::Write, pc)
         })
     }
     .unwrap_or_else(|err| ctx.handle_error(err, pc));
@@ -671,10 +662,9 @@ extern "C" fn __bsan_print(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_print_borrow_state(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
-    let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
     BorrowTracker::for_alloc_weak(prov, |bt| {
-        bt.debug_print_tree(ctx, false);
+        bt.debug_print_tree(false);
     });
 }
 

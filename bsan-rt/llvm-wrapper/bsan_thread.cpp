@@ -32,8 +32,8 @@ void BsanThread::Init() {
 
 void BsanThread::Destroy(void *tsd) {
   BsanThread *t = (BsanThread *)tsd;
-  global_ctx()->Threads().DeregisterThread(t->id);
-  t->zero_count_set_.~ConcreteProvenanceSet();
+  global_ctx()->Threads().DeregisterThread(t);
+  t->zct.~ZeroCountTable();
   UnmapOrDie(t->shadow_stack_bottom_, t->shadow_stack_size_);
   uptr size = RoundUpTo(sizeof(BsanThread), GetPageSizeCached());
   UnmapOrDie(t, size);
@@ -61,7 +61,8 @@ void ThreadManager::RegisterThread(BsanThread *thread) {
   thread->id = tid;
 }
 
-void ThreadManager::DeregisterThread(ThreadId tid) {
+void ThreadManager::DeregisterThread(BsanThread *thread) {
   Lock l(&mtx_);
-  threads.erase(tid);
+  global_zct.drainFrom(thread->zct);
+  threads.erase(thread->id);
 }

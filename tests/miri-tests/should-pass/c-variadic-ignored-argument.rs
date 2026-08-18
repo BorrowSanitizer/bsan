@@ -3,7 +3,6 @@
 //miri: @ ignore-target: powerpc # does not ignore ZST arguments
 //miri: @ ignore-target: s390x # does not ignore ZST arguments
 //miri: @ ignore-target: sparc # does not ignore ZST arguments
-#![feature(c_variadic)]
 
 // Some platforms ignore ZSTs, meaning that the argument is not passed, even though it is part
 // of the callee's ABI. Test that this doesn't trip any asserts.

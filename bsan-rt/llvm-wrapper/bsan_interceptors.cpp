@@ -31,6 +31,9 @@ int OnExit() { return 0; }
 
 DECLARE_REAL(void *, malloc, SIZE_T)
 DECLARE_REAL(void, free, void *)
+DECLARE_REAL(void *, memcpy, void *dest, const void *src, SIZE_T n)
+DECLARE_REAL(void *, memset, void *dest, int c, SIZE_T n)
+DECLARE_REAL(void *, memmove, void *dest, const void *src, SIZE_T n)
 
 extern "C" int pthread_attr_init(void *attr);
 extern "C" int pthread_attr_destroy(void *attr);
@@ -159,7 +162,9 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
 static Provenance BsanAllocateMeta(void *ptr, SIZE_T size, uptr span) {
   BorTag tag = NewBorTag();
   AllocInfo *info = __bsan_alloc(ptr, size, tag, span);
-  return {tag, info};
+  Provenance prov = {tag, info};
+  CurrentThread()->zct.acquireProvenance(prov);
+  return prov;
 }
 
 static void *BsanAllocateMetaIntoStack(void *ptr, SIZE_T size, bool is_inst,
@@ -167,10 +172,9 @@ static void *BsanAllocateMetaIntoStack(void *ptr, SIZE_T size, bool is_inst,
   if (is_inst) {
     Provenance *slot = GetRetValSlot(slot_idx);
     Provenance prov = BsanAllocateMeta(ptr, size, span);
-    *slot = BsanAllocateMeta(ptr, size, span);
-    CurrentThread()->AcquireProvenance(prov);
+    *slot = prov;
   } else {
-    ClearSlot(slot_idx);
+    ClearRetValSlot(slot_idx);
   }
   return ptr;
 }
@@ -178,7 +182,8 @@ static void *BsanAllocateMetaIntoStack(void *ptr, SIZE_T size, bool is_inst,
 static void *BsanAllocateMetaIntoHeap(void *ptr, SIZE_T size, bool is_inst,
                                       uptr span, void *dest) {
   if (is_inst) {
-    WriteShadow(dest, BsanAllocateMeta(ptr, size, span));
+    Provenance prov = BsanAllocateMeta(ptr, size, span);
+    WriteShadow(dest, prov);
   } else {
     ClearShadow(dest, sizeof(void *));
   }
@@ -267,7 +272,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memset(void *dest, int c, uptr n) {
     internal_memset(dest, c, n);
   } else {
     ENSURE_BSAN_INITED();
-    internal_memset(dest, c, n);
+    REAL(memset)(dest, c, n);
     ClearShadow(dest, n);
   }
 }
@@ -278,7 +283,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memmove(void *dest, const void *src,
     internal_memmove(dest, src, n);
   } else {
     ENSURE_BSAN_INITED();
-    internal_memmove(dest, src, n);
+    REAL(memmove)(dest, src, n);
     MoveShadow(dest, src, n);
   }
 }
@@ -289,7 +294,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memcpy(void *dest, const void *src,
     internal_memcpy(dest, src, n);
   } else {
     ENSURE_BSAN_INITED();
-    internal_memcpy(dest, src, n);
+    REAL(memcpy)(dest, src, n);
     CopyShadow(dest, src, n);
   }
 }
@@ -307,13 +312,13 @@ void BSanAtExitWrapper() {
     stack.PopBack();
   }
 
-  ClearSlot(0);
+  ClearParamSlot(0);
   ((void (*)())r->func)();
   InternalFree(r);
 }
 
 void BSanCxaAtExitWrapper(void *arg) {
-  ClearSlot(0);
+  ClearParamSlot(0);
   AtExitRecord *r = (AtExitRecord *)arg;
   // libc before 2.27 had race which caused occasional double handler execution
   // https://sourceware.org/ml/libc-alpha/2017-08/msg01204.html

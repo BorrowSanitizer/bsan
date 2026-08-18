@@ -93,6 +93,15 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
         ),
     };
 
+    // This is sound in a single-threaded environment.
+    // Miri skips parting terminfo via a conditional
+    // compilation directive. We do not have equivalent
+    // upstream status, so instead, we unset this variable,
+    // which has the same effect.
+    unsafe {
+        env::remove_var("TERM");
+    }
+
     let env = EnvConfig::from_args();
 
     // Determine the involved architectures.

@@ -134,14 +134,22 @@ impl ErrorFormatContext {
                     .file_cache
                     .entry(path.clone())
                     .or_insert_with(|| SanitizerCommon::read_file(&path).unwrap_or_default());
-                if let Some(content) = SanitizerCommon::get_source_line(file, line) {
+                if let Some(content_raw) = SanitizerCommon::get_source_line(file, line) {
+                    let content = content_raw.trim_start();
+                    let trimmed_ws_diff = content_raw.len() - content.len();
+                    let content = content.trim_end();
+
                     let line = line.to_string();
                     let line_indent_len = max(indentation, line.len()) - line.len();
                     let line_indent = " ".repeat(line_indent_len);
 
                     buffer.push_str(&format!("{max_indent} |\n",));
                     buffer.push_str(&format!("{line_indent}{line} | {content}\n"));
-                    buffer.push_str(&format!("{max_indent} |\n",));
+
+                    let col = col as usize;
+                    let offset = col.saturating_sub(trimmed_ws_diff).saturating_sub(1);
+                    let column_repeat = " ".repeat(offset);
+                    buffer.push_str(&format!("{max_indent} | {column_repeat}^\n",));
                 }
             }
             Symbol::Unresolved { pc } => {

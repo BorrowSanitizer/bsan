@@ -2,18 +2,18 @@ error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x0] is 
  --> bsan/tests/fail/aliasing/forbidden_child_access.rs:LL:CC
    |
 LL | std::hint::black_box(r1);
-   |
+   |                      ^
   = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow (acting as a child read access)
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
  --> bsan/tests/fail/aliasing/forbidden_child_access.rs:LL:CC
    |
 LL | let r1 = unsafe { &mut *ptr };
-   |
+   |                   ^
 help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x0..0x4]
  --> bsan/tests/fail/aliasing/forbidden_child_access.rs:LL:CC
    |
 LL | *r2 += 1;
-   |
+   | ^
   = help: this transition corresponds to a loss of read and write permissions
 
 stack backtrace:

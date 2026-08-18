@@ -11,8 +11,8 @@ using namespace __bsan;
 
 namespace __bsan {
 
-void GlobalContext::CollectProvenance(const uptr, BsanThread *const &thread,
-                                      void *arg) {
+void GlobalContext::CollectProvenance(const ThreadId id,
+                                      BsanThread *const &thread, void *arg) {
   // Iterate over the shadow stacks for each thread,
   // collecting all provenance values into the snapshot.
   auto *state = static_cast<Snapshot *>(arg);
@@ -23,18 +23,25 @@ void GlobalContext::CollectProvenance(const uptr, BsanThread *const &thread,
   }
 }
 
-void GlobalContext::MergeZeroCounts(const uptr, BsanThread *const &thread,
-                                    void *arg) {
+void GlobalContext::MergeZeroCountsCallback(const ThreadId id,
+                                            BsanThread *const &thread,
+                                            void *arg) {
   auto *snap = static_cast<Snapshot *>(arg);
   if (!thread) {
     return;
   }
+  MergeZeroCounts(snap, thread->zct);
+}
+
+void GlobalContext::MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct) {
   // If the thread is not in the middle of updating its zero
   // count table, then we can drain its contents for garbage collection.
-  if (!thread->ZctBusy()) {
+  if (!zct.isBusy()) {
     // Move every unreachable value into the pending set, keeping the reachable
-    // ones in this thread's zero count table for a future collection.
-    thread->zero_count_set_.retainIf([&](AllocInfo *info, BorTag tag) -> bool {
+    // ones in this thread's zero count table for a future collection. Record
+    // the current generation as the last one when this thread's zero count
+    // table was drained.
+    zct.retainIf(snap->gen, [&](AllocInfo *info, BorTag tag) -> bool {
       Provenance prov = {tag, info};
       if (snap->live->contains(prov)) {
         return true;
@@ -42,17 +49,15 @@ void GlobalContext::MergeZeroCounts(const uptr, BsanThread *const &thread,
       global_ctx()->pending_.insert(prov);
       return false;
     });
-    // Record the current generation as the last one
-    // when this thread's zero count table was drained.
-    thread->drained_gen_ = snap->gen;
   }
 
   // The default value of `min_drained` is the current
   // generation. Its final value will be equal to the
   // minimum generation for any thread, after updating
   // the ZCT (if we were able to access it this time).
-  if (thread->drained_gen_ < snap->min_drained) {
-    snap->min_drained = thread->drained_gen_;
+  ZeroCountTable::Generation last_drained = zct.lastDrained();
+  if (last_drained < snap->min_drained) {
+    snap->min_drained = last_drained;
   }
 }
 
@@ -65,7 +70,10 @@ void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
   // in the set of live provenance values in the `SnapShot`, then remove
   // it from the ZCT and add it to the global "pending" set of provenance
   // values that need pruning.
-  threads.ForEachThread(MergeZeroCounts, arg);
+  threads.ForEachThread(MergeZeroCountsCallback, arg);
+  // We also need to visit the global ZCT, which contains garbage from threads
+  // that have exited since the last collection run.
+  MergeZeroCounts(static_cast<Snapshot *>(arg), threads.global_zct);
 }
 
 void GlobalContext::CollectGarbage(Snapshot &snap) {
