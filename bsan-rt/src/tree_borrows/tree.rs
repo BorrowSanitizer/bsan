@@ -22,8 +22,8 @@ use smallvec::SmallVec;
 
 use super::data_structures::{DedupRangeMap, UniIndex, UniKeyMap, UniValMap};
 use super::diagnostics::{
-    no_valid_exposed_references_error, AccessCause, DiagnosticInfo, NodeDebugInfo, TbError,
-    TransitionError,
+    no_valid_exposed_references_error, AccessCause, DiagnosticInfo, ErrorNode, NodeDebugInfo,
+    TbError, TransitionError,
 };
 use super::foreign_access_skipping::IdempotentForeignAccess;
 use super::perms::{AccessKind, PermTransition, Permission};
@@ -189,6 +189,11 @@ impl Node {
             self.default_initial_perm,
             self.default_initial_idempotent_foreign_access,
         )
+    }
+
+    /// How this node should be referred to by an error message.
+    fn error_node(&self) -> ErrorNode<'_> {
+        ErrorNode { info: &self.debug_info, protector: self.protector_kind }
     }
 }
 
@@ -849,13 +854,13 @@ impl LocationTree {
                     diagnostics,
                 )
                 .map_err(|error_kind| {
+                    let accessed = args.nodes.get(access_source).unwrap();
+                    let conflicting = args.nodes.get(args.idx).unwrap();
                     TbError {
                         error_kind,
                         access_info: diagnostics,
-                        conflicting_node_info: &args.nodes.get(args.idx).unwrap().debug_info,
-                        accessed_node_info: Some(
-                            &args.nodes.get(access_source).unwrap().debug_info,
-                        ),
+                        conflicting_node: conflicting.error_node(),
+                        accessed_node: Some(accessed.error_node()),
                     }
                     .build()
                 })
@@ -989,13 +994,13 @@ impl LocationTree {
                     diagnostics,
                 )
                 .map_err(|trans| {
-                    let node = args.nodes.get(args.idx).unwrap();
+                    let conflicting = args.nodes.get(args.idx).unwrap();
                     TbError {
                         error_kind: trans,
                         access_info: diagnostics,
-                        conflicting_node_info: &node.debug_info,
-                        accessed_node_info: access_source
-                            .map(|idx| &args.nodes.get(idx).unwrap().debug_info),
+                        conflicting_node: conflicting.error_node(),
+                        accessed_node: access_source
+                            .map(|idx| args.nodes.get(idx).unwrap().error_node()),
                     }
                     .build()
                 })
@@ -1032,7 +1037,7 @@ pub trait AllocState: Clone {
         new_tag: BorTag,
         inside_perms: DedupRangeMap<LocationState>,
         outside_perm: Permission,
-        protected: bool,
+        protector: Option<ProtectorKind>,
         span: Span,
     ) -> UBResult<()>;
     fn perform_access(
@@ -1082,7 +1087,7 @@ impl AllocState for LazyTree {
         new_tag: BorTag,
         inside_perms: DedupRangeMap<LocationState>,
         outside_perm: Permission,
-        protected: bool,
+        protector: Option<ProtectorKind>,
         span: Span,
     ) -> UBResult<()> {
         self.ensure_init();
@@ -1093,7 +1098,7 @@ impl AllocState for LazyTree {
             new_tag,
             inside_perms,
             outside_perm,
-            protected,
+            protector,
             span,
         )
     }
@@ -1208,9 +1213,10 @@ impl AllocState for EagerTree {
         new_tag: BorTag,
         inside_perms: DedupRangeMap<LocationState>,
         outside_perm: Permission,
-        protected: bool,
+        protector: Option<ProtectorKind>,
         span: Span,
     ) -> UBResult<()> {
+        let protected = protector.is_some();
         let idx = self.tag_mapping.insert(new_tag);
         let parent_idx = if parent_tag.is_wildcard() {
             None
@@ -1230,7 +1236,7 @@ impl AllocState for EagerTree {
                 default_initial_perm: outside_perm,
                 default_initial_idempotent_foreign_access: default_strongest_idempotent,
                 is_exposed: false,
-                protector_kind: None,
+                protector_kind: protector,
                 refcount: RefCount::new(),
                 debug_info: NodeDebugInfo::new(new_tag, outside_perm, span),
             },
@@ -1352,9 +1358,9 @@ impl AllocState for EagerTree {
                                 Err(TbError {
                                     error_kind: TransitionError::ProtectedDealloc,
                                     access_info: &diagnostics,
-                                    conflicting_node_info: &node.debug_info,
-                                    accessed_node_info: start_idx
-                                        .map(|idx| &args.nodes.get(idx).unwrap().debug_info),
+                                    conflicting_node: node.error_node(),
+                                    accessed_node: start_idx
+                                        .map(|idx| args.nodes.get(idx).unwrap().error_node()),
                                 }
                                 .build())
                             } else {

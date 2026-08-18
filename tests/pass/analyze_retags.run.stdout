@@ -1,21 +1,21 @@
 --- After &mut x ---
 New Tags:
-  <TAG>
+  <TAG>(unprotected)
 --- After scope 1 ---
 Permission Changes:
-  <TAG>:
+  <TAG>(unprotected):
     [0..4): Reserved -> Disabled
-  <TAG>:
+  <TAG>(unprotected):
     [0..4): Reserved -> Unique
 --- After second &mut x ---
 New Tags:
-  <TAG>
+  <TAG>(unprotected)
 Permission Changes:
-  <TAG>:
+  <TAG>(unprotected):
     [0..4): Unique -> Frozen
 --- After scope 2 ---
 Permission Changes:
-  <TAG>:
+  <TAG>(unprotected):
     [0..4): Frozen -> Disabled
-  <TAG>:
+  <TAG>(unprotected):
     [0..4): Reserved -> Unique

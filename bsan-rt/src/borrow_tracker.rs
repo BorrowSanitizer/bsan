@@ -359,7 +359,7 @@ impl<'b> BorrowTracker<'b> {
             new_tag,
             inside_perms,
             new_perm.outside_perm,
-            protected,
+            new_perm.protector,
             span,
         )?;
 
