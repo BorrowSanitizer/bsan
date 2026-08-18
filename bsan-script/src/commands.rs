@@ -96,7 +96,6 @@ impl Command {
         cmd!(env.sh, "rm -rf {cargo_test_path}").run()?;
         cmd!(env.sh, "python3 tests/test-cargo-bsan/run_test.py").run()?;
         Self::stats(env)?;
-
         Ok(())
     }
 
@@ -108,7 +107,6 @@ impl Command {
             Self::fmt(env, true)?;
             components.iter().try_for_each(|c| c.clippy(env, args))?;
             components.iter().try_for_each(|c| c.test(env, args))?;
-            //components.iter().try_for_each(|c| c.miri(env, args))?;
             Self::ui(env, false, false, allow_unsafe_deps)
         })
     }
