@@ -53,13 +53,12 @@
     <p>
       To summarize the performance of a crate, we calculate relative execution time for every unit test
       and report the mean value. We use <a rel="noopener" href="https://github.com/sharkdp/hyperfine">hyperfine</a>
-      to measure individual tests, recording wall time as the mean of three iterations after a "warm-up" run.
+      to measure individual tests, and we record wall time as the mean of three iterations after a "warm-up" run.
     </p>
     <p>
-      We also use <a rel="noopener" href="https://github.com/BorrowSanitizer/rust">a fork</a> of the Rust
-      compiler. This includes a change to Rust's test harness that lets us disable parsing information about
-      the user's terminal. Miri already disables this feature using its own conditional compilation directive.
-      We use this configuration for both the "native" baseline and each of BorrowSanitizer's configurations.
+      We compile crates under BorrowSanitizer using our Cargo plugin. This plugin configures libtest as if it were
+      being built for Miri, which disables parsing information about the user's terminal. This process is slow under
+      both Miri and BorrowSanitizer.
     </p>
   </div>
 </section>
