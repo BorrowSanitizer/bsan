@@ -93,15 +93,6 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
         ),
     };
 
-    // This is sound in a single-threaded environment.
-    // Miri skips parting terminfo via a conditional
-    // compilation directive. We do not have equivalent
-    // upstream status, so instead, we unset this variable,
-    // which has the same effect.
-    unsafe {
-        env::remove_var("TERM");
-    }
-
     let env = EnvConfig::from_args();
 
     // Determine the involved architectures.
@@ -295,6 +286,13 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
             // Rustdoc already receives the sysroot via its dedicated phase, so we do not want
             // to set it twice.
             cmd.arg("--sysroot").arg(expect_env("BSAN_SYSROOT"));
+        }
+        // During setup, configure libtest as if we were Miri. It has Miri-specific
+        // configuration options.
+        if phase == RustcPhase::Setup
+            && get_arg_flag_value("--crate-name").as_deref() == Some("test")
+        {
+            cmd.arg("--cfg=miri");
         }
         if phase == RustcPhase::Setup
             && get_arg_flag_value("--crate-name").as_deref() == Some("panic_abort")
