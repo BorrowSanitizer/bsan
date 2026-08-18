@@ -296,8 +296,8 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
             // to set it twice.
             cmd.arg("--sysroot").arg(expect_env("BSAN_SYSROOT"));
         }
-        // During setup, patch the panic runtime for `libpanic_abort`
-        // (mirroring what bootstrap usually does).
+        // During setup, configure libtest as if we were Miri. It has Miri-specific
+        // configuration options.
         if phase == RustcPhase::Setup
             && get_arg_flag_value("--crate-name").as_deref() == Some("test")
         {
