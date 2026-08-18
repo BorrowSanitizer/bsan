@@ -34,7 +34,7 @@ use crate::errors::UBResult;
 use crate::global::{MAX_COMPACTED_CHILDREN, TREE_GC_MIN_NODES};
 use crate::helpers::{AllocRange, Size};
 use crate::sanitizer_common::Span;
-use crate::tree_borrows::{GlobalState, ProtectorKind};
+use crate::tree_borrows::ProtectorKind;
 use crate::*;
 
 // Features in ./bsan-rt/Cargo.toml
@@ -174,6 +174,8 @@ pub struct Node {
     default_initial_idempotent_foreign_access: IdempotentForeignAccess,
     /// Whether a wildcard access could happen through this node.
     pub is_exposed: bool,
+    /// If the node is currently protected.
+    pub protector_kind: Option<ProtectorKind>,
     /// Number of live references to this node. Always accessed under the
     /// allocation's tree `Mutex`.
     pub refcount: RefCount,
@@ -425,6 +427,7 @@ impl EagerTree {
                     // The root may never be skipped, all accesses will be local.
                     default_initial_idempotent_foreign_access: IdempotentForeignAccess::None,
                     is_exposed: false,
+                    protector_kind: None,
                     refcount: RefCount::new(),
                     debug_info,
                 },
@@ -732,7 +735,6 @@ impl LocationTree {
         nodes: &mut UniValMap<Node>,
         access_source: Option<UniIndex>,
         access_kind: AccessKind,
-        global: &GlobalState,
         visit_children: ChildrenVisitMode,
         diagnostics: &DiagnosticInfo,
         min_exposed_child: Option<BorTag>,
@@ -742,7 +744,6 @@ impl LocationTree {
                 idx,
                 nodes,
                 access_kind,
-                global,
                 visit_children,
                 diagnostics,
             )?)
@@ -790,7 +791,6 @@ impl LocationTree {
                 /*max_local_tag*/ accessed_root_tag,
                 nodes,
                 access_kind,
-                global,
                 diagnostics,
                 /*is_wildcard_tree*/ i != 0,
             )?;
@@ -809,7 +809,6 @@ impl LocationTree {
         access_source: UniIndex,
         nodes: &mut UniValMap<Node>,
         access_kind: AccessKind,
-        global: &GlobalState,
         visit_children: ChildrenVisitMode,
         diagnostics: &DiagnosticInfo,
     ) -> UBResult<UniIndex> {
@@ -838,7 +837,7 @@ impl LocationTree {
 
             let state = perm.or_insert(node.default_location_state());
 
-            let protected = global.get_protector_kind(node.tag).is_some();
+            let protected = node.protector_kind.is_some();
             state
                 .perform_transition(
                     args.idx,
@@ -892,7 +891,6 @@ impl LocationTree {
         max_local_tag: Option<BorTag>,
         nodes: &mut UniValMap<Node>,
         access_kind: AccessKind,
-        global: &GlobalState,
         diagnostics: &DiagnosticInfo,
         is_wildcard_tree: bool,
     ) -> UBResult<()> {
@@ -950,7 +948,7 @@ impl LocationTree {
                 visit_count += 1;
                 let node = args.nodes.get_mut(args.idx).unwrap();
 
-                let protected = global.get_protector_kind(node.tag).is_some();
+                let protected = node.protector_kind.is_some();
 
                 let Some(wildcard_relatedness) = get_relatedness(args.idx, node, args.data) else {
                     // There doesn't exist a valid exposed reference for this access to
@@ -1022,6 +1020,7 @@ impl LocationTree {
 /// through this trait; the underlying implementations are
 /// module-private.
 pub trait AllocState: Clone {
+    fn get_protector_kind(&self, tag: BorTag) -> Option<ProtectorKind>;
     fn contains_tag(&self, tag: BorTag) -> bool;
     fn node_count(&self) -> usize;
     fn increment(&self, tag: BorTag) -> bool;
@@ -1042,7 +1041,6 @@ pub trait AllocState: Clone {
         access_range: AllocRange,
         access_kind: AccessKind,
         access_cause: AccessCause,
-        global: &GlobalState,
         alloc_id: AllocId,
         span: Span,
     ) -> UBResult<()>;
@@ -1050,14 +1048,12 @@ pub trait AllocState: Clone {
         &mut self,
         tag: BorTag,
         access_range: AllocRange,
-        global: &GlobalState,
         alloc_id: AllocId,
         span: Span,
     ) -> UBResult<()>;
     fn perform_protector_end_access(
         &mut self,
         tag: BorTag,
-        global: &GlobalState,
         alloc_id: AllocId,
         span: Span,
     ) -> UBResult<()>;
@@ -1107,46 +1103,37 @@ impl AllocState for LazyTree {
         access_range: AllocRange,
         access_kind: AccessKind,
         access_cause: AccessCause,
-        global: &GlobalState,
         alloc_id: AllocId,
         span: Span,
     ) -> UBResult<()> {
         match self {
             LazyTree::Uninit { .. } => Ok(()),
-            LazyTree::Init(tree) => tree.perform_access(
-                tag,
-                access_range,
-                access_kind,
-                access_cause,
-                global,
-                alloc_id,
-                span,
-            ),
+            LazyTree::Init(tree) => {
+                tree.perform_access(tag, access_range, access_kind, access_cause, alloc_id, span)
+            }
         }
     }
     fn dealloc(
         &mut self,
         tag: BorTag,
         access_range: AllocRange,
-        global: &GlobalState,
         alloc_id: AllocId,
         span: Span,
     ) -> UBResult<()> {
         match self {
             LazyTree::Uninit { .. } => Ok(()),
-            LazyTree::Init(tree) => tree.dealloc(tag, access_range, global, alloc_id, span),
+            LazyTree::Init(tree) => tree.dealloc(tag, access_range, alloc_id, span),
         }
     }
     fn perform_protector_end_access(
         &mut self,
         tag: BorTag,
-        global: &GlobalState,
         alloc_id: AllocId,
         span: Span,
     ) -> UBResult<()> {
         match self {
             LazyTree::Uninit { .. } => Ok(()),
-            LazyTree::Init(tree) => tree.perform_protector_end_access(tag, global, alloc_id, span),
+            LazyTree::Init(tree) => tree.perform_protector_end_access(tag, alloc_id, span),
         }
     }
     fn expose_tag(&mut self, tag: BorTag, protected: bool) {
@@ -1198,6 +1185,13 @@ impl AllocState for LazyTree {
             LazyTree::Init(tree) => tree.decrement(tag),
         }
     }
+
+    fn get_protector_kind(&self, tag: BorTag) -> Option<ProtectorKind> {
+        match self {
+            LazyTree::Uninit { .. } => None,
+            LazyTree::Init(tree) => tree.get_protector_kind(tag),
+        }
+    }
 }
 
 impl AllocState for EagerTree {
@@ -1236,6 +1230,7 @@ impl AllocState for EagerTree {
                 default_initial_perm: outside_perm,
                 default_initial_idempotent_foreign_access: default_strongest_idempotent,
                 is_exposed: false,
+                protector_kind: None,
                 refcount: RefCount::new(),
                 debug_info: NodeDebugInfo::new(new_tag, outside_perm, span),
             },
@@ -1278,7 +1273,6 @@ impl AllocState for EagerTree {
         access_range: AllocRange,
         access_kind: AccessKind,
         access_cause: AccessCause,
-        global: &GlobalState,
         alloc_id: AllocId,
         span: Span,
     ) -> UBResult<()> {
@@ -1303,7 +1297,6 @@ impl AllocState for EagerTree {
                 &mut self.nodes,
                 source_idx,
                 access_kind,
-                global,
                 ChildrenVisitMode::VisitChildrenOfAccessed,
                 &diagnostics,
                 /* min_exposed_child */ None,
@@ -1315,7 +1308,6 @@ impl AllocState for EagerTree {
         &mut self,
         tag: BorTag,
         access_range: AllocRange,
-        global: &GlobalState,
         alloc_id: AllocId,
         span: Span,
     ) -> UBResult<()> {
@@ -1324,7 +1316,6 @@ impl AllocState for EagerTree {
             access_range,
             AccessKind::Write,
             AccessCause::Dealloc,
-            global,
             alloc_id,
             span,
         )?;
@@ -1354,8 +1345,7 @@ impl AllocState for EagerTree {
                                 .get(args.idx)
                                 .copied()
                                 .unwrap_or_else(|| node.default_location_state());
-                            if global.get_protector_kind(node.tag)
-                                == Some(ProtectorKind::StrongProtector)
+                            if node.protector_kind == Some(ProtectorKind::StrongProtector)
                                 && !perm.permission.is_cell()
                                 && perm.accessed
                             {
@@ -1386,7 +1376,6 @@ impl AllocState for EagerTree {
     fn perform_protector_end_access(
         &mut self,
         tag: BorTag,
-        global: &GlobalState,
         alloc_id: AllocId,
         span: Span,
     ) -> UBResult<()> {
@@ -1420,7 +1409,6 @@ impl AllocState for EagerTree {
                     &mut self.nodes,
                     Some(source_idx),
                     access_kind,
-                    global,
                     ChildrenVisitMode::SkipChildrenOfAccessed,
                     &diagnostics,
                     min_exposed_child,
@@ -1432,6 +1420,10 @@ impl AllocState for EagerTree {
         // reflect that it is no longer protected: accesses that were UB while
         // the protector was active may be permitted again.
         self.update_exposure_for_protector_release(tag);
+
+        // Remove the protector from the node.
+        let node = self.nodes.get_mut(source_idx).unwrap();
+        node.protector_kind = None;
 
         Ok(())
     }
@@ -1481,5 +1473,12 @@ impl AllocState for EagerTree {
             .and_then(|idx| self.nodes.get(idx))
             .map(|node| node.refcount.decrement_nonatomic())
             .unwrap_or(false)
+    }
+
+    fn get_protector_kind(&self, tag: BorTag) -> Option<ProtectorKind> {
+        self.tag_mapping
+            .get(&tag)
+            .and_then(|idx| self.nodes.get(idx))
+            .and_then(|node| node.protector_kind)
     }
 }

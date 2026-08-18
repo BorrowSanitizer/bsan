@@ -639,6 +639,7 @@ struct DisplayRepr {
     tag: BorTag,
     name: Option<String>,
     exposed: bool,
+    protector_kind: Option<ProtectorKind>,
     rperm: Vec<Option<LocationState>>,
     children: Vec<DisplayRepr>,
 }
@@ -667,6 +668,7 @@ impl DisplayRepr {
             let node = tree.nodes.get(idx).unwrap();
             let name = node.debug_info.name.clone();
             let exposed = node.is_exposed;
+            let protector_kind = node.protector_kind;
             let children_sorted = {
                 let mut children = node.children.iter().cloned().collect::<Vec<_>>();
                 children.sort_by_key(|idx| tree.nodes.get(*idx).unwrap().tag);
@@ -691,7 +693,14 @@ impl DisplayRepr {
                 for child_idx in children_sorted {
                     extraction_aux(tree, child_idx, show_unnamed, &mut children);
                 }
-                acc.push(DisplayRepr { tag: node.tag, name, rperm, children, exposed });
+                acc.push(DisplayRepr {
+                    tag: node.tag,
+                    name,
+                    rperm,
+                    children,
+                    exposed,
+                    protector_kind,
+                });
             }
         }
     }
@@ -700,7 +709,6 @@ impl DisplayRepr {
         wildcard_subtrees: &[DisplayRepr],
         fmt: &DisplayFmt,
         indenter: &mut DisplayIndent,
-        protected_tags: &ProtectedTagsRef<'_>,
         ranges: Vec<Range<u64>>,
         print_warning: bool,
     ) {
@@ -740,7 +748,6 @@ impl DisplayRepr {
                 &range_padding,
                 fmt,
                 indenter,
-                protected_tags,
                 true,  /* root _is_ the last child */
                 false, /* not a wildcard_root*/
                 &mut block,
@@ -763,7 +770,6 @@ impl DisplayRepr {
                 &range_padding,
                 fmt,
                 indenter,
-                protected_tags,
                 true, /* root _is_ the last child */
                 true, /* wildcard_root*/
                 &mut block,
@@ -796,7 +802,6 @@ impl DisplayRepr {
             padding: &[usize],
             fmt: &DisplayFmt,
             indent: &mut DisplayIndent,
-            protected_tags: &ProtectedTagsRef<'_>,
             is_last_child: bool,
             is_wildcard_root: bool,
             acc: &mut Vec<String>,
@@ -835,8 +840,7 @@ impl DisplayRepr {
                 line.push_str(fmt.padding.join_default);
             }
             line.push_str(&fmt.print_tag(tree.tag, &tree.name));
-            let protector = protected_tags.get_protector_kind(tree.tag);
-            line.push_str(fmt.print_protector(protector.as_ref()));
+            line.push_str(fmt.print_protector(tree.protector_kind.as_ref()));
             line.push_str(fmt.print_exposed(tree.exposed));
             // Push the line to the accumulator then recurse.
             acc.push(line);
@@ -848,7 +852,6 @@ impl DisplayRepr {
                     padding,
                     fmt,
                     indent,
-                    protected_tags,
                     /* is_last_child */ i + 1 == nb_children,
                     /* is_wildcard_root */ false,
                     acc,
@@ -880,7 +883,7 @@ const DEFAULT_FORMATTER: DisplayFmt = DisplayFmt {
 
 impl EagerTree {
     /// Display the contents of the tree.
-    pub fn print_tree(&self, protected_tags: &ProtectedTagsRef<'_>, show_unnamed: bool) {
+    pub fn print_tree(&self, show_unnamed: bool) {
         let mut indenter = DisplayIndent::new();
         let ranges = self.locations.iter_all().map(|(range, _loc)| range).collect::<Vec<_>>();
         let main_tree = DisplayRepr::from(self, self.roots[0], show_unnamed);
@@ -900,14 +903,13 @@ impl EagerTree {
             wildcard_subtrees.as_slice(),
             &DEFAULT_FORMATTER,
             &mut indenter,
-            protected_tags,
             ranges,
             /* print warning message about tags not shown */ !show_unnamed,
         );
     }
 
     // Print the diff between me and an older tree
-    pub fn print_tree_diff(&self, old_tree: &EagerTree, _protected_tags: &ProtectedTagsRef<'_>) {
+    pub fn print_tree_diff(&self, old_tree: &EagerTree) {
         let mut new_tags = Vec::new();
         let mut changed_tags = Vec::new();
 
@@ -967,16 +969,16 @@ impl EagerTree {
 }
 
 impl LazyTree {
-    pub fn print_tree(&self, protected_tags: &ProtectedTagsRef<'_>, show_unnamed: bool) {
+    pub fn print_tree(&self, show_unnamed: bool) {
         match self {
-            LazyTree::Init(tree) => tree.print_tree(protected_tags, show_unnamed),
+            LazyTree::Init(tree) => tree.print_tree(show_unnamed),
             LazyTree::Uninit { root_tag, size, span, .. } => {
-                EagerTree::new(*root_tag, *size, *span).print_tree(protected_tags, show_unnamed)
+                EagerTree::new(*root_tag, *size, *span).print_tree(show_unnamed)
             }
         }
     }
 
-    pub fn print_tree_diff(&self, old_tree: &LazyTree, protected_tags: &ProtectedTagsRef<'_>) {
+    pub fn print_tree_diff(&self, old_tree: &LazyTree) {
         let self_tree = match self {
             LazyTree::Init(t) => t.clone(),
             LazyTree::Uninit { root_tag, size, span, .. } => {
@@ -989,6 +991,6 @@ impl LazyTree {
                 EagerTree::new(*root_tag, *size, *span)
             }
         };
-        self_tree.print_tree_diff(&old_tree, protected_tags);
+        self_tree.print_tree_diff(&old_tree);
     }
 }
