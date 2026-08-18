@@ -115,9 +115,11 @@ struct ScopedStopTheWorldLock {
     // once we resume.
     global_ctx()->Threads().LockThreads();
     LockAllocator();
+    InternalAllocatorLock();
   }
 
   ~ScopedStopTheWorldLock() {
+    InternalAllocatorUnlock();
     UnlockAllocator();
     global_ctx()->Threads().UnlockThreads();
   }
