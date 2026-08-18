@@ -55,7 +55,7 @@ pub const BSAN_DEFAULT_RUSTFLAGS: &[&str] = &[
     "-Zinline-llvm=no",
     "-Cembed-bitcode=yes",
     "-Cdebuginfo=2",
-    "-Zmir-enable-passes=-CheckAlignment",
+    "-Zmir-enable-passes=-CheckAlignment,-CheckNull,-CheckEnums",
 ];
 
 pub const BSAN_DEFAULT_CFLAGS: &[&str] =
@@ -301,7 +301,7 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
         if phase == RustcPhase::Setup
             && get_arg_flag_value("--crate-name").as_deref() == Some("test")
         {
-            cmd.arg("-C").arg("cfg=abort");
+            cmd.arg("--cfg=miri");
         }
         if phase == RustcPhase::Setup
             && get_arg_flag_value("--crate-name").as_deref() == Some("panic_abort")
