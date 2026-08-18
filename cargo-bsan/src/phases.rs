@@ -55,7 +55,7 @@ pub const BSAN_DEFAULT_RUSTFLAGS: &[&str] = &[
     "-Zinline-llvm=no",
     "-Cembed-bitcode=yes",
     "-Cdebuginfo=2",
-    "-Cdebug-assertions=off",
+    "-Zmir-enable-passes=-CheckAlignment",
 ];
 
 pub const BSAN_DEFAULT_CFLAGS: &[&str] =
@@ -298,6 +298,11 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
         }
         // During setup, patch the panic runtime for `libpanic_abort`
         // (mirroring what bootstrap usually does).
+        if phase == RustcPhase::Setup
+            && get_arg_flag_value("--crate-name").as_deref() == Some("test")
+        {
+            cmd.arg("-C").arg("cfg=abort");
+        }
         if phase == RustcPhase::Setup
             && get_arg_flag_value("--crate-name").as_deref() == Some("panic_abort")
         {
