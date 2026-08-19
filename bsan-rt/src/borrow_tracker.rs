@@ -274,7 +274,12 @@ impl<'b> BorrowTracker<'b> {
         }
     }
 
-    pub fn retag(&mut self, retag_info: RetagInfo<'_>, span: Span) -> UBResult<Provenance> {
+    pub fn retag(
+        &mut self,
+        global_ctx: &GlobalCtx,
+        retag_info: RetagInfo<'_>,
+        span: Span,
+    ) -> UBResult<Provenance> {
         let alloc_id = self.alloc_info.alloc_id.get();
         let parent_tag = self.bor_tag;
         let new_tag = BorTag::default();
@@ -342,6 +347,7 @@ impl<'b> BorrowTracker<'b> {
 
                 // Perform the access (update the Tree Borrows FSM)
                 self.tree.perform_access(
+                    global_ctx,
                     parent_tag,
                     range_in_alloc,
                     access_kind,
@@ -378,8 +384,13 @@ impl<'b> BorrowTracker<'b> {
         Ok(Provenance { alloc_info: self.alloc_info.0.as_ptr(), bor_tag: new_tag })
     }
 
-    pub fn protector_end(&mut self, span: Span) -> UBResult<()> {
-        self.tree.perform_protector_end_access(self.bor_tag, self.alloc_info.alloc_id.get(), span)
+    pub fn protector_end(&mut self, global_ctx: &GlobalCtx, span: Span) -> UBResult<()> {
+        self.tree.perform_protector_end_access(
+            global_ctx,
+            self.bor_tag,
+            self.alloc_info.alloc_id.get(),
+            span,
+        )
     }
 
     /// Increments the reference count, returning `true` if the count went from
@@ -394,7 +405,12 @@ impl<'b> BorrowTracker<'b> {
         Ok(self.tree.decrement(self.bor_tag))
     }
 
-    pub fn access(&mut self, access_kind: AccessKind, span: Span) -> UBResult<()> {
+    pub fn access(
+        &mut self,
+        global_ctx: &GlobalCtx,
+        access_kind: AccessKind,
+        span: Span,
+    ) -> UBResult<()> {
         // E3/E4: the read or write access, by the accessing tag.
         match (access_kind, self.bor_tag.is_wildcard()) {
             (AccessKind::Read, false) => crate::log_event!("E3: Read(t{})", self.bor_tag.get()),
@@ -403,6 +419,7 @@ impl<'b> BorrowTracker<'b> {
             (AccessKind::Write, true) => crate::log_event!("E4: Write(tw)"),
         }
         self.tree.perform_access(
+            global_ctx,
             self.bor_tag,
             self.range,
             access_kind,
@@ -413,20 +430,29 @@ impl<'b> BorrowTracker<'b> {
     }
 
     pub fn dealloc(mut self, global_ctx: &GlobalCtx, span: Span) -> UBResult<()> {
-        self.tree.take().dealloc(self.bor_tag, self.range, self.alloc_info.alloc_id.get(), span)?;
+        self.tree.take().dealloc(
+            global_ctx,
+            self.bor_tag,
+            self.range,
+            self.alloc_info.alloc_id.get(),
+            span,
+        )?;
         let range = unsafe { self.alloc_info.range() };
         global_ctx.remove_exposed_provenance(range, true);
         Ok(())
     }
 
     pub fn expose_tag(&mut self, global_ctx: &GlobalCtx) -> UBResult<()> {
+        if !global_ctx.flags.wildcard {
+            return Ok(());
+        }
         let tag = self.bor_tag;
         let range = unsafe { self.alloc_info.range() };
 
         // Ranges in the mapping must be non-empty, and a wildcard access can
         // never resolve to a zero-sized allocation anyway.
         if range.size > Size::ZERO {
-            let mut exposed = global_ctx.exposed_provenance_mut();
+            let mut exposed = global_ctx.exposed_provenance();
             if let AccessType::Empty(pos) = exposed.access_type(range) {
                 exposed.insert_at_pos(pos, range, self.alloc_info);
             }

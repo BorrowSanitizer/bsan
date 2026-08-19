@@ -16,7 +16,6 @@
 // use alloc::boxed::Box;
 use core::cell::Cell;
 use core::ops::Range;
-use core::sync::atomic::Ordering::Relaxed;
 use core::{cmp, fmt, mem};
 
 use smallvec::SmallVec;
@@ -32,7 +31,6 @@ use super::refcount::RefCount;
 use super::tree_visitor::{ChildrenVisitMode, ContinueTraversal, NodeAppArgs, TreeVisitor};
 use super::wildcard::{ExposedCache, WildcardAccessLevel};
 use crate::errors::UBResult;
-use crate::global::{MAX_COMPACTED_CHILDREN, TREE_GC_MIN_NODES};
 use crate::helpers::{AllocRange, Size};
 use crate::sanitizer_common::Span;
 use crate::tree_borrows::ProtectorKind;
@@ -248,6 +246,7 @@ impl LocationState {
     /// perm and wildcard_state to reflect the transition.
     fn perform_transition(
         &mut self,
+        global_ctx: &GlobalCtx,
         idx: UniIndex,
         nodes: &mut UniValMap<Node>,
         exposed_cache: &mut ExposedCache,
@@ -264,10 +263,13 @@ impl LocationState {
         let transition = self.perform_access(access_kind, relatedness, protected)?;
         if !transition.is_noop() {
             let node = nodes.get_mut(idx).unwrap();
-            // Record the event as part of the history.
-            node.debug_info
-                .history
-                .push(diagnostics.create_event(transition, relatedness.is_foreign()));
+
+            if global_ctx.flags.node_debug_info {
+                // Record the event as part of the history.
+                node.debug_info
+                    .history
+                    .push(diagnostics.create_event(transition, relatedness.is_foreign()));
+            }
 
             // We need to update the wildcard state, if the permission
             // of an exposed pointer changes.
@@ -535,7 +537,7 @@ impl EagerTree {
     /// Like [`Self::can_be_replaced_by_single_child`], but for a node with more than one
     /// child. This requires the stronger [`Permission::can_be_replaced_by_children`] check, and
     /// it must hold for every child at every location
-    fn can_be_replaced_by_children(&self, idx: UniIndex) -> bool {
+    fn can_be_replaced_by_children(&self, global_ctx: &GlobalCtx, idx: UniIndex) -> bool {
         let node = self.nodes.get(idx).unwrap();
         // A root nor `ReservedIM` parent is never replaced
         let Some(parent_idx) = node.parent else { return false };
@@ -545,7 +547,8 @@ impl EagerTree {
 
         // Check that the final compaction result would be within bounds
         let parent_width = self.nodes.get(parent_idx).unwrap().children.len();
-        if parent_width + node.children.len() - 1 > MAX_COMPACTED_CHILDREN.load(Relaxed) {
+
+        if parent_width + node.children.len() - 1 > global_ctx.flags.max_compacted_children {
             return false;
         }
 
@@ -611,7 +614,12 @@ impl EagerTree {
     /// `roots`, which [`LocationTree::perform_access`] and the wildcard consistency
     /// checks rely on. This retains at most one dead root per tree, and only until its
     /// subtree dies (or is compacted away), at which point it is removed as a leaf.
-    fn remove_useless_children(&mut self, dead_tags: &mut [BorTag], compact: bool) {
+    fn remove_useless_children(
+        &mut self,
+        global_ctx: &GlobalCtx,
+        dead_tags: &mut [BorTag],
+        compact: bool,
+    ) {
         // E7 is reported per root, matching Miri: one event per tree per prune pass.
         // An allocation owns one root per tree (the main tree, plus a root for every
         // wildcard subtree -- see `EagerTree::roots`), so a prune has to name which
@@ -687,7 +695,7 @@ impl EagerTree {
                 }
                 // Node has more than one child. If every child can soundly replace it, compact it
                 // by reparenting all of its children onto its parent.
-                _ if compact && self.can_be_replaced_by_children(idx) => {
+                _ if compact && self.can_be_replaced_by_children(global_ctx, idx) => {
                     let root_tag = self.root_tag_of(idx);
                     let parent_idx = parent.unwrap();
                     // Move `idx`'s children out so we can reparent them
@@ -779,6 +787,7 @@ impl LocationTree {
     ///   of the accessed node.
     fn perform_access(
         &mut self,
+        global_ctx: &GlobalCtx,
         roots: impl Iterator<Item = UniIndex>,
         nodes: &mut UniValMap<Node>,
         access_source: Option<UniIndex>,
@@ -789,6 +798,7 @@ impl LocationTree {
     ) -> UBResult<()> {
         let accessed_root = if let Some(idx) = access_source {
             Some(self.perform_normal_access(
+                global_ctx,
                 idx,
                 nodes,
                 access_kind,
@@ -834,6 +844,7 @@ impl LocationTree {
             // As a consequence of this, since the root of the main tree is the smallest tag in the entire
             // allocation, if the access occurred in the main tree then other subtrees will only see foreign accesses.
             self.perform_wildcard_access(
+                global_ctx,
                 root,
                 access_source,
                 /*max_local_tag*/ accessed_root_tag,
@@ -854,6 +865,7 @@ impl LocationTree {
     ///   during the access. Used for protector end access.
     fn perform_normal_access(
         &mut self,
+        global_ctx: &GlobalCtx,
         access_source: UniIndex,
         nodes: &mut UniValMap<Node>,
         access_kind: AccessKind,
@@ -893,6 +905,7 @@ impl LocationTree {
             let protected = node.protector_kind.is_some();
             state
                 .perform_transition(
+                    global_ctx,
                     args.idx,
                     args.nodes,
                     &mut args.data.exposed_cache,
@@ -950,6 +963,7 @@ impl LocationTree {
     ///   at most `max_local_tag`.
     fn perform_wildcard_access(
         &mut self,
+        global_ctx: &GlobalCtx,
         root: UniIndex,
         access_source: Option<UniIndex>,
         max_local_tag: Option<BorTag>,
@@ -1049,6 +1063,7 @@ impl LocationTree {
 
                 // We know the exact relatedness, so we can actually do precise checks.
                 perm.perform_transition(
+                    global_ctx,
                     args.idx,
                     args.nodes,
                     &mut args.data.exposed_cache,
@@ -1115,6 +1130,7 @@ pub trait AllocState: Clone {
     ) -> UBResult<()>;
     fn perform_access(
         &mut self,
+        global_ctx: &GlobalCtx,
         tag: BorTag,
         access_range: AllocRange,
         access_kind: AccessKind,
@@ -1124,6 +1140,8 @@ pub trait AllocState: Clone {
     ) -> UBResult<()>;
     fn dealloc(
         &mut self,
+        global_ctx: &GlobalCtx,
+
         tag: BorTag,
         access_range: AllocRange,
         alloc_id: AllocId,
@@ -1131,13 +1149,14 @@ pub trait AllocState: Clone {
     ) -> UBResult<()>;
     fn perform_protector_end_access(
         &mut self,
+        global_ctx: &GlobalCtx,
         tag: BorTag,
         alloc_id: AllocId,
         span: Span,
     ) -> UBResult<()>;
     fn expose_tag(&mut self, tag: BorTag, protected: bool);
     #[allow(dead_code)]
-    fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool;
+    fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_tags: &mut [BorTag]) -> bool;
 }
 
 impl AllocState for LazyTree {
@@ -1177,6 +1196,8 @@ impl AllocState for LazyTree {
     }
     fn perform_access(
         &mut self,
+        global_ctx: &GlobalCtx,
+
         tag: BorTag,
         access_range: AllocRange,
         access_kind: AccessKind,
@@ -1186,13 +1207,20 @@ impl AllocState for LazyTree {
     ) -> UBResult<()> {
         match self {
             LazyTree::Uninit { .. } => Ok(()),
-            LazyTree::Init(tree) => {
-                tree.perform_access(tag, access_range, access_kind, access_cause, alloc_id, span)
-            }
+            LazyTree::Init(tree) => tree.perform_access(
+                global_ctx,
+                tag,
+                access_range,
+                access_kind,
+                access_cause,
+                alloc_id,
+                span,
+            ),
         }
     }
     fn dealloc(
         &mut self,
+        global_ctx: &GlobalCtx,
         tag: BorTag,
         access_range: AllocRange,
         alloc_id: AllocId,
@@ -1200,18 +1228,22 @@ impl AllocState for LazyTree {
     ) -> UBResult<()> {
         match self {
             LazyTree::Uninit { .. } => Ok(()),
-            LazyTree::Init(tree) => tree.dealloc(tag, access_range, alloc_id, span),
+            LazyTree::Init(tree) => tree.dealloc(global_ctx, tag, access_range, alloc_id, span),
         }
     }
     fn perform_protector_end_access(
         &mut self,
+        global_ctx: &GlobalCtx,
+
         tag: BorTag,
         alloc_id: AllocId,
         span: Span,
     ) -> UBResult<()> {
         match self {
             LazyTree::Uninit { .. } => Ok(()),
-            LazyTree::Init(tree) => tree.perform_protector_end_access(tag, alloc_id, span),
+            LazyTree::Init(tree) => {
+                tree.perform_protector_end_access(global_ctx, tag, alloc_id, span)
+            }
         }
     }
     fn expose_tag(&mut self, tag: BorTag, protected: bool) {
@@ -1220,12 +1252,12 @@ impl AllocState for LazyTree {
             tree.expose_tag(tag, protected);
         }
     }
-    fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool {
+    fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_tags: &mut [BorTag]) -> bool {
         match self {
             LazyTree::Init(tree) => {
                 // Only *compaction* of dead interior nodes is skipped on small trees
-                let compact = tree.tag_mapping.len() > TREE_GC_MIN_NODES.load(Relaxed);
-                tree.remove_useless_children(dead_tags, compact);
+                let compact = tree.tag_mapping.len() > global_ctx.flags.tree_gc_min_nodes;
+                tree.remove_useless_children(global_ctx, dead_tags, compact);
                 tree.locations.merge_adjacent_thorough();
                 tree.roots.is_empty()
             }
@@ -1348,6 +1380,7 @@ impl AllocState for EagerTree {
     }
     fn perform_access(
         &mut self,
+        global_ctx: &GlobalCtx,
         tag: BorTag,
         access_range: AllocRange,
         access_kind: AccessKind,
@@ -1372,6 +1405,7 @@ impl AllocState for EagerTree {
                 transition_range: loc_range,
             };
             loc.perform_access(
+                global_ctx,
                 self.roots.iter().copied(),
                 &mut self.nodes,
                 source_idx,
@@ -1385,12 +1419,14 @@ impl AllocState for EagerTree {
     }
     fn dealloc(
         &mut self,
+        global_ctx: &GlobalCtx,
         tag: BorTag,
         access_range: AllocRange,
         alloc_id: AllocId,
         span: Span,
     ) -> UBResult<()> {
         self.perform_access(
+            global_ctx,
             tag,
             access_range,
             AccessKind::Write,
@@ -1454,6 +1490,7 @@ impl AllocState for EagerTree {
     }
     fn perform_protector_end_access(
         &mut self,
+        global_ctx: &GlobalCtx,
         tag: BorTag,
         alloc_id: AllocId,
         span: Span,
@@ -1484,6 +1521,7 @@ impl AllocState for EagerTree {
                     transition_range: loc_range,
                 };
                 loc.perform_access(
+                    global_ctx,
                     self.roots.iter().copied(),
                     &mut self.nodes,
                     Some(source_idx),
@@ -1532,10 +1570,10 @@ impl AllocState for EagerTree {
         }
     }
 
-    fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool {
+    fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_tags: &mut [BorTag]) -> bool {
         // Only *compaction* of dead interior nodes is skipped on small trees
-        let compact = self.tag_mapping.len() > TREE_GC_MIN_NODES.load(Relaxed);
-        self.remove_useless_children(dead_tags, compact);
+        let compact = self.tag_mapping.len() > global_ctx.flags.tree_gc_min_nodes;
+        self.remove_useless_children(global_ctx, dead_tags, compact);
         self.locations.merge_adjacent_thorough();
         self.roots.is_empty()
     }

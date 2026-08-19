@@ -1,7 +1,45 @@
+use alloc::boxed::Box;
 use alloc::ffi::CString;
 use alloc::string::{String, ToString};
+use core::cell::UnsafeCell;
 use core::ffi::c_char;
 use core::{fmt, ptr, slice};
+
+use crate::errors::{ErrorFormatContext, UBInfo};
+
+/// Thread-local slot for a boxed `(UBInfo, Span)` set by `handle_error` and
+/// consumed by `__bsan_format_pending_ub` once the C++ side has captured the
+/// stack and located the first user-code frame.
+#[thread_local]
+pub(crate) static PENDING_ERROR: UnsafeCell<*mut (UBInfo, Span)> =
+    UnsafeCell::new(core::ptr::null_mut());
+
+/// Configuration options set by the user via `BSAN_OPTIONS`.
+///
+/// This mirrors a definition in the LLVM wrapper (`bsan_flags.h`).
+/// New options must be added to each definition, and initialized
+/// within `InitializeFlags` in C++.
+#[repr(C)]
+#[derive(Debug, Clone)]
+pub(crate) struct SharedSanitizerFlags {
+    pub wildcard: bool,
+    pub node_debug_info: bool,
+    pub max_compacted_children: usize,
+    pub tree_gc_min_nodes: usize,
+}
+
+impl Default for SharedSanitizerFlags {
+    fn default() -> Self {
+        // These values should be kept in sync
+        // with those defined in `bsan_flags.inc`
+        Self {
+            wildcard: true,
+            node_debug_info: true,
+            max_compacted_children: 16,
+            tree_gc_min_nodes: 64,
+        }
+    }
+}
 
 /// The immediate caller PC of a runtime hook, captured at the retag/access
 /// site by the C++ interceptors and symbolized lazily at display time as the
@@ -53,9 +91,21 @@ impl fmt::Display for Symbol {
     }
 }
 
-pub struct SanitizerCommon;
+pub struct Bridge;
 
-impl SanitizerCommon {
+impl Bridge {
+    pub fn prepare_error(ub_info: UBInfo, pc: Span) {
+        unsafe {
+            let old_ptr = *PENDING_ERROR.get();
+            if !old_ptr.is_null() {
+                drop(alloc::boxed::Box::from_raw(old_ptr));
+            }
+            let ptr = Box::into_raw(Box::new((ub_info, pc)));
+            *PENDING_ERROR.get() = ptr;
+            __bsan_had_error = 1;
+        }
+    }
+
     /// Symbolizes `pc` to a [`Symbol`], reporting whether it lies in an
     /// internal library path (`.cargo`/`.rustup`).
     fn symbolize_pc(pc: usize) -> (Symbol, bool) {
@@ -194,6 +244,7 @@ unsafe extern "C" {
 
     /// Free the buffer allocated by __bsan_read_file
     fn __bsan_free_buffer(buf: *mut c_char, size: usize);
+    fn __bsan_abort() -> !;
 
     /// Whether event logging is enabled (`BSAN_NODE_LOG` is set).
     fn __bsan_node_logging_enabled() -> bool;
@@ -203,11 +254,27 @@ unsafe extern "C" {
     fn __bsan_append_log(buf: *const u8, len: usize);
 }
 
+/// Called from the `HANDLE_ERROR` C++ macro after the stack trace has been
+/// captured and the first user-code frame PC has been located.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __bsan_format_pending_ub(user_frame_pc: usize) {
+    let ptr = unsafe { *PENDING_ERROR.get() };
+    if ptr.is_null() {
+        return;
+    }
+    unsafe { *PENDING_ERROR.get() = core::ptr::null_mut() };
+    let (ub_info, original_pc) = unsafe { *alloc::boxed::Box::from_raw(ptr) };
+    let (primary, origin) =
+        crate::sanitizer_common::Bridge::resolve_error_location(user_frame_pc, original_pc);
+    let mut ctx = ErrorFormatContext::default();
+    crate::eprint!("error: {}", ctx.display_ub(ub_info, primary, origin));
+}
+
 /// Test-only definitions of the event-log hooks that would otherwise be
 /// provided by the C++ runtime. The unit-test binary links no C++, and the
 /// event emitters (e.g. `E7` in `remove_useless_children`) are reachable from
 /// the tree tests, so without these the test build fails to link. Logging is
-/// reported disabled, so [`SanitizerCommon::log_event`] never appends anything.
+/// reported disabled, so [`Bridge::log_event`] never appends anything.
 #[cfg(test)]
 mod test_stubs {
     #[unsafe(no_mangle)]

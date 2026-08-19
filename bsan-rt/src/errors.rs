@@ -5,7 +5,7 @@ use core::cmp::max;
 use hashbrown::HashMap;
 
 use crate::helpers::Size;
-use crate::sanitizer_common::{SanitizerCommon, Symbol};
+use crate::sanitizer_common::{Bridge, Symbol};
 use crate::tree_borrows::diagnostics::TreeBorrowsUb;
 use crate::AllocId;
 
@@ -79,7 +79,7 @@ impl ErrorFormatContext {
             .drain(..)
             .map(|evt| {
                 if let Some(span) = evt.0 {
-                    let (sym, origin) = SanitizerCommon::symbolize_with_origin(span);
+                    let (sym, origin) = Bridge::symbolize_with_origin(span);
                     max_indentation = max_indentation.max(sym.line_length());
                     if let Some(origin) = &origin {
                         max_indentation = max_indentation.max(origin.line_length());
@@ -133,8 +133,8 @@ impl ErrorFormatContext {
                 let file = self
                     .file_cache
                     .entry(path.clone())
-                    .or_insert_with(|| SanitizerCommon::read_file(&path).unwrap_or_default());
-                if let Some(content_raw) = SanitizerCommon::get_source_line(file, line) {
+                    .or_insert_with(|| Bridge::read_file(&path).unwrap_or_default());
+                if let Some(content_raw) = Bridge::get_source_line(file, line) {
                     let content = content_raw.trim_start();
                     let trimmed_ws_diff = content_raw.len() - content.len();
                     let content = content.trim_end();

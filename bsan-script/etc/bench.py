@@ -27,7 +27,7 @@ WARMUP = 1
 NATIVE = {
     "name": "native",
     "cmd": ["cargo", "test", "--lib"],
-    "env": {"RUSTFLAGS": "--cfg=bsan --cfg=miri", "TERM": None},
+    "env": {"RUSTFLAGS": "--cfg=bsan --cfg=miri"},
 }
 
 # Flags shared by every Miri configuration. These disable most forms of
@@ -44,7 +44,6 @@ MIRI = {
     "name": "miri-tb",
     "env": {
         "MIRIFLAGS": f"-Zmiri-tree-borrows {MIRI_COMMON_FLAGS}",
-        "RUSTFLAGS": "-Cdebug-assertions=off",
     },
 }
 
@@ -53,17 +52,20 @@ MIRI_CONFIGS = [MIRI]
 
 # BorrowSanitizer configurations.
 BSAN_CONFIGS = [
-    # Full checking, skip parsing terminal info.
+    # Full checking.
     {
         "name": "full",
         "cmd": ["cargo", "bsan", "test", "--lib"],
-        "env": {"RUSTFLAGS": "--cfg=miri", "TERM": None},
-    },
-    # Full checking, parse terminal info.
-    {
-        "name": "full-terminfo",
-        "cmd": ["cargo", "bsan", "test", "--lib"],
         "env": {"RUSTFLAGS": "--cfg=miri"},
+    },
+    # Full, but with wildcard provenance disabled.
+    {
+        "name": "full-no-wildcard",
+        "cmd": ["cargo", "bsan", "test", "--lib"],
+        "env": {
+            "RUSTFLAGS": "--cfg=miri", 
+            "BSAN_OPTIONS": "wildcard=0"
+        },
     },
     # No-op checking. Instrumentation is inserted, but
     # all memory access checks, retags, and reference count
@@ -71,7 +73,7 @@ BSAN_CONFIGS = [
     {
         "name": "no-op",
         "cmd": ["cargo", "bsan", "test", "--nop", "--lib"],
-        "env": {"RUSTFLAGS": "--cfg=miri", "TERM": None},
+        "env": {"RUSTFLAGS": "--cfg=miri"},
     }
 ]
 
@@ -404,7 +406,6 @@ def process_config(
             raw_results.append(row_start + (config["name"], mean))
 
         baselines = {NATIVE["name"]: per_test_means.pop(NATIVE["name"])}
-
         # execute Miri and add each configuration as a baseline for comparison
         for miri_config in MIRI_CONFIGS:
             miri_mean = run_miri_test(src_dir, t, miri_config, scratch)

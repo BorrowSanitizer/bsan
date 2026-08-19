@@ -282,7 +282,7 @@ using namespace __bsan;
 extern "C" {
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_internal_init() {}
+void __bsan_internal_init(SharedSanitizerFlags *_flags) {}
 
 void __bsan_init() {
   CHECK(!bsan_init_running);
@@ -291,11 +291,12 @@ void __bsan_init() {
   bsan_init_running = true;
 
   AvoidCVE_2016_2143();
-  InitializeFlags();
+  SharedSanitizerFlags flags;
+  InitializeFlags(flags);
   node_logging_enabled = GetEnv("BSAN_NODE_LOG") != nullptr;
   new (global_ctx()) GlobalContext();
 
-  __bsan_internal_init();
+  __bsan_internal_init(&flags);
   InitializePlatformEarly();
 
   if (!InitShadowWithReExec()) {
