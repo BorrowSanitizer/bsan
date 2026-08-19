@@ -611,14 +611,14 @@ impl EagerTree {
     /// `roots`, which [`LocationTree::perform_access`] and the wildcard consistency
     /// checks rely on. This retains at most one dead root per tree, and only until its
     /// subtree dies (or is compacted away), at which point it is removed as a leaf.
-    fn remove_useless_children(
-        &mut self,
-        dead_tags: &mut [BorTag],
-        alloc_id: AllocId,
-        compact: bool,
-    ) {
-        // Node count before pruning, so we can report how many were removed (E7).
-        let before_count = self.tag_mapping.len();
+    fn remove_useless_children(&mut self, dead_tags: &mut [BorTag], compact: bool) {
+        // E7 is reported per root, matching Miri: one event per tree per prune pass.
+        // An allocation owns one root per tree (the main tree, plus a root for every
+        // wildcard subtree -- see `EagerTree::roots`), so a prune has to name which
+        // one it pruned from. Snapshot the roots up front: a root removed during this
+        // pass still has to report the nodes it took with it.
+        let mut pruned: SmallVec<[(BorTag, usize); 4]> =
+            self.roots.iter().map(|&r| (self.nodes.get(r).unwrap().tag, 0)).collect();
         // Iterating through dead_tags in reverse (descending tag order)
         for entry in dead_tags.iter_mut().rev() {
             let tag = *entry;
@@ -652,6 +652,7 @@ impl EagerTree {
             match node.children.len() {
                 // Node is a leaf
                 0 => {
+                    let root_tag = self.root_tag_of(idx);
                     // Drop the leaf from its parent's child list, then delete it everywhere else
                     // If it is a root, remove it from `self.roots`
                     match parent {
@@ -666,10 +667,12 @@ impl EagerTree {
                         }
                     }
                     self.remove_useless_node(idx);
+                    Self::tally_pruned(&mut pruned, root_tag);
                     *entry = BorTag::omnivalid();
                 }
                 // Node has exactly one child (and, per the guard above, a parent)
                 1 if compact && self.can_be_replaced_by_single_child(idx) => {
+                    let root_tag = self.root_tag_of(idx);
                     // Replace the node with its only child.
                     let child_idx = node.children[0];
                     let parent_idx = parent.unwrap();
@@ -678,12 +681,14 @@ impl EagerTree {
                     siblings[pos] = child_idx;
                     self.nodes.get_mut(child_idx).unwrap().parent = parent;
                     self.remove_useless_node(idx);
+                    Self::tally_pruned(&mut pruned, root_tag);
                     *entry = BorTag::omnivalid();
                     // Otherwise, the dead node could not be pruned this pass.
                 }
                 // Node has more than one child. If every child can soundly replace it, compact it
                 // by reparenting all of its children onto its parent.
                 _ if compact && self.can_be_replaced_by_children(idx) => {
+                    let root_tag = self.root_tag_of(idx);
                     let parent_idx = parent.unwrap();
                     // Move `idx`'s children out so we can reparent them
                     let children = mem::take(&mut self.nodes.get_mut(idx).unwrap().children);
@@ -699,6 +704,7 @@ impl EagerTree {
                         siblings.push(children[i]);
                     }
                     self.remove_useless_node(idx);
+                    Self::tally_pruned(&mut pruned, root_tag);
                     *entry = BorTag::omnivalid();
                     // Otherwise, the dead node could not be pruned this pass.
                 }
@@ -709,11 +715,34 @@ impl EagerTree {
             }
         }
 
-        // E7: nodes pruned from this allocation this pass. Miri emits one event
-        // per root; bsan prunes all of an allocation's roots in a single pass,
-        // so this reports the allocation and the total number of nodes removed.
-        let removed_count = before_count.saturating_sub(self.tag_mapping.len());
-        crate::log_event!("E7: Pruned({alloc_id:?}, {})", removed_count);
+        // E7: nodes pruned from each tree this pass, one event per root, so the
+        // stream lines up one-to-one with Miri's `Pruned(t<root>, n)`. Roots that
+        // pruned nothing still report a zero, as they do in Miri.
+        for (root_tag, count) in pruned {
+            crate::log_event!("E7: Pruned(t{}, {})", root_tag.get(), count);
+        }
+    }
+
+    /// The tag of the root of `idx`'s tree.
+    ///
+    /// Safe to call mid-prune: removals proceed bottom-up and compaction only ever
+    /// reparents a node onto its own grandparent, so the `parent` chain above a node
+    /// that is about to be removed is always intact and still ends at a live root.
+    fn root_tag_of(&self, mut idx: UniIndex) -> BorTag {
+        while let Some(parent) = self.nodes.get(idx).unwrap().parent {
+            idx = parent;
+        }
+        self.nodes.get(idx).unwrap().tag
+    }
+
+    /// Charge one pruned node to `root_tag`'s tally.
+    fn tally_pruned(pruned: &mut SmallVec<[(BorTag, usize); 4]>, root_tag: BorTag) {
+        match pruned.iter_mut().find(|(tag, _)| *tag == root_tag) {
+            Some((_, count)) => *count += 1,
+            // Unreachable in practice: a prune pass only removes roots, never adds
+            // them, so every root is in the snapshot. Count it rather than lose it.
+            None => pruned.push((root_tag, 1)),
+        }
     }
 }
 
@@ -898,10 +927,14 @@ impl LocationTree {
             crate::sanitizer_common::__bsan_visits_since_gc
                 .fetch_add(visit_count, core::sync::atomic::Ordering::Relaxed);
         }
-        // E5: one access event per accessed allocation, with visited/skipped counts.
+        // E5: one access event per accessed tree, with visited/skipped counts. Keyed
+        // by the accessed tag (not the allocation): an allocation holds one tree per
+        // root, so an alloc-keyed count cannot say which tree it was spent on. Matches
+        // Miri, whose analysis resolves the tag to its root.
+        let source_tag = nodes.get(access_source).unwrap().tag;
         crate::log_event!(
-            "E5: Access({:?}, {}, {})",
-            diagnostics.alloc_id,
+            "E5: Access(t{}, {}, {})",
+            source_tag.get(),
             visit_count,
             skipped_count.get()
         );
@@ -1041,10 +1074,12 @@ impl LocationTree {
             crate::sanitizer_common::__bsan_visits_since_gc
                 .fetch_add(visit_count, core::sync::atomic::Ordering::Relaxed);
         }
-        // E5: one wildcard-access event per accessed allocation, with visited/skipped counts.
+        // E5: one wildcard-access event per accessed tree, keyed by that tree's root.
+        // A wildcard access walks each root in turn, so this fires once per tree.
+        let root_tag = nodes.get(root).unwrap().tag;
         crate::log_event!(
-            "E5: WC Access({:?}, {}, {})",
-            diagnostics.alloc_id,
+            "E5: WC Access(t{}, {}, {})",
+            root_tag.get(),
             visit_count,
             skipped_count.get()
         );
@@ -1102,7 +1137,7 @@ pub trait AllocState: Clone {
     ) -> UBResult<()>;
     fn expose_tag(&mut self, tag: BorTag, protected: bool);
     #[allow(dead_code)]
-    fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag], alloc_id: AllocId) -> bool;
+    fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool;
 }
 
 impl AllocState for LazyTree {
@@ -1185,12 +1220,12 @@ impl AllocState for LazyTree {
             tree.expose_tag(tag, protected);
         }
     }
-    fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag], alloc_id: AllocId) -> bool {
+    fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool {
         match self {
             LazyTree::Init(tree) => {
                 // Only *compaction* of dead interior nodes is skipped on small trees
                 let compact = tree.tag_mapping.len() > TREE_GC_MIN_NODES.load(Relaxed);
-                tree.remove_useless_children(dead_tags, alloc_id, compact);
+                tree.remove_useless_children(dead_tags, compact);
                 tree.locations.merge_adjacent_thorough();
                 tree.roots.is_empty()
             }
@@ -1497,10 +1532,10 @@ impl AllocState for EagerTree {
         }
     }
 
-    fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag], alloc_id: AllocId) -> bool {
+    fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool {
         // Only *compaction* of dead interior nodes is skipped on small trees
         let compact = self.tag_mapping.len() > TREE_GC_MIN_NODES.load(Relaxed);
-        self.remove_useless_children(dead_tags, alloc_id, compact);
+        self.remove_useless_children(dead_tags, compact);
         self.locations.merge_adjacent_thorough();
         self.roots.is_empty()
     }

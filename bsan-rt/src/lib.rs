@@ -625,10 +625,9 @@ unsafe extern "C" fn __bsan_prune(
     len: usize,
 ) -> bool {
     let alloc: AllocInfoPtr = alloc_info.into();
-    let alloc_id = alloc.alloc_id.get();
     let dead_tags = unsafe { slice::from_raw_parts_mut(bor_tags, len) };
     match alloc.tree.lock().as_mut() {
-        Some(tree) => tree.remove_dead_tags(dead_tags, alloc_id),
+        Some(tree) => tree.remove_dead_tags(dead_tags),
         None => {
             // The tree is already deallocated, so we can zero out dead_tags
             dead_tags.fill(BorTag::omnivalid());
