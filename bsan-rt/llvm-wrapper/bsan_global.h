@@ -21,17 +21,6 @@ public:
   uptr min_drained;
 };
 
-// An allocation that is unreachable and
-// has had all of its nodes pruned, but that
-// cannot be ejected yet, because it might still
-// be stored within a thread's zero count table.
-struct RetiredAlloc {
-  // A non-null pointer to the allocation.
-  AllocInfo *info;
-  // The generation when it was retired.
-  uptr retire_gen;
-};
-
 // Global state associated with the runtime.
 struct GlobalContext {
 public:
@@ -93,8 +82,11 @@ private:
   // has restarted.
   void CollectGarbage(Snapshot &snap);
 
-  // A list of retired allocations that have yet to be ejected.
-  InternalMmapVectorNoCtor<RetiredAlloc> quarantine_{};
+  // Allocations that are unreachable and have had all of their nodes pruned,
+  // but that cannot be ejected yet, because they might still be stored within a
+  // thread's zero count table. Maps each allocation to the generation when it
+  // was retired.
+  DenseMap<AllocInfo *, uptr> quarantine_{};
 
   // Guards `at_exit_stack_`.
   Mutex at_exit_lock_;
