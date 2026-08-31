@@ -50,7 +50,9 @@ void *BsanThread::StartCallback(void *arg) {
   BsanThread *t = (BsanThread *)arg;
   SetCurrentThread(t);
   t->Init();
+#if SANITIZER_LINUX
   SetSigProcMask(&t->starting_sigset_, nullptr);
+#endif
   return t->Start();
 }
 

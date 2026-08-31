@@ -130,24 +130,16 @@ impl Command {
         Ok(())
     }
 
-    fn inst(env: &mut BsanEnv, file: String, debug: bool, args: &[String]) -> Result<()> {
+    fn inst(env: &mut BsanEnv, file: String, _debug: bool, args: &[String]) -> Result<()> {
         env.in_mode(Mode::Release, |env| {
             let plugin = env.build_artifact(BsanPass, &[])?;
-
-            let rust_runtime = if debug {
-                env.build_artifact(BsanRt, &["--features".to_string(), "debug".to_string()])?
-            } else {
-                env.build_artifact(BsanRt, &[])?
-            };
-
-            let llvm_runtime = env.build_artifact(CompilerRt, &[])?;
+            let runtime = env.build_artifact(CompilerRt, &[])?;
             let cargo_bsan = env.build_artifact(CargoBsan, &[])?;
             let sysroot_dir = path!(&env.target_dir / "sysroot");
 
             let env_guards = vec![
                 env.sh.push_env("BSAN_PLUGIN", &plugin),
-                env.sh.push_env("BSAN_RT_RUST", &rust_runtime),
-                env.sh.push_env("BSAN_RT_LLVM", &llvm_runtime),
+                env.sh.push_env("BSAN_RT", &runtime),
                 env.sh.push_env("BSAN_SYSROOT", &sysroot_dir),
             ];
 
@@ -463,6 +455,15 @@ impl CompilerRt {
         cfg.define("LLVM_CMAKE_DIR", llvm_cmake);
         cfg.define("BSAN_CLANG_FORMAT", env.sysroot_binary("clang-format"));
 
+        if cfg!(target_os = "macos") {
+            // Do not build a Mac Catalyst dylib.
+            // This would only be required for *-apple-ios-macabi.
+            cfg.define("COMPILER_RT_ENABLE_MACCATALYST", "OFF");
+            // Avoid building a universal binary. We only want to support
+            // the current architecture.
+            assert!(env.toolchain_config.meta.host.starts_with("aarch64"));
+            cfg.define("DARWIN_osx_ARCHS", "arm64");
+        }
         cfg.build_target(&CompilerRt.artifact(env));
         Ok(cfg)
     }
@@ -493,15 +494,35 @@ impl Buildable for CompilerRt {
     }
 
     fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
+        // BsanRt must be built before we configure CompilerRt: the CMake build
+        // links against `libbsan_rt.a`, so the archive has to already exist
+        // (and be finished being post-processed by `llvm-objcopy`, see
+        // `BsanRt::build`) by the time we set up the linker flags below.
+        let bsan_rt = env.build_artifact(BsanRt, args)?;
+        let bsan_rt_dir = bsan_rt.parent().unwrap();
+
         let mut cfg = Self::cmake(env)?;
         args.iter().for_each(|arg| {
             cfg.build_arg(arg);
         });
+
+        // `cxxflag`/`cflag` only ever affect `CMAKE_CXX_FLAGS`/`CMAKE_C_FLAGS`,
+        // and only when those aren't already defined -- but `Self::cmake`
+        // (via `llvm_cmake`) already defines `CMAKE_CXX_FLAGS` explicitly, so
+        // calling `cxxflag` here would silently do nothing. `-L`/`-l` are
+        // linker flags anyway, so give them their own CMake variables, which
+        // `add_compiler_rt_runtime`'s SHARED (macOS) target picks up when
+        // linking `libclang_rt.bsan_osx_dynamic.dylib` against `libbsan_rt.a`.
+        let link_flags = format!("-L{} -lbsan_rt", bsan_rt_dir.display());
+        cfg.define("CMAKE_SHARED_LINKER_FLAGS", &link_flags);
+        cfg.define("CMAKE_EXE_LINKER_FLAGS", &link_flags);
+
         let os_dir = if cfg!(target_os = "macos") { "darwin" } else { "linux" };
         let target_dir = path!(cfg.build() / "build" / "lib" / os_dir);
         let target = path!(target_dir / self.artifact(env));
         Ok(Some(target))
     }
+
     fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
         env.in_mode(Mode::Release, |env| {
             let built = self.build(env, args)?.expect("Compiler-rt was not built.");
@@ -535,7 +556,16 @@ impl Buildable for BsanRt {
             Ok(env.assert_artifact(&self.artifact(env)))
         })?;
 
-        cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_*").arg(&rust_runtime).quiet().run()?;
+        // On Mach-O, every C symbol gets an extra leading underscore compared
+        // to its source name, so `__bsan_alloc_impl` shows up in the object
+        // file as `___bsan_alloc_impl` (three underscores). Matching only
+        // `__bsan_*` therefore matches nothing on Apple platforms, and
+        // `-G`/`--keep-global-symbol` then localizes *every* symbol in the
+        // archive (including the ones we actually need to stay global),
+        // rather than the intended "keep bsan symbols global, hide the
+        // rest". ELF has no such prefix, so match both forms.
+        let keep_pattern = if cfg!(target_os = "macos") { "___bsan_*" } else { "__bsan_*" };
+        cmd!(env.sh, "{llvm_objcopy} -w -G {keep_pattern}").arg(&rust_runtime).quiet().run()?;
 
         Ok(Some(rust_runtime))
     }
@@ -560,12 +590,8 @@ impl Buildable for BsanRt {
         )
     }
 
-    fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.in_mode(Mode::Release, |env| {
-            self.build(env, args)?;
-            let runtime = env.assert_artifact(&self.artifact(env));
-            env.copy_to_sysroot_libdir(&runtime)
-        })
+    fn install(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
+        Ok(())
     }
 }
 

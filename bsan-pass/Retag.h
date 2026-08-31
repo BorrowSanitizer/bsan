@@ -31,8 +31,8 @@ public:
   }
 };
 
-bool IsFnEntryRetag(const CallBase *CB);
-bool IsRetag(const CallBase *CB);
+bool isFnEntryRetag(const CallBase *CB);
+bool isRetag(const CallBase *CB);
 
 } // end namespace llvm
 

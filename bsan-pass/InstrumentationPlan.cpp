@@ -75,9 +75,9 @@ void InstrumentationPlan::build() {
       }
 
       if (auto *CB = dyn_cast<CallBase>(&I)) {
-        if (IsRetag(CB)) {
+        if (isRetag(CB)) {
           Retags.push_back(CB);
-          if (IsFnEntryRetag(CB))
+          if (isFnEntryRetag(CB))
             NumFnEntryRetags += 1;
         }
         if (auto *LI = dyn_cast<LifetimeIntrinsic>(CB)) {

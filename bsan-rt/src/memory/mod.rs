@@ -96,18 +96,18 @@ pub fn mmap(size_bytes: NonZero<usize>) -> NonNull<u8> {
     }
 }
 
-/// Panics with a message displaying the current libc exit code. 
-/// 
+/// Panics with a message displaying the current libc exit code.
+///
 /// # Safety
 /// Must be called immediately after a `libc`` function has returned
-/// a non-zero exit code. Otherwise, the reported error number could be 
-/// uninitialized. 
+/// a non-zero exit code. Otherwise, the reported error number could be
+/// uninitialized.
 #[cold]
 #[inline(never)]
 pub(crate) unsafe fn libc_failed(name: &str) -> ! {
-    // The location where libc's error message is 
-    // stored could be uninitialized. 
-    unsafe { 
+    // The location where libc's error message is
+    // stored could be uninitialized.
+    unsafe {
         #[cfg(target_os = "linux")]
         let errno = *libc::__errno_location();
         #[cfg(target_os = "macos")]

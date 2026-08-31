@@ -3,6 +3,7 @@ Checks: >
   -*,
   clang-diagnostic-*,
   llvm-*,
+  -llvm-header-guard,
   misc-*,
   -misc-const-correctness,
   -misc-include-cleaner,
@@ -11,6 +12,12 @@ Checks: >
   -misc-unused-parameters,
   -misc-use-anonymous-namespace,
   readability-identifier-naming
+
+# We only want to include our headers.
+# By default, newest versions of clang-tidy
+# will also report warnings for LLVM headers,
+# and any other header that isn't provided by the OS.
+HeaderFilterRegex: '^.*/bsan-pass/.*$'
 
 CheckOptions:
   - key:             readability-identifier-naming.ClassCase

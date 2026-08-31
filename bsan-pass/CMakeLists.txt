@@ -36,3 +36,9 @@ add_custom_target(clang-format-check
 
 add_library(bsan_plugin SHARED ${BSAN_SOURCES} ${BSAN_HEADERS})
 add_dependencies(bsan_plugin clang-format)
+
+# on MacOS, we need to configure the linker to allow undefined
+# symbols in dynamic libraries. Otherwise, the build will fail,
+# because we are not linking libLLVM yet.
+target_link_libraries(bsan_plugin
+  "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>")

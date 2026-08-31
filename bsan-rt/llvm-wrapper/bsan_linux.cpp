@@ -27,7 +27,9 @@ void DestroyTSD(void *tsd) {
     CHECK_EQ(0, pthread_setspecific(TSD_KEY, tsd));
     return;
   }
+#if SANITIZER_LINUX
   ScopedBlockSignals block(nullptr);
+#endif
   bsan_thread = nullptr;
   // Make sure that signal handler can not see a stale current thread pointer.
   atomic_signal_fence(memory_order_seq_cst);

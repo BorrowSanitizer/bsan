@@ -65,7 +65,11 @@ INTERCEPTOR(int, pthread_create, void *th, void *attr,
     attr = &myattr;
   }
   BsanThread *t = BsanThread::Create(callback, param);
+
+#if SANITIZER_LINUX
   ScopedBlockSignals block(&t->starting_sigset_);
+#endif
+
   int res = REAL(pthread_create)(th, attr, BsanThread::StartCallback, t);
 
   if (attr == &myattr) {
@@ -201,6 +205,7 @@ INTERCEPTOR(void *, aligned_alloc, SIZE_T alignment, SIZE_T size) {
   return BsanAllocateMetaIntoStack(ptr, size, is_inst, span, 0);
 }
 
+#if SANITIZER_LINUX
 INTERCEPTOR(void *, memalign, SIZE_T alignment, SIZE_T size) {
   GET_SPAN;
   if (DlsymAlloc::Use())
@@ -211,7 +216,9 @@ INTERCEPTOR(void *, memalign, SIZE_T alignment, SIZE_T size) {
   bool is_inst = !already_in_scope && INST_CALLER(memalign);
   return BsanAllocateMetaIntoStack(ptr, size, is_inst, span, 0);
 }
+#endif
 
+#if SANITIZER_LINUX
 INTERCEPTOR(void *, __libc_memalign, SIZE_T alignment, SIZE_T size) {
   GET_SPAN;
   if (DlsymAlloc::Use())
@@ -222,18 +229,9 @@ INTERCEPTOR(void *, __libc_memalign, SIZE_T alignment, SIZE_T size) {
   bool is_inst = !already_in_scope && INST_CALLER(__libc_memalign);
   return BsanAllocateMetaIntoStack(ptr, size, is_inst, span, 0);
 }
+#endif
 
-INTERCEPTOR(void *, valloc, SIZE_T size) {
-  GET_SPAN;
-  if (DlsymAlloc::Use())
-    return DlsymAlloc::Allocate(size, GetPageSizeCached());
-  bool already_in_scope = BlockInterception();
-  InterceptorBarrier barrier;
-  void *ptr = bsan_valloc(size);
-  bool is_inst = !already_in_scope && INST_CALLER(valloc);
-  return BsanAllocateMetaIntoStack(ptr, size, is_inst, span, 0);
-}
-
+#if SANITIZER_LINUX
 INTERCEPTOR(void *, pvalloc, SIZE_T size) {
   GET_SPAN;
   if (DlsymAlloc::Use())
@@ -243,6 +241,18 @@ INTERCEPTOR(void *, pvalloc, SIZE_T size) {
   InterceptorBarrier barrier;
   void *ptr = bsan_pvalloc(size);
   bool is_inst = !already_in_scope && INST_CALLER(pvalloc);
+  return BsanAllocateMetaIntoStack(ptr, size, is_inst, span, 0);
+}
+#endif
+
+INTERCEPTOR(void *, valloc, SIZE_T size) {
+  GET_SPAN;
+  if (DlsymAlloc::Use())
+    return DlsymAlloc::Allocate(size, GetPageSizeCached());
+  bool already_in_scope = BlockInterception();
+  InterceptorBarrier barrier;
+  void *ptr = bsan_valloc(size);
+  bool is_inst = !already_in_scope && INST_CALLER(valloc);
   return BsanAllocateMetaIntoStack(ptr, size, is_inst, span, 0);
 }
 
@@ -368,6 +378,7 @@ static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso) {
   return res;
 }
 
+#if !SANITIZER_APPLE
 #define BSAN_INTERCEPT_FUNC(name)                                              \
   do {                                                                         \
     if (!INTERCEPT_FUNCTION(name))                                             \
@@ -387,6 +398,14 @@ static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso) {
       VReport(1, "BorrowSanitizer: failed to intercept '%s@@%s' or '%s'\n",    \
               #name, ver, #name);                                              \
   } while (0)
+#else
+// Interceptors on Apple platforms are installed via DYLD interposition
+// rather than by patching the callee at runtime, so INTERCEPT_FUNCTION is a
+// no-op there and must not be initialized.
+#define BSAN_INTERCEPT_FUNC(name)
+#define BSAN_INTERCEPT_FUNC_VER(name, ver)
+#define BSAN_INTERCEPT_FUNC_VER_UNVERSIONED_FALLBACK(name, ver)
+#endif // !SANITIZER_APPLE
 
 #define COMMON_INTERCEPT_FUNCTION(name) BSAN_INTERCEPT_FUNC(name)
 

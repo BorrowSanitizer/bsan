@@ -16,15 +16,12 @@ mod utils;
 static TOOLCHAIN_NAME: &str = "bsan";
 
 /// Additional utilities outside of Rust that are needed
-/// to build BorrowSanitizer. 
+/// to build BorrowSanitizer.
 static DEPENDENCIES: &[&str] = &["cmake", "ninja", "curl", "clang", "clang-tidy", "python3"];
 
 /// BorrowSanitizer's supported targets.
-static TARGETS: &[&str] = &[
-    "x86_64-unknown-linux-gnu", 
-    "aarch64-unknown-linux-gnu",
-    "aarch64-apple-darwin"
-];
+static TARGETS: &[&str] =
+    &["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "aarch64-apple-darwin"];
 
 #[derive(Clone, Debug, Parser)]
 pub enum Command {

@@ -1809,7 +1809,7 @@ private:
 
     Function *Callee = CB.getCalledFunction();
     if (Callee) {
-      if (IsRetag(&CB)) {
+      if (isRetag(&CB)) {
         if (CB.getType() == BS.PtrTy) {
           return instrumentRetagReg(CB);
         }

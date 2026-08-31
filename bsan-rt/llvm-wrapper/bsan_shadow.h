@@ -48,7 +48,7 @@ const MappingDesc kMemoryLayout[] = {
 const uptr kAllocatorSpace = 0xE00000000000ULL;
 const uptr kAllocatorSpaceSize = 0x40000000000ULL; // 4T.
 
-#elif SANITIZER_LINUX && defined(__x86_64__)
+#elif (SANITIZER_LINUX && defined(__x86_64__)) || (SANITIZER_APPLE)
 // All of the following configurations are supported.
 // ASLR disabled: main executable and DSOs at 0x555550000000
 // PIE and ASLR: main executable and DSOs at 0x7f0000000000
