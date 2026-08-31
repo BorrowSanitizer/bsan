@@ -156,6 +156,7 @@ private:
 
 BsanThread *CurrentThread();
 void SetCurrentThread(BsanThread *t);
+void ClearCurrentThread();
 
 struct SANITIZER_MUTEX ThreadManager {
 public:

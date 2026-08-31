@@ -7,6 +7,24 @@
 using namespace __sanitizer;
 using namespace __bsan;
 
+static THREADLOCAL void *bsan_thread = nullptr;
+
+namespace __bsan {
+
+extern void PlatformSetCurrentThread(BsanThread *t);
+void SetCurrentThread(BsanThread *t) {
+  // Make sure we do not reset the current BsanThread.
+  CHECK_EQ(0, bsan_thread);
+  bsan_thread = t;
+  PlatformSetCurrentThread(t);
+}
+
+BsanThread *CurrentThread() { return (BsanThread *)bsan_thread; }
+
+void ClearCurrentThread() { bsan_thread = nullptr; }
+
+} // namespace __bsan
+
 BsanThread *BsanThread::Create(thread_callback_t start_routine, void *arg) {
   uptr PageSize = GetPageSizeCached();
   uptr size = RoundUpTo(sizeof(BsanThread), PageSize);

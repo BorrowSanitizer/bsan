@@ -264,19 +264,12 @@ fn run_tests(env: &mut BsanEnv, config: TestConfig) -> Result<(), anyhow::Error>
         let mut env_guards = vec![];
         let cargo_bsan = env.build_artifact(CargoBsan, args)?;
 
-        // We want release mode to ensure a reasonable level of performance, but
-        // we also want debug assertions enabled, too.
-        let rust_runtime = env.with_flags("RUSTFLAGS", &["-Cdebug-assertions=on"], |env| {
-            env.build_artifact(BsanRt, args)
-        })?;
-        let llvm_runtime = env.build_artifact(CompilerRt, args)?;
+        let runtime = env.build_artifact(CompilerRt, args)?;
 
         let pass = env.build_artifact(BsanPass, args)?;
         let symbolizer = env.sysroot_binary("llvm-symbolizer");
 
-        env_guards.push(env.sh.push_env("BSAN_RT_RUST", &rust_runtime));
-        env_guards.push(env.sh.push_env("BSAN_RT_LLVM", &llvm_runtime));
-
+        env_guards.push(env.sh.push_env("BSAN_RT", &runtime));
         env_guards.push(env.sh.push_env("BSAN_PLUGIN", &pass));
         env_guards.push(env.sh.push_env("BSAN_SYMBOLIZER", &symbolizer));
         env_guards.push(env.sh.push_env("CARGO_BSAN", &cargo_bsan));

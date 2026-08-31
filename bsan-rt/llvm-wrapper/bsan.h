@@ -69,9 +69,6 @@ namespace __bsan {
 
 typedef uptr ThreadId;
 
-// A pointer to the state object for the current thread.
-extern THREADLOCAL void *bsan_thread;
-
 // A flag that will block interceptors from being activated
 // for operations occuring in this thread.
 extern THREADLOCAL int block_interception;

@@ -6,7 +6,7 @@ set(BSAN_SOURCES
   bsan_set.cpp
   bsan_flags.cpp
   bsan_interceptors.cpp
-  bsan_linux.cpp
+  bsan_posix.cpp
   bsan_thread.cpp
   bsan_allocator.cpp
   bsan_shadow.cpp
