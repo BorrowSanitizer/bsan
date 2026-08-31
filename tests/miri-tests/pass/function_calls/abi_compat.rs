@@ -1,6 +1,4 @@
 //@run:0
-#![feature(never_type)]
-
 use std::rc::Rc;
 use std::{mem, num, ptr};
 

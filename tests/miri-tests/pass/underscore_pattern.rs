@@ -1,7 +1,5 @@
 //@run:0
 // Various tests ensuring that underscore patterns really just construct the place, but don't check its contents.
-#![feature(never_type)]
-
 use std::ptr;
 
 fn main() {

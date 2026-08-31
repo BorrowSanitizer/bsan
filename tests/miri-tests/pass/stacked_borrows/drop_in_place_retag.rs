@@ -4,6 +4,7 @@
 
 //miri: @error-in-other-file: /retag .* for Unique permission .* only grants SharedReadOnly permission/
 
+#[allow(dropping_copy_types)]
 fn main() {
     unsafe {
         let x = 0u8;
