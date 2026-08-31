@@ -319,3 +319,17 @@ fn move_file<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<()> {
         r => r,
     }
 }
+
+pub(crate) fn dylib(name: impl AsRef<str>) -> String{
+    let name = name.as_ref();
+    if cfg!(target_os = "macos") {
+        format!("{name}.dylib")
+    } else  {
+        format!("{name}.so")
+    }
+}
+
+pub(crate) fn staticlib(name: impl AsRef<str>) -> String {
+    let name = name.as_ref();
+    format!("{name}.a")
+}

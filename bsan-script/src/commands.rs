@@ -10,7 +10,7 @@ use xshell::cmd;
 
 use crate::env::{BsanEnv, Mode};
 use crate::stats::*;
-use crate::utils::install_git_hooks;
+use crate::utils::{self, install_git_hooks};
 use crate::Command;
 
 impl Command {
@@ -481,11 +481,15 @@ impl CompilerRt {
 
 impl Buildable for CompilerRt {
     fn artifact(&self, env: &BsanEnv) -> String {
-        let host = &env.toolchain_config.meta.host;
-        let arch = host.split("-").next().unwrap_or_else(|| {
-            panic!("Invalid target triple: `{}`", env.toolchain_config.meta.host)
-        });
-        format!("libclang_rt.bsan-{}.a", arch)
+        if cfg!(target_os = "macos") {
+            utils::dylib("libclang_rt.bsan_osx_dynamic")
+        } else {
+            let host = &env.toolchain_config.meta.host;
+            let arch = host.split("-").next().unwrap_or_else(|| {
+                panic!("Invalid target triple: `{}`", env.toolchain_config.meta.host)
+            });
+            utils::staticlib(format!("libclang_rt.bsan-{arch}"))
+        }
     }
 
     fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<Option<PathBuf>> {
@@ -493,7 +497,8 @@ impl Buildable for CompilerRt {
         args.iter().for_each(|arg| {
             cfg.build_arg(arg);
         });
-        let target_dir = path!(cfg.build() / "build" / "lib" / "linux");
+        let os_dir = if cfg!(target_os = "macos") { "darwin" } else { "linux" };
+        let target_dir = path!(cfg.build() / "build" / "lib" / os_dir);
         let target = path!(target_dir / self.artifact(env));
         Ok(Some(target))
     }

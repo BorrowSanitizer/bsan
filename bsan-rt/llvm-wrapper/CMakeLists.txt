@@ -46,8 +46,6 @@ set_source_files_properties(bsan_interceptors.cpp PROPERTIES
 set(BSAN_COMMON_DEFINITIONS "")
 set(BSAN_DYNAMIC_DEFINITIONS ${BSAN_COMMON_DEFINITIONS} BSAN_DYNAMIC=1)
 
-# Compile BorSan sources into an object library.
-
 add_compiler_rt_object_libraries(RTBorsan_dynamic
   OS ${SANITIZER_COMMON_SUPPORTED_OS}
   ARCHS ${BSAN_SUPPORTED_ARCH}
@@ -56,12 +54,10 @@ add_compiler_rt_object_libraries(RTBorsan_dynamic
   CFLAGS ${BSAN_DYNAMIC_CFLAGS}
   DEFS ${BSAN_DYNAMIC_DEFINITIONS})
 
-# Static runtime library.
 add_compiler_rt_component(bsan)
 
 if(APPLE)
   add_weak_symbols("sanitizer_common" WEAK_SYMBOL_LINK_FLAGS)
-
   add_compiler_rt_runtime(clang_rt.bsan
     SHARED
     OS ${SANITIZER_COMMON_SUPPORTED_OS}
@@ -74,14 +70,6 @@ if(APPLE)
     CFLAGS ${BSAN_DYNAMIC_CFLAGS}
     LINK_FLAGS ${WEAK_SYMBOL_LINK_FLAGS}
     DEFS ${BSAN_DYNAMIC_DEFINITIONS}
-    PARENT_TARGET bsan)
-
-  add_compiler_rt_runtime(clang_rt.bsan_static
-    STATIC
-    ARCHS ${BSAN_SUPPORTED_ARCH}
-    OBJECT_LIBS RTBorsan_static
-    CFLAGS ${BSAN_CFLAGS}
-    DEFS ${BSAN_COMMON_DEFINITIONS}
     PARENT_TARGET bsan)
 else()
   set(BSAN_CFLAGS ${BSAN_COMMON_CFLAGS})
