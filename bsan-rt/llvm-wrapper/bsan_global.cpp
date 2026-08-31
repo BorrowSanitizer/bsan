@@ -77,33 +77,17 @@ void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
 }
 
 void GlobalContext::CollectGarbage(Snapshot &snap) {
-  InternalMmapVector<RetiredAlloc> filtered;
-  // Eject all retired allocation metadata objects
-  // that are confirmed to be unreachable as of the
-  // current minimum generation.
-  for (uptr i = 0; i < quarantine_.size(); ++i) {
-    RetiredAlloc retired = quarantine_[i];
-    if (retired.retire_gen <= snap.min_drained) {
-      __bsan_eject(retired.info);
-    } else {
-      // If we can't eject this object yet, then
-      // make sure it stays in quarantine.
-      filtered.push_back(retired);
-    }
-  }
-  quarantine_.swap(filtered);
 
-  // A pending set of unpruned tags
   ConcreteProvenanceSet still_pending;
   pending_.drain([&](AllocInfo *info, BorTagSet &tags) {
     // If `__bsan_prune` returns true, then the allocation's tree is empty;
     // every single tag was pruned.
     if (__bsan_prune(info, tags.data(), tags.size())) {
-      if (snap.min_drained == snap.gen) {
-        __bsan_eject(info);
-      } else {
-        quarantine_.push_back({info, snap.gen});
-      }
+      // Insert the allocation into the quarantine.
+      // It might already be present. If so, its generation is
+      // updated. It is crucial for this to be a hashmap. Otherwise,
+      // we will end up double-freeing allocation metadata.
+      quarantine_[info] = snap.gen;
     } else {
       // The Rust core zeroes out every tag that no longer needs tracking.
       // The remaining nonzero tags are dead nodes that could not be pruned
@@ -117,6 +101,17 @@ void GlobalContext::CollectGarbage(Snapshot &snap) {
     }
   });
   pending_.swap(still_pending);
+
+  DenseMap<AllocInfo *, uptr> quarantined;
+  quarantine_.forEach([&](const DenseMap<AllocInfo *, uptr>::value_type &KV) {
+    if (KV.second <= snap.min_drained) {
+      __bsan_eject(KV.first);
+    } else {
+      quarantined.try_emplace(KV.first, KV.second);
+    }
+    return true;
+  });
+  quarantine_.swap(quarantined);
 }
 
 void GlobalContext::RequestGC() {
