@@ -90,17 +90,30 @@ pub fn mmap(size_bytes: NonZero<usize>) -> NonNull<u8> {
     unsafe {
         let ptr = libc::mmap(ptr::null_mut(), size_bytes, BSAN_PROT_FLAGS, BSAN_MAP_FLAGS, -1, 0);
         if ptr.is_null() || ptr == libc::MAP_FAILED {
-            let errno = *libc::__errno_location();
-            libc_failed("mmap", errno);
+            libc_failed("mmap");
         }
         NonNull::new_unchecked(ptr.cast())
     }
 }
 
+/// Panics with a message displaying the current libc exit code. 
+/// 
+/// # Safety
+/// Must be called immediately after a `libc`` function has returned
+/// a non-zero exit code. Otherwise, the reported error number could be 
+/// uninitialized. 
 #[cold]
 #[inline(never)]
-pub(crate) fn libc_failed(name: &str, exit_code: libc::c_int) -> ! {
-    panic!("`{name}` failed with exit code: {exit_code}")
+pub(crate) unsafe fn libc_failed(name: &str) -> ! {
+    // The location where libc's error message is 
+    // stored could be uninitialized. 
+    unsafe { 
+        #[cfg(target_os = "linux")]
+        let errno = *libc::__errno_location();
+        #[cfg(target_os = "macos")]
+        let errno = *libc::__error();
+        panic!("`{name}` failed with exit code: {errno}")
+    }
 }
 
 /// A wrapper around `munmap` that converts non-zero exit codes into errors.
@@ -112,8 +125,7 @@ pub unsafe fn munmap<T>(ptr: NonNull<T>, size_bytes: impl Into<NonZero<usize>>) 
         let ptr = ptr.cast::<c_void>();
         let res = libc::munmap(ptr, size_bytes);
         if res == -1 {
-            let errno = *libc::__errno_location();
-            libc_failed("munmap", errno)
+            libc_failed("munmap")
         }
     }
 }
