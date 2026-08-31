@@ -2,7 +2,6 @@
 #![cfg_attr(not(test), feature(core_intrinsics))]
 #![feature(thread_local)]
 #![feature(allocator_api)]
-#![feature(never_type)]
 #![allow(internal_features)]
 
 #[macro_use]

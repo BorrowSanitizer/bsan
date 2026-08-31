@@ -1,7 +1,7 @@
 //@run:0
 //miri: @revisions: stack tree
 //miri: @[tree]compile-flags: -Zmiri-tree-borrows
-#![feature(coroutines, coroutine_trait, never_type, stmt_expr_attributes)]
+#![feature(coroutines, coroutine_trait, stmt_expr_attributes)]
 
 use std::fmt::Debug;
 use std::mem::ManuallyDrop;
