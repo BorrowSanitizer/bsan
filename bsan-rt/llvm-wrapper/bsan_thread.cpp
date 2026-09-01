@@ -7,6 +7,12 @@
 using namespace __sanitizer;
 using namespace __bsan;
 
+namespace __bsan {
+
+BsanThread *CurrentThread() { return (BsanThread *)TSDGet(); }
+
+void SetCurrentThread(BsanThread *t) { TSDSet((void *)t); }
+
 BsanThread *BsanThread::Create(thread_callback_t start_routine, void *arg) {
   uptr PageSize = GetPageSizeCached();
   uptr size = RoundUpTo(sizeof(BsanThread), PageSize);
@@ -50,7 +56,9 @@ void *BsanThread::StartCallback(void *arg) {
   BsanThread *t = (BsanThread *)arg;
   SetCurrentThread(t);
   t->Init();
+#if SANITIZER_LINUX
   SetSigProcMask(&t->starting_sigset_, nullptr);
+#endif
   return t->Start();
 }
 
@@ -66,3 +74,5 @@ void ThreadManager::DeregisterThread(BsanThread *thread) {
   global_zct.drainFrom(thread->zct);
   threads.erase(thread->id);
 }
+
+} // namespace __bsan

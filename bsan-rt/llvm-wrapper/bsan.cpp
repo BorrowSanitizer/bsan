@@ -27,9 +27,11 @@ using namespace __sanitizer;
 // side to create a strong link between the two components.
 // When we run BorrowSanitizer in no-op mode, we define
 // this symbol manually by passing a flag to the linker.
+#if SANITIZER_LINUX
 extern "C" void __bsan_rust_runtime_anchor(void);
 USED static void (*const bsan_rust_runtime_anchor)(void) =
     &__bsan_rust_runtime_anchor;
+#endif
 
 // Interface globals.
 // Stores the function pointer of a possibly
@@ -94,17 +96,23 @@ atomic_uintptr_t __bsan_bor_tag_ctr{3};
 SANITIZER_INTERFACE_ATTRIBUTE
 atomic_uintptr_t __bsan_visits_since_gc{0};
 
-namespace __bsan {
-
-// Is the runtime initialized?
-bool bsan_inited = false;
-
-// Is the initializer for the runtime executing?
-bool bsan_init_running = false;
-
 // Path substrings that identify a file as belonging to a dependency/toolchain
 static const char *const kLibraryPathMarkers[] = {".cargo/", ".rustup/",
                                                   "cargo/", "rustup/"};
+
+namespace __bsan {
+
+static StaticSpinMutex bsan_inited_mutex;
+static atomic_uint8_t bsan_inited = {0};
+
+static void SetBsanInited() {
+  atomic_store(&bsan_inited, 1, memory_order_release);
+}
+
+bool BsanInited() {
+  return atomic_load(&bsan_inited, memory_order_acquire) == 1;
+}
+
 // Allocates a new borrow tag.
 BorTag NewBorTag() {
   return atomic_fetch_add(&__bsan_bor_tag_ctr, 1, memory_order_relaxed);
@@ -250,11 +258,62 @@ bool CallerIsInstrumented(void *sym) {
   return matches;
 }
 
+SANITIZER_WEAK_ATTRIBUTE
+extern "C" void __bsan_internal_init(SharedSanitizerFlags *_flags) {}
+
+static bool BsanInitInternal() {
+  if (LIKELY(BsanInited()))
+    return true;
+
+  AvoidCVE_2016_2143();
+  SharedSanitizerFlags flags;
+  InitializeFlags(flags);
+  new (global_ctx()) GlobalContext();
+
+  __bsan_internal_init(&flags);
+  InitializePlatformEarly();
+
+  if (!InitShadowWithReExec()) {
+    Printf("FATAL: BorrowSanitizer can not mmap the shadow memory.\n");
+    DumpProcessMap();
+    Die();
+  }
+
+  InitializeAllocator();
+  InitializeInterceptors();
+  InitializeTSD(PlatformTSDDtor);
+
+  BsanThread *main_thread = BsanThread::Create(nullptr, nullptr);
+  SetCurrentThread(main_thread);
+  main_thread->Init();
+
+  SetBsanInited();
+  return true;
+}
+
+// Initialize as requested from some part of the runtime library
+// (interceptors, allocator, etc).
+void BsanInitFromRtl() {
+  if (LIKELY(BsanInited()))
+    return;
+  SpinMutexLock lock(&bsan_inited_mutex);
+  BsanInitInternal();
+}
+
+bool TryBsanInitFromRtl() {
+  if (LIKELY(BsanInited()))
+    return true;
+  if (!bsan_inited_mutex.TryLock())
+    return false;
+  bool result = BsanInitInternal();
+  bsan_inited_mutex.Unlock();
+  return result;
+}
+
 } // namespace __bsan
 
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_format_pending_ub(uptr) {}
-
 void __sanitizer::BufferedStackTrace::UnwindImpl(uptr pc, uptr bp,
                                                  void *context,
                                                  bool request_fast,
@@ -274,42 +333,10 @@ void __sanitizer::BufferedStackTrace::UnwindImpl(uptr pc, uptr bp,
 }
 
 using namespace __bsan;
-
 extern "C" {
 
-SANITIZER_WEAK_ATTRIBUTE
-void __bsan_internal_init(SharedSanitizerFlags *_flags) {}
-
-void __bsan_init() {
-  CHECK(!bsan_init_running);
-  if (bsan_inited)
-    return;
-  bsan_init_running = true;
-
-  AvoidCVE_2016_2143();
-  SharedSanitizerFlags flags;
-  InitializeFlags(flags);
-  new (global_ctx()) GlobalContext();
-
-  __bsan_internal_init(&flags);
-  InitializePlatformEarly();
-
-  if (!InitShadowWithReExec()) {
-    Printf("FATAL: BorrowSanitizer can not mmap the shadow memory.\n");
-    DumpProcessMap();
-    Die();
-  }
-  InitializeAllocator();
-  InitializeInterceptors();
-  InitializeTSD();
-
-  BsanThread *main_thread = BsanThread::Create(nullptr, nullptr);
-  SetCurrentThread(main_thread);
-  main_thread->Init();
-
-  bsan_init_running = false;
-  bsan_inited = true;
-}
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_init() { BsanInitFromRtl(); }
 
 /// When we call a possibly uninstrumented function, we store our frame
 /// pointer in a thread-local variable, marking the "boundary" between
@@ -651,6 +678,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_print(void *ptr) {
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_print_borrow_state(BorTag bor_tag, AllocInfo *alloc_info) {}
 
+SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_debug_print_borrow_state(void *ptr) {
   Provenance *slot = GetParamSlot(0);
   InterceptorBarrier barrier;
@@ -660,6 +688,7 @@ void __bsan_debug_print_borrow_state(void *ptr) {
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_tree_size(BorTag bor_tag, AllocInfo *alloc_info) {}
 
+SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_debug_tree_size(void *ptr) {
   Provenance *slot = GetParamSlot(0);
   InterceptorBarrier barrier;
@@ -669,6 +698,7 @@ void __bsan_debug_tree_size(void *ptr) {
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_snapshot(BorTag bor_tag, AllocInfo *alloc_info) {}
 
+SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_debug_snapshot(void *ptr) {
   Provenance *slot = GetParamSlot(0);
   InterceptorBarrier barrier;
@@ -678,6 +708,7 @@ void __bsan_debug_snapshot(void *ptr) {
 SANITIZER_WEAK_ATTRIBUTE void __bsan_print_diff(BorTag bor_tag,
                                                 AllocInfo *alloc_info) {}
 
+SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_debug_print_diff(void *ptr) {
   Provenance *slot = GetParamSlot(0);
   InterceptorBarrier barrier;
@@ -689,6 +720,7 @@ void __bsan_debug_print_diff(void *ptr) {
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_request_gc() { global_ctx()->RequestGC(); }
 
+SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_abort() { Die(); }
 
 } // extern "C"

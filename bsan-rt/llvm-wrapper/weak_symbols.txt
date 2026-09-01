@@ -1,0 +1,14 @@
+___bsan_write_impl
+___bsan_retag_impl
+___bsan_reserve_stack_slot_impl
+___bsan_read_impl
+___bsan_rc_inc_impl
+___bsan_rc_dec_impl
+___bsan_prune
+___bsan_protector_end_impl
+___bsan_expose_prov_impl
+___bsan_eject
+___bsan_destroy_stack_slot_impl
+___bsan_dealloc_stack_impl
+___bsan_alloc_stack_impl
+___bsan_alloc_impl
