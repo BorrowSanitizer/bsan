@@ -102,6 +102,8 @@ static const char *const kLibraryPathMarkers[] = {".cargo/", ".rustup/",
 
 namespace __bsan {
 
+MetadataAlloc metadata_alloc(LINKER_INITIALIZED, "bsan_metadata");
+
 static StaticSpinMutex bsan_inited_mutex;
 static atomic_uint8_t bsan_inited = {0};
 

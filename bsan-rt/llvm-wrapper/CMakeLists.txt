@@ -23,6 +23,7 @@ SET(BSAN_HEADERS
   bsan_shadow.h
   bsan_allocator.h
   bsan_global.h
+  bsan_dense_alloc.h
 )
 
 add_custom_target(clang-format

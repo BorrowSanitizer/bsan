@@ -1,6 +1,7 @@
 #ifndef BSAN_H
 #define BSAN_H
 #include "bsan_allocator.h"
+#include "bsan_dense_alloc.h"
 #include "bsan_shadow.h"
 #include "sanitizer_common/sanitizer_addrhashmap.h"
 #include "sanitizer_common/sanitizer_atomic.h"
@@ -124,6 +125,9 @@ void __bsan_format_pending_ub(uptr user_frame_pc);
 }
 
 namespace __bsan {
+
+typedef DenseSlabAlloc<kMetadataSpace> MetadataAlloc;
+extern MetadataAlloc metadata_alloc;
 
 // Capture the immediate caller PC of the runtime hook as the span.
 #define GET_SPAN uptr span = GET_CALLER_PC();
