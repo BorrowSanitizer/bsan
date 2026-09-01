@@ -1,6 +1,6 @@
 # Updates the current nightly version of Rust, creating a
 # pull request for manual validation. This will also build 
-# and distribute a compatible version of clang, as needed.
+# and distribute a compatible version of clang.
 name: nightly 
 on:
   workflow_dispatch:
@@ -32,6 +32,9 @@ jobs:
       # such that libLLVM is built differently, but it uses the same source,
       # then we want those changes, too.
       tag: ${{ steps.nightly.outputs.tag }}
+      # The list of targets that need to be built. If a target is missing
+      # from an existing release, then it will still be built.
+      matrix: ${{ steps.nightly.outputs.matrix }}
       should_build: ${{ steps.nightly.outputs.should_build }}
     steps:
       - name: Fetch nightly release info
@@ -46,8 +49,28 @@ jobs:
           llvm_sha=$(gh api "repos/rust-lang/rust/contents/src/llvm-project?ref=$rust_sha" --jq .sha)
           rust_version=$(gh api "repos/rust-lang/rust/contents/src/version?ref=$rust_sha" --jq .content | base64 -d | tr -d '[:space:]')
           tag="clang-${llvm_sha:0:7}-$rust_version"
+
+          # The set of supported targets.
+          targets='[
+            {"target": "x86_64-unknown-linux-gnu",  "os": "ubuntu-latest"},
+            {"target": "aarch64-unknown-linux-gnu", "os": "ubuntu-24.04-arm"},
+            {"target": "aarch64-apple-darwin",      "os": "macos-latest"}
+          ]'
+
+          # Obtain a newline separated list of every release asset. 
+          # If the release does not exist, then the list will be empty.
+          assets=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets[].name' 2>/dev/null || true)
+
+          # Select every element of the targets list where the given target does 
+          # not correspond to an existing release asset.
+          matrix=$(jq -c --arg tag "$tag" --arg assets "$assets" '
+            ($assets | split("\n")) as $have
+            | map(select(.target as $t | ($have | index("\($tag)-\($t).tar.xz")) | not))
+          ' <<<"$targets")
+
           should_build=false
-          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          if [ "$(jq length <<<"$matrix")" -gt 0 ]; then
             should_build=true
           fi
           {
@@ -56,6 +79,7 @@ jobs:
             echo "llvm_sha=$llvm_sha"
             echo "nightly_date=$nightly_date"
             echo "tag=$tag"
+            echo "matrix=$matrix"
             echo "should_build=$should_build"
             echo "rust_version=$rust_version"
           } >> "$GITHUB_OUTPUT"
@@ -67,26 +91,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        config:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-24.04-arm
+        config: ${{ fromJSON(needs.init.outputs.matrix) }}
     runs-on: ${{ matrix.config.os }}
     defaults:
       run:
         shell: bash
     steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build lld
-          
       - uses: actions/checkout@v4
         with:
             sparse-checkout: bsan-script/etc/build-clang.sh
             sparse-checkout-cone-mode: false
-            
       - name: Build
         run: |
           # We need a version of `clang` that matches nightly Rust toolchain
@@ -130,23 +144,36 @@ jobs:
             echo "No build artifacts found!"
             exit 1
           fi
+          tag="${{ needs.init.outputs.tag }}"
           llvm_sha="${{ needs.init.outputs.llvm_sha }}"
           llvm_link="[\`${llvm_sha:0:7}\`]($GITHUB_SERVER_URL/rust-lang/llvm-project/commit/$llvm_sha)"
-          gh release create "${{ needs.init.outputs.tag }}" \
-            --repo "${{ github.repository }}" \
-            --target "${{ github.sha }}" \
-            --title "Clang (${llvm_sha:0:7})" \
-            --notes "A build of Clang that shares its LLVM version with nightly Rust ($llvm_link)." \
-            --prerelease \
-            "${files[@]}"
 
-
+          # if the release already exists, then all we need to do is upload the assets,
+          # which are already confirmed to be missing.
+          # otherwise, create a new release. 
+          if gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$tag" \
+              --repo "${{ github.repository }}" \
+              --clobber \
+              "${files[@]}"
+          else
+            gh release create "$tag" \
+              --repo "${{ github.repository }}" \
+              --target "${{ github.sha }}" \
+              --title "Clang (${llvm_sha:0:7})" \
+              --notes "A build of Clang that shares its LLVM version with nightly Rust ($llvm_link)." \
+              --prerelease \
+              "${files[@]}"
+          fi
   update:
     name: Open PR
     needs: [init, build, release]
     # Run this step if we did not need to build clang,
     # or if we did, and both the build and release
-    # steps succeeded
+    # steps succeeded. In this step, we check to see
+    # if the committed nightly version is different from
+    # the latest upstream nightly version, and skip creating
+    # a PR if nothing needs to be updated. 
     if: >-
       ${{ !cancelled()
         && ((needs.init.outputs.should_build == 'false')
@@ -166,6 +193,7 @@ jobs:
       - name: Open PR
         run: |
           set -euo pipefail
+          # if nothing changed, then exit without creating a PR.
           if git diff --quiet; then
             exit 0
           fi
