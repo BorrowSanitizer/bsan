@@ -69,9 +69,6 @@ namespace __bsan {
 
 typedef uptr ThreadId;
 
-// A pointer to the state object for the current thread.
-extern THREADLOCAL void *bsan_thread;
-
 // A flag that will block interceptors from being activated
 // for operations occuring in this thread.
 extern THREADLOCAL int block_interception;
@@ -86,17 +83,22 @@ struct InterceptorBarrier {
 bool BlockInterception();
 
 // Is the runtime initialized?
-extern bool bsan_inited;
+bool BsanInited();
 
-// Is the initializer for the runtime executing?
-extern bool bsan_init_running;
+// Initialize the runtime
+void BsanInitFromRtl();
+
+// Attempt to initialize the runtime.
+bool TryBsanInitFromRtl();
+
+// Wrappers for TLS / TSD
+void InitializeTSD(void (*destructor)(void *tsd));
+void *TSDGet();
+void TSDSet(void *tsd);
+void PlatformTSDDtor(void *tsd);
 
 /// Creates a new borrow tag.
 BorTag NewBorTag();
-
-/// Initializes the destructor
-/// for per-thread state.
-void InitializeTSD();
 
 /// Enables interception.
 void InitializeInterceptors();

@@ -130,6 +130,17 @@ void __bsan::bsan_deallocate(void *p) {
   }
 }
 
+static uptr GetMallocUsableSize(const void *p) {
+  if (!p)
+    return 0;
+  Metadata *meta = reinterpret_cast<Metadata *>(allocator.GetMetaData(p));
+  if (!meta)
+    return 0;
+  return meta->requested_size;
+}
+
+uptr __bsan::bsan_mz_size(const void *p) { return GetMallocUsableSize(p); }
+
 static void *BsanReallocate(void *old_p, uptr new_size, uptr alignment) {
   Metadata *meta = reinterpret_cast<Metadata *>(allocator.GetMetaData(old_p));
   uptr old_size = meta->requested_size;
