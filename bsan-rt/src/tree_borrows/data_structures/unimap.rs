@@ -170,6 +170,13 @@ impl<V> UniKeyValMap<V> {
         self.mapping.insert(idx, val);
         idx
     }
+
+    pub fn keys(&self) -> impl Iterator<Item = UniIndex> {
+        self.data
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, opt_val)| opt_val.is_some().then_some(UniIndex { idx: idx as u32 }))
+    }
 }
 
 /// An access to a single value of the map.

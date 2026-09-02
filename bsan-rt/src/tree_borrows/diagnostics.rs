@@ -252,8 +252,7 @@ impl EagerTree {
     /// Allows operations on tags that are unreachable by the program
     /// but still exist in the tree. Not guaranteed to perform consistently
     /// if `provenance-gc=1`.
-    fn nth_parent(&self, tag: BorTag, nth_parent: u8) -> Option<BorTag> {
-        let mut idx = self.tag_mapping.get(&tag).unwrap();
+    fn nth_parent(&self, mut idx: UniIndex, nth_parent: u8) -> Option<BorTag> {
         for _ in 0..nth_parent {
             let node = self.nodes.get(idx).unwrap();
             idx = node.parent?;
@@ -261,20 +260,9 @@ impl EagerTree {
         Some(self.nodes.get(idx).unwrap().tag)
     }
 
-    /// Debug helper: assign name to tag.
-    pub fn give_pointer_debug_name(&mut self, tag: BorTag, nth_parent: u8, name: &str) {
-        let tag = self.nth_parent(tag, nth_parent).unwrap();
-        let idx = self.tag_mapping.get(&tag).unwrap();
-        if let Some(node) = self.nodes.get_mut(idx) {
-            node.debug_info.add_name(name);
-        } else {
-            eprintln!("Tag {tag:?} (to be named '{name}') not found!");
-        }
-    }
-
     /// Debug helper: determines if the tree contains a tag.
-    pub fn is_allocation_of(&self, tag: BorTag) -> bool {
-        self.tag_mapping.contains_key(&tag)
+    pub fn is_allocation_of(&self, idx: UniIndex) -> bool {
+        self.nodes.contains_idx(idx)
     }
 }
 
@@ -942,13 +930,10 @@ impl EagerTree {
         let mut new_tags = Vec::new();
         let mut changed_tags = Vec::new();
 
-        let mut all_indices: Vec<BorTag> = self.tag_mapping.mapping.keys().copied().collect();
-        all_tags.sort();
+        let mut all_indices: Vec<UniIndex> = self.nodes.keys().collect();
 
-        for tag in all_tags {
-            let new_idx = self.tag_mapping.get(&tag).unwrap();
-
-            if let Some(old_idx) = old_tree.tag_mapping.get(&tag) {
+        for new_idx in all_indices {
+            if let Some(old_node) = old_tree.nodes.get(new_idx) {
                 let mut diffs = Vec::new();
                 for (range, loc) in self.locations.iter_all() {
                     let new_perm = loc.perms.get(new_idx).copied();
@@ -959,7 +944,7 @@ impl EagerTree {
                         .iter(Size::from_bytes(range.start), Size::from_bytes(1))
                         .next()
                     {
-                        old_loc.perms.get(old_idx).copied()
+                        old_loc.perms.get(new_idx).copied()
                     } else {
                         None
                     };
@@ -969,16 +954,14 @@ impl EagerTree {
                     }
                 }
                 if !diffs.is_empty() {
-                    changed_tags.push((tag, diffs));
+                    changed_tags.push((idx, diffs));
                 }
             } else {
                 new_tags.push(tag);
             }
         }
 
-        let protector_of = |tag: BorTag| {
-            self.nodes.get(self.tag_mapping.get(&tag).unwrap()).unwrap().protector_kind
-        };
+        let protector_of = |idx: UniIndex| self.nodes.get(idx).unwrap().protector_kind;
 
         if !new_tags.is_empty() {
             crate::println!("New Tags:");
