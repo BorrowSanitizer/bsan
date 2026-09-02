@@ -564,28 +564,11 @@ void __bsan_shadow_clear_aligned(void *dest_shadow, void *dest_origin,
   ClearShadowAligned((uptr)dest_shadow, (uptr)dest_origin, size);
 }
 
-SANITIZER_WEAK_ATTRIBUTE
-AllocInfo *__bsan_reserve_stack_slot_impl();
+SANITIZER_INTERFACE_ATTRIBUTE
+AllocInfo *__bsan_reserve_stack_slot() { return nullptr; }
 
 SANITIZER_INTERFACE_ATTRIBUTE
-AllocInfo *__bsan_reserve_stack_slot() {
-  if (__bsan_reserve_stack_slot_impl) {
-    InterceptorBarrier barrier;
-    return __bsan_reserve_stack_slot_impl();
-  }
-  return nullptr;
-}
-
-SANITIZER_WEAK_ATTRIBUTE
-void __bsan_destroy_stack_slot_impl(AllocInfo *slot);
-
-SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_destroy_stack_slot(AllocInfo *slot) {
-  if (__bsan_destroy_stack_slot_impl) {
-    InterceptorBarrier barrier;
-    __bsan_destroy_stack_slot_impl(slot);
-  }
-}
+void __bsan_destroy_stack_slot(AllocInfo *slot) {}
 
 SANITIZER_WEAK_ATTRIBUTE
 AllocInfo *__bsan_alloc_impl(void *base_addr, uptr size, BorTag bor_tag,

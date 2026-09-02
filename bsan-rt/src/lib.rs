@@ -27,7 +27,6 @@ mod sanitizer_common;
 use borrow_tracker::*;
 
 mod errors;
-mod memory;
 
 use crate::helpers::{AllocRange, Size};
 use crate::sanitizer_common::{Block, BorTag, RawProvenance, SharedSanitizerFlags, Span};
@@ -443,20 +442,6 @@ unsafe extern "C-unwind" fn __bsan_rc_dec_impl(prov: RawProvenance) -> bool {
     }
     let prov = Provenance { bor_tag, alloc_info };
     BorrowTracker::for_alloc(prov, |bt| bt.decrement()).unwrap_or(false)
-}
-
-/// Reserves a stack slot for allocation metadata.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_reserve_stack_slot_impl() -> NonNull<AllocInfo> {
-    unsafe { global_ctx().create_alloc_info(AllocInfo::invalid()) }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_destroy_stack_slot_impl(slot: NonNull<AllocInfo>) {
-    let ctx = unsafe { global_ctx() };
-    unsafe {
-        ctx.destroy_alloc_info(slot);
-    }
 }
 
 /// Initializes stack allocation metadata in-place.
