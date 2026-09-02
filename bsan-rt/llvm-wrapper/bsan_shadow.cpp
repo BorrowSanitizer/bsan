@@ -115,9 +115,9 @@ static bool InitShadow(bool init_origins, bool dry_run) {
                    (!init_origins && type == MappingDesc::ORIGIN);
     CHECK(!(map && protect));
     if (!map && !protect) {
-      CHECK(type == MappingDesc::APP || type == MappingDesc::ALLOCATOR);
-
-      if (dry_run && type == MappingDesc::ALLOCATOR &&
+      bool is_alloc = type == MappingDesc::ALLOCATOR || type == MappingDesc::METADATA;
+      CHECK(type == MappingDesc::APP || is_alloc);
+      if (dry_run && is_alloc &&
           !CheckMemoryRangeAvailability(start, size, !dry_run,
                                         kMemoryLayout[i].name))
         return false;
