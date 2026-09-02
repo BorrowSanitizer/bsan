@@ -4,7 +4,7 @@
 
 using namespace __sanitizer;
 
-struct Provenance;
+struct AllocInfo;
 
 // We slab-allocate blocks of 128 bytes within a dedicated 1 TB
 // memory region. This allows up to 2^32 allocation metadata
@@ -15,8 +15,25 @@ typedef u8 Block[kBlockSize];
 // Blocks are identified by 32-bit indices.
 typedef u32 BlockIndex;
 
+// Allocations are identified by word-size IDs.
+typedef u64 AllocId;
+
+// Nodes are identified by 32-bit indices.
+typedef u32 UniIndex;
+
+typedef uptr BorTag;
+
+// Provenance is two words: an AllocId,
+// and a pair of 32-bit indices for the
+// UniIndex and the BlockIndex.
+struct Provenance {
+  AllocId id;
+  u64 indices;
+};
+
 static constexpr uptr kProvenanceSize = 16;
 static constexpr uptr kProvenanceAlign = 8;
+static constexpr uptr kMinProvAlignment = 8;
 
 struct MappingDesc {
   uptr start;

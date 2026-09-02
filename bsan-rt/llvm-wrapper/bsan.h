@@ -36,25 +36,14 @@ using __sanitizer::Vector;
 // site. Symbolized lazily at display time as the error's origin note; the
 // primary error location comes from the live unwind in `HANDLE_ERROR`.
 typedef uptr Span;
-typedef uptr BorTag;
-
-struct AllocInfo;
-
-struct Provenance {
-  BorTag tag;
-  AllocInfo *info;
-};
 
 struct AtExitRecord {
   void (*func)(void *arg);
   void *arg;
 };
 
-const Provenance OMNIVALID = {0, nullptr};
-
 static constexpr uptr kParamTLSSizeProv = 100;
 static constexpr uptr kVarArgTLSSizeBytes = 800;
-static constexpr uptr kMinProvAlignment = 8;
 
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance
     *__bsan_shadow_stack;

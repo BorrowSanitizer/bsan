@@ -3,9 +3,26 @@ use alloc::ffi::CString;
 use alloc::string::{String, ToString};
 use core::cell::UnsafeCell;
 use core::ffi::c_char;
+use core::sync::atomic::{AtomicU64, Ordering};
 use core::{fmt, ptr, slice};
 
+use ptr::NonNull;
+
 use crate::errors::{ErrorFormatContext, UBInfo};
+use crate::tree_borrows::data_structures::UniIndex;
+use crate::AllocId;
+
+/// We link against the Rust component of our runtime
+/// via weak symbols. Unless we intervene, the linker
+/// will always discard the Rust component, because
+/// strong dependencies are necessary to "pull" a symbol
+/// from a static archive. To avoid this situation, we
+/// define a dedicated, unused "anchor" symbol on the Rust
+/// side to create a strong link between the two components.
+/// When we run BorrowSanitizer in no-op mode, we define
+/// this symbol manually by passing a flag to the linker.
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_rust_runtime_anchor() {}
 
 /// Thread-local slot for a boxed `(UBInfo, Span)` set by `handle_error` and
 /// consumed by `__bsan_format_pending_ub` once the C++ side has captured the
@@ -13,6 +30,89 @@ use crate::errors::{ErrorFormatContext, UBInfo};
 #[thread_local]
 pub(crate) static PENDING_ERROR: UnsafeCell<*mut (UBInfo, Span)> =
     UnsafeCell::new(core::ptr::null_mut());
+
+/// We use a slab allocator to create allocation-level metadata. The slab
+/// hands out 128-byte "blocks" of memory.
+pub type Block = [u8; 128];
+
+/// A type that can be stored within a [`Block`].
+unsafe trait Blockable: Sized {
+    fn into(ptr: NonNull<Block>) -> NonNull<Self>;
+    fn validate() {
+        assert!(size_of::<Self>() == size_of::<Block>());
+        assert!(align_of::<Self>() == size_of::<Block>());
+    }
+}
+
+/// Unique identifier for a node within the tree
+#[repr(transparent)]
+#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct BorTag(u64);
+
+impl BorTag {
+    #[inline]
+    pub fn is_wildcard(self) -> bool {
+        self == Self::wildcard()
+    }
+
+    #[inline]
+    pub fn is_invalid(self) -> bool {
+        self == Self::invalid()
+    }
+
+    #[inline]
+    pub fn is_omnivalid(self) -> bool {
+        self == Self::omnivalid()
+    }
+
+    #[inline]
+    pub fn is_concrete(&self) -> bool {
+        self.0 > Self::wildcard().0
+    }
+
+    #[inline]
+    pub const fn omnivalid() -> Self {
+        BorTag(0)
+    }
+
+    #[inline]
+    pub const fn invalid() -> Self {
+        BorTag(1)
+    }
+
+    #[inline]
+    pub const fn wildcard() -> Self {
+        BorTag(2)
+    }
+
+    #[inline]
+    pub fn get(&self) -> u64 {
+        self.0
+    }
+}
+
+impl Default for BorTag {
+    fn default() -> Self {
+        BorTag(unsafe { __BSAN_BOR_TAG_CTR.fetch_add(1, Ordering::Relaxed) })
+    }
+}
+
+impl fmt::Debug for BorTag {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "<{}>", self.0)
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RawProvenance {
+    info: *mut Block,
+    id: AllocId,
+    idx: UniIndex,
+}
+
+unsafe impl Sync for RawProvenance {}
+unsafe impl Send for RawProvenance {}
 
 /// Configuration options set by the user via `BSAN_OPTIONS`.
 ///
@@ -187,6 +287,9 @@ impl Bridge {
 }
 
 unsafe extern "C" {
+    #[link_name = "__bsan_bor_tag_ctr"]
+    unsafe static __BSAN_BOR_TAG_CTR: AtomicU64;
+
     #[thread_local]
     pub unsafe static mut __bsan_had_error: usize;
 

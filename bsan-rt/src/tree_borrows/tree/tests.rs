@@ -845,7 +845,7 @@ mod spurious_read {
 
 const ALLOC_BYTES: usize = 8;
 
-fn t(n: usize) -> BorTag {
+fn t(n: usize) -> UniIndex {
     assert!(BorTag(n).is_concrete());
     BorTag(n)
 }

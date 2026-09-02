@@ -19,7 +19,7 @@ use core::{cmp, fmt, mem};
 
 use smallvec::SmallVec;
 
-use super::data_structures::{DedupRangeMap, UniIndex, UniKeyMap, UniValMap};
+use super::data_structures::{DedupRangeMap, UniIndex, UniKeyValMap, UniValMap};
 use super::diagnostics::{
     no_valid_exposed_references_error, AccessCause, DiagnosticInfo, ErrorNode, NodeDebugInfo,
     TbError, TransitionError,
@@ -92,16 +92,8 @@ pub struct LocationTree {
 /// able to traverse the tree efficiently in both directions.
 #[derive(Clone, Debug)]
 pub struct EagerTree {
-    /// Mapping from tags to keys. The key obtained can then be used in
-    /// any of the `UniValMap` relative to this allocation, i.e.
-    /// `nodes`, `LocationTree::perms` and `LocationTree::exposed_cache`
-    /// of the same `Tree`.
-    /// The parent-child relationship in `Node` is encoded in terms of these same
-    /// keys, so traversing the entire tree needs exactly one access to
-    /// `tag_mapping`.
-    pub(crate) tag_mapping: UniKeyMap<BorTag>,
     /// All nodes of this tree.
-    pub(super) nodes: UniValMap<Node>,
+    pub(super) nodes: UniKeyValMap<Node>,
     /// Associates with each location its state and wildcard access tracking.
     pub(super) locations: DedupRangeMap<LocationTree>,
     /// Contains both the root of the main tree as well as the roots of the wildcard subtrees.
@@ -142,8 +134,7 @@ impl LazyTree {
     fn ensure_init(&mut self) {
         if let LazyTree::Uninit { root_tag, size, span, refcount } = self {
             let mut tree = EagerTree::new(*root_tag, *size, *span);
-            let root_idx = tree.tag_mapping.get(root_tag).unwrap();
-            tree.nodes.get_mut(root_idx).unwrap().refcount = refcount.clone();
+            tree.nodes.get_mut(UniIndex::root()).unwrap().refcount = refcount.clone();
             *self = LazyTree::Init(tree);
         }
     }
@@ -417,29 +408,24 @@ impl EagerTree {
         // The root has `Disabled` as the default permission,
         // so that any access out of bounds is invalid.
         let root_default_perm = Permission::new_disabled();
-        let mut tag_mapping = UniKeyMap::default();
-        let root_idx = tag_mapping.insert(root_tag);
-        let nodes = {
-            let mut nodes = UniValMap::<Node>::default();
+        let (root_idx, nodes) = {
+            let mut nodes = UniKeyValMap::<Node>::default();
             let mut debug_info = NodeDebugInfo::new(root_tag, root_default_perm, span);
             // name the root so that all allocations contain one named pointer
             debug_info.add_name("root of the allocation");
-            nodes.insert(
-                root_idx,
-                Node {
-                    tag: root_tag,
-                    parent: None,
-                    children: SmallVec::default(),
-                    default_initial_perm: root_default_perm,
-                    // The root may never be skipped, all accesses will be local.
-                    default_initial_idempotent_foreign_access: IdempotentForeignAccess::None,
-                    is_exposed: false,
-                    protector_kind: None,
-                    refcount: RefCount::new(),
-                    debug_info,
-                },
-            );
-            nodes
+            let root_idx = nodes.insert(Node {
+                tag: root_tag,
+                parent: None,
+                children: SmallVec::default(),
+                default_initial_perm: root_default_perm,
+                // The root may never be skipped, all accesses will be local.
+                default_initial_idempotent_foreign_access: IdempotentForeignAccess::None,
+                is_exposed: false,
+                protector_kind: None,
+                refcount: RefCount::new(),
+                debug_info,
+            });
+            (root_idx, nodes)
         };
         let locations = {
             let mut perms = UniValMap::default();
@@ -457,7 +443,7 @@ impl EagerTree {
             let exposed_cache = ExposedCache::default();
             DedupRangeMap::new(size, LocationTree { perms, exposed_cache })
         };
-        Self { roots: SmallVec::from_slice(&[root_idx]), nodes, locations, tag_mapping }
+        Self { roots: SmallVec::from_slice(&[root_idx]), nodes, locations }
     }
 
     /// Restores the SIFA "children are stronger"/"parents are weaker" invariant after a retag:
@@ -578,12 +564,11 @@ impl EagerTree {
         // (which are `self.nodes` and every range of `self.rperms`)
         // before we can safely apply `UniKeyMap::remove` to truly remove
         // this tag from the `tag_mapping`.
-        let node = self.nodes.remove(this).unwrap();
+        self.nodes.remove(this).unwrap();
         for (_range, loc) in self.locations.iter_mut_all() {
             loc.perms.remove(this);
             loc.exposed_cache.remove(this);
         }
-        self.tag_mapping.remove(&node.tag);
     }
 
     /// Removes from the tree the nodes for the given *dead* tags, wherever
@@ -616,30 +601,29 @@ impl EagerTree {
     fn remove_useless_children(
         &mut self,
         global_ctx: &GlobalCtx,
-        dead_tags: &mut [BorTag],
+        dead_indices: &mut [UniIndex],
         compact: bool,
     ) {
         // Iterating through dead_tags in reverse (descending tag order)
-        for entry in dead_tags.iter_mut().rev() {
-            let tag = *entry;
+        for entry in dead_indices.iter_mut().rev() {
+            let idx = *entry;
             // A missing entry means the node was already removed; zero out the entry
-            let Some(idx) = self.tag_mapping.get(&tag) else {
-                *entry = BorTag::omnivalid();
+            let Some(node) = self.nodes.get(idx) else {
+                *entry = UniIndex::root();
                 continue;
             };
-            let node = self.nodes.get(idx).unwrap();
 
             // The ZCT may contain tags with a non-zero reference count. These must be
             // dropped; the tag will re-enter the ZCT when it drops back to zero.
             if node.refcount.get() != 0 {
-                *entry = BorTag::omnivalid();
+                *entry = UniIndex::root();
                 continue;
             }
 
             // Do not remove exposed nodes. They could be used for future accesses via
             // wildcard pointers.
             if node.is_exposed {
-                *entry = BorTag::omnivalid();
+                *entry = UniIndex::root();
                 continue;
             }
 
@@ -666,7 +650,7 @@ impl EagerTree {
                         }
                     }
                     self.remove_useless_node(idx);
-                    *entry = BorTag::omnivalid();
+                    *entry = UniIndex::root();
                 }
                 // Node has exactly one child (and, per the guard above, a parent)
                 1 if compact && self.can_be_replaced_by_single_child(idx) => {
@@ -678,7 +662,7 @@ impl EagerTree {
                     siblings[pos] = child_idx;
                     self.nodes.get_mut(child_idx).unwrap().parent = parent;
                     self.remove_useless_node(idx);
-                    *entry = BorTag::omnivalid();
+                    *entry = UniIndex::root();
                     // Otherwise, the dead node could not be pruned this pass.
                 }
                 // Node has more than one child. If every child can soundly replace it, compact it
@@ -699,7 +683,7 @@ impl EagerTree {
                         siblings.push(children[i]);
                     }
                     self.remove_useless_node(idx);
-                    *entry = BorTag::omnivalid();
+                    *entry = UniIndex::root();
                     // Otherwise, the dead node could not be pruned this pass.
                 }
                 // A dead interior node on a tree too small to be worth compacting. Leave its
@@ -1040,15 +1024,15 @@ impl LocationTree {
 /// through this trait; the underlying implementations are
 /// module-private.
 pub trait AllocState: Clone {
-    fn get_protector_kind(&self, tag: BorTag) -> Option<ProtectorKind>;
-    fn contains_tag(&self, tag: BorTag) -> bool;
+    fn get_protector_kind(&self, idx: UniIndex) -> Option<ProtectorKind>;
+    fn contains_idx(&self, idx: UniIndex) -> bool;
     fn node_count(&self) -> usize;
-    fn increment(&self, tag: BorTag) -> bool;
-    fn decrement(&self, tag: BorTag) -> bool;
+    fn increment(&self, idx: UniIndex) -> bool;
+    fn decrement(&self, idx: UniIndex) -> bool;
     fn new_child(
         &mut self,
         base_offset: Size,
-        parent_tag: BorTag,
+        parent_idx: Option<UniIndex>,
         new_tag: BorTag,
         inside_perms: DedupRangeMap<LocationState>,
         outside_perm: Permission,
@@ -1058,7 +1042,7 @@ pub trait AllocState: Clone {
     fn perform_access(
         &mut self,
         global_ctx: &GlobalCtx,
-        tag: BorTag,
+        source_idx: Option<UniIndex>,
         access_range: AllocRange,
         access_kind: AccessKind,
         access_cause: AccessCause,
@@ -1068,8 +1052,7 @@ pub trait AllocState: Clone {
     fn dealloc(
         &mut self,
         global_ctx: &GlobalCtx,
-
-        tag: BorTag,
+        source_idx: Option<UniIndex>,
         access_range: AllocRange,
         alloc_id: AllocId,
         span: Span,
@@ -1077,32 +1060,32 @@ pub trait AllocState: Clone {
     fn perform_protector_end_access(
         &mut self,
         global_ctx: &GlobalCtx,
-        tag: BorTag,
+        idx: UniIndex,
         alloc_id: AllocId,
         span: Span,
     ) -> UBResult<()>;
-    fn expose_tag(&mut self, tag: BorTag, protected: bool);
+    fn expose_idx(&mut self, idx: UniIndex, protected: bool);
     #[allow(dead_code)]
-    fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_tags: &mut [BorTag]) -> bool;
+    fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_indices: &mut [UniIndex]) -> bool;
 }
 
 impl AllocState for LazyTree {
-    fn contains_tag(&self, tag: BorTag) -> bool {
+    fn contains_idx(&self, idx: UniIndex) -> bool {
         match self {
-            LazyTree::Uninit { root_tag, .. } => *root_tag == tag,
-            LazyTree::Init(tree) => tree.tag_mapping.contains_key(&tag),
+            LazyTree::Uninit { .. } => idx == UniIndex::root(),
+            LazyTree::Init(tree) => tree.nodes.contains_idx(idx),
         }
     }
     fn node_count(&self) -> usize {
         match self {
             LazyTree::Uninit { .. } => 1,
-            LazyTree::Init(tree) => tree.tag_mapping.len(),
+            LazyTree::Init(tree) => tree.nodes.len(),
         }
     }
     fn new_child(
         &mut self,
         base_offset: Size,
-        parent_tag: BorTag,
+        parent_idx: Option<UniIndex>,
         new_tag: BorTag,
         inside_perms: DedupRangeMap<LocationState>,
         outside_perm: Permission,
@@ -1113,7 +1096,7 @@ impl AllocState for LazyTree {
         let LazyTree::Init(tree) = self else { unreachable!() };
         tree.new_child(
             base_offset,
-            parent_tag,
+            parent_idx,
             new_tag,
             inside_perms,
             outside_perm,
@@ -1124,8 +1107,7 @@ impl AllocState for LazyTree {
     fn perform_access(
         &mut self,
         global_ctx: &GlobalCtx,
-
-        tag: BorTag,
+        idx: Option<UniIndex>,
         access_range: AllocRange,
         access_kind: AccessKind,
         access_cause: AccessCause,
@@ -1136,7 +1118,7 @@ impl AllocState for LazyTree {
             LazyTree::Uninit { .. } => Ok(()),
             LazyTree::Init(tree) => tree.perform_access(
                 global_ctx,
-                tag,
+                idx,
                 access_range,
                 access_kind,
                 access_cause,
@@ -1148,100 +1130,100 @@ impl AllocState for LazyTree {
     fn dealloc(
         &mut self,
         global_ctx: &GlobalCtx,
-        tag: BorTag,
+        idx: Option<UniIndex>,
         access_range: AllocRange,
         alloc_id: AllocId,
         span: Span,
     ) -> UBResult<()> {
         match self {
             LazyTree::Uninit { .. } => Ok(()),
-            LazyTree::Init(tree) => tree.dealloc(global_ctx, tag, access_range, alloc_id, span),
+            LazyTree::Init(tree) => tree.dealloc(global_ctx, idx, access_range, alloc_id, span),
         }
     }
     fn perform_protector_end_access(
         &mut self,
         global_ctx: &GlobalCtx,
-
-        tag: BorTag,
+        idx: UniIndex,
         alloc_id: AllocId,
         span: Span,
     ) -> UBResult<()> {
         match self {
             LazyTree::Uninit { .. } => Ok(()),
             LazyTree::Init(tree) => {
-                tree.perform_protector_end_access(global_ctx, tag, alloc_id, span)
+                tree.perform_protector_end_access(global_ctx, idx, alloc_id, span)
             }
         }
     }
-    fn expose_tag(&mut self, tag: BorTag, protected: bool) {
+    fn expose_idx(&mut self, idx: UniIndex, protected: bool) {
         self.ensure_init();
         if let LazyTree::Init(tree) = self {
-            tree.expose_tag(tag, protected);
+            tree.expose_idx(idx, protected);
         }
     }
-    fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_tags: &mut [BorTag]) -> bool {
+    fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_indices: &mut [UniIndex]) -> bool {
         match self {
             LazyTree::Init(tree) => {
                 // Only *compaction* of dead interior nodes is skipped on small trees
-                let compact = tree.tag_mapping.len() > global_ctx.flags.tree_gc_min_nodes;
-                tree.remove_useless_children(global_ctx, dead_tags, compact);
+                let compact = tree.nodes.len() > global_ctx.flags.tree_gc_min_nodes;
+                tree.remove_useless_children(global_ctx, dead_indices, compact);
                 tree.locations.merge_adjacent_thorough();
                 tree.roots.is_empty()
             }
-            LazyTree::Uninit { root_tag, refcount, .. } => {
+            LazyTree::Uninit { refcount, .. } => {
                 // A tree in the Uninit state only has a single node (the root). If
                 // this node is in the dead list with a zero reference count, then the
                 // tree is dead and the associated AllocInfo metadata can be freed.
-                let root_is_dead = refcount.get() == 0 && dead_tags.contains(root_tag);
-                dead_tags.fill(BorTag::omnivalid());
+                let root_is_dead = refcount.get() == 0 && dead_indices.len() > 0;
+                dead_indices.fill(UniIndex::root());
                 root_is_dead
             }
         }
     }
-    fn increment(&self, tag: BorTag) -> bool {
+    fn increment(&self, idx: UniIndex) -> bool {
         match self {
-            LazyTree::Uninit { root_tag, refcount, .. } => {
-                if *root_tag == tag {
+            LazyTree::Uninit { refcount, .. } => {
+                if idx.is_root() {
                     refcount.increment_nonatomic()
                 } else {
                     false
                 }
             }
-            LazyTree::Init(tree) => tree.increment(tag),
+            LazyTree::Init(tree) => tree.increment(idx),
         }
     }
-    fn decrement(&self, tag: BorTag) -> bool {
+    fn decrement(&self, idx: UniIndex) -> bool {
         match self {
-            LazyTree::Uninit { root_tag, refcount, .. } => {
-                if *root_tag == tag {
+            LazyTree::Uninit { refcount, .. } => {
+                if idx.is_root() {
                     refcount.decrement_nonatomic()
                 } else {
                     false
                 }
             }
-            LazyTree::Init(tree) => tree.decrement(tag),
+            LazyTree::Init(tree) => tree.decrement(idx),
         }
     }
 
-    fn get_protector_kind(&self, tag: BorTag) -> Option<ProtectorKind> {
+    fn get_protector_kind(&self, idx: UniIndex) -> Option<ProtectorKind> {
         match self {
             LazyTree::Uninit { .. } => None,
-            LazyTree::Init(tree) => tree.get_protector_kind(tag),
+            LazyTree::Init(tree) => tree.get_protector_kind(idx),
         }
     }
 }
 
 impl AllocState for EagerTree {
-    fn contains_tag(&self, tag: BorTag) -> bool {
-        self.tag_mapping.contains_key(&tag)
+    fn contains_idx(&self, idx: UniIndex) -> bool {
+        self.nodes.contains_idx(idx)
     }
     fn node_count(&self) -> usize {
-        self.tag_mapping.len()
+        self.nodes.len()
     }
+
     fn new_child(
         &mut self,
         base_offset: Size,
-        parent_tag: BorTag,
+        parent_idx: Option<UniIndex>,
         new_tag: BorTag,
         inside_perms: DedupRangeMap<LocationState>,
         outside_perm: Permission,
@@ -1249,30 +1231,21 @@ impl AllocState for EagerTree {
         span: Span,
     ) -> UBResult<()> {
         let protected = protector.is_some();
-        let idx = self.tag_mapping.insert(new_tag);
-        let parent_idx = if parent_tag.is_wildcard() {
-            None
-        } else {
-            Some(self.tag_mapping.get(&parent_tag).unwrap())
-        };
         assert!(outside_perm.is_initial());
 
         let default_strongest_idempotent =
             outside_perm.strongest_idempotent_foreign_access(protected);
-        self.nodes.insert(
-            idx,
-            Node {
-                tag: new_tag,
-                parent: parent_idx,
-                children: SmallVec::default(),
-                default_initial_perm: outside_perm,
-                default_initial_idempotent_foreign_access: default_strongest_idempotent,
-                is_exposed: false,
-                protector_kind: protector,
-                refcount: RefCount::new(),
-                debug_info: NodeDebugInfo::new(new_tag, outside_perm, span),
-            },
-        );
+        let idx = self.nodes.insert(Node {
+            tag: new_tag,
+            parent: parent_idx,
+            children: SmallVec::default(),
+            default_initial_perm: outside_perm,
+            default_initial_idempotent_foreign_access: default_strongest_idempotent,
+            is_exposed: false,
+            protector_kind: protector,
+            refcount: RefCount::new(),
+            debug_info: NodeDebugInfo::new(new_tag, outside_perm, span),
+        });
         if let Some(parent_idx) = parent_idx {
             let parent_node = self.nodes.get_mut(parent_idx).unwrap();
             parent_node.children.push(idx);
@@ -1308,7 +1281,7 @@ impl AllocState for EagerTree {
     fn perform_access(
         &mut self,
         global_ctx: &GlobalCtx,
-        tag: BorTag,
+        source_idx: Option<UniIndex>,
         access_range: AllocRange,
         access_kind: AccessKind,
         access_cause: AccessCause,
@@ -1319,9 +1292,6 @@ impl AllocState for EagerTree {
         if self.roots.len() > 1 || matches!(prov, ProvenanceExtra::Wildcard) {
             self.verify_wildcard_consistency(global);
         }
-
-        let source_idx =
-            if tag.is_wildcard() { None } else { Some(self.tag_mapping.get(&tag).unwrap()) };
 
         for (loc_range, loc) in self.locations.iter_mut(access_range.start, access_range.size) {
             let diagnostics = DiagnosticInfo {
@@ -1347,24 +1317,20 @@ impl AllocState for EagerTree {
     fn dealloc(
         &mut self,
         global_ctx: &GlobalCtx,
-        tag: BorTag,
+        start_idx: Option<UniIndex>,
         access_range: AllocRange,
         alloc_id: AllocId,
         span: Span,
     ) -> UBResult<()> {
         self.perform_access(
             global_ctx,
-            tag,
+            start_idx,
             access_range,
             AccessKind::Write,
             AccessCause::Dealloc,
             alloc_id,
             span,
         )?;
-
-        let start_idx =
-            if tag.is_wildcard() { None } else { Some(self.tag_mapping.get(&tag).unwrap()) };
-
         for (loc_range, loc) in self.locations.iter_mut(access_range.start, access_range.size) {
             let diagnostics = DiagnosticInfo {
                 alloc_id,
@@ -1418,7 +1384,7 @@ impl AllocState for EagerTree {
     fn perform_protector_end_access(
         &mut self,
         global_ctx: &GlobalCtx,
-        tag: BorTag,
+        source_idx: UniIndex,
         alloc_id: AllocId,
         span: Span,
     ) -> UBResult<()> {
@@ -1426,9 +1392,6 @@ impl AllocState for EagerTree {
         if self.roots.len() > 1 {
             self.verify_wildcard_consistency(global);
         }
-
-        let source_idx = self.tag_mapping.get(&tag).unwrap();
-
         let min_exposed_child = if self.roots.len() > 1 {
             LocationTree::get_min_exposed_child(source_idx, &self.nodes)
         } else {
@@ -1463,7 +1426,7 @@ impl AllocState for EagerTree {
         // If the tag is exposed, then the wildcard tracking state needs to
         // reflect that it is no longer protected: accesses that were UB while
         // the protector was active may be permitted again.
-        self.update_exposure_for_protector_release(tag);
+        self.update_exposure_for_protector_release(source_idx);
 
         // Remove the protector from the node.
         let node = self.nodes.get_mut(source_idx).unwrap();
@@ -1472,24 +1435,22 @@ impl AllocState for EagerTree {
         Ok(())
     }
 
-    fn expose_tag(&mut self, tag: BorTag, protected: bool) {
-        let id = self.tag_mapping.get(&tag).unwrap();
-        let node = self.nodes.get_mut(id).unwrap();
+    fn expose_idx(&mut self, idx: UniIndex, protected: bool) {
+        let node = self.nodes.get_mut(idx).unwrap();
         if !node.is_exposed {
             node.is_exposed = true;
-            let node = self.nodes.get(id).unwrap();
-
             for (_, loc) in self.locations.iter_mut_all() {
+                let node = self.nodes.get_mut(idx).unwrap();
                 let perm = loc
                     .perms
-                    .get(id)
+                    .get(idx)
                     .map(|p| p.permission())
                     .unwrap_or_else(|| node.default_location_state().permission());
 
                 let access_level = perm.strongest_allowed_local_access(protected);
                 loc.exposed_cache.update_exposure(
                     &self.nodes,
-                    id,
+                    idx,
                     WildcardAccessLevel::None,
                     access_level,
                 );
@@ -1497,32 +1458,21 @@ impl AllocState for EagerTree {
         }
     }
 
-    fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_tags: &mut [BorTag]) -> bool {
+    fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_indices: &mut [UniIndex]) -> bool {
         // Only *compaction* of dead interior nodes is skipped on small trees
-        let compact = self.tag_mapping.len() > global_ctx.flags.tree_gc_min_nodes;
-        self.remove_useless_children(global_ctx, dead_tags, compact);
+        let compact = self.nodes.len() > global_ctx.flags.tree_gc_min_nodes;
+        self.remove_useless_children(global_ctx, dead_indices, compact);
         self.locations.merge_adjacent_thorough();
         self.roots.is_empty()
     }
-    fn increment(&self, tag: BorTag) -> bool {
-        self.tag_mapping
-            .get(&tag)
-            .and_then(|idx| self.nodes.get(idx))
-            .map(|node| node.refcount.increment_nonatomic())
-            .unwrap_or(false)
+    fn increment(&self, idx: UniIndex) -> bool {
+        self.nodes.get(idx).map(|node| node.refcount.increment_nonatomic()).unwrap_or(false)
     }
-    fn decrement(&self, tag: BorTag) -> bool {
-        self.tag_mapping
-            .get(&tag)
-            .and_then(|idx| self.nodes.get(idx))
-            .map(|node| node.refcount.decrement_nonatomic())
-            .unwrap_or(false)
+    fn decrement(&self, idx: UniIndex) -> bool {
+        self.nodes.get(idx).map(|node| node.refcount.decrement_nonatomic()).unwrap_or(false)
     }
 
-    fn get_protector_kind(&self, tag: BorTag) -> Option<ProtectorKind> {
-        self.tag_mapping
-            .get(&tag)
-            .and_then(|idx| self.nodes.get(idx))
-            .and_then(|node| node.protector_kind)
+    fn get_protector_kind(&self, idx: UniIndex) -> Option<ProtectorKind> {
+        self.nodes.get(idx).and_then(|node| node.protector_kind)
     }
 }

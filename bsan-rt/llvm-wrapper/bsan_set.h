@@ -8,6 +8,7 @@
 // `InternalMmapVector` underneath).
 
 #include "bsan.h"
+#include "bsan_array_set.h"
 #include "sanitizer_common/sanitizer_array_ref.h"
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_dense_map.h"
@@ -19,55 +20,7 @@ using __sanitizer::InternalMmapVectorNoCtor;
 
 namespace __bsan {
 
-// A set of borrow tags, implemented as a sorted array.
-// We need this representation because the contents of the
-// tag set are exposed to the Rust core. We provide a pointer
-// to the list and its length, which becomes a slice. Using a
-// `DenseMap`, or another C++ representation, could be more efficient
-// but it would make the API more cumbersome.
-class BorTagSet {
-public:
-  void insert(BorTag Tag);
-  void erase(BorTag Tag);
-  bool contains(BorTag Tag) const;
-
-  // Removes all elements of the list without freeing
-  // the underlying allocation.
-  void clear() { tags_.clear(); }
-
-  // Removes all elements of the list and frees the
-  // underlying allocation. This is idempotent.
-  void destroy();
-
-  const BorTag *data() const { return tags_.data(); }
-  // Mutable access to the underlying array.
-  BorTag *data() { return tags_.data(); }
-  uptr size() const { return tags_.size(); }
-
-  template <typename Fn> void forEach(Fn fn) const {
-    for (uptr i = 0; i < tags_.size(); ++i) {
-      fn(tags_[i]);
-    }
-  }
-
-  // Keep only the tags that satisfy the given predicate.
-  template <typename Fn> void retainIf(Fn keep) {
-    uptr w = 0;
-    for (uptr r = 0; r < tags_.size(); ++r) {
-      BorTag tag = tags_[r];
-      if (keep(tag)) {
-        tags_[w++] = tag;
-      }
-    }
-    tags_.resize(w);
-  }
-
-private:
-  // Returns the index where this tag exists, or needs
-  // to be inserted.
-  uptr lowerBound(BorTag Tag) const;
-  InternalMmapVectorNoCtor<BorTag> tags_{};
-};
+typedef InternalMmapArraySet<BorTag> BorTagSet;
 
 // A set of concrete provenance values (e.g. not wildcard, omnivalid, or null).
 // Implemented as a mapping from allocations to sets of borrow tags.

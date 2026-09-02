@@ -942,7 +942,7 @@ impl EagerTree {
         let mut new_tags = Vec::new();
         let mut changed_tags = Vec::new();
 
-        let mut all_tags: Vec<BorTag> = self.tag_mapping.mapping.keys().copied().collect();
+        let mut all_indices: Vec<BorTag> = self.tag_mapping.mapping.keys().copied().collect();
         all_tags.sort();
 
         for tag in all_tags {
