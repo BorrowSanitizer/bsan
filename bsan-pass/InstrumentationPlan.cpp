@@ -1,4 +1,5 @@
 #include "InstrumentationPlan.h"
+#include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
 namespace llvm {
 
@@ -14,6 +15,10 @@ bool InstrumentationPlan::shouldInstrumentAlloca(const AllocaInst &AI) {
          !AllocSize.value().isZero() &&
          // We only instrument static allocas
          AI.isStaticAlloca() &&
+         // If an alloca is promoteable to a register,
+         // then it will only be accessed via non-volatile,
+         // direct loads and stores. It will never be retagged.
+         !isAllocaPromotable(&AI) &&
          // Retags are treated as an unknown source
          // of memory effects, so they block stack safety
          // from eliding checks for allocations that are
