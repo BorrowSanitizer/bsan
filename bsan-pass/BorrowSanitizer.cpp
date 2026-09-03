@@ -282,7 +282,7 @@ private:
   friend struct VarArgAMD64Helper;
   friend struct VarArgAArch64Helper;
   friend struct Provenance;
-
+  friend struct ProvenanceMap;
   friend class BorrowSanitizerVisitor;
 
   void initializeCallbacks(Module &M, const TargetLibraryInfo &TLI);
@@ -778,10 +778,45 @@ public:
                              ElementCount Elems = ElementCount::getFixed(1));
 };
 
+// Tracks the provenance associated with each value.
 struct ProvenanceMap {
-  DenseMap<Value *, SmallDenseMap<unsigned, Provenance>> Inner;
+  BorrowSanitizer &BS;
+  // A map associating values with one or more provenance values,
+  // corresponding to each field that carries provenance.  The index
+  // in the inner map identifies the field. This map is used for SSA
+  // values that have the same provenance everywhere that they are used.
+  DenseMap<Value *, SmallDenseMap<unsigned, Provenance>> Mapping;
+
+  // If an alloca has more than one `lifetime.start`, then its provenance
+  // will vary, because each lifetime has a new root borrow tag. We create
+  // an additional alloca to contain the tag for each of these allocas.
+  DenseMap<AllocaInst *, AllocaInst *> TagAllocas;
+
+  // When we need to resolve the tag for an alloca's provenance, we load it from
+  // the dedicated tag alloca. We can cache loaded values during a given
+  // lifetime to avoid unnecessary loads.
+  DenseMap<BasicBlock *, DenseMap<AllocaInst *, Value *>> CachedTags;
+
+  // After instrumenting the function, we promote all of the tag allocas into
+  // registers.
+  SmallVector<AllocaInst *> AllocasToPromote;
+
+  // Only the tag of an alloca's provenance will change. The info stays the
+  // same.
+  DenseMap<AllocaInst *, Value *> AllocaInfo;
+
+  // Certain operations (GEPs) might be emitted prior to any `lifetime.start`.
+  // Instead of assigning them provenance, we track that they correspond to a
+  // particular alloca, and lazily initialize provenance when we need it to
+  // validate an access. As specified in langref: "operations that don’t
+  // dereference [an alloca ...return a valid result."
+  DenseMap<Value *, Value *> Forwards;
 
 public:
+  ProvenanceMap(BorrowSanitizer &BS) : BS(BS) {}
+
+  // A key for the primary provenance mapping. Identifies the provenance
+  // of a field.
   struct Key {
     Value *V;
     unsigned long Offset;
@@ -789,11 +824,89 @@ public:
     Key(Value *V, unsigned long Offset) : V(V), Offset(Offset) {}
   };
 
-  Provenance &operator[](Key K) { return Inner[K.V][K.Offset]; }
+  void setProvenance(ProvenanceMap::Key K, Provenance Prov) {
+    Mapping[K.V][K.Offset] = Prov;
+  }
+
+  void forwardProvenance(Value *Dest, Value *Src) { Forwards[Dest] = Src; }
+
+  Value *getAllocaTagRecurse(BasicBlock *BB, AllocaInst *AI) {
+    auto TagsIt = CachedTags.find(BB);
+    if (TagsIt == CachedTags.end()) {
+      if (auto *PredBB = BB->getSinglePredecessor()) {
+        return getAllocaTagRecurse(PredBB, AI);
+      }
+    } else {
+      auto &AllocaMap = TagsIt->second;
+      auto AllocProvIt = AllocaMap.find(AI);
+      if (AllocProvIt != AllocaMap.end())
+        return AllocProvIt->second;
+    }
+    if (!TagAllocas.contains(AI)) {
+      report_fatal_error("Unable to resolve cached tag alloca.");
+    }
+
+    IRBuilder<> FrontIRB(BB, BB->getFirstInsertionPt());
+    AllocaInst *TagAlloca = TagAllocas[AI];
+    Value *Tag = FrontIRB.CreateLoad(BS.IntptrTy, TagAlloca);
+    CachedTags[BB][AI] = Tag;
+    return Tag;
+  }
+
+  std::optional<Provenance> getProvenance(BasicBlock *BB, Key K) {
+    // We return invalid provenance for null pointers.
+    if (auto *CI = dyn_cast<ConstantPointerNull>(K.V)) {
+      return Provenance::invalid(BS);
+    }
+
+    if (auto *Prov = find(K)) {
+      return *Prov;
+    }
+
+    auto FwdIt = Forwards.find(K.V);
+    if (FwdIt != Forwards.end()) {
+      return getProvenance(BB, Key(FwdIt->second, K.Offset));
+    }
+
+    if (auto *AI = dyn_cast<AllocaInst>(K.V)) {
+      auto InfoIT = AllocaInfo.find(AI);
+      if (InfoIT != AllocaInfo.end()) {
+        Value *Info = InfoIT->second;
+        Value *Tag = getAllocaTagRecurse(BB, AI);
+        return Provenance(Tag, Info);
+      }
+    }
+    return std::nullopt;
+  }
+
+  void cacheAllocaProvenance(IRBuilder<> &IRB, AllocaInst *AI,
+                             Provenance Prov) {
+    AllocaInst *TagAlloca = IRB.CreateAlloca(BS.IntptrTy);
+    IRB.CreateStore(Prov.Tag, TagAlloca);
+    AllocasToPromote.push_back(TagAlloca);
+    TagAllocas[AI] = TagAlloca;
+    AllocaInfo[AI] = Prov.Info;
+    CachedTags[IRB.GetInsertBlock()][AI] = Prov.Tag;
+  }
+
+  Provenance updateTag(IRBuilder<> &IRB, AllocaInst *AI, Value *Tag) {
+    if (TagAllocas.contains(AI)) {
+      AllocaInst *TagAlloca = TagAllocas[AI];
+      IRB.CreateStore(Tag, TagAlloca);
+      CachedTags[IRB.GetInsertBlock()][AI] = Tag;
+
+      auto InfoIT = AllocaInfo.find(AI);
+      if (InfoIT != AllocaInfo.end()) {
+        Value *Info = InfoIT->second;
+        return Provenance(Tag, Info);
+      }
+    }
+    report_fatal_error("Unable to resolve cached tag alloca.");
+  }
 
   Provenance *find(Key K) {
-    auto InnerIt = Inner.find(K.V);
-    if (InnerIt == Inner.end())
+    auto InnerIt = Mapping.find(K.V);
+    if (InnerIt == Mapping.end())
       return nullptr;
 
     auto &SubMap = InnerIt->second;
@@ -805,12 +918,12 @@ public:
   }
 
   void transfer(Value *Src, Value *Dest) {
-    auto It = Inner.find(Src);
-    if (It == Inner.end())
+    auto It = Mapping.find(Src);
+    if (It == Mapping.end())
       return;
 
     SmallDenseMap<unsigned, Provenance> SrcMap = It->second;
-    auto &DestMap = Inner[Dest];
+    auto &DestMap = Mapping[Dest];
     for (const auto &[Idx, Prov] : SrcMap) {
       DestMap[Idx] = Prov;
     }
@@ -822,6 +935,8 @@ public:
     }
     return std::nullopt;
   }
+
+  void patch(DominatorTree &DT) { PromoteMemToReg(AllocasToPromote, DT); }
 };
 
 } // end anonymous namespace
@@ -1236,7 +1351,17 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
       ArgumentProvenance;
 
   // A map from values to their provenance.
-  ProvenanceMap BaseProvMap;
+  ProvenanceMap ProvMap;
+
+  // For each alloca that has an explicit `lifetime.start` (and so gets a
+  // fresh borrow tag minted on every entry into its scope), this records
+  // where its provenance lives in this frame's shadow-stack header. At
+  // function exit, `popFrame` reads directly out of that header to pop/
+  // deallocate every slot in it -- so every time a fresh tag is minted, we
+  // must also refresh the copy stored here, or `popFrame` will act on
+  // whatever stale (tag, info) pair was written at function entry instead
+  // of the alloca's current one.
+  DenseMap<AllocaInst *, ProvenanceDest> AllocaFrameSlots;
 
   // Information needed to reconstruct the shadow memory of a `byval` argument
   // once the frame header has been initialized and validated.
@@ -1274,7 +1399,7 @@ public:
                          const TargetLibraryInfo &TLI, DominatorTree &DT,
                          const StackSafetyGlobalInfo &SSGI)
       : F(F), BS(BS), C(BS.C), TLI(&TLI), DT(DT), Plan(F, BS.DL, DT, SSGI),
-        VAHelper(createVarArgHelper(F, BS, *this)),
+        ProvMap(BS), VAHelper(createVarArgHelper(F, BS, *this)),
         ShadowStack(BS.ProvenanceSize, BS.ProvStackTLS) {}
   bool run() {
     DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Lazy);
@@ -1311,6 +1436,7 @@ public:
     ReplacedMemIntrinsics.clear();
 
     patchShadowPHINodes();
+    ProvMap.patch(DT);
     ShadowStack.patchStackSlots(DT);
     return true;
   }
@@ -1418,6 +1544,12 @@ private:
     return ProvenanceDest(ShadowPtr, OriginPtr, true);
   }
 
+  Value *newBorrowTag(IRBuilder<> &IRB) {
+    return IRB.CreateAtomicRMW(AtomicRMWInst::Add, BS.BorTagCounter,
+                               ConstantInt::get(BS.IntptrTy, 1), std::nullopt,
+                               AtomicOrdering::Monotonic);
+  }
+
   // Loads a provenance value from shadow memory, storing it into a
   // new slot on the shadow stack.
   Provenance loadProvenanceFromShadow(
@@ -1499,13 +1631,10 @@ private:
   // value is required.
   std::optional<Provenance> getProvenance(BasicBlock *BB,
                                           ProvenanceMap::Key Key) {
-    if (Provenance *Prov = BaseProvMap.find(Key)) {
+    if (auto Prov = ProvMap.getProvenance(BB, Key)) {
       return *Prov;
     }
-    // We return invalid provenance for null pointers.
-    if (auto *CI = dyn_cast<ConstantPointerNull>(Key.V)) {
-      return Provenance::invalid(BS);
-    }
+
     if (Argument *Arg = dyn_cast<Argument>(Key.V)) {
       // We always need to load the provenance for arguments right at the
       // beginning of the function. Otherwise, subsequent function calls could
@@ -1524,15 +1653,11 @@ private:
         Value *ArgProvenancePtr = ptradd(EntryIRB, BS.ParamTLS, ByteOffset);
         Provenance ArgProvenance =
             loadProvenanceAligned(EntryIRB, ArgProvenancePtr, Elems);
-        setProvenance(Key, ArgProvenance);
+        ProvMap.setProvenance(Key, ArgProvenance);
         return ArgProvenance;
       }
     }
     return std::nullopt;
-  }
-
-  void setProvenance(ProvenanceMap::Key Key, Provenance Prov) {
-    BaseProvMap[Key] = Prov;
   }
 
   Provenance loadProvenanceAlignedPairwise(IRBuilder<> &IRB, ProvenanceDest Ptr,
@@ -1618,7 +1743,7 @@ private:
 
         Provenance Prov = createAllocaMetadata(EntryIRB);
         initAllocaMetadata(EntryIRB, &Arg, Size, Prov);
-        setProvenance(&Arg, Prov);
+        ProvMap.setProvenance(&Arg, Prov);
 
         ByValArgInfo Info;
         Info.Arg = &Arg;
@@ -1694,16 +1819,24 @@ private:
     // We push additional slots into the frame header for
     // static allocas.
     for (auto [Idx, AI] : llvm::enumerate(Plan.allocas())) {
-      Provenance Prov = createAllocaMetadata(EntryIRB);
       NextNodeIRBuilder IRB(AI);
-      if (!Plan.hasLifetimeStart(AI)) {
-        Value *AllocaSize = BS.getAllocaSizeBytes(IRB, AI);
-        initAllocaMetadata(IRB, AI, AllocaSize, Prov);
-      }
-      setProvenance(AI, Prov);
       Value *Slot = ShadowStack.getStackAllocSlot(EntryIRB);
+      Provenance Prov;
+      if (!Plan.hasLifetimeStart(AI)) {
+        Prov = createAllocaMetadata(EntryIRB);
+        initAllocaMetadata(IRB, AI, Prov);
+        ProvMap.setProvenance(AI, Prov);
+      } else {
+        Value *Info = EntryIRB.CreateCall(BS.BsanFuncReserveStackSlot, {});
+        Value *InitialTag = ConstantInt::get(BS.IntptrTy, 1);
+        Prov = Provenance(InitialTag, Info);
+        ProvMap.cacheAllocaProvenance(EntryIRB, AI, Prov);
+      }
       auto SlotPtr = getMainProvenancePtr(EntryIRB, Slot);
       storeProvenance(EntryIRB, SlotPtr, Prov);
+      if (Plan.hasLifetimeStart(AI)) {
+        AllocaFrameSlots[AI] = SlotPtr;
+      }
     }
 
     // We also need a dedicated region of the shadow stack
@@ -1730,12 +1863,6 @@ private:
         Prov.addIncoming(IncomingBlock, IncomingProv);
       }
     }
-  }
-
-  Value *newBorrowTag(IRBuilder<> &IRB) {
-    return IRB.CreateAtomicRMW(AtomicRMWInst::Add, BS.BorTagCounter,
-                               ConstantInt::get(BS.IntptrTy, 1), std::nullopt,
-                               AtomicOrdering::Monotonic);
   }
 
   Value *getLayoutArrayLength(Value *Start) {
@@ -1783,7 +1910,7 @@ private:
                      {Ptr, RI.Size, RI.Perms, RI.ImArray, ImArrayLen,
                       RI.PinArray, PinArrayLen, Prov->Tag, Prov->Info, Dest,
                       IRB.getInt1(false)});
-      setProvenance(&CB, loadProvenanceAligned(IRB, Dest));
+      ProvMap.setProvenance(&CB, loadProvenanceAligned(IRB, Dest));
     }
   }
 
@@ -2036,7 +2163,7 @@ private:
     for (const auto &[Idx, Ptr] : llvm::enumerate(ReturnProvPtrs)) {
       ElementCount Elems = ReturnDesc[Idx].Elems;
       Provenance Prov = loadProvenanceAligned(After, Ptr, Elems);
-      setProvenance({&CB, Idx}, Prov);
+      ProvMap.setProvenance({&CB, Idx}, Prov);
     }
   }
 
@@ -2066,7 +2193,7 @@ private:
       SmallVector<ProvenanceField> Components =
           BS.getProvenanceLayout(IRB, Operand->getType());
       for (const auto &[Idx, Comp] : llvm::enumerate(Components)) {
-        setProvenance({Operand, Idx}, Provenance::omnivalid(BS));
+        ProvMap.setProvenance({Operand, Idx}, Provenance::omnivalid(BS));
       }
     }
   }
@@ -2103,7 +2230,7 @@ private:
     for (auto [Idx, Comp] : llvm::enumerate(Components)) {
       Provenance Prov =
           createProvenancePHI(IRB, Comp, predecessors(PN.getParent()));
-      setProvenance({&PN, Idx}, Prov);
+      ProvMap.setProvenance({&PN, Idx}, Prov);
       ProvPHINodes.push_back({{&PN, Idx}, Prov});
     }
   }
@@ -2137,11 +2264,13 @@ private:
 
   void instrumentLifetimeStart(IntrinsicInst &II) {
     if (auto *AI = findAllocaForValue(II.getArgOperand(0), true)) {
-      if (auto Prov = getProvenance(II.getParent(), AI)) {
-        IRBuilder<> IRB(&II);
-        IRB.CreateCall(BS.BsanFuncDeallocStack,
-                       {AI, (*Prov).Tag, (*Prov).Info});
-        initAllocaMetadata(IRB, AI, *Prov);
+      IRBuilder<> IRB(&II);
+      Value *Tag = newBorrowTag(IRB);
+      Provenance StartProv = ProvMap.updateTag(IRB, AI, Tag);
+      initAllocaMetadata(IRB, AI, StartProv);
+      auto SlotIt = AllocaFrameSlots.find(AI);
+      if (SlotIt != AllocaFrameSlots.end()) {
+        storeProvenance(IRB, SlotIt->second, StartProv);
       }
     }
   }
@@ -2216,7 +2345,7 @@ private:
           commonAlignment(LI.getAlign(), Comp.FieldAlign.value());
       Provenance Prov = loadProvenanceFromShadow(IRB, ObjAddr, FieldAlign,
                                                  Comp.Elems, LI.getOrdering());
-      setProvenance({&LI, Idx}, Prov);
+      ProvMap.setProvenance({&LI, Idx}, Prov);
     }
   }
 
@@ -2352,11 +2481,7 @@ private:
   }
 
   void visitGetElementPtrInst(GetElementPtrInst &I) {
-    // Pointer arithmetic does not affect provenance.
-    // We can propagage the provenance of the input to the output value.
-    if (auto Prov = getProvenance(I.getParent(), I.getPointerOperand())) {
-      setProvenance(&I, *Prov);
-    }
+    ProvMap.forwardProvenance(&I, I.getPointerOperand());
   }
 
   void visitPtrToIntInst(PtrToIntInst &I) {
@@ -2367,26 +2492,23 @@ private:
   }
 
   void visitIntToPtrInst(IntToPtrInst &I) {
-    setProvenance(&I, Provenance::wildcard(BS));
+    ProvMap.setProvenance(&I, Provenance::wildcard(BS));
   }
 
   void visitAddrSpaceCastInst(AddrSpaceCastInst &I) {
-    // Address space casts do not affect provenance.
-    // We can propagage the provenance of the input to the output value.
-    if (auto Prov = getProvenance(I.getParent(), I.getPointerOperand())) {
-      setProvenance(&I, *Prov);
-    }
+    // Address space casts do not affect provenance. As with GEPs, we
+    // forward lazily rather than snapshotting -- see visitGetElementPtrInst.
+    ProvMap.forwardProvenance(&I, I.getPointerOperand());
   }
 
   void visitBitCastInst(BitCastInst &I) {
-    // Bitcasts propagate provenance.
+    // Bitcasts propagate provenance, forwarded lazily -- see
+    // visitGetElementPtrInst.
     // TODO: The arguments to a bitcast are never aggregates, but they can
     // be vectors, which we do not support yet.
     Value *Src = I.getOperand(0);
     if (Src->getType()->isPointerTy() && I.getType()->isPointerTy()) {
-      if (auto Prov = getProvenance(I.getParent(), Src)) {
-        setProvenance(&I, *Prov);
-      }
+      ProvMap.forwardProvenance(&I, Src);
     }
   }
 
@@ -2433,14 +2555,14 @@ private:
     for (auto [Offset, Desc] : llvm::enumerate(DestProvDesc)) {
       if (auto Prov = getProvenance(IRB.GetInsertBlock(),
                                     {AggregateSrc, StartIdx + Offset})) {
-        setProvenance({&EI, Offset}, *Prov);
+        ProvMap.setProvenance({&EI, Offset}, *Prov);
       }
     }
   }
 
   void visitInsertValueInst(InsertValueInst &II) {
     IRBuilder<> IRB(&II);
-    BaseProvMap.transfer(II.getAggregateOperand(), &II);
+    ProvMap.transfer(II.getAggregateOperand(), &II);
     Value *ToInsert = II.getInsertedValueOperand();
     SmallVector<ProvenanceField> SrcProvDesc =
         BS.getProvenanceLayout(IRB, ToInsert->getType());
@@ -2455,7 +2577,7 @@ private:
 
     for (auto [Offset, Desc] : llvm::enumerate(SrcProvDesc)) {
       if (auto Prov = getProvenance(IRB.GetInsertBlock(), {ToInsert, Offset})) {
-        setProvenance({&II, StartIdx + Offset}, *Prov);
+        ProvMap.setProvenance({&II, StartIdx + Offset}, *Prov);
       }
     }
   }
@@ -2482,7 +2604,7 @@ private:
           Tag = ProvL.Tag;
           Info = ProvL.Info;
         }
-        setProvenance({&SI, Idx}, Provenance(Tag, Info));
+        ProvMap.setProvenance({&SI, Idx}, Provenance(Tag, Info));
       }
     }
   }
