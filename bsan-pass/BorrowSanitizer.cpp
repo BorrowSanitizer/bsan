@@ -1296,7 +1296,7 @@ public:
     for (const CheckInfo &CI : Plan.checks()) {
       Value *AccessSize = CI.getAccessSize(BS.IntptrTy);
       IRBuilder<> IRB(CI.InsertPt);
-      if (CI.AccessKind == CheckInfo::Read) {
+      if (CI.Kind == AccessKind::Read) {
         insertReadCheck(IRB, CI.Target, AccessSize);
       } else {
         insertWriteCheck(IRB, CI.Target, AccessSize);

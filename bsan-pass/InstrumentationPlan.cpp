@@ -1,5 +1,20 @@
 #include "InstrumentationPlan.h"
+#include "llvm/ADT/Statistic.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
+
+#define DEBUG_TYPE "bsan"
+
+STATISTIC(NumInstrumentedAllocas, "Number of instrumented allocas");
+STATISTIC(NumEliminatedAllocas, "Number of eliminated allocas");
+
+STATISTIC(NumInstrumentedReads, "Number of instrumented reads");
+STATISTIC(NumEliminatedReads, "Number of eliminated reads");
+
+STATISTIC(NumInstrumentedWrites, "Number of instrumented writes");
+STATISTIC(NumEliminatedWrites, "Number of eliminated writes");
+
+STATISTIC(NumRetags, "Number of retags");
+STATISTIC(NumEliminatedRetags, "Number of eliminated retags");
 
 namespace llvm {
 
@@ -11,20 +26,27 @@ bool InstrumentationPlan::shouldInstrumentAlloca(const AllocaInst &AI) {
   // due to interactions with lowering.
   Type *AllocType = AI.getAllocatedType();
   std::optional<TypeSize> AllocSize = AI.getAllocationSize(*DL);
-  return AllocType->isSized() && AllocSize.has_value() &&
-         !AllocSize.value().isZero() &&
-         // We only instrument static allocas
-         AI.isStaticAlloca() &&
-         // If an alloca is promoteable to a register,
-         // then it will only be accessed via non-volatile,
-         // direct loads and stores. It will never be retagged.
-         !isAllocaPromotable(&AI) &&
-         // Retags are treated as an unknown source
-         // of memory effects, so they block stack safety
-         // from eliding checks for allocations that are
-         // accessed in-bounds, but may still be subject to
-         // aliasing violations.
-         !SSGI.isSafe(AI);
+  bool ShouldInstrument = AllocType->isSized() && AllocSize.has_value() &&
+                          !AllocSize.value().isZero() &&
+                          // We only instrument static allocas
+                          AI.isStaticAlloca() &&
+                          // If an alloca is promoteable to a register,
+                          // then it will only be accessed via non-volatile,
+                          // direct loads and stores. It will never be retagged.
+                          !isAllocaPromotable(&AI) &&
+                          // Retags are treated as an unknown source
+                          // of memory effects, so they block stack safety
+                          // from eliding checks for allocations that are
+                          // accessed in-bounds but may still be subject to
+                          // aliasing violations.
+                          !SSGI.isSafe(AI);
+
+  if (ShouldInstrument) {
+    NumInstrumentedAllocas++;
+  } else {
+    NumEliminatedAllocas++;
+  }
+  return ShouldInstrument;
 }
 
 void InstrumentationPlan::collectChecks(Instruction *Inst) {
@@ -34,24 +56,26 @@ void InstrumentationPlan::collectChecks(Instruction *Inst) {
     AccessRange Range(DL, MI->getLength());
 
     if (auto *MTI = dyn_cast<MemTransferInst>(MI)) {
-      Checks.emplace_back(Inst, CheckInfo::Read, MTI->getSource(), Range);
+      Checks.emplace_back(Inst, AccessKind::Read, MTI->getSource(), Range);
     }
-    Checks.emplace_back(Inst, CheckInfo::Write, MI->getDest(), Range);
+    Checks.emplace_back(Inst, AccessKind::Write, MI->getDest(), Range);
     return;
   }
 
   Value *Ptr;
   Type *AccessTy;
-  CheckInfo::Kind AccessKind;
+  AccessKind Kind;
 
   if (auto *SI = dyn_cast<StoreInst>(Inst)) {
     Ptr = SI->getPointerOperand();
     AccessTy = SI->getValueOperand()->getType();
-    AccessKind = CheckInfo::Write;
+    Kind = AccessKind::Write;
+    NumInstrumentedWrites++;
   } else if (auto *LI = dyn_cast<LoadInst>(Inst)) {
     Ptr = LI->getPointerOperand();
     AccessTy = LI->getType();
-    AccessKind = CheckInfo::Read;
+    Kind = AccessKind::Read;
+    NumInstrumentedReads++;
   } else {
     return;
   }
@@ -60,7 +84,7 @@ void InstrumentationPlan::collectChecks(Instruction *Inst) {
   if (AccessSize.isZero())
     return;
 
-  Checks.emplace_back(Inst, AccessKind, Ptr, AccessRange(DL, AccessSize));
+  Checks.emplace_back(Inst, Kind, Ptr, AccessRange(DL, AccessSize));
 }
 
 void InstrumentationPlan::build() {
@@ -80,9 +104,11 @@ void InstrumentationPlan::build() {
 
       if (auto *CB = dyn_cast<CallBase>(&I)) {
         if (auto ChildRetag = getRetagInfo(CB)) {
+          NumRetags++;
           if (auto ParentRetag = getRetagInfo(CB->getOperand(0))) {
             if (ParentRetag->canReplace(*ChildRetag)) {
               CB->replaceAllUsesWith(CB->getOperand(0));
+              NumEliminatedRetags++;
             }
           }
           Retags.push_back(CB);
@@ -101,7 +127,6 @@ void InstrumentationPlan::build() {
           }
         }
       }
-
       collectChecks(&I);
       Instructions.push_back(&I);
     }

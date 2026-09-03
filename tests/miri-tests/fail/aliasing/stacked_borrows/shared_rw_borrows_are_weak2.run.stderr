@@ -8,7 +8,7 @@ help: the accessed tag <TAG>(unprotected) was created here, in the initial state
    --> bsan/tests/miri-tests/fail/aliasing/stacked_borrows/shared_rw_borrows_are_weak2.rs:LL:CC
    |
 LL | let y: &i32 = mem::transmute(&*x.borrow()); // launder lifetime
-   |               ^
+   |                               ^
 help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x8..0xc]
    --> RUSTLIB/core/src/mem/mod.rs:LL:CC
    |

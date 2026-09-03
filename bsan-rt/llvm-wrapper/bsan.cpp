@@ -17,7 +17,6 @@
 #include "sanitizer_common/sanitizer_symbolizer.h"
 
 using namespace __sanitizer;
-
 // We link against the Rust component of our runtime
 // via weak symbols. Unless we intervene, the linker
 // will always discard the Rust component, because
@@ -258,8 +257,8 @@ bool CallerIsInstrumented(void *sym) {
   return matches;
 }
 
-SANITIZER_WEAK_ATTRIBUTE
-extern "C" void __bsan_internal_init(SharedSanitizerFlags *_flags) {}
+extern "C" SANITIZER_WEAK_ATTRIBUTE void
+__bsan_internal_init(SharedSanitizerFlags *_flags) {}
 
 static bool BsanInitInternal() {
   if (LIKELY(BsanInited()))

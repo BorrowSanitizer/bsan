@@ -26,6 +26,8 @@ namespace llvm {
 #define RUST_PREFIX "__rust_"
 #define RUST_FN(name) RUST_PREFIX name
 
+enum AccessKind { Read, Write };
+
 class RetagInfo {
 public:
   Value *Ptr;
@@ -43,17 +45,42 @@ public:
     PinArray = cast<GlobalVariable>(CB->getOperand(4));
   }
 
+  AccessKind getAccessKind() {
+    // All retags are read accesses, for the moment.
+    return AccessKind::Read;
+  }
+
   bool isProtected() {
     // The least significant bit of the permission
     // indicates whether this is a function-entry retag.
-    return (Perms->getZExtValue() & 0x1) != 0;
+    return (Perms->getZExtValue() & (1 << 0)) != 0;
+  }
+
+  bool isMutable() {
+    /// If this is a mutable reference or a `Box`.
+    return (Perms->getZExtValue() & (1 << 1)) != 0;
+  }
+
+  bool isBox() {
+    /// If this is a `Box`.
+    return (Perms->getZExtValue() & (1 << 2)) != 0;
+  }
+
+  bool isFreeze() {
+    /// If the pointee type is `Freeze`
+    return (Perms->getZExtValue() & (1 << 3)) != 0;
   }
 
   bool canReplace(RetagInfo &Child) {
+    // We can never remove a protector.
+    if (Child.isProtected())
+      return false;
+
     bool NestedAliases =
-        // This retag, the "parent", is only
-        // used once.
-        this->CB->hasOneUse()
+        // If this is a mutable reference, then it can
+        // only replace a child permission that is immutable
+        // or that is never used again.
+        ((!Child.isMutable() && isFreeze()) || this->CB->hasOneUse())
         // The parent and the child are both
         // of the form `retag_reg`.
         && Child.CB->getType()->isPointerTy()
@@ -143,15 +170,13 @@ struct AccessRange {
 struct CheckInfo {
   // The location where the check needs to be inserted.
   Instruction *InsertPt;
-  enum Kind { Read, Write };
-  Kind AccessKind;
+  AccessKind Kind;
   // The pointer being dereferenced.
   Value *Target;
   AccessRange Range;
-  CheckInfo(Instruction *InsertPt, Kind AccessKind, Value *Target,
+  CheckInfo(Instruction *InsertPt, AccessKind Kind, Value *Target,
             AccessRange Range)
-      : InsertPt(InsertPt), AccessKind(AccessKind), Target(Target),
-        Range(Range) {}
+      : InsertPt(InsertPt), Kind(Kind), Target(Target), Range(Range) {}
 
   // Materializes the number of bytes that this check needs to validate, as a
   // value of type `Ty`, immediately before `InsertPt`. A runtime length takes
