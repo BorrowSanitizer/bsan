@@ -258,8 +258,8 @@ bool CallerIsInstrumented(void *sym) {
   return matches;
 }
 
-SANITIZER_WEAK_ATTRIBUTE
-extern "C" void __bsan_internal_init(SharedSanitizerFlags *_flags) {}
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE
+void __bsan_internal_init(SharedSanitizerFlags *_flags) {}
 
 static bool BsanInitInternal() {
   if (LIKELY(BsanInited()))
