@@ -1,6 +1,7 @@
 #ifndef BSAN_H
 #define BSAN_H
 #include "bsan_allocator.h"
+#include "bsan_dense_slab.h"
 #include "bsan_shadow.h"
 #include "sanitizer_common/sanitizer_addrhashmap.h"
 #include "sanitizer_common/sanitizer_atomic.h"
@@ -37,11 +38,9 @@ using __sanitizer::Vector;
 typedef uptr Span;
 typedef uptr BorTag;
 
-struct AllocInfo;
-
 struct Provenance {
   BorTag tag;
-  AllocInfo *info;
+  Block *info;
 };
 
 struct AtExitRecord {
@@ -66,6 +65,12 @@ extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uintptr_t __bsan_bor_tag_ctr;
 extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uintptr_t __bsan_visits_since_gc;
 
 namespace __bsan {
+
+typedef DenseSlabAlloc<kMetadataSpace> BlockAllocator;
+extern BlockAllocator block_allocator;
+#define BLOCK_IDX(ptr) ((BlockIndex)(block_allocator.IndexOf(ptr)))
+
+#define BLOCK_PTR(idx) (block_allocator.Map(idx))
 
 typedef uptr ThreadId;
 

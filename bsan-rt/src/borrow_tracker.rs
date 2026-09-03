@@ -26,15 +26,11 @@ impl AllocInfoPtr {
     /// Otherwise, the contents of its base address will be initialized with the next
     /// pointer in a free list.
     pub unsafe fn range(&self) -> AllocRange {
-        AllocRange { start: unsafe { self.base_addr() }, size: self.size.get() }
+        AllocRange { start: self.offset(), size: self.size.get() }
     }
 
-    /// # Safety
-    /// This instance of `AllocInfo` must represent a valid, non-freed allocation.
-    /// Otherwise, the contents of its base address will be initialized with the next
-    /// pointer in a free list.
-    pub unsafe fn base_addr(&self) -> Size {
-        unsafe { self.free_or_addr.get().base_addr }
+    pub fn offset(&self) -> Size {
+        self.offset.get()
     }
 
     fn tree<'b>(self) -> UBResult<TreeGuard<'b>> {
@@ -189,7 +185,7 @@ impl<'b> BorrowTracker<'b> {
     {
         let alloc_info: AllocInfoPtr = unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
         let alloc_size = alloc_info.size.get();
-        let base_addr = unsafe { alloc_info.base_addr() };
+        let base_addr = alloc_info.offset();
         let offset = Size::from_bytes(start.bytes().wrapping_sub(base_addr.bytes()));
         let tree = alloc_info.tree()?;
 
@@ -239,7 +235,7 @@ impl<'b> BorrowTracker<'b> {
 
             let alloc_id = alloc_info.alloc_id.get();
             let alloc_size = alloc_info.size.get();
-            let base_addr = unsafe { alloc_info.base_addr() };
+            let base_addr = alloc_info.offset();
             let access_size = access_size.unwrap_or(alloc_size);
             let is_sized_access = access_size != Size::ZERO;
 

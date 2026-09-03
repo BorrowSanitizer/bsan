@@ -77,7 +77,7 @@ void ConcreteProvenanceSet::remove(Provenance prov) {
 }
 
 void ConcreteProvenanceSet::clear() {
-  set_.forEach([](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
+  set_.forEach([](DenseMap<Block *, BorTagSet>::value_type &KV) {
     KV.second.clear();
     return true;
   });
@@ -91,7 +91,7 @@ bool ConcreteProvenanceSet::contains(Provenance prov) {
 }
 
 ConcreteProvenanceSet::~ConcreteProvenanceSet() {
-  set_.forEach([](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
+  set_.forEach([](DenseMap<Block *, BorTagSet>::value_type &KV) {
     KV.second.destroy();
     return true;
   });

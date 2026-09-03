@@ -7,7 +7,6 @@ use spin::{RwLock, RwLockWriteGuard};
 
 use crate::errors::UBInfo;
 use crate::helpers::FxHashMap;
-use crate::memory::Heap;
 use crate::sanitizer_common::{Bridge, SharedSanitizerFlags};
 use crate::tree_borrows::data_structures::{AccessType, RangeObjectMap};
 use crate::tree_borrows::AllocStateImpl;
@@ -39,7 +38,6 @@ impl<'a> DerefMut for ExposedProvenance<'a> {
 /// around explicitly, but it prevents us from relying on implicit global state and limits the spread
 /// of unsafety throughout the library.
 pub struct GlobalCtx {
-    alloc_metadata_map: Heap<AllocInfo>,
     snapshots: RwLock<FxHashMap<AllocId, AllocStateImpl>>,
     exposed_provenance: RwLock<RangeObjectMap<AllocInfoPtr>>,
     pub flags: SharedSanitizerFlags,
@@ -48,19 +46,10 @@ pub struct GlobalCtx {
 impl GlobalCtx {
     pub(crate) fn new(flags: &SharedSanitizerFlags) -> Self {
         Self {
-            alloc_metadata_map: Heap::new(),
             snapshots: RwLock::new(FxHashMap::default()),
             exposed_provenance: RwLock::new(RangeObjectMap::new()),
             flags: flags.clone(),
         }
-    }
-
-    pub(crate) fn create_alloc_info(&self, info: AllocInfo) -> NonNull<AllocInfo> {
-        self.alloc_metadata_map.alloc(info)
-    }
-
-    pub(crate) unsafe fn destroy_alloc_info(&self, ptr: NonNull<AllocInfo>) {
-        unsafe { self.alloc_metadata_map.dealloc(ptr) }
     }
 
     pub fn exposed_provenance<'a>(&'a self) -> ExposedProvenance<'a> {

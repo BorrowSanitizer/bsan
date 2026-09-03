@@ -86,7 +86,7 @@ private:
   // but that cannot be ejected yet, because they might still be stored within a
   // thread's zero count table. Maps each allocation to the generation when it
   // was retired.
-  DenseMap<AllocInfo *, uptr> quarantine_{};
+  DenseMap<Block *, uptr> quarantine_{};
 
   // Guards `at_exit_stack_`.
   Mutex at_exit_lock_;

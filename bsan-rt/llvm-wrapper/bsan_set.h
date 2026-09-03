@@ -89,7 +89,7 @@ public:
   // Removes all entries from the set, after executing the
   // given callback for each allocation.
   void takeFrom(ConcreteProvenanceSet &other) {
-    other.drain([&](AllocInfo *info, BorTagSet &tags) {
+    other.drain([&](Block *info, BorTagSet &tags) {
       tags.forEach([&](BorTag tag) { set_[info].insert(tag); });
     });
   }
@@ -97,7 +97,7 @@ public:
   // Removes all entries from the set, after executing the
   // given callback for each allocation.
   template <typename Fn> void drain(Fn visit) {
-    set_.forEach([&](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
+    set_.forEach([&](DenseMap<Block *, BorTagSet>::value_type &KV) {
       visit(KV.first, KV.second);
       KV.second.destroy();
       return true;
@@ -107,9 +107,9 @@ public:
 
   // Retain only the provenance values that satisfy the given predicate.
   template <typename Fn> void retainIf(Fn retain) {
-    InternalMmapVector<AllocInfo *> ToErase;
-    set_.forEach([&](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
-      AllocInfo *info = KV.first;
+    InternalMmapVector<Block *> ToErase;
+    set_.forEach([&](DenseMap<Block *, BorTagSet>::value_type &KV) {
+      Block *info = KV.first;
       KV.second.retainIf([&](BorTag tag) { return retain(info, tag); });
       if (KV.second.size() == 0) {
         KV.second.destroy();
@@ -121,18 +121,18 @@ public:
       set_.erase(ToErase[Idx]);
   }
 
-  BorTagSet *find(AllocInfo *Info) {
+  BorTagSet *find(Block *Info) {
     auto *KV = set_.find(Info);
     return KV ? &KV->second : nullptr;
   }
 
-  const BorTagSet *find(AllocInfo *Info) const {
+  const BorTagSet *find(Block *Info) const {
     const auto *KV = set_.find(Info);
     return KV ? &KV->second : nullptr;
   }
 
 private:
-  DenseMap<AllocInfo *, BorTagSet> set_;
+  DenseMap<Block *, BorTagSet> set_;
 };
 
 } // namespace __bsan

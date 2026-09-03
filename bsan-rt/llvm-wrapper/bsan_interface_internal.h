@@ -25,10 +25,10 @@ SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_shadow_clear(void *dest, uptr size);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_rc_dec(BorTag Tag, AllocInfo *Info);
+void __bsan_rc_dec(BorTag Tag, Block *Info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_rc_inc(BorTag Tag, AllocInfo *Info);
+void __bsan_rc_inc(BorTag Tag, Block *Info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 u32 __bsan_symbolize_pc(uptr pc, char *file_buf, uptr file_buf_len, u32 *line,
@@ -38,24 +38,24 @@ SANITIZER_INTERFACE_ATTRIBUTE
 uptr __bsan_read_file(const char *path, char **file_buf, uptr *file_buf_len);
 
 SANITIZER_WEAK_ATTRIBUTE
-AllocInfo *__bsan_alloc(void *base_addr, uptr size, BorTag bor_tag, Span pc);
+Block *__bsan_alloc(void *base_addr, uptr size, BorTag bor_tag, Span pc);
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info, Span pc,
+void __bsan_dealloc(void *ptr, BorTag bor_tag, Block *alloc_info, Span pc,
                     bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_read(void *ptr, uptr access_size, BorTag bor_tag,
-                 AllocInfo *alloc_info, bool checked);
+void __bsan_read(void *ptr, uptr access_size, BorTag bor_tag, Block *alloc_info,
+                 bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_write(void *ptr, uptr access_size, BorTag bor_tag,
-                  AllocInfo *alloc_info, bool checked);
+                  Block *alloc_info, bool checked);
 
 // Records a zero-count (alloc_info, bor_tag) pair in the zero-count table.
 // Called by the Rust core when a node's reference count reaches zero.
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_release(BorTag bor_tag, AllocInfo *alloc_info);
+void __bsan_release(BorTag bor_tag, Block *alloc_info);
 
 // Requests a garbage collection. Any thread may call this.
 SANITIZER_INTERFACE_ATTRIBUTE
@@ -65,12 +65,12 @@ void __bsan_request_gc();
 // Returns true if every tag has been pruned, indicating that the allocation
 // metadata object can also be reclaimed.
 SANITIZER_WEAK_ATTRIBUTE
-bool __bsan_prune(AllocInfo *Info, BorTag *tags, uptr len);
+bool __bsan_prune(Block *Info, BorTag *tags, uptr len);
 
-// Frees an `AllocInfo` object. The pointer must be nonnull and unreachable
+// Frees an `Block` object. The pointer must be nonnull and unreachable
 // in shadow memory.
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_eject(AllocInfo *Info);
+void __bsan_eject(Block *Info);
 
 } // extern "C"
 

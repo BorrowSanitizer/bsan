@@ -131,6 +131,11 @@ public:
 
   ZeroCountTable zct;
 
+  BlockIndex AllocBlock() { return block_allocator.Alloc(&this->block_cache_); }
+  void FreeBlock(BlockIndex idx) {
+    block_allocator.Free(&this->block_cache_, idx);
+  }
+
 private:
   friend struct GlobalContext;
 
@@ -147,6 +152,9 @@ private:
   uptr shadow_stack_size_;
 
   BsanThreadLocalMallocStorage malloc_storage_;
+
+  // This thread's block-index cache for the `Block` metadata slab.
+  BlockAllocator::Cache block_cache_;
 
   // The address of this thread's thread-local allocation
   // containing the current value of its shadow stack

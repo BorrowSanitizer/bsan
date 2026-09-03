@@ -17,6 +17,7 @@ BsanThread *BsanThread::Create(thread_callback_t start_routine, void *arg) {
   uptr PageSize = GetPageSizeCached();
   uptr size = RoundUpTo(sizeof(BsanThread), PageSize);
   BsanThread *thread = (BsanThread *)MmapOrDie(size, __func__);
+  block_allocator.InitCache(&thread->block_cache_);
   thread->start_routine_ = start_routine;
   thread->arg_ = arg;
   thread->destructor_iterations_ = GetPthreadDestructorIterations();
@@ -37,12 +38,13 @@ void BsanThread::Init() {
 }
 
 void BsanThread::Destroy(void *tsd) {
-  BsanThread *t = (BsanThread *)tsd;
-  global_ctx()->Threads().DeregisterThread(t);
-  t->zct.~ZeroCountTable();
-  UnmapOrDie(t->shadow_stack_bottom_, t->shadow_stack_size_);
+  BsanThread *thread = (BsanThread *)tsd;
+  global_ctx()->Threads().DeregisterThread(thread);
+  thread->zct.~ZeroCountTable();
+  UnmapOrDie(thread->shadow_stack_bottom_, thread->shadow_stack_size_);
   uptr size = RoundUpTo(sizeof(BsanThread), GetPageSizeCached());
-  UnmapOrDie(t, size);
+  block_allocator.FlushCache(&thread->block_cache_);
+  UnmapOrDie(thread, size);
 }
 
 thread_return_t BsanThread::Start() {

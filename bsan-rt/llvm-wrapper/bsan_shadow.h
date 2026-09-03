@@ -6,6 +6,15 @@ using namespace __sanitizer;
 
 struct Provenance;
 
+// We slab-allocate blocks of 256 bytes within a dedicated 1 TB
+// memory region. This allows up to 2^32 allocation metadata
+// objects to be allocated at once.
+static constexpr uptr kBlockSize = 256;
+typedef u8 Block[kBlockSize];
+
+// Blocks are identified by 32-bit indices.
+typedef u32 BlockIndex;
+
 struct MappingDesc {
   uptr start;
   uptr end;
@@ -15,9 +24,12 @@ struct MappingDesc {
     APP = 4,
     SHADOW = 8,
     ORIGIN = 16,
+    METADATA = 32,
   } type;
   const char *name;
 };
+
+const uptr kMetadataSpaceSize = 0x10000000000ULL; // 1T.
 
 #if SANITIZER_LINUX && defined(__aarch64__)
 // The mapping assumes 48-bit VMA. AArch64 maps:
@@ -30,7 +42,8 @@ struct MappingDesc {
 const MappingDesc kMemoryLayout[] = {
     {0X0000000000000, 0X0100000000000, MappingDesc::APP, "app-10-13"},
     {0X0100000000000, 0X0200000000000, MappingDesc::SHADOW, "shadow-14"},
-    {0X0200000000000, 0X0300000000000, MappingDesc::INVALID, "invalid"},
+    {0X0200000000000, 0X0210000000000, MappingDesc::METADATA, "metadata"},
+    {0X0210000000000, 0X0300000000000, MappingDesc::INVALID, "invalid"},
     {0X0300000000000, 0X0400000000000, MappingDesc::ORIGIN, "origin-14"},
     {0X0400000000000, 0X0600000000000, MappingDesc::SHADOW, "shadow-15"},
     {0X0600000000000, 0X0800000000000, MappingDesc::ORIGIN, "origin-15"},
@@ -48,6 +61,8 @@ const MappingDesc kMemoryLayout[] = {
 const uptr kAllocatorSpace = 0xE00000000000ULL;
 const uptr kAllocatorSpaceSize = 0x40000000000ULL; // 4T.
 
+const uptr kMetadataSpace = 0X0200000000000;
+
 #elif (SANITIZER_LINUX && defined(__x86_64__))
 // All of the following configurations are supported.
 // ASLR disabled: main executable and DSOs at 0x555550000000
@@ -61,7 +76,8 @@ const MappingDesc kMemoryLayout[] = {
     {0x110000000000ULL, 0x200000000000ULL, MappingDesc::ORIGIN, "origin-2"},
     {0x200000000000ULL, 0x300000000000ULL, MappingDesc::SHADOW, "shadow-3"},
     {0x300000000000ULL, 0x400000000000ULL, MappingDesc::ORIGIN, "origin-3"},
-    {0x400000000000ULL, 0x500000000000ULL, MappingDesc::INVALID, "invalid"},
+    {0x400000000000ULL, 0x410000000000ULL, MappingDesc::METADATA, "metadata"},
+    {0x410000000000ULL, 0x500000000000ULL, MappingDesc::INVALID, "invalid"},
     {0x500000000000ULL, 0x510000000000ULL, MappingDesc::SHADOW, "shadow-1"},
     {0x510000000000ULL, 0x600000000000ULL, MappingDesc::APP, "app-2"},
     {0x600000000000ULL, 0x610000000000ULL, MappingDesc::ORIGIN, "origin-1"},
@@ -74,6 +90,8 @@ const MappingDesc kMemoryLayout[] = {
 
 const uptr kAllocatorSpace = 0x700000000000ULL;
 const uptr kAllocatorSpaceSize = 0x40000000000ULL; // 4T.
+
+const uptr kMetadataSpace = 0x400000000000ULL;
 
 #else
 #error "BorrowSanitizer: unsupported platform."

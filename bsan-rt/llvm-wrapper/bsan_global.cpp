@@ -41,7 +41,7 @@ void GlobalContext::MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct) {
     // ones in this thread's zero count table for a future collection. Record
     // the current generation as the last one when this thread's zero count
     // table was drained.
-    zct.retainIf(snap->gen, [&](AllocInfo *info, BorTag tag) -> bool {
+    zct.retainIf(snap->gen, [&](Block *info, BorTag tag) -> bool {
       Provenance prov = {tag, info};
       if (snap->live->contains(prov)) {
         return true;
@@ -79,7 +79,7 @@ void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
 void GlobalContext::CollectGarbage(Snapshot &snap) {
 
   ConcreteProvenanceSet still_pending;
-  pending_.drain([&](AllocInfo *info, BorTagSet &tags) {
+  pending_.drain([&](Block *info, BorTagSet &tags) {
     // If `__bsan_prune` returns true, then the allocation's tree is empty;
     // every single tag was pruned.
     if (__bsan_prune(info, tags.data(), tags.size())) {
@@ -102,10 +102,11 @@ void GlobalContext::CollectGarbage(Snapshot &snap) {
   });
   pending_.swap(still_pending);
 
-  DenseMap<AllocInfo *, uptr> quarantined;
-  quarantine_.forEach([&](const DenseMap<AllocInfo *, uptr>::value_type &KV) {
+  DenseMap<Block *, uptr> quarantined;
+  quarantine_.forEach([&](const DenseMap<Block *, uptr>::value_type &KV) {
     if (KV.second <= snap.min_drained) {
       __bsan_eject(KV.first);
+      CurrentThread()->FreeBlock(BLOCK_IDX(KV.first));
     } else {
       quarantined.try_emplace(KV.first, KV.second);
     }
