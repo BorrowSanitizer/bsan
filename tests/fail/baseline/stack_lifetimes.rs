@@ -1,9 +1,11 @@
-#![allow(unused)]
+//@run:1
+
 use std::ptr;
+
 fn main() {
     let mut stash: *mut u64 = ptr::null_mut();
     let mut i: u32 = 0;
-    let mut acc: u64 = 0;
+    let mut _acc: u64 = 0;
     while i < 2 {
         // This variable has a new lifetime for
         // each iteration of the loop. Semantically,
@@ -15,7 +17,7 @@ fn main() {
             // Access using a pointer to `slot` that
             // was created during a different lifetime.
             unsafe {
-                acc += *stash; // UB!
+                _acc += *stash; // UB!
             }
         }
         // Store a pointer to `slot`, which will be
