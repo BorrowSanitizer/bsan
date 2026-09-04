@@ -10,13 +10,14 @@ namespace llvm {
 
 class RetagInfo {
 public:
+  CallBase *CB;
   Value *Ptr;
   Value *ImArray;
   Value *PinArray;
   ConstantInt *Size;
   ConstantInt *Perms;
 
-  RetagInfo(const CallBase *CB) {
+  RetagInfo(CallBase *CB) : CB(CB) {
     assert(CB->arg_size() == 5);
     Ptr = CB->getOperand(0);
     Size = cast<ConstantInt>(CB->getOperand(1));
@@ -24,14 +25,23 @@ public:
     ImArray = CB->getOperand(3);
     PinArray = CB->getOperand(4);
   }
+
   bool isProtected() {
     // The least significant bit of the permission
     // indicates whether this is a function-entry retag.
     return (Perms->getZExtValue() & 0x1) != 0;
   }
+
+  void stripProtector() {
+    if (!isProtected())
+      return;
+    uint64_t OldVal = Perms->getZExtValue();
+    uint64_t NewVal = OldVal & ~0x1;
+    Perms = cast<ConstantInt>(ConstantInt::get(Perms->getType(), NewVal));
+    CB->setOperand(2, Perms);
+  }
 };
 
-bool IsFnEntryRetag(const CallBase *CB);
 bool IsRetag(const CallBase *CB);
 
 } // end namespace llvm

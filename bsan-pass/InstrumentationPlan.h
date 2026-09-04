@@ -108,7 +108,7 @@ public:
                       const StackSafetyGlobalInfo &SSGI)
       : F(F), DL(DL), DT(DT), SSGI(SSGI) {}
 
-  void build();
+  void build(CycleInfo &CI);
 
 private:
   // The static allocations that we will instrument.
