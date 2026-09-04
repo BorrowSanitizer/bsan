@@ -58,6 +58,42 @@ static cl::opt<bool> ClHandleAsmConservative(
              "outputs to wildcard Provenance"),
     cl::Hidden, cl::init(true));
 
+static cl::opt<bool> ClDisableStackInstrumentation(
+    "bsan-disable-stack-instrumentation",
+    cl::desc("Disable instrumentation of alloca stack allocations. Accesses "
+             "through pointers to the stack are never checked."),
+    cl::Hidden, cl::init(false));
+
+static cl::opt<bool> ClInstrumentByValArgs(
+    "bsan-byval-args",
+    cl::desc("Instrument the implicit stack allocations backing `byval` "
+             "arguments. These are compiler-inserted copies, so they are "
+             "unlikely to be involved in aliasing violations and are skipped "
+             "by default."),
+    cl::Hidden, cl::init(false));
+
+// Resolves a boolean flag from its command-line option or an environment
+// variable override, returning true if either is set.
+//
+// rustc parses `-Cllvm-args` before loading plugins passed via
+// `-Zllvm-plugins`, so our options are not registered yet at parse time. The
+// environment provides an alternative channel for setting an option when the
+// pass is loaded through rustc instead of `opt`.
+static bool flagEnabled(const cl::opt<bool> &Opt, const char *EnvVar) {
+  return Opt || std::getenv(EnvVar) != nullptr;
+}
+
+bool llvm::disableStackInstrumentation() {
+  return flagEnabled(ClDisableStackInstrumentation,
+                     "BSAN_DISABLE_STACK_INSTRUMENTATION");
+}
+
+// `byval` allocations are stack allocations, so disabling stack
+// instrumentation overrides the option to instrument them.
+static bool instrumentByValArgs() {
+  return ClInstrumentByValArgs && !disableStackInstrumentation();
+}
+
 static cl::opt<bool> ClInstrumentVariadics(
     "bsan-variadics", cl::desc("Instrument functions with variadic arguments."),
     cl::Hidden, cl::init(true));
@@ -1741,14 +1777,21 @@ private:
         TypeSize TS = BS.DL->getTypeAllocSize(Ty);
         Value *Size = EntryIRB.CreateTypeSize(BS.IntptrTy, TS);
 
-        Provenance Prov = createAllocaMetadata(EntryIRB);
-        initAllocaMetadata(EntryIRB, &Arg, Size, Prov);
-        ProvMap.setProvenance(&Arg, Prov);
-
         ByValArgInfo Info;
         Info.Arg = &Arg;
-        Info.AllocProv = Prov;
         Info.Size = Size;
+
+        // By default, the implicit stack allocation backing a byval argument
+        // is not instrumented: we never create allocation metadata for the
+        // callee's private copy, so accesses through it are not tracked as a
+        // stack allocation. Field provenance is still copied below so
+        // pointers passed by value keep their provenance.
+        if (instrumentByValArgs()) {
+          Provenance Prov = createAllocaMetadata(EntryIRB);
+          initAllocaMetadata(EntryIRB, &Arg, Size, Prov);
+          ProvMap.setProvenance(&Arg, Prov);
+          Info.AllocProv = Prov;
+        }
 
         // If a `byval` parameter does not have an explicit alignment, then
         // we use the alignment of the type. As specified in the LLVM guide:
@@ -1811,9 +1854,11 @@ private:
       copyProvenance(EntryIRB, ShadowPtr, Fields, Info.Size,
                      AtomicOrdering::NotAtomic);
 
-      Value *Slot = ShadowStack.getStackAllocSlot(EntryIRB);
-      auto SlotPtr = getMainProvenancePtr(EntryIRB, Slot);
-      storeProvenance(EntryIRB, SlotPtr, Info.AllocProv);
+      if (instrumentByValArgs()) {
+        Value *Slot = ShadowStack.getStackAllocSlot(EntryIRB);
+        auto SlotPtr = getMainProvenancePtr(EntryIRB, Slot);
+        storeProvenance(EntryIRB, SlotPtr, Info.AllocProv);
+      }
     }
 
     // We push additional slots into the frame header for
