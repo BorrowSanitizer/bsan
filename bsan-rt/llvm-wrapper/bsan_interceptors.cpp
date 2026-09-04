@@ -404,8 +404,8 @@ static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso) {
     if (!TryBsanInitFromRtl()) {                                               \
       return REAL(func)(__VA_ARGS__);                                          \
     }                                                                          \
-    BSAN_INTERCEPTOR_ENTER(ctx, func);                                         \
-  } while (false)
+  } while (false);                                                             \
+  BSAN_INTERCEPTOR_ENTER(ctx, func);
 
 #define COMMON_INTERCEPTOR_DIR_ACQUIRE(ctx, path)                              \
   do {                                                                         \

@@ -1,4 +1,5 @@
 #include "InstrumentationPlan.h"
+#include "llvm/Analysis/CycleAnalysis.h"
 
 namespace llvm {
 
