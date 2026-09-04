@@ -11,13 +11,13 @@ namespace __bsan {
 
 // We cache the current thread pointer in a thread
 // local variable, which is cheaper than having to
-// go through the pthread API every time. 
+// go through the pthread API every time.
 THREADLOCAL BsanThread *bsan_thread_cached = nullptr;
 
 BsanThread *CurrentThread() { return bsan_thread_cached; }
 
-void SetCurrentThread(BsanThread *t) { 
-  TSDSet((void *)t); 
+void SetCurrentThread(BsanThread *t) {
+  TSDSet((void *)t);
   bsan_thread_cached = t;
 }
 

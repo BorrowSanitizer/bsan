@@ -79,6 +79,7 @@ public:
   }
 
   static BlockIndex IndexOf(Block *elem) {
+    if (!elem) return 0;
     uptr addr = reinterpret_cast<uptr>(elem);
     // The address must fall within the prefixed region
     DCHECK_GE(addr, kRegionStart + kBlockSize);

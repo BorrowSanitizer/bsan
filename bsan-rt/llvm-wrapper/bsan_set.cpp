@@ -52,8 +52,9 @@ void BorTagSet::Erase(BorTag tag) {
 
 void BorTagSet::EnsureCapacity(uptr req_size) {
   uptr old_capacity = last_ - begin_;
+  uptr old_size = Size();
   if (req_size > old_capacity) {
-    uptr capacity = old_capacity * 5 / 4; // 25% growth
+    uptr capacity = old_capacity * 2;
     if (capacity == 0)
       capacity = 16;
     if (capacity < req_size)
@@ -62,7 +63,7 @@ void BorTagSet::EnsureCapacity(uptr req_size) {
     BorTag *p = (BorTag *)InternalAlloc(capacity * sizeof(BorTag));
 
     if (capacity) {
-      internal_memcpy(p, begin_, old_capacity * sizeof(BorTag));
+      internal_memcpy(p, begin_, old_size * sizeof(BorTag));
       InternalFree(begin_);
     }
 
