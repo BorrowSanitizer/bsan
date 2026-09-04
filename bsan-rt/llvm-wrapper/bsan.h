@@ -68,9 +68,10 @@ namespace __bsan {
 
 typedef DenseSlabAlloc<kMetadataSpace> BlockAllocator;
 extern BlockAllocator block_allocator;
-#define BLOCK_IDX(ptr) ((BlockIndex)(block_allocator.IndexOf(ptr)))
 
-#define BLOCK_PTR(idx) (block_allocator.Map(idx))
+#define BLOCK_IDX(ptr)                                                         \
+  ((BlockIndex)((ptr == nullptr) ? 0 : block_allocator.IndexOf(ptr)))
+#define BLOCK_PTR(idx) (idx ? block_allocator.Map(idx) : nullptr)
 
 typedef uptr ThreadId;
 

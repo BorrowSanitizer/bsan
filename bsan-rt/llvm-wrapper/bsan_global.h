@@ -8,6 +8,8 @@
 
 namespace __bsan {
 
+struct ScopedStopTheWorldLock;
+
 struct Snapshot {
 public:
   Snapshot(ConcreteProvenanceSet *live, uptr gen)
@@ -19,6 +21,12 @@ public:
   uptr gen;
   // The minimum generation recorded by any live thread.
   uptr min_drained;
+  // The scope holding the lock for global state. We need
+  // access to this within the closure that executes when
+  // the world is stopped, so that we can selectively
+  // unlock the internal allocator. We only want to unlock
+  // this once, so we need to update the state of the scope.
+  ScopedStopTheWorldLock *scope = nullptr;
 };
 
 // Global state associated with the runtime.
@@ -86,7 +94,7 @@ private:
   // but that cannot be ejected yet, because they might still be stored within a
   // thread's zero count table. Maps each allocation to the generation when it
   // was retired.
-  DenseMap<Block *, uptr> quarantine_{};
+  DenseMap<BlockIndex, uptr> quarantine_{};
 
   // Guards `at_exit_stack_`.
   Mutex at_exit_lock_;
@@ -110,14 +118,24 @@ struct ScopedStopTheWorldLock {
     InternalAllocatorLock();
   }
 
-  ~ScopedStopTheWorldLock() {
+  void UnlockInternalAllocator() {
     InternalAllocatorUnlock();
+    internal_is_locked_ = false;
+  }
+
+  ~ScopedStopTheWorldLock() {
+    if (internal_is_locked_) {
+      InternalAllocatorUnlock();
+    }
     UnlockAllocator();
     global_ctx()->Threads().UnlockThreads();
   }
 
   ScopedStopTheWorldLock &operator=(const ScopedStopTheWorldLock &) = delete;
   ScopedStopTheWorldLock(const ScopedStopTheWorldLock &) = delete;
+
+private:
+  bool internal_is_locked_ = true;
 };
 
 } // namespace __bsan

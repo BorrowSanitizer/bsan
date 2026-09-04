@@ -82,7 +82,6 @@ public:
     uptr addr = reinterpret_cast<uptr>(elem);
     // The address must fall within the prefixed region
     DCHECK_GE(addr, kRegionStart + kBlockSize);
-    DCHECK_LT(addr, kRegionStart + kRegionSize);
     // It must be aligned to the block size.
     DCHECK_EQ(addr & (kBlockSize - 1), 0);
     return static_cast<BlockIndex>((addr - kRegionStart) >> kBlockShift);

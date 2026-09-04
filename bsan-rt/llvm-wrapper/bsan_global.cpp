@@ -18,7 +18,7 @@ void GlobalContext::CollectProvenance(const ThreadId id,
   auto *state = static_cast<Snapshot *>(arg);
   if (thread) {
     for (auto prov : thread->shadow_stack()) {
-      state->live->insert(prov);
+      state->live->insert(BLOCK_IDX(prov.info), prov.tag);
     }
   }
 }
@@ -41,12 +41,11 @@ void GlobalContext::MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct) {
     // ones in this thread's zero count table for a future collection. Record
     // the current generation as the last one when this thread's zero count
     // table was drained.
-    zct.retainIf(snap->gen, [&](Block *info, BorTag tag) -> bool {
-      Provenance prov = {tag, info};
-      if (snap->live->contains(prov)) {
+    zct.retainIf(snap->gen, [&](BlockIndex idx, BorTag tag) -> bool {
+      if (snap->live->contains(idx, tag)) {
         return true;
       }
-      global_ctx()->pending_.insert(prov);
+      global_ctx()->pending_.insert(idx, tag);
       return false;
     });
   }
@@ -62,6 +61,11 @@ void GlobalContext::MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct) {
 }
 
 void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
+  Snapshot *snap = static_cast<Snapshot *>(arg);
+  // We need access to the internal allocator so that we can add
+  // live provenance values to the set within the snapshot. Unlocking
+  // it here prevents us from unlocking it again once the closure returns.
+  snap->scope->UnlockInternalAllocator();
   // The `arg` here is a pointer to a `SnapShot` object.
   ThreadManager &threads = global_ctx()->Threads();
   // For each thread, add all live provenance values to the snapshot.
@@ -73,16 +77,16 @@ void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
   threads.ForEachThread(MergeZeroCountsCallback, arg);
   // We also need to visit the global ZCT, which contains garbage from threads
   // that have exited since the last collection run.
-  MergeZeroCounts(static_cast<Snapshot *>(arg), threads.global_zct);
+  MergeZeroCounts(snap, threads.global_zct);
 }
 
 void GlobalContext::CollectGarbage(Snapshot &snap) {
 
   ConcreteProvenanceSet still_pending;
-  pending_.drain([&](Block *info, BorTagSet &tags) {
+  pending_.drain([&](BlockIndex info, BorTagSet &tags) {
     // If `__bsan_prune` returns true, then the allocation's tree is empty;
     // every single tag was pruned.
-    if (__bsan_prune(info, tags.data(), tags.size())) {
+    if (__bsan_prune(BLOCK_PTR(info), tags.Data(), tags.Size())) {
       // Insert the allocation into the quarantine.
       // It might already be present. If so, its generation is
       // updated. It is crucial for this to be a hashmap. Otherwise,
@@ -92,21 +96,21 @@ void GlobalContext::CollectGarbage(Snapshot &snap) {
       // The Rust core zeroes out every tag that no longer needs tracking.
       // The remaining nonzero tags are dead nodes that could not be pruned
       // yet; collect them for a future GC pass.
-      const BorTag *retained = tags.data();
-      for (uptr i = 0; i < tags.size(); ++i) {
+      const BorTag *retained = tags.Data();
+      for (uptr i = 0; i < tags.Size(); ++i) {
         if (retained[i] != 0) {
-          still_pending.insert({retained[i], info});
+          still_pending.insert(info, retained[i]);
         }
       }
     }
   });
   pending_.swap(still_pending);
 
-  DenseMap<Block *, uptr> quarantined;
-  quarantine_.forEach([&](const DenseMap<Block *, uptr>::value_type &KV) {
+  DenseMap<BlockIndex, uptr> quarantined;
+  quarantine_.forEach([&](const DenseMap<BlockIndex, uptr>::value_type &KV) {
     if (KV.second <= snap.min_drained) {
-      __bsan_eject(KV.first);
-      CurrentThread()->FreeBlock(BLOCK_IDX(KV.first));
+      __bsan_eject(BLOCK_PTR(KV.first));
+      CurrentThread()->FreeBlock(KV.first);
     } else {
       quarantined.try_emplace(KV.first, KV.second);
     }
@@ -130,8 +134,10 @@ void GlobalContext::RequestGC() {
       Snapshot state(&live, gen);
       {
         ScopedStopTheWorldLock stopped;
+        state.scope = &stopped;
         StopTheWorld(SnapshotCallback, &state);
       }
+
       CollectGarbage(state);
       atomic_fetch_add(&gc_gen, 1, memory_order_relaxed);
     }

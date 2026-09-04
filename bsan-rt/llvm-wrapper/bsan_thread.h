@@ -46,7 +46,7 @@ public:
     // stores is ordered before the "acquire" load used
     // to check the value in `IsBusy`.
     GCBarrier barrier(*this);
-    zct_.insert(Prov);
+    zct_.insert(BLOCK_IDX(Prov.info), Prov.tag);
   }
 
   void drainFrom(ZeroCountTable &other) {
