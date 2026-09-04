@@ -73,7 +73,7 @@ public:
   }
 
   static Block *Map(BlockIndex idx) {
-    DCHECK_NE(idx, 0);
+    if(idx == 0) return nullptr;
     uptr addr = kRegionStart + (static_cast<uptr>(idx) << kBlockShift);
     return reinterpret_cast<Block *>(addr);
   }

@@ -70,7 +70,7 @@ typedef DenseSlabAlloc<kMetadataSpace> BlockAllocator;
 extern BlockAllocator block_allocator;
 
 #define BLOCK_IDX(ptr) (block_allocator.IndexOf(ptr))
-#define BLOCK_PTR(idx) (idx ? block_allocator.Map(idx) : nullptr)
+#define BLOCK_PTR(idx) (block_allocator.Map(idx))
 
 typedef uptr ThreadId;
 
