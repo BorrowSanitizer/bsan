@@ -2,13 +2,13 @@ error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x0]
  --> bsan/tests/fail/aliasing/frozen_write.rs:LL:CC
    |
 LL | unsafe { *(ptr as *mut i32) = 1 };
-   |
+   |          ^
   = help: the accessed tag <TAG>(unprotected) has state Frozen which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
  --> bsan/tests/fail/aliasing/frozen_write.rs:LL:CC
    |
 LL | let rx = &x;
-   |
+   |          ^
 
 stack backtrace:
 0: frozen_write::foo

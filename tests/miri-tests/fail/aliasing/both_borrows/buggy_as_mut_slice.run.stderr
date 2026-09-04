@@ -2,18 +2,18 @@ error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x4]
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/buggy_as_mut_slice.rs:LL:CC
    |
 LL | v2[1] = 7;
-   |
+   | ^
    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child write access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/buggy_as_mut_slice.rs:LL:CC
    |
 LL | let v2 = safe::as_mut_slice(&v);
-   |
+   |          ^
 help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x4..0x8]
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/buggy_as_mut_slice.rs:LL:CC
    |
 LL | v1[1] = 5;
-   |
+   | ^
    = help: this transition corresponds to a loss of read and write permissions
 
 stack backtrace:

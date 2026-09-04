@@ -1,7 +1,6 @@
 // Ported from Miri (commit:ce9844e)
 //! Tests for the tree
 #![cfg(test)]
-
 use std::fmt;
 
 use super::super::exhaustive::{precondition, Exhaustive};
@@ -865,18 +864,18 @@ fn add_child_perm(tree: &mut EagerTree, parent: BorTag, child: BorTag, perm: Per
         Size::from_bytes(ALLOC_BYTES),
         LocationState::new_non_accessed(perm, sifa),
     );
-    let result =
-        tree.new_child(Size::ZERO, parent, child, inside_perms, perm, false, Span::dummy());
+    let result = tree.new_child(Size::ZERO, parent, child, inside_perms, perm, None, Span::dummy());
     assert!(result.is_ok());
 }
 
 #[test]
 fn dead_leaf_is_removed_and_zeroed() {
+    let ctx = GlobalCtx::new(&SharedSanitizerFlags::default());
     let mut tree = new_tree(t(10));
     add_child(&mut tree, t(10), t(11));
 
     let mut dead = [t(11)];
-    let empty = tree.remove_dead_tags(&mut dead);
+    let empty = tree.remove_dead_tags(&ctx, &mut dead);
 
     assert!(!empty, "the root is still in the tree");
     assert_eq!(dead, [BorTag::omnivalid()]);
@@ -886,6 +885,13 @@ fn dead_leaf_is_removed_and_zeroed() {
 
 #[test]
 fn dead_node_with_multiple_children_is_compacted() {
+    // Ensure that we can compact any size of tree
+    let flags = SharedSanitizerFlags {
+        max_compacted_children: usize::MAX,
+        tree_gc_min_nodes: 0,
+        ..Default::default()
+    };
+    let ctx = GlobalCtx::new(&flags);
     // A dead interior node whose children can all soundly replace it (here Frozen parent,
     // Frozen children) is compacted: its children are reparented onto the grandparent and the
     // node is pruned immediately, even though it has more than one child.
@@ -897,7 +903,7 @@ fn dead_node_with_multiple_children_is_compacted() {
     tree.increment(t(13));
 
     let mut dead = [t(11)];
-    let empty = tree.remove_dead_tags(&mut dead);
+    let empty = tree.remove_dead_tags(&ctx, &mut dead);
 
     assert!(!empty);
     // The dead node was removed; its slot is zeroed so the caller drops it.
@@ -911,6 +917,7 @@ fn dead_node_with_multiple_children_is_compacted() {
 
 #[test]
 fn dead_node_with_incompatible_children_is_retained() {
+    let ctx = GlobalCtx::new(&SharedSanitizerFlags::default());
     // When some child cannot replace the dead node (here Frozen parent, `ReservedFrz` children),
     // compaction is unsound, so the node is retained for a future pass.
     let mut tree = new_tree(t(10));
@@ -921,7 +928,7 @@ fn dead_node_with_incompatible_children_is_retained() {
     tree.increment(t(13));
 
     let mut dead = [t(11)];
-    let empty = tree.remove_dead_tags(&mut dead);
+    let empty = tree.remove_dead_tags(&ctx, &mut dead);
 
     assert!(!empty);
     // The dead node cannot be pruned yet. Its slot must stay nonzero so the caller keeps it
@@ -933,6 +940,7 @@ fn dead_node_with_incompatible_children_is_retained() {
 
 #[test]
 fn retained_tag_is_pruned_once_children_die() {
+    let ctx = GlobalCtx::new(&SharedSanitizerFlags::default());
     let mut tree = new_tree(t(10));
     add_child(&mut tree, t(10), t(11));
     // `ReservedFrz` children block compaction of the Frozen parent, so it is retained rather
@@ -944,7 +952,7 @@ fn retained_tag_is_pruned_once_children_die() {
 
     // First GC pass: the dead parent is blocked by its two live, non-replacing children.
     let mut dead = [t(11)];
-    assert!(!tree.remove_dead_tags(&mut dead));
+    assert!(!tree.remove_dead_tags(&ctx, &mut dead));
     assert_eq!(dead, [t(11)]);
 
     // The children die, re-entering a ZCT. The next pass removes them as leaves, and the
@@ -953,7 +961,7 @@ fn retained_tag_is_pruned_once_children_die() {
     tree.decrement(t(12));
     tree.decrement(t(13));
     let mut dead = [t(11), t(12), t(13)];
-    let empty = tree.remove_dead_tags(&mut dead);
+    let empty = tree.remove_dead_tags(&ctx, &mut dead);
 
     assert!(!empty, "the root is still in the tree");
     assert_eq!(dead, [BorTag::omnivalid(); 3]);
@@ -968,6 +976,8 @@ fn root_tags(tree: &EagerTree) -> Vec<BorTag> {
 
 #[test]
 fn dead_root_with_children_is_retained() {
+    let ctx = GlobalCtx::new(&SharedSanitizerFlags::default());
+
     // A dead root is never replaced by its child, since promoting the child into `roots`
     // could break its ascending-tag order. Here the main root's only child (tag 30) has a
     // larger tag than the wildcard subtree root (tag 20), so the pre-guard promotion would
@@ -979,7 +989,7 @@ fn dead_root_with_children_is_retained() {
     tree.increment(t(30));
 
     let mut dead = [t(10)];
-    let empty = tree.remove_dead_tags(&mut dead);
+    let empty = tree.remove_dead_tags(&ctx, &mut dead);
 
     assert!(!empty);
     // The root cannot be pruned while it has a child; it must stay pending.
@@ -990,6 +1000,7 @@ fn dead_root_with_children_is_retained() {
 
 #[test]
 fn dead_root_is_pruned_as_leaf_once_subtree_dies() {
+    let ctx: GlobalCtx = GlobalCtx::new(&SharedSanitizerFlags::default());
     let mut tree = new_tree(t(10));
     add_child(&mut tree, BorTag::wildcard(), t(20));
     add_child(&mut tree, t(10), t(30));
@@ -998,7 +1009,7 @@ fn dead_root_is_pruned_as_leaf_once_subtree_dies() {
 
     // First pass: the dead root is retained while its child is alive.
     let mut dead = [t(10)];
-    assert!(!tree.remove_dead_tags(&mut dead));
+    assert!(!tree.remove_dead_tags(&ctx, &mut dead));
     assert_eq!(dead, [t(10)]);
     assert_eq!(root_tags(&tree), [t(10), t(20)]);
 
@@ -1008,7 +1019,7 @@ fn dead_root_is_pruned_as_leaf_once_subtree_dies() {
     tree.decrement(t(20));
     tree.decrement(t(30));
     let mut dead = [t(10), t(20), t(30)];
-    let empty = tree.remove_dead_tags(&mut dead);
+    let empty = tree.remove_dead_tags(&ctx, &mut dead);
 
     assert!(empty, "every root was removed as a leaf");
     assert_eq!(dead, [BorTag::omnivalid(); 3]);

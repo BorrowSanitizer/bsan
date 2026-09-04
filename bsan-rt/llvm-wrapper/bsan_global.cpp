@@ -11,8 +11,8 @@ using namespace __bsan;
 
 namespace __bsan {
 
-void GlobalContext::CollectProvenance(const uptr, BsanThread *const &thread,
-                                      void *arg) {
+void GlobalContext::CollectProvenance(const ThreadId id,
+                                      BsanThread *const &thread, void *arg) {
   // Iterate over the shadow stacks for each thread,
   // collecting all provenance values into the snapshot.
   auto *state = static_cast<Snapshot *>(arg);
@@ -23,18 +23,25 @@ void GlobalContext::CollectProvenance(const uptr, BsanThread *const &thread,
   }
 }
 
-void GlobalContext::MergeZeroCounts(const uptr, BsanThread *const &thread,
-                                    void *arg) {
+void GlobalContext::MergeZeroCountsCallback(const ThreadId id,
+                                            BsanThread *const &thread,
+                                            void *arg) {
   auto *snap = static_cast<Snapshot *>(arg);
   if (!thread) {
     return;
   }
+  MergeZeroCounts(snap, thread->zct);
+}
+
+void GlobalContext::MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct) {
   // If the thread is not in the middle of updating its zero
   // count table, then we can drain its contents for garbage collection.
-  if (!thread->ZctBusy()) {
+  if (!zct.isBusy()) {
     // Move every unreachable value into the pending set, keeping the reachable
-    // ones in this thread's zero count table for a future collection.
-    thread->zero_count_set_.retainIf([&](AllocInfo *info, BorTag tag) -> bool {
+    // ones in this thread's zero count table for a future collection. Record
+    // the current generation as the last one when this thread's zero count
+    // table was drained.
+    zct.retainIf(snap->gen, [&](AllocInfo *info, BorTag tag) -> bool {
       Provenance prov = {tag, info};
       if (snap->live->contains(prov)) {
         return true;
@@ -42,17 +49,15 @@ void GlobalContext::MergeZeroCounts(const uptr, BsanThread *const &thread,
       global_ctx()->pending_.insert(prov);
       return false;
     });
-    // Record the current generation as the last one
-    // when this thread's zero count table was drained.
-    thread->drained_gen_ = snap->gen;
   }
 
   // The default value of `min_drained` is the current
   // generation. Its final value will be equal to the
   // minimum generation for any thread, after updating
   // the ZCT (if we were able to access it this time).
-  if (thread->drained_gen_ < snap->min_drained) {
-    snap->min_drained = thread->drained_gen_;
+  ZeroCountTable::Generation last_drained = zct.lastDrained();
+  if (last_drained < snap->min_drained) {
+    snap->min_drained = last_drained;
   }
 }
 
@@ -65,37 +70,24 @@ void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
   // in the set of live provenance values in the `SnapShot`, then remove
   // it from the ZCT and add it to the global "pending" set of provenance
   // values that need pruning.
-  threads.ForEachThread(MergeZeroCounts, arg);
+  threads.ForEachThread(MergeZeroCountsCallback, arg);
+  // We also need to visit the global ZCT, which contains garbage from threads
+  // that have exited since the last collection run.
+  MergeZeroCounts(static_cast<Snapshot *>(arg), threads.global_zct);
 }
 
 void GlobalContext::CollectGarbage(Snapshot &snap) {
-  InternalMmapVector<RetiredAlloc> filtered;
-  // Eject all retired allocation metadata objects
-  // that are confirmed to be unreachable as of the
-  // current minimum generation.
-  for (uptr i = 0; i < quarantine_.size(); ++i) {
-    RetiredAlloc retired = quarantine_[i];
-    if (retired.retire_gen <= snap.min_drained) {
-      __bsan_eject(retired.info);
-    } else {
-      // If we can't eject this object yet, then
-      // make sure it stays in quarantine.
-      filtered.push_back(retired);
-    }
-  }
-  quarantine_.swap(filtered);
 
-  // A pending set of unpruned tags
   ConcreteProvenanceSet still_pending;
   pending_.drain([&](AllocInfo *info, BorTagSet &tags) {
     // If `__bsan_prune` returns true, then the allocation's tree is empty;
     // every single tag was pruned.
     if (__bsan_prune(info, tags.data(), tags.size())) {
-      if (snap.min_drained == snap.gen) {
-        __bsan_eject(info);
-      } else {
-        quarantine_.push_back({info, snap.gen});
-      }
+      // Insert the allocation into the quarantine.
+      // It might already be present. If so, its generation is
+      // updated. It is crucial for this to be a hashmap. Otherwise,
+      // we will end up double-freeing allocation metadata.
+      quarantine_[info] = snap.gen;
     } else {
       // The Rust core zeroes out every tag that no longer needs tracking.
       // The remaining nonzero tags are dead nodes that could not be pruned
@@ -109,6 +101,17 @@ void GlobalContext::CollectGarbage(Snapshot &snap) {
     }
   });
   pending_.swap(still_pending);
+
+  DenseMap<AllocInfo *, uptr> quarantined;
+  quarantine_.forEach([&](const DenseMap<AllocInfo *, uptr>::value_type &KV) {
+    if (KV.second <= snap.min_drained) {
+      __bsan_eject(KV.first);
+    } else {
+      quarantined.try_emplace(KV.first, KV.second);
+    }
+    return true;
+  });
+  quarantine_.swap(quarantined);
 }
 
 void GlobalContext::RequestGC() {

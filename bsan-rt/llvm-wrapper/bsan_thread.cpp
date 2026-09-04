@@ -7,6 +7,12 @@
 using namespace __sanitizer;
 using namespace __bsan;
 
+namespace __bsan {
+
+BsanThread *CurrentThread() { return (BsanThread *)TSDGet(); }
+
+void SetCurrentThread(BsanThread *t) { TSDSet((void *)t); }
+
 BsanThread *BsanThread::Create(thread_callback_t start_routine, void *arg) {
   uptr PageSize = GetPageSizeCached();
   uptr size = RoundUpTo(sizeof(BsanThread), PageSize);
@@ -32,8 +38,8 @@ void BsanThread::Init() {
 
 void BsanThread::Destroy(void *tsd) {
   BsanThread *t = (BsanThread *)tsd;
-  global_ctx()->Threads().DeregisterThread(t->id);
-  t->zero_count_set_.~ConcreteProvenanceSet();
+  global_ctx()->Threads().DeregisterThread(t);
+  t->zct.~ZeroCountTable();
   UnmapOrDie(t->shadow_stack_bottom_, t->shadow_stack_size_);
   uptr size = RoundUpTo(sizeof(BsanThread), GetPageSizeCached());
   UnmapOrDie(t, size);
@@ -50,7 +56,9 @@ void *BsanThread::StartCallback(void *arg) {
   BsanThread *t = (BsanThread *)arg;
   SetCurrentThread(t);
   t->Init();
+#if SANITIZER_LINUX
   SetSigProcMask(&t->starting_sigset_, nullptr);
+#endif
   return t->Start();
 }
 
@@ -61,7 +69,10 @@ void ThreadManager::RegisterThread(BsanThread *thread) {
   thread->id = tid;
 }
 
-void ThreadManager::DeregisterThread(ThreadId tid) {
+void ThreadManager::DeregisterThread(BsanThread *thread) {
   Lock l(&mtx_);
-  threads.erase(tid);
+  global_zct.drainFrom(thread->zct);
+  threads.erase(thread->id);
 }
+
+} // namespace __bsan

@@ -42,27 +42,30 @@ MIRI_COMMON_FLAGS = (
 # (to the extent possible).
 MIRI = {
     "name": "miri-tb",
-    "env": {"MIRIFLAGS": f"-Zmiri-tree-borrows {MIRI_COMMON_FLAGS}"},
+    "env": {
+        "MIRIFLAGS": f"-Zmiri-tree-borrows {MIRI_COMMON_FLAGS}",
+    },
 }
-
-# Miri with Tree Borrows disabled. This is as close to "just interpret" as
-# we can get. However, the core interpreter will still check for certain forms
-# of UB, like accessese out-of-bounds, use-after-free errors, and uninitialized accesses.
-# MIRI_BASE = {
-#     "name": "miri-base",
-#     "env": {"MIRIFLAGS": f"-Zmiri-disable-stacked-borrows {MIRI_COMMON_FLAGS}"},
-# }
 
 # Every Miri configuration.
 MIRI_CONFIGS = [MIRI]
 
 # BorrowSanitizer configurations.
 BSAN_CONFIGS = [
-    # Full checking
+    # Full checking.
     {
         "name": "full",
         "cmd": ["cargo", "bsan", "test", "--lib"],
         "env": {"RUSTFLAGS": "--cfg=miri"},
+    },
+    # Full, but with wildcard provenance disabled.
+    {
+        "name": "full-no-wildcard",
+        "cmd": ["cargo", "bsan", "test", "--lib"],
+        "env": {
+            "RUSTFLAGS": "--cfg=miri", 
+            "BSAN_OPTIONS": "wildcard=0"
+        },
     },
     # No-op checking. Instrumentation is inserted, but
     # all memory access checks, retags, and reference count
@@ -82,7 +85,6 @@ BSAN_CONFIGS = [
 
 # Every configuration that requires compiling a native binary.
 ALL_BINARY_CONFIGS = [NATIVE] + BSAN_CONFIGS
-
 
 # Raw timing results are output as a CSV with these headers.
 CSV_HEADERS = [
@@ -113,9 +115,17 @@ class TestHarnessJSON:
         raise StopIteration
 
 def _build_env(kwargs: dict) -> dict:
-    """Creates a copy of the current environment, merged with an `env` mapping from `kwargs`."""
+    """Creates a copy of the current environment, merged with an `env` mapping from `kwargs`.
+
+    If a a value is set to `None` in `kwargs`, then the value will be unset from the environment,
+    instead of being inherited by the parent process.
+    """
     env = os.environ.copy()
-    env.update(kwargs.pop("env", None) or {})
+    for key, value in (kwargs.pop("env", None) or {}).items():
+        if value is None:
+            env.pop(key, None)
+        else:
+            env[key] = value
     return env
 
 def run(
@@ -126,7 +136,16 @@ def run(
 
     The command inherits the current environment.
     """
-    return subprocess.run(cmd, check=True, env=_build_env(kwargs), **kwargs)
+    sys.stderr.flush()
+    try:
+        proc = subprocess.run(cmd, check=True, env=_build_env(kwargs), **kwargs)
+    except subprocess.CalledProcessError as exc:
+        print(
+            f"command failed with exit code {exc.returncode}: {shlex.join(cmd)}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return proc
 def run_capture(
     cmd: list[str],
     **kwargs,
@@ -393,7 +412,6 @@ def process_config(
             raw_results.append(row_start + (config["name"], mean))
 
         baselines = {NATIVE["name"]: per_test_means.pop(NATIVE["name"])}
-
         # execute Miri and add each configuration as a baseline for comparison
         for miri_config in MIRI_CONFIGS:
             miri_mean = run_miri_test(src_dir, t, miri_config, scratch)
@@ -437,13 +455,21 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description="Benchmark relative execution time",
         usage=(
-            "%(prog)s <crates> <target> <output_json> <output_csv>"
+            "%(prog)s [--crate NAME ...] <crates> <target> <output_json> <output_csv>"
         ),
     )
     parser.add_argument("crates_json", type=Path)
     parser.add_argument("target", type=str)
     parser.add_argument("output_json", type=Path)
     parser.add_argument("output_csv", type=Path)
+    parser.add_argument(
+        "--crate",
+        action="append",
+        dest="only",
+        metavar="NAME",
+        help="Only benchmark the named crate from <crates> (repeatable). "
+             "Used to shard the benchmark suite one crate per CI job.",
+    )
 
     args = parser.parse_args(argv)
     for tool in ["cargo", "hyperfine"]:
@@ -453,10 +479,18 @@ def main(argv: list[str]) -> int:
     if not crates_json.is_file():
         sys.exit(f"Error: invalid config file: {crates_json}")
 
+    configs = json.loads(crates_json.read_text())
+    if args.only:
+        wanted = set(args.only)
+        configs = [cfg for cfg in configs if cfg.get("name") in wanted]
+        missing = wanted - {cfg.get("name") for cfg in configs}
+        if missing:
+            sys.exit(f"Error: crate(s) not found in {crates_json}: {', '.join(sorted(missing))}")
+
     all_results = {}
     with tempfile.TemporaryDirectory() as scratch_str:
         scratch = Path(scratch_str)
-        for cfg in json.loads(crates_json.read_text()):
+        for cfg in configs:
             cfg_results = process_config(cfg, args.target, scratch)
             all_results.setdefault("relative", [])
             all_results["relative"] += cfg_results["relative"]

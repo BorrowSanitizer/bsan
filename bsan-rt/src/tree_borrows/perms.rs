@@ -303,6 +303,11 @@ impl Permission {
         self.inner == Cell
     }
 
+    /// Check if `self` is the not-yet-written-to state of an interior mutable pointer.
+    pub fn is_reserved_im(&self) -> bool {
+        self.inner == ReservedIM
+    }
+
     /// Default initial permission of the root of a new tree at inbounds positions.
     /// Must *only* be used for the root, this is not in general an "initial" permission!
     pub fn new_unique() -> Self {

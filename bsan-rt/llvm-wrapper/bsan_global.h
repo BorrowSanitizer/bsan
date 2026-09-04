@@ -21,17 +21,6 @@ public:
   uptr min_drained;
 };
 
-// An allocation that is unreachable and
-// has had all of its nodes pruned, but that
-// cannot be ejected yet, because it might still
-// be stored within a thread's zero count table.
-struct RetiredAlloc {
-  // A non-null pointer to the allocation.
-  AllocInfo *info;
-  // The generation when it was retired.
-  uptr retire_gen;
-};
-
 // Global state associated with the runtime.
 struct GlobalContext {
 public:
@@ -76,14 +65,16 @@ private:
   // Iterates over every thread's shadow stack, creating a set of all reachable
   // provenance values. The last argument is a pointer to the
   // `ConcreteProvenanceSet` being populated.
-  static void CollectProvenance(const uptr, BsanThread *const &thread,
+  static void CollectProvenance(const ThreadId id, BsanThread *const &thread,
                                 void *arg);
 
   // Iterates over every thread's zero-count-table, merging its contents into
   // the set of pending provenance values. We only add values to the pending set
   // if they are not present on any shadow stack. Values that we add to the
   // pending set are also removed from their thread's zero-count-table.
-  static void MergeZeroCounts(const uptr, BsanThread *const &thread, void *arg);
+  static void MergeZeroCountsCallback(const ThreadId id,
+                                      BsanThread *const &thread, void *arg);
+  static void MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct);
 
   // Drains the contents of the pending provenance set, pruning the associated
   // state from the tree for each allocation. Ejects any retired allocation
@@ -91,8 +82,11 @@ private:
   // has restarted.
   void CollectGarbage(Snapshot &snap);
 
-  // A list of retired allocations that have yet to be ejected.
-  InternalMmapVectorNoCtor<RetiredAlloc> quarantine_{};
+  // Allocations that are unreachable and have had all of their nodes pruned,
+  // but that cannot be ejected yet, because they might still be stored within a
+  // thread's zero count table. Maps each allocation to the generation when it
+  // was retired.
+  DenseMap<AllocInfo *, uptr> quarantine_{};
 
   // Guards `at_exit_stack_`.
   Mutex at_exit_lock_;
@@ -113,9 +107,11 @@ struct ScopedStopTheWorldLock {
     // once we resume.
     global_ctx()->Threads().LockThreads();
     LockAllocator();
+    InternalAllocatorLock();
   }
 
   ~ScopedStopTheWorldLock() {
+    InternalAllocatorUnlock();
     UnlockAllocator();
     global_ctx()->Threads().UnlockThreads();
   }

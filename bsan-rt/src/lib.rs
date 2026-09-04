@@ -2,7 +2,6 @@
 #![cfg_attr(not(test), feature(core_intrinsics))]
 #![feature(thread_local)]
 #![feature(allocator_api)]
-#![feature(never_type)]
 #![allow(internal_features)]
 
 #[macro_use]
@@ -31,7 +30,7 @@ mod errors;
 mod memory;
 
 use crate::helpers::{AllocRange, Size};
-use crate::sanitizer_common::Span;
+use crate::sanitizer_common::{SharedSanitizerFlags, Span};
 use crate::tree_borrows::perms::AccessKind;
 use crate::tree_borrows::tree::AllocStateImpl;
 use crate::tree_borrows::AllocState;
@@ -210,12 +209,7 @@ impl Default for BorTag {
 
 impl fmt::Debug for BorTag {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let global = unsafe { global_ctx() };
-        let protector = match global.protected_tags().get_protector_kind(*self) {
-            Some(kind) => &format!("{:?}", kind),
-            None => "unprotected",
-        };
-        write!(f, "<{}>({})", self.0, protector)
+        write!(f, "<{}>", self.0)
     }
 }
 
@@ -305,9 +299,9 @@ pub(crate) enum AllocInfoSummary {
 /// function having been executed. We assume the global invariant that
 /// no other API functions will be called prior to that point.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_internal_init() {
+unsafe extern "C-unwind" fn __bsan_internal_init(flags: NonNull<SharedSanitizerFlags>) {
     unsafe {
-        init_global_ctx();
+        init_global_ctx(flags);
     }
 }
 
@@ -405,9 +399,6 @@ extern "C" fn __bsan_protector_end_impl(bor_tag: BorTag, alloc_info: *mut AllocI
     BorrowTracker::for_alloc_weak(prov, |mut bt| {
         let _ = bt.protector_end(ctx, pc);
     });
-    // We need to remove the protector as a separate action from deallocation,
-    // because you can deallocate something through a protected tag.
-    ctx.protected_tags_mut().remove_protector(bor_tag);
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -616,10 +607,11 @@ unsafe extern "C" fn __bsan_prune(
     bor_tags: *mut BorTag,
     len: usize,
 ) -> bool {
+    let global_ctx = unsafe { global_ctx() };
     let alloc: AllocInfoPtr = alloc_info.into();
     let dead_tags = unsafe { slice::from_raw_parts_mut(bor_tags, len) };
     match alloc.tree.lock().as_mut() {
-        Some(tree) => tree.remove_dead_tags(dead_tags),
+        Some(tree) => tree.remove_dead_tags(global_ctx, dead_tags),
         None => {
             // The tree is already deallocated, so we can zero out dead_tags
             dead_tags.fill(BorTag::omnivalid());
@@ -653,10 +645,9 @@ extern "C" fn __bsan_print(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
 
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_print_borrow_state(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
-    let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
     BorrowTracker::for_alloc_weak(prov, |bt| {
-        bt.debug_print_tree(ctx, false);
+        bt.debug_print_tree(false);
     });
 }
 

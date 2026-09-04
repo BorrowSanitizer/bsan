@@ -133,9 +133,15 @@ impl History {
 
 impl HistoryData {
     // Format events from `new_history` into those recorded by `self`.
-    fn extend(&mut self, new_history: History, tag_name: &'static str, show_initial_state: bool) {
+    fn extend(
+        &mut self,
+        new_history: History,
+        tag_name: &'static str,
+        protector: Option<ProtectorKind>,
+        show_initial_state: bool,
+    ) {
         let History { tag, created, events } = new_history;
-        let this = format!("the {tag_name} tag {tag:?}");
+        let this = format!("the {tag_name} tag {}", print_tag(tag, protector));
         let msg_initial_state = format!(", in the initial state {}", created.1);
         let msg_creation = format!(
             "{this} was created here{maybe_msg_initial_state}",
@@ -168,6 +174,33 @@ impl HistoryData {
             ));
             self.events
                 .push((None, format!("this transition corresponds to {}", transition.summary())));
+        }
+    }
+}
+
+// Prints a tag and its protector status.
+pub(super) fn print_tag(tag: BorTag, protector: Option<ProtectorKind>) -> String {
+    match protector {
+        Some(kind) => format!("{tag:?}({kind:?})"),
+        None => format!("{tag:?}(unprotected)"),
+    }
+}
+
+/// A node and its protector status.
+#[derive(Clone, Copy)]
+pub(super) struct ErrorNode<'node> {
+    pub info: &'node NodeDebugInfo,
+    pub protector: Option<ProtectorKind>,
+}
+
+impl ErrorNode<'_> {
+    /// The tag as it should appear in an error message, including its name
+    /// (if it has one) and its protector status.
+    fn print(&self) -> String {
+        let tag = print_tag(self.info.tag, self.protector);
+        match &self.info.name {
+            Some(name) => format!("{tag} ({name})"),
+            None => tag,
         }
     }
 }
@@ -209,16 +242,6 @@ impl NodeDebugInfo {
             prev_name.push_str(name);
         } else {
             self.name = Some(String::from(name));
-        }
-    }
-}
-
-impl fmt::Display for NodeDebugInfo {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(ref name) = self.name {
-            write!(f, "{tag:?} ({name})", tag = self.tag)
-        } else {
-            write!(f, "{tag:?}", tag = self.tag)
         }
     }
 }
@@ -306,11 +329,11 @@ pub(super) struct TbError<'node> {
     /// On protector violations, this is the tag that was protected.
     /// On accesses rejected due to insufficient permissions, this is the
     /// tag that lacked those permissions.
-    pub conflicting_node_info: &'node NodeDebugInfo,
+    pub conflicting_node: ErrorNode<'node>,
     /// Which tag, if any, the access that caused this error was made through, i.e.
     /// which tag was used to read/write/deallocate.
     /// Not set on wildcard accesses.
-    pub accessed_node_info: Option<&'node NodeDebugInfo>,
+    pub accessed_node: Option<ErrorNode<'node>>,
 }
 
 pub struct TreeBorrowsUb {
@@ -325,10 +348,9 @@ impl TbError<'_> {
         use TransitionError::*;
         let cause = self.access_info.access_cause;
         let error_offset = self.access_info.transition_range.start;
-        let accessed = self.accessed_node_info;
-        let accessed_str =
-            self.accessed_node_info.map(|v| format!("{v}")).unwrap_or_else(|| "<wildcard>".into());
-        let conflicting = self.conflicting_node_info;
+        let accessed = self.accessed_node;
+        let accessed_str = accessed.map(|v| v.print()).unwrap_or_else(|| "<wildcard>".into());
+        let conflicting = self.conflicting_node.print();
         // An access is considered conflicting if it happened through a
         // different tag than the one who caused UB.
         // When doing a wildcard access (where `accessed` is `None`) we
@@ -337,7 +359,8 @@ impl TbError<'_> {
         // conflicting tag.
         // This is because the wildcard data structure already removes
         // all tags through which an access would cause UB.
-        let accessed_is_conflicting = accessed.map(|a| a.tag) == Some(conflicting.tag);
+        let accessed_is_conflicting =
+            accessed.map(|a| a.info.tag) == Some(self.conflicting_node.info.tag);
         let title = format!(
             "{cause} through {accessed_str} at {alloc_id}[{error_offset:#x}] is forbidden",
             alloc_id = self.access_info.alloc_id
@@ -384,14 +407,20 @@ impl TbError<'_> {
             }
         };
         let mut history = HistoryData::default();
-        if let Some(accessed_info) = self.accessed_node_info
+        if let Some(accessed_node) = self.accessed_node
             && !accessed_is_conflicting
         {
-            history.extend(accessed_info.history.forget(), "accessed", false);
+            history.extend(
+                accessed_node.info.history.forget(),
+                "accessed",
+                accessed_node.protector,
+                false,
+            );
         }
         history.extend(
-            self.conflicting_node_info.history.extract_relevant(error_offset, self.error_kind),
+            self.conflicting_node.info.history.extract_relevant(error_offset, self.error_kind),
             conflicting_tag_name,
+            self.conflicting_node.protector,
             true,
         );
         TreeBorrowsUb { title, details, history }
@@ -639,6 +668,7 @@ struct DisplayRepr {
     tag: BorTag,
     name: Option<String>,
     exposed: bool,
+    protector_kind: Option<ProtectorKind>,
     rperm: Vec<Option<LocationState>>,
     children: Vec<DisplayRepr>,
 }
@@ -667,6 +697,7 @@ impl DisplayRepr {
             let node = tree.nodes.get(idx).unwrap();
             let name = node.debug_info.name.clone();
             let exposed = node.is_exposed;
+            let protector_kind = node.protector_kind;
             let children_sorted = {
                 let mut children = node.children.iter().cloned().collect::<Vec<_>>();
                 children.sort_by_key(|idx| tree.nodes.get(*idx).unwrap().tag);
@@ -691,7 +722,14 @@ impl DisplayRepr {
                 for child_idx in children_sorted {
                     extraction_aux(tree, child_idx, show_unnamed, &mut children);
                 }
-                acc.push(DisplayRepr { tag: node.tag, name, rperm, children, exposed });
+                acc.push(DisplayRepr {
+                    tag: node.tag,
+                    name,
+                    rperm,
+                    children,
+                    exposed,
+                    protector_kind,
+                });
             }
         }
     }
@@ -700,7 +738,6 @@ impl DisplayRepr {
         wildcard_subtrees: &[DisplayRepr],
         fmt: &DisplayFmt,
         indenter: &mut DisplayIndent,
-        protected_tags: &ProtectedTagsRef<'_>,
         ranges: Vec<Range<u64>>,
         print_warning: bool,
     ) {
@@ -740,7 +777,6 @@ impl DisplayRepr {
                 &range_padding,
                 fmt,
                 indenter,
-                protected_tags,
                 true,  /* root _is_ the last child */
                 false, /* not a wildcard_root*/
                 &mut block,
@@ -763,7 +799,6 @@ impl DisplayRepr {
                 &range_padding,
                 fmt,
                 indenter,
-                protected_tags,
                 true, /* root _is_ the last child */
                 true, /* wildcard_root*/
                 &mut block,
@@ -796,7 +831,6 @@ impl DisplayRepr {
             padding: &[usize],
             fmt: &DisplayFmt,
             indent: &mut DisplayIndent,
-            protected_tags: &ProtectedTagsRef<'_>,
             is_last_child: bool,
             is_wildcard_root: bool,
             acc: &mut Vec<String>,
@@ -835,8 +869,7 @@ impl DisplayRepr {
                 line.push_str(fmt.padding.join_default);
             }
             line.push_str(&fmt.print_tag(tree.tag, &tree.name));
-            let protector = protected_tags.get_protector_kind(tree.tag);
-            line.push_str(fmt.print_protector(protector.as_ref()));
+            line.push_str(fmt.print_protector(tree.protector_kind.as_ref()));
             line.push_str(fmt.print_exposed(tree.exposed));
             // Push the line to the accumulator then recurse.
             acc.push(line);
@@ -848,7 +881,6 @@ impl DisplayRepr {
                     padding,
                     fmt,
                     indent,
-                    protected_tags,
                     /* is_last_child */ i + 1 == nb_children,
                     /* is_wildcard_root */ false,
                     acc,
@@ -880,7 +912,7 @@ const DEFAULT_FORMATTER: DisplayFmt = DisplayFmt {
 
 impl EagerTree {
     /// Display the contents of the tree.
-    pub fn print_tree(&self, protected_tags: &ProtectedTagsRef<'_>, show_unnamed: bool) {
+    pub fn print_tree(&self, show_unnamed: bool) {
         let mut indenter = DisplayIndent::new();
         let ranges = self.locations.iter_all().map(|(range, _loc)| range).collect::<Vec<_>>();
         let main_tree = DisplayRepr::from(self, self.roots[0], show_unnamed);
@@ -900,14 +932,13 @@ impl EagerTree {
             wildcard_subtrees.as_slice(),
             &DEFAULT_FORMATTER,
             &mut indenter,
-            protected_tags,
             ranges,
             /* print warning message about tags not shown */ !show_unnamed,
         );
     }
 
     // Print the diff between me and an older tree
-    pub fn print_tree_diff(&self, old_tree: &EagerTree, _protected_tags: &ProtectedTagsRef<'_>) {
+    pub fn print_tree_diff(&self, old_tree: &EagerTree) {
         let mut new_tags = Vec::new();
         let mut changed_tags = Vec::new();
 
@@ -945,17 +976,21 @@ impl EagerTree {
             }
         }
 
+        let protector_of = |tag: BorTag| {
+            self.nodes.get(self.tag_mapping.get(&tag).unwrap()).unwrap().protector_kind
+        };
+
         if !new_tags.is_empty() {
             crate::println!("New Tags:");
             for tag in new_tags {
-                crate::println!("  {:?}", tag);
+                crate::println!("  {}", print_tag(tag, protector_of(tag)));
             }
         }
 
         if !changed_tags.is_empty() {
             crate::println!("Permission Changes:");
             for (tag, diffs) in changed_tags {
-                crate::println!("  {:?}:", tag);
+                crate::println!("  {}:", print_tag(tag, protector_of(tag)));
                 for (range, old, new) in diffs {
                     let old_s = old.map(|p| p.to_string()).unwrap_or("None".to_string());
                     let new_s = new.map(|p| p.to_string()).unwrap_or("None".to_string());
@@ -967,16 +1002,16 @@ impl EagerTree {
 }
 
 impl LazyTree {
-    pub fn print_tree(&self, protected_tags: &ProtectedTagsRef<'_>, show_unnamed: bool) {
+    pub fn print_tree(&self, show_unnamed: bool) {
         match self {
-            LazyTree::Init(tree) => tree.print_tree(protected_tags, show_unnamed),
+            LazyTree::Init(tree) => tree.print_tree(show_unnamed),
             LazyTree::Uninit { root_tag, size, span, .. } => {
-                EagerTree::new(*root_tag, *size, *span).print_tree(protected_tags, show_unnamed)
+                EagerTree::new(*root_tag, *size, *span).print_tree(show_unnamed)
             }
         }
     }
 
-    pub fn print_tree_diff(&self, old_tree: &LazyTree, protected_tags: &ProtectedTagsRef<'_>) {
+    pub fn print_tree_diff(&self, old_tree: &LazyTree) {
         let self_tree = match self {
             LazyTree::Init(t) => t.clone(),
             LazyTree::Uninit { root_tag, size, span, .. } => {
@@ -989,6 +1024,6 @@ impl LazyTree {
                 EagerTree::new(*root_tag, *size, *span)
             }
         };
-        self_tree.print_tree_diff(&old_tree, protected_tags);
+        self_tree.print_tree_diff(&old_tree);
     }
 }

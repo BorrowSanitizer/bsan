@@ -2,18 +2,18 @@ error: Undefined Behavior: trying to access an allocation that has been freed.
  --> bsan/tests/miri-tests/fail/baseline/alloc/reallocate-dangling.rs:LL:CC
    |
 LL | let _z = realloc(x, Layout::from_size_align_unchecked(1, 1), 1); //miri: ~ERROR: has been freed
-   |
+   |          ^
    = note: the above line calls library code, where the error was detected:
   --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
    |
 LL | unsafe { libc::realloc(ptr as *mut libc::c_void, new_size) as *mut u8 }
-   |
+   |          ^
 
 stack backtrace:
-0: <std::alloc::System as core::alloc::global::GlobalAlloc>::realloc
+0: std::sys::alloc::PLATFORM::realloc
  at RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
 1: __rustc::__rdl_realloc
- at RUSTLIB/std/src/alloc.rs:LL:CC
+ at RUSTLIB/std/src/alloc.rs
 2: alloc::alloc::realloc_nonnull
  at RUSTLIB/alloc/src/alloc.rs:LL:CC
 

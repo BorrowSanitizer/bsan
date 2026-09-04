@@ -2,24 +2,24 @@ error: Undefined Behavior: deallocation through <TAG>(StrongProtector) at ALLOC[
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/mixed_cell_deallocate.rs:LL:CC
    |
 LL | unsafe { alloc::dealloc(x as *const _ as *mut T as *mut u8, layout) }; //miri: ~ERROR: dealloc
-   |
+   |          ^
    = note: the above line calls library code, where the error was detected:
   --> RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
    |
 LL | unsafe { libc::free(ptr as *mut libc::c_void) }
-   |
+   |          ^
    = help: the accessed tag <TAG>(StrongProtector) has state Frozen which forbids this deallocation (acting as a child write access)
 help: the accessed tag <TAG>(StrongProtector) was created here, in the initial state Cell
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/mixed_cell_deallocate.rs:LL:CC
    |
 LL | fn foo(x: &T) {
-   |
+   | ^
 
 stack backtrace:
-0: <std::alloc::System as core::alloc::global::GlobalAlloc>::dealloc
+0: std::sys::alloc::PLATFORM::dealloc
  at RUSTLIB/std/src/sys/alloc/unix.rs:LL:CC
 1: __rustc::__rdl_dealloc
- at RUSTLIB/std/src/alloc.rs:LL:CC
+ at RUSTLIB/std/src/alloc.rs
 2: alloc::alloc::dealloc_nonnull
  at RUSTLIB/alloc/src/alloc.rs:LL:CC
 

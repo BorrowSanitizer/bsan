@@ -291,14 +291,6 @@ impl<'b> BorrowTracker<'b> {
         let new_perm: NewPermission = NewPermission::new(retag_info);
 
         let protected = new_perm.protector.is_some();
-        if let Some(protector) = new_perm.protector {
-            // We register the protection in two different places.
-            // This makes creating a protector slower, but checking whether a tag
-            // is protected faster.
-            // Since we return the fully-resolved provenance (including for
-            // wildcard parents), the new tag is reachable for `protector_end`.
-            global_ctx.protected_tags_mut().add_protector(new_tag, protector);
-        }
 
         // Compute initial "inside" permissions.
         let loc_state = |frozen: bool| -> LocationState {
@@ -355,11 +347,11 @@ impl<'b> BorrowTracker<'b> {
 
                 // Perform the access (update the Tree Borrows FSM)
                 self.tree.perform_access(
+                    global_ctx,
                     parent_tag,
                     range_in_alloc,
                     access_kind,
                     AccessCause::Reborrow,
-                    &global_ctx.protected_tags(),
                     alloc_id,
                     span,
                 )?;
@@ -373,7 +365,7 @@ impl<'b> BorrowTracker<'b> {
             new_tag,
             inside_perms,
             new_perm.outside_perm,
-            protected,
+            new_perm.protector,
             span,
         )?;
 
@@ -382,8 +374,8 @@ impl<'b> BorrowTracker<'b> {
 
     pub fn protector_end(&mut self, global_ctx: &GlobalCtx, span: Span) -> UBResult<()> {
         self.tree.perform_protector_end_access(
+            global_ctx,
             self.bor_tag,
-            &global_ctx.protected_tags(),
             self.alloc_info.alloc_id.get(),
             span,
         )
@@ -408,11 +400,11 @@ impl<'b> BorrowTracker<'b> {
         span: Span,
     ) -> UBResult<()> {
         self.tree.perform_access(
+            global_ctx,
             self.bor_tag,
             self.range,
             access_kind,
             AccessCause::Explicit(access_kind),
-            &global_ctx.protected_tags(),
             self.alloc_info.alloc_id.get(),
             span,
         )
@@ -420,9 +412,9 @@ impl<'b> BorrowTracker<'b> {
 
     pub fn dealloc(mut self, global_ctx: &GlobalCtx, span: Span) -> UBResult<()> {
         self.tree.take().dealloc(
+            global_ctx,
             self.bor_tag,
             self.range,
-            &global_ctx.protected_tags(),
             self.alloc_info.alloc_id.get(),
             span,
         )?;
@@ -432,20 +424,23 @@ impl<'b> BorrowTracker<'b> {
     }
 
     pub fn expose_tag(&mut self, global_ctx: &GlobalCtx) -> UBResult<()> {
+        if !global_ctx.flags.wildcard {
+            return Ok(());
+        }
         let tag = self.bor_tag;
         let range = unsafe { self.alloc_info.range() };
 
         // Ranges in the mapping must be non-empty, and a wildcard access can
         // never resolve to a zero-sized allocation anyway.
         if range.size > Size::ZERO {
-            let mut exposed = global_ctx.exposed_provenance_mut();
+            let mut exposed = global_ctx.exposed_provenance();
             if let AccessType::Empty(pos) = exposed.access_type(range) {
                 exposed.insert_at_pos(pos, range, self.alloc_info);
             }
         }
 
         if self.tree.contains_tag(tag) {
-            let protected = global_ctx.protected_tags().get_protector_kind(tag).is_some();
+            let protected = self.tree.get_protector_kind(tag).is_some();
             self.tree.expose_tag(tag, protected);
         }
         Ok(())
@@ -457,12 +452,12 @@ impl<'b> BorrowTracker<'b> {
 
     pub fn debug_print_diff(&self, ctx: &GlobalCtx) {
         ctx.with_snapshot(self.alloc_info.alloc_id.get(), |old_tree: &AllocStateImpl| {
-            self.tree.print_tree_diff(old_tree, &ctx.protected_tags());
+            self.tree.print_tree_diff(old_tree);
         });
     }
 
-    pub fn debug_print_tree(&self, ctx: &GlobalCtx, show_unnamed: bool) {
-        self.tree.print_tree(&ctx.protected_tags(), show_unnamed);
+    pub fn debug_print_tree(&self, show_unnamed: bool) {
+        self.tree.print_tree(show_unnamed);
     }
 
     pub fn debug_tree_size(&self) -> usize {

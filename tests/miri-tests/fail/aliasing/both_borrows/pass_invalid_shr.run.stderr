@@ -2,18 +2,18 @@ error: Undefined Behavior: reborrow through <TAG>(unprotected) at ALLOC[0x0] is 
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/pass_invalid_shr.rs:LL:CC
    |
 LL | foo(xref);
-   |
+   |     ^
    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this reborrow (acting as a child read access)
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Frozen
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/pass_invalid_shr.rs:LL:CC
    |
 LL | let xref = unsafe { &*xraw };
-   |
+   |                     ^
 help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x0..0x4]
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/pass_invalid_shr.rs:LL:CC
    |
 LL | unsafe { *xraw = 42 }; // unfreeze
-   |
+   |          ^
    = help: this transition corresponds to a loss of read permissions
 
 stack backtrace:

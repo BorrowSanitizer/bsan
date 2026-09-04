@@ -48,7 +48,7 @@ const MappingDesc kMemoryLayout[] = {
 const uptr kAllocatorSpace = 0xE00000000000ULL;
 const uptr kAllocatorSpaceSize = 0x40000000000ULL; // 4T.
 
-#elif SANITIZER_LINUX && defined(__x86_64__)
+#elif (SANITIZER_LINUX && defined(__x86_64__))
 // All of the following configurations are supported.
 // ASLR disabled: main executable and DSOs at 0x555550000000
 // PIE and ASLR: main executable and DSOs at 0x7f0000000000
@@ -107,8 +107,13 @@ inline bool addr_is_type(uptr addr, int mapping_types) {
 namespace __bsan {
 bool InitShadowWithReExec();
 void CopyShadow(void *dest, const void *src, uptr size);
+void JoinShadow(void *dest, const void *src_shadow, const void *src_origin,
+                uptr size);
+
 void MoveShadow(void *dest, const void *src, uptr size);
 void ClearShadow(void *dest, uptr size);
+void ClearShadowAligned(uptr shadow_start, uptr origin_start,
+                        uptr size_aligned);
 void WriteShadow(void *dest, Provenance prov);
 } // namespace __bsan
 

@@ -2,7 +2,7 @@ error: Undefined Behavior: an access of size 2b at offset $HEX is out of bounds 
  --> bsan/tests/miri-tests/fail/baseline/dangling_pointers/out_of_bounds_read_neg_offset.rs:LL:CC
    |
 LL | let x = unsafe { *v.as_ptr().wrapping_byte_sub(6) }; //miri: ~ ERROR: before the beginning of the allocation
-   |
+   |                  ^
 
 stack backtrace:
 0: out_of_bounds_read_neg_offset::main

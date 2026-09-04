@@ -128,7 +128,13 @@ fn run_tests(
     config.program.envs.push(("BSAN_TEMP".into(), Some(tmpdir.to_owned().into())));
     // If a test ICEs, we want to see a backtrace.
     config.program.envs.push(("RUST_BACKTRACE".into(), Some("1".into())));
-    config.program.envs.push(("BSAN_OPTIONS".into(), Some("stacktrace_max_len=3".into())));
+
+    let default_options =
+        [("stacktrace_max_len", "3"), ("wildcard", "1"), ("node_debug_info", "1")]
+            .map(|(key, val)| format!("{key}={val}"))
+            .join(",");
+
+    config.program.envs.push(("BSAN_OPTIONS".into(), Some(default_options.into())));
     config
         .program
         .envs
@@ -245,6 +251,9 @@ regexes! {
     // erase line numbers in source locations
     r"(?m)^ *[0-9]+ *\|" => "LL |",
     // erase line and column info
+    // note that unlike Miri, we do *not* replace these
+    // with "LL:CC". On aarch64, allocator shims do not
+    // consistently have line numbers.
     r"\.(rs|c|cpp):[0-9]+:[0-9]+(: [0-9]+:[0-9]+)?" => ".rs:LL:CC",
     // erase alloc ids
     "alloc[0-9]+"                    => "ALLOC",
@@ -273,11 +282,14 @@ regexes! {
     // erase Rust stdlib path
     "[^ \n`]*/(rust[^/]*|checkout)/library/" => "RUSTLIB/",
     // erase platform file paths and line numbers
-    r"\bsys/([a-z_]+)/[a-z]+\.rs:\d+:\d+\b" => "sys/$1/PLATFORM.rs:l:c",
+    r"\bsys/([a-z_]+)/[a-z]+\.rs:\d+:\d+\b" => "sys/$1/PLATFORM.rs",
     // erase platform dependent line retrieved
     r"(-->\s+\S+/PLATFORM\.rs:l:c)\n\s*\|\s*\n\s*\d+\s*\|.*\n\s*\|\s*\n" => "$1\n",
     // erase paths into the crate registry
     r"[^ ]*/\.?cargo/registry/.*/(.*\.(rs|c|cpp))"  => "CARGO_REGISTRY/.../$1",
+    // erase line numbers for the allocator shims (e.g. __rdl_alloc) within stdlib.
+    // these are sometimes missing on aarch64.
+    r"(__rdl_\w+\n[ \t]*at [^\n]+):LL:CC" => "$1",
     // normalize workspace paths to relative
     r"(/.*/tests/)([^ \n]+)" => "bsan/tests/$2",
     r"::h[0-9a-f]{16}\b" => "::HASH",

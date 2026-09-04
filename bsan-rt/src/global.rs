@@ -2,100 +2,20 @@ use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use spin::{RwLock, RwLockWriteGuard};
 
-use crate::errors::{ErrorFormatContext, UBInfo};
+use crate::errors::UBInfo;
 use crate::helpers::FxHashMap;
 use crate::memory::Heap;
-use crate::sanitizer_common::Span;
+use crate::sanitizer_common::{Bridge, SharedSanitizerFlags};
 use crate::tree_borrows::data_structures::{AccessType, RangeObjectMap};
-use crate::tree_borrows::{AllocStateImpl, ProtectorKind};
+use crate::tree_borrows::AllocStateImpl;
 use crate::*;
 
-pub static DISABLE_NODE_DEBUG_INFO: AtomicBool = AtomicBool::new(false);
+pub struct ExposedProvenance<'a>(RwLockWriteGuard<'a, RangeObjectMap<AllocInfoPtr>>);
 
-/// Only prune borrow trees with more than this many nodes; this initial value is only
-/// the pre-init default and is replaced by the flag's default (64) in `bsan_flags.inc`.
-pub static TREE_GC_MIN_NODES: AtomicUsize = AtomicUsize::new(0);
-
-/// Thread-local slot for a boxed `(UBInfo, Span)` set by `handle_error` and
-/// consumed by `__bsan_format_pending_ub` once the C++ side has captured the
-/// stack and located the first user-code frame.
-#[thread_local]
-static PENDING_ERROR: UnsafeCell<*mut (UBInfo, Span)> = UnsafeCell::new(core::ptr::null_mut());
-
-unsafe extern "C" {
-    fn __bsan_abort() -> !;
-    fn __bsan_disable_node_debug_info() -> bool;
-    fn __bsan_tree_gc_min_nodes() -> usize;
-}
-
-/// Called from the `HANDLE_ERROR` C++ macro after the stack trace has been
-/// captured and the first user-code frame PC has been located.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __bsan_format_pending_ub(user_frame_pc: usize) {
-    let ptr = unsafe { *PENDING_ERROR.get() };
-    if ptr.is_null() {
-        return;
-    }
-    unsafe { *PENDING_ERROR.get() = core::ptr::null_mut() };
-    let (ub_info, original_pc) = unsafe { *alloc::boxed::Box::from_raw(ptr) };
-    let (primary, origin) = crate::sanitizer_common::SanitizerCommon::resolve_error_location(
-        user_frame_pc,
-        original_pc,
-    );
-    let mut ctx = ErrorFormatContext::default();
-    crate::eprint!("error: {}", ctx.display_ub(ub_info, primary, origin));
-}
-
-#[derive(Default)]
-pub struct ProtectedTags(FxHashMap<BorTag, ProtectorKind>);
-
-impl ProtectedTags {
-    pub fn get_protector_kind(&self, tag: BorTag) -> Option<ProtectorKind> {
-        self.0.get(&tag).copied()
-    }
-
-    pub fn add_protector(&mut self, tag: BorTag, kind: ProtectorKind) {
-        self.0.insert(tag, kind);
-    }
-
-    pub fn remove_protector(&mut self, tag: BorTag) {
-        self.0.remove(&tag);
-    }
-}
-
-pub struct ProtectedTagsRefMut<'a>(RwLockWriteGuard<'a, ProtectedTags>);
-
-impl<'a> Deref for ProtectedTagsRefMut<'a> {
-    type Target = ProtectedTags;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<'a> DerefMut for ProtectedTagsRefMut<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-pub struct ProtectedTagsRef<'a>(RwLockReadGuard<'a, ProtectedTags>);
-
-impl<'a> Deref for ProtectedTagsRef<'a> {
-    type Target = ProtectedTags;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-pub struct ExposedProvenanceRef<'a>(RwLockReadGuard<'a, RangeObjectMap<AllocInfoPtr>>);
-
-impl<'a> Deref for ExposedProvenanceRef<'a> {
+impl<'a> Deref for ExposedProvenance<'a> {
     type Target = RangeObjectMap<AllocInfoPtr>;
 
     fn deref(&self) -> &Self::Target {
@@ -103,17 +23,7 @@ impl<'a> Deref for ExposedProvenanceRef<'a> {
     }
 }
 
-pub struct ExposedProvenanceRefMut<'a>(RwLockWriteGuard<'a, RangeObjectMap<AllocInfoPtr>>);
-
-impl<'a> Deref for ExposedProvenanceRefMut<'a> {
-    type Target = RangeObjectMap<AllocInfoPtr>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<'a> DerefMut for ExposedProvenanceRefMut<'a> {
+impl<'a> DerefMut for ExposedProvenance<'a> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
@@ -129,19 +39,19 @@ impl<'a> DerefMut for ExposedProvenanceRefMut<'a> {
 /// around explicitly, but it prevents us from relying on implicit global state and limits the spread
 /// of unsafety throughout the library.
 pub struct GlobalCtx {
-    protected_tags: RwLock<ProtectedTags>,
     alloc_metadata_map: Heap<AllocInfo>,
     snapshots: RwLock<FxHashMap<AllocId, AllocStateImpl>>,
     exposed_provenance: RwLock<RangeObjectMap<AllocInfoPtr>>,
+    pub flags: SharedSanitizerFlags,
 }
 
 impl GlobalCtx {
-    fn new() -> Self {
+    pub(crate) fn new(flags: &SharedSanitizerFlags) -> Self {
         Self {
-            protected_tags: RwLock::new(ProtectedTags::default()),
             alloc_metadata_map: Heap::new(),
             snapshots: RwLock::new(FxHashMap::default()),
             exposed_provenance: RwLock::new(RangeObjectMap::new()),
+            flags: flags.clone(),
         }
     }
 
@@ -153,24 +63,14 @@ impl GlobalCtx {
         unsafe { self.alloc_metadata_map.dealloc(ptr) }
     }
 
-    pub fn protected_tags<'a>(&'a self) -> ProtectedTagsRef<'a> {
-        ProtectedTagsRef(self.protected_tags.read())
-    }
-
-    pub fn protected_tags_mut<'a>(&'a self) -> ProtectedTagsRefMut<'a> {
-        ProtectedTagsRefMut(self.protected_tags.write())
-    }
-
-    #[allow(unused)]
-    pub fn exposed_provenance<'a>(&'a self) -> ExposedProvenanceRef<'a> {
-        ExposedProvenanceRef(self.exposed_provenance.read())
-    }
-
-    pub fn exposed_provenance_mut<'a>(&'a self) -> ExposedProvenanceRefMut<'a> {
-        ExposedProvenanceRefMut(self.exposed_provenance.write())
+    pub fn exposed_provenance<'a>(&'a self) -> ExposedProvenance<'a> {
+        ExposedProvenance(self.exposed_provenance.write())
     }
 
     pub fn get_exposed_provenance(&self, range: AllocRange) -> Option<AllocInfoPtr> {
+        if !self.flags.wildcard {
+            return None;
+        }
         // A zero-sized lookup (e.g. a deallocation, where the size of the access
         // is determined by the allocation) still needs to resolve the allocation
         // containing its start address, so we widen it to a single byte.
@@ -187,7 +87,9 @@ impl GlobalCtx {
     }
 
     pub fn remove_exposed_provenance(&self, range: AllocRange, strict: bool) {
-        self.removing_exposed_provenance(range, strict, || {});
+        if self.flags.wildcard {
+            self.removing_exposed_provenance(range, strict, || {});
+        }
     }
     /// Removes a provenance value that has been exposed for the given range.
     /// If `strict`, then exposed provenance will only be removed if is matches
@@ -228,15 +130,7 @@ impl GlobalCtx {
     }
 
     pub fn handle_error(&self, ub_info: UBInfo, pc: Span) {
-        unsafe {
-            let old_ptr = *PENDING_ERROR.get();
-            if !old_ptr.is_null() {
-                drop(alloc::boxed::Box::from_raw(old_ptr));
-            }
-            let ptr = alloc::boxed::Box::into_raw(alloc::boxed::Box::new((ub_info, pc)));
-            *PENDING_ERROR.get() = ptr;
-            crate::sanitizer_common::__bsan_had_error = 1;
-        }
+        Bridge::prepare_error(ub_info, pc);
     }
 
     pub fn take_snapshot(&self, alloc_id: AllocId, tree: AllocStateImpl) {
@@ -311,11 +205,9 @@ static GLOBAL_CTX: GlobalCtxWrapper = GlobalCtxWrapper(UnsafeCell::new(MaybeUnin
 /// It is marked as `unsafe`, because it relies on the set of function pointers in
 /// `BsanHooks` to be valid.
 #[inline]
-pub unsafe fn init_global_ctx() {
+pub unsafe fn init_global_ctx(flags: NonNull<SharedSanitizerFlags>) {
     unsafe {
-        (*GLOBAL_CTX.0.get()).write(GlobalCtx::new());
-        DISABLE_NODE_DEBUG_INFO.store(__bsan_disable_node_debug_info(), Ordering::Relaxed);
-        TREE_GC_MIN_NODES.store(__bsan_tree_gc_min_nodes(), Ordering::Relaxed);
+        (*GLOBAL_CTX.0.get()).write(GlobalCtx::new(flags.as_ref()));
     }
 }
 

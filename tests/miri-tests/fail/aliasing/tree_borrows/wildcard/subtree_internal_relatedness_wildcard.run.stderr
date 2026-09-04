@@ -2,18 +2,18 @@ error: Undefined Behavior: read access through <TAG>(unprotected) at ALLOC[0x0] 
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/subtree_internal_relatedness_wildcard.rs:LL:CC
    |
 LL | let _fail = *ref2; //miri: ~ ERROR: /read access through .* is forbidden/
-   |
+   |             ^
    = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child read access
 help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/subtree_internal_relatedness_wildcard.rs:LL:CC
    |
 LL | let ref2 = unsafe { &mut *ptr_reb };
-   |
+   |                     ^
 help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x0..0x4]
   --> bsan/tests/miri-tests/fail/aliasing/tree_borrows/wildcard/subtree_internal_relatedness_wildcard.rs:LL:CC
    |
 LL | unsafe { *wild = 13 };
-   |
+   |          ^
    = help: this transition corresponds to a loss of read and write permissions
 
 stack backtrace:

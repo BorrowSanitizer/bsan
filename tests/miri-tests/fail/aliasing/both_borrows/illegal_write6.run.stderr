@@ -2,7 +2,7 @@ error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x0]
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_write6.rs:LL:CC
    |
 LL | unsafe { *y = 2 };
-   |
+   |          ^
    = help: the accessed tag <TAG>(unprotected) is foreign to the protected tag <TAG>(StrongProtector) (i.e., it is not a child)
    = help: this foreign write access would cause the protected tag <TAG>(StrongProtector) (currently Unique) to become Disabled
    = help: protected tags must never be Disabled
@@ -10,17 +10,17 @@ help: the accessed tag <TAG>(unprotected) was created here
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_write6.rs:LL:CC
    |
 LL | let x = &mut 0u32;
-   |
+   |         ^
 help: the protected tag <TAG>(StrongProtector) was created here, in the initial state Reserved
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_write6.rs:LL:CC
    |
 LL | fn foo(a: &mut u32, y: *mut u32) -> u32 {
-   |
+   | ^
 help: the protected tag <TAG>(StrongProtector) later transitioned to Unique due to a child write access at offsets [0x0..0x4]
   --> bsan/tests/miri-tests/fail/aliasing/both_borrows/illegal_write6.rs:LL:CC
    |
 LL | *a = 1;
-   |
+   | ^
    = help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
 
 stack backtrace:

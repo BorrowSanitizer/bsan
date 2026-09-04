@@ -2,7 +2,14 @@ name: Benchmarks
 on:
   push:
     branches: [ "main" ]
-  workflow_dispatch: 
+    paths:
+      - bsan-rt/**
+      - bsan-pass/**
+      - cargo-bsan/**
+      - bsan-script/**
+      - tests/benches/**
+      - config.toml
+  workflow_dispatch:
   schedule:
     - cron: '0 0 * * *'
 permissions:
@@ -13,7 +20,18 @@ concurrency:
   group: benchmarks-${{ github.ref }}
   cancel-in-progress: false
 jobs:
-  build:
+  setup:
+    name: Compute crate matrix
+    runs-on: ubuntu-latest
+    outputs:
+      crates: ${{ steps.crates.outputs.crates }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: Read crate list from crates.json
+      id: crates
+      run: echo "crates=$(jq -c '[.[].name]' tests/benches/crates.json)" >> "$GITHUB_OUTPUT"
+  bench:
+    needs: setup
     strategy:
       fail-fast: false
       matrix:
@@ -22,13 +40,14 @@ jobs:
             os: ubuntu-24.04-arm
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-24.04
+        crate: ${{ fromJson(needs.setup.outputs.crates) }}
     runs-on: ${{ matrix.config.os }}
     container:
       image: ghcr.io/borrowsanitizer/bsan:latest
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.github_token }}
-    name: ${{ matrix.config.target }}
+    name: ${{ matrix.crate }} (${{ matrix.config.target }})
     steps:
     - uses: actions/checkout@v4
     - name: Setup dependencies
@@ -39,14 +58,22 @@ jobs:
       run: ./xb install
     - name: Set output filename
       id: filename
-      run: echo "results=results_$(date +%Y-%m-%d_%H-%M-%S)_${{ matrix.config.target }}" >> $GITHUB_OUTPUT
+      env:
+        TARGET: ${{ matrix.config.target }}
+        CRATE: ${{ matrix.crate }}
+      run: echo "results=results_$(date +%Y-%m-%d_%H-%M-%S)_${TARGET}_${CRATE}" >> "$GITHUB_OUTPUT"
     - name: Benchmarks
-      run: | 
+      env:
+        TARGET: ${{ matrix.config.target }}
+        CRATE: ${{ matrix.crate }}
+        RESULTS: ${{ steps.filename.outputs.results }}
+      run: |
         python3 ./bsan-script/etc/bench.py \
+        --crate "$CRATE" \
         ./tests/benches/crates.json \
-        ${{ matrix.config.target }} \
-        ${{ steps.filename.outputs.results }}.json \
-        ${{ steps.filename.outputs.results }}.csv 
+        "$TARGET" \
+        "$RESULTS.json" \
+        "$RESULTS.csv"
     - name: Upload results
       uses: actions/upload-artifact@v4
       with:
@@ -57,7 +84,7 @@ jobs:
         retention-days: 30
   merge:
     name: Merge & Upload
-    needs: build
+    needs: bench
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -69,7 +96,7 @@ jobs:
         path: results/
     - name: Set merged filename
       id: merged_filename
-      run: echo "name=results_$(date +%Y-%m-%d_%H-%M-%S)" >> $GITHUB_OUTPUT
+      run: echo "name=results_$(date +%Y-%m-%d_%H-%M-%S)" >> "$GITHUB_OUTPUT"
     - name: Merge JSON files
       run: jq -s 'add' results/*.json > ${{ steps.merged_filename.outputs.name }}.json
     - name: Upload merged results
