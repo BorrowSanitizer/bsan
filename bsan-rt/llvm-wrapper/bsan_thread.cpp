@@ -9,9 +9,17 @@ using namespace __bsan;
 
 namespace __bsan {
 
-BsanThread *CurrentThread() { return (BsanThread *)TSDGet(); }
+// We cache the current thread pointer in a thread
+// local variable, which is cheaper than having to
+// go through the pthread API every time. 
+THREADLOCAL BsanThread *bsan_thread_cached = nullptr;
 
-void SetCurrentThread(BsanThread *t) { TSDSet((void *)t); }
+BsanThread *CurrentThread() { return bsan_thread_cached; }
+
+void SetCurrentThread(BsanThread *t) { 
+  TSDSet((void *)t); 
+  bsan_thread_cached = t;
+}
 
 BsanThread *BsanThread::Create(thread_callback_t start_routine, void *arg) {
   uptr PageSize = GetPageSizeCached();
