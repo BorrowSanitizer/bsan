@@ -107,6 +107,7 @@ jobs:
         retention-days: 30
     - name: Store benchmark result
       uses: benchmark-action/github-action-benchmark@v1
+      if: github.ref == 'refs/heads/main'
       with:
         name: Benchmarks
         tool: 'customSmallerIsBetter'
