@@ -55,8 +55,10 @@ public:
   static_assert((kRegionStart & (kSegmentSize - 1)) == 0,
                 "the region must be segment-aligned");
   DenseSlabAlloc(LinkerInitialized, const char *name) : name_(name) {}
-  explicit DenseSlabAlloc(const char *name)
-      : DenseSlabAlloc(LINKER_INITIALIZED, name) {}
+  explicit DenseSlabAlloc(const char *name) : name_(name) {
+    atomic_store(&freelist_, 0, memory_order_relaxed);
+    atomic_store(&fillpos_, 0, memory_order_relaxed);
+  }
   ~DenseSlabAlloc() {}
 
   BlockIndex Alloc(Cache *c) {
@@ -105,8 +107,8 @@ private:
   // The stack itself uses Block::next links, while the batch within each
   // stack node uses Block::batch links.
   // Low 32-bits of freelist_ is the node index, top 32-bits is ABA-counter.
-  atomic_uint64_t freelist_ = {0};
-  atomic_uintptr_t fillpos_ = {0};
+  atomic_uint64_t freelist_;
+  atomic_uintptr_t fillpos_;
   const char *const name_;
 
   struct FreeBlock {
@@ -178,9 +180,9 @@ private:
               seg, kNumSegments);
       c->cursor = seg * kBlocksPerSegment;
       c->end = c->cursor + kBlocksPerSegment;
-      // Block 0 of the region is reserved as the invalid index.
+      // We reserve indices 0-2 for omnivalid, invalid, and wildcard provenance.
       if (UNLIKELY(c->cursor == 0))
-        c->cursor = 1;
+        c->cursor = 3;
     }
     uptr batch = Min(Cache::kSize, c->end - c->cursor);
     for (uptr i = 0; i < batch; i++)
