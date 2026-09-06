@@ -609,12 +609,11 @@ unsafe extern "C" fn __bsan_prune(
 ) -> bool {
     let global_ctx = unsafe { global_ctx() };
     let alloc: AllocInfoPtr = alloc_info.into();
-    let dead_tags = unsafe { slice::from_raw_parts_mut(bor_tags, len) };
+    let dead_tags = unsafe { slice::from_raw_parts(bor_tags, len) };
     match alloc.tree.lock().as_mut() {
         Some(tree) => tree.remove_dead_tags(global_ctx, dead_tags),
         None => {
             // The tree is already deallocated, so we can zero out dead_tags
-            dead_tags.fill(BorTag::omnivalid());
             false
         }
     }

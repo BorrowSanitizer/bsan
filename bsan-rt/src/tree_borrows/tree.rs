@@ -177,6 +177,8 @@ pub struct Node {
     /// Number of live references to this node. Always accessed under the
     /// allocation's tree `Mutex`.
     pub refcount: RefCount,
+    /// Indicates that the node is unreachable in memory.
+    pub dead: Cell<bool>,
     /// Some extra information useful only for debugging purposes.
     pub debug_info: NodeDebugInfo,
 }
@@ -434,6 +436,7 @@ impl EagerTree {
                     // The root may never be skipped, all accesses will be local.
                     default_initial_idempotent_foreign_access: IdempotentForeignAccess::None,
                     is_exposed: false,
+                    dead: Cell::new(false),
                     protector_kind: None,
                     refcount: RefCount::new(),
                     debug_info,
@@ -616,97 +619,108 @@ impl EagerTree {
     fn remove_useless_children(
         &mut self,
         global_ctx: &GlobalCtx,
-        dead_tags: &mut [BorTag],
+        dead_tags: &[BorTag],
         compact: bool,
     ) {
         // Iterating through dead_tags in reverse (descending tag order)
-        for entry in dead_tags.iter_mut().rev() {
+        for entry in dead_tags.iter().rev() {
             let tag = *entry;
             // A missing entry means the node was already removed; zero out the entry
             let Some(idx) = self.tag_mapping.get(&tag) else {
-                *entry = BorTag::omnivalid();
                 continue;
             };
-            let node = self.nodes.get(idx).unwrap();
 
-            // The ZCT may contain tags with a non-zero reference count. These must be
-            // dropped; the tag will re-enter the ZCT when it drops back to zero.
-            if node.refcount.get() != 0 {
-                *entry = BorTag::omnivalid();
-                continue;
-            }
-
-            // Do not remove exposed nodes. They could be used for future accesses via
-            // wildcard pointers.
-            if node.is_exposed {
-                *entry = BorTag::omnivalid();
-                continue;
-            }
-
-            // `parent` is an Option<UniIndex>: if it is None, then `node` is a root
-            let parent = node.parent;
-
-            // Branches are mutually exclusive on child count: `can_be_replaced_by_single_child`
-            // only yields `Some` for exactly one child, and `can_be_replaced_by_children` only
-            // holds for more than one, so we can dispatch on the number of children.
-            match node.children.len() {
-                // Node is a leaf
-                0 => {
-                    // Drop the leaf from its parent's child list, then delete it everywhere else
-                    // If it is a root, remove it from `self.roots`
-                    match parent {
-                        Some(parent_idx) => {
-                            let children = &mut self.nodes.get_mut(parent_idx).unwrap().children;
-                            let pos = children.iter().position(|&c| c == idx).unwrap();
-                            children.swap_remove(pos);
-                        }
-                        None => {
-                            let pos = self.roots.iter().position(|&r| r == idx).unwrap();
-                            self.roots.remove(pos);
-                        }
-                    }
-                    self.remove_useless_node(idx);
-                    *entry = BorTag::omnivalid();
+            let mut opt_parent_idx = {
+                let node = self.nodes.get(idx).unwrap();
+                if !(node.refcount.get() == 0 && !node.is_exposed) {
+                    continue;
                 }
-                // Node has exactly one child (and, per the guard above, a parent)
-                1 if compact && self.can_be_replaced_by_single_child(idx) => {
-                    // Replace the node with its only child.
-                    let child_idx = node.children[0];
-                    let parent_idx = parent.unwrap();
-                    let siblings = &mut self.nodes.get_mut(parent_idx).unwrap().children;
-                    let pos = siblings.iter().position(|&c| c == idx).unwrap();
-                    siblings[pos] = child_idx;
-                    self.nodes.get_mut(child_idx).unwrap().parent = parent;
-                    self.remove_useless_node(idx);
-                    *entry = BorTag::omnivalid();
-                    // Otherwise, the dead node could not be pruned this pass.
-                }
-                // Node has more than one child. If every child can soundly replace it, compact it
-                // by reparenting all of its children onto its parent.
-                _ if compact && self.can_be_replaced_by_children(global_ctx, idx) => {
-                    let parent_idx = parent.unwrap();
-                    // Move `idx`'s children out so we can reparent them
-                    let children = mem::take(&mut self.nodes.get_mut(idx).unwrap().children);
-                    // Point every grandchild at the grandparent.
-                    for i in 0..children.len() {
-                        self.nodes.get_mut(children[i]).unwrap().parent = Some(parent_idx);
-                    }
-                    // Replace `idx` in the grandparent's child list with all of its children.
-                    let siblings = &mut self.nodes.get_mut(parent_idx).unwrap().children;
-                    let pos = siblings.iter().position(|&c| c == idx).unwrap();
-                    siblings.swap_remove(pos);
-                    for i in 0..children.len() {
-                        siblings.push(children[i]);
-                    }
-                    self.remove_useless_node(idx);
-                    *entry = BorTag::omnivalid();
-                    // Otherwise, the dead node could not be pruned this pass.
-                }
-                // A dead interior node on a tree too small to be worth compacting. Leave its
-                // entry nonzero so the caller keeps it pending; it is removed as a leaf once
-                // its subtree dies.
-                _ => {}
+                node.dead.set(true);
+                node.parent
+            };
+            let mut attempt = self.try_remove_dead_node(global_ctx, idx, compact);
+            while attempt
+                && let Some(parent_idx) = opt_parent_idx
+                && let Some(parent_node) = self.nodes.get(parent_idx)
+                && parent_node.refcount.get() == 0
+                && !parent_node.is_exposed
+                && parent_node.dead.get()
+            {
+                opt_parent_idx = parent_node.parent;
+                attempt = self.try_remove_dead_node(global_ctx, parent_idx, compact);
             }
+        }
+    }
+
+    fn try_remove_dead_node(
+        &mut self,
+        global_ctx: &GlobalCtx,
+        idx: UniIndex,
+        compact: bool,
+    ) -> bool {
+        let node = self.nodes.get(idx).unwrap();
+
+        // `parent` is an Option<UniIndex>: if it is None, then `node` is a root
+        let parent = node.parent;
+
+        // Branches are mutually exclusive on child count: `can_be_replaced_by_single_child`
+        // only yields `Some` for exactly one child, and `can_be_replaced_by_children` only
+        // holds for more than one, so we can dispatch on the number of children.
+        match node.children.len() {
+            // Node is a leaf
+            0 => {
+                // Drop the leaf from its parent's child list, then delete it everywhere else
+                // If it is a root, remove it from `self.roots`
+                match parent {
+                    Some(parent_idx) => {
+                        let children = &mut self.nodes.get_mut(parent_idx).unwrap().children;
+                        let pos = children.iter().position(|&c| c == idx).unwrap();
+                        children.swap_remove(pos);
+                    }
+                    None => {
+                        let pos = self.roots.iter().position(|&r| r == idx).unwrap();
+                        self.roots.remove(pos);
+                    }
+                }
+                self.remove_useless_node(idx);
+                true
+            }
+            // Node has exactly one child (and, per the guard above, a parent)
+            1 if compact && self.can_be_replaced_by_single_child(idx) => {
+                // Replace the node with its only child.
+                let child_idx = node.children[0];
+                let parent_idx = parent.unwrap();
+                let siblings = &mut self.nodes.get_mut(parent_idx).unwrap().children;
+                let pos = siblings.iter().position(|&c| c == idx).unwrap();
+                siblings[pos] = child_idx;
+                self.nodes.get_mut(child_idx).unwrap().parent = parent;
+                self.remove_useless_node(idx);
+                true
+            }
+            // Node has more than one child. If every child can soundly replace it, compact it
+            // by reparenting all of its children onto its parent.
+            _ if compact && self.can_be_replaced_by_children(global_ctx, idx) => {
+                let parent_idx = parent.unwrap();
+                // Move `idx`'s children out so we can reparent them
+                let children = mem::take(&mut self.nodes.get_mut(idx).unwrap().children);
+                // Point every grandchild at the grandparent.
+                for i in 0..children.len() {
+                    self.nodes.get_mut(children[i]).unwrap().parent = Some(parent_idx);
+                }
+                // Replace `idx` in the grandparent's child list with all of its children.
+                let siblings = &mut self.nodes.get_mut(parent_idx).unwrap().children;
+                let pos = siblings.iter().position(|&c| c == idx).unwrap();
+                siblings.swap_remove(pos);
+                for i in 0..children.len() {
+                    siblings.push(children[i]);
+                }
+                self.remove_useless_node(idx);
+                true
+            }
+            // A dead interior node on a tree too small to be worth compacting. Leave its
+            // entry nonzero so the caller keeps it pending; it is removed as a leaf once
+            // its subtree dies.
+            _ => false,
         }
     }
 }
@@ -1068,7 +1082,6 @@ pub trait AllocState: Clone {
     fn dealloc(
         &mut self,
         global_ctx: &GlobalCtx,
-
         tag: BorTag,
         access_range: AllocRange,
         alloc_id: AllocId,
@@ -1082,8 +1095,8 @@ pub trait AllocState: Clone {
         span: Span,
     ) -> UBResult<()>;
     fn expose_tag(&mut self, tag: BorTag, protected: bool);
-    #[allow(dead_code)]
-    fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_tags: &mut [BorTag]) -> bool;
+
+    fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_tags: &[BorTag]) -> bool;
 }
 
 impl AllocState for LazyTree {
@@ -1179,7 +1192,7 @@ impl AllocState for LazyTree {
             tree.expose_tag(tag, protected);
         }
     }
-    fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_tags: &mut [BorTag]) -> bool {
+    fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_tags: &[BorTag]) -> bool {
         match self {
             LazyTree::Init(tree) => {
                 // Only *compaction* of dead interior nodes is skipped on small trees
@@ -1193,7 +1206,6 @@ impl AllocState for LazyTree {
                 // this node is in the dead list with a zero reference count, then the
                 // tree is dead and the associated AllocInfo metadata can be freed.
                 let root_is_dead = refcount.get() == 0 && dead_tags.contains(root_tag);
-                dead_tags.fill(BorTag::omnivalid());
                 root_is_dead
             }
         }
@@ -1268,6 +1280,7 @@ impl AllocState for EagerTree {
                 default_initial_perm: outside_perm,
                 default_initial_idempotent_foreign_access: default_strongest_idempotent,
                 is_exposed: false,
+                dead: Cell::new(false),
                 protector_kind: protector,
                 refcount: RefCount::new(),
                 debug_info: NodeDebugInfo::new(new_tag, outside_perm, span),
@@ -1497,7 +1510,7 @@ impl AllocState for EagerTree {
         }
     }
 
-    fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_tags: &mut [BorTag]) -> bool {
+    fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_tags: &[BorTag]) -> bool {
         // Only *compaction* of dead interior nodes is skipped on small trees
         let compact = self.tag_mapping.len() > global_ctx.flags.tree_gc_min_nodes;
         self.remove_useless_children(global_ctx, dead_tags, compact);
