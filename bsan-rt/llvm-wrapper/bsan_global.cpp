@@ -62,7 +62,11 @@ void GlobalContext::MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct) {
 }
 
 void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
-  // The `arg` here is a pointer to a `SnapShot` object.
+  Snapshot *snap = static_cast<Snapshot *>(arg);
+  // We need access to the internal allocator so that we can add
+  // live provenance values to the set within the snapshot. Unlocking
+  // it here prevents us from unlocking it again once the closure returns.
+  snap->scope->UnlockInternalAllocator();
   ThreadManager &threads = global_ctx()->Threads();
   // For each thread, add all live provenance values to the snapshot.
   threads.ForEachThread(CollectProvenance, arg);
@@ -73,11 +77,10 @@ void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
   threads.ForEachThread(MergeZeroCountsCallback, arg);
   // We also need to visit the global ZCT, which contains garbage from threads
   // that have exited since the last collection run.
-  MergeZeroCounts(static_cast<Snapshot *>(arg), threads.global_zct);
+  MergeZeroCounts(snap, threads.global_zct);
 }
 
 void GlobalContext::CollectGarbage(Snapshot &snap) {
-
   ConcreteProvenanceSet still_pending;
   pending_.drain([&](AllocInfo *info, BorTagSet &tags) {
     // If `__bsan_prune` returns true, then the allocation's tree is empty;
@@ -129,6 +132,7 @@ void GlobalContext::RequestGC() {
       Snapshot state(&live, gen);
       {
         ScopedStopTheWorldLock stopped;
+        state.scope = &stopped;
         StopTheWorld(SnapshotCallback, &state);
       }
       CollectGarbage(state);
