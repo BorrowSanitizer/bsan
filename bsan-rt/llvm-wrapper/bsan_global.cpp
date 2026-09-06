@@ -85,7 +85,7 @@ void GlobalContext::CollectGarbage(Snapshot &snap) {
   pending_.drain([&](AllocInfo *info, BorTagSet &tags) {
     // If `__bsan_prune` returns true, then the allocation's tree is empty;
     // every single tag was pruned.
-    if (__bsan_prune(info, tags.Data(), tags.Size())) {
+    if (__bsan_prune(info, tags.data(), tags.size())) {
       // Insert the allocation into the quarantine.
       // It might already be present. If so, its generation is
       // updated. It is crucial for this to be a hashmap. Otherwise,
@@ -95,8 +95,8 @@ void GlobalContext::CollectGarbage(Snapshot &snap) {
       // The Rust core zeroes out every tag that no longer needs tracking.
       // The remaining nonzero tags are dead nodes that could not be pruned
       // yet; collect them for a future GC pass.
-      const BorTag *retained = tags.Data();
-      for (uptr i = 0; i < tags.Size(); ++i) {
+      const BorTag *retained = tags.data();
+      for (uptr i = 0; i < tags.size(); ++i) {
         if (retained[i] != 0) {
           still_pending.insert({retained[i], info});
         }

@@ -25,17 +25,17 @@ class BorTagSet {
 public:
   BorTagSet() : begin_(), end_(), last_() {}
 
-  const BorTag *Data() const { return begin_; }
+  const BorTag *data() const { return begin_; }
   // Mutable access to the underlying array.
-  BorTag *Data() { return begin_; }
-  uptr Size() const { return (end_ - begin_); }
+  BorTag *data() { return begin_; }
+  uptr size() const { return (end_ - begin_); }
 
-  void Insert(BorTag Tag);
-  void Erase(BorTag Tag);
-  bool Contains(BorTag Tag) const;
+  void insert(BorTag Tag);
+  void erase(BorTag Tag);
+  bool contains(BorTag Tag) const;
 
   // Frees the underlying allocation.
-  void Reset() {
+  void reset() {
     if (begin_)
       InternalFree(begin_);
     begin_ = 0;
@@ -45,7 +45,7 @@ public:
 
   // Removes all elements of the list without freeing
   // the underlying allocation.
-  void Clear() { end_ = begin_; }
+  void clear() { end_ = begin_; }
 
   BorTag &operator[](uptr i) {
     DCHECK_LT(i, end_ - begin_);
@@ -58,7 +58,7 @@ public:
   }
 
   template <typename Fn> void forEach(Fn fn) const {
-    for (uptr i = 0; i < this->Size(); ++i) {
+    for (uptr i = 0; i < this->size(); ++i) {
       fn((*this)[i]);
     }
   }
@@ -66,7 +66,7 @@ public:
   // Keep only the tags that satisfy the given predicate.
   template <typename Fn> void retainIf(Fn keep) {
     uptr w = 0;
-    for (uptr r = 0; r < this->Size(); ++r) {
+    for (uptr r = 0; r < this->size(); ++r) {
       BorTag tag = (*this)[r];
       if (keep(tag)) {
         (*this)[w++] = tag;
@@ -107,7 +107,7 @@ public:
   // given callback for each allocation.
   void takeFrom(ConcreteProvenanceSet &other) {
     other.drain([&](AllocInfo *info, BorTagSet &tags) {
-      tags.forEach([&](BorTag tag) { set_[info].Insert(tag); });
+      tags.forEach([&](BorTag tag) { set_[info].insert(tag); });
     });
   }
 
@@ -116,7 +116,7 @@ public:
   template <typename Fn> void drain(Fn visit) {
     set_.forEach([&](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
       visit(KV.first, KV.second);
-      KV.second.Reset();
+      KV.second.reset();
       return true;
     });
     set_.clear();
@@ -128,8 +128,8 @@ public:
     set_.forEach([&](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
       AllocInfo *info = KV.first;
       KV.second.retainIf([&](BorTag tag) { return retain(info, tag); });
-      if (KV.second.Size() == 0) {
-        KV.second.Reset();
+      if (KV.second.size() == 0) {
+        KV.second.reset();
         ToErase.push_back(info);
       }
       return true;
