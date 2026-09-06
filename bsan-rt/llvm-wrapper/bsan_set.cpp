@@ -62,7 +62,9 @@ void BorTagSet::EnsureCapacity(uptr req_size) {
 
     BorTag *p = (BorTag *)InternalAlloc(capacity * sizeof(BorTag));
 
-    if (capacity) {
+    // We only need to free and copy over if the set
+    // already contains elements.
+    if (old_capacity && capacity) {
       internal_memcpy(p, begin_, old_size * sizeof(BorTag));
       InternalFree(begin_);
     }

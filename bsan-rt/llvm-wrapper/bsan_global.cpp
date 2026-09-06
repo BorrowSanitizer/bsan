@@ -81,7 +81,6 @@ void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
 }
 
 void GlobalContext::CollectGarbage(Snapshot &snap) {
-
   ConcreteProvenanceSet still_pending;
   pending_.drain([&](AllocInfo *info, BorTagSet &tags) {
     // If `__bsan_prune` returns true, then the allocation's tree is empty;
