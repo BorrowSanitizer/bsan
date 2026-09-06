@@ -3,13 +3,13 @@
 
 namespace __bsan {
 
-uptr BorTagSet::lowerBound(BorTag Tag) const {
+uptr BorTagSet::LowerBound(BorTag Tag) const {
   // Binary search over the elements of the array
   uptr lo = 0;
-  uptr hi = tags_.size();
+  uptr hi = Size();
   while (lo < hi) {
     uptr mid = lo + (hi - lo) / 2;
-    if (tags_[mid] < Tag) {
+    if ((*this)[mid] < Tag) {
       lo = mid + 1;
     } else {
       hi = mid;
@@ -18,49 +18,64 @@ uptr BorTagSet::lowerBound(BorTag Tag) const {
   return lo;
 }
 
-bool BorTagSet::contains(BorTag tag) const {
-  uptr i = lowerBound(tag);
-  return i < tags_.size() && tags_[i] == tag;
+bool BorTagSet::Contains(BorTag tag) const {
+  uptr i = LowerBound(tag);
+  return i < Size() && (*this)[i] == tag;
 }
 
-void BorTagSet::insert(BorTag tag) {
-  uptr i = lowerBound(tag);
-  if (i < tags_.size() && tags_[i] == tag) {
-    return; // Already present.
+void BorTagSet::Insert(BorTag tag) {
+  uptr i = LowerBound(tag);
+
+  if (i < Size() && (*this)[i] == tag)
+    return;
+
+  EnsureCapacity(Size() + 1);
+
+  // Move up every tag after the index,
+  // leaving an empty slot for the new tag.
+  for (uptr j = Size() - 1; j > i; --j) {
+    (*this)[j] = (*this)[j - 1];
   }
-  tags_.push_back(tag);
-  for (uptr j = tags_.size() - 1; j > i; --j) {
-    tags_[j] = tags_[j - 1];
-  }
-  tags_[i] = tag;
+  (*this)[i] = tag;
 }
 
-void BorTagSet::erase(BorTag tag) {
-  uptr i = lowerBound(tag);
-  if (i >= tags_.size() || tags_[i] != tag) {
+void BorTagSet::Erase(BorTag tag) {
+  uptr i = LowerBound(tag);
+  if (i >= Size() || (*this)[i] != tag) {
     return;
   }
-  // Shift the tail down in place, then drop the last slot. Never shrinks the
-  // mapping, so this takes no allocator lock and is safe while the world is
-  // stopped.
-  for (uptr j = i; j + 1 < tags_.size(); ++j) {
-    tags_[j] = tags_[j + 1];
+  for (uptr j = i; j + 1 < Size(); ++j) {
+    (*this)[j] = (*this)[j + 1];
   }
-  tags_.pop_back();
+  end_--;
 }
 
-void BorTagSet::destroy() {
-  if (tags_.data()) {
-    tags_.Destroy();
-    // Reset to a valid empty state so the set is safe to reuse (e.g. if its
-    // map bucket is repopulated) and so a second Destroy is a no-op.
-    tags_.Initialize(0);
+void BorTagSet::EnsureCapacity(uptr req_size) {
+  uptr old_capacity = last_ - begin_;
+  uptr old_size = Size();
+  if (req_size > old_capacity) {
+    uptr capacity = old_capacity * 2;
+    if (capacity == 0)
+      capacity = 16;
+    if (capacity < req_size)
+      capacity = req_size;
+
+    BorTag *p = (BorTag *)InternalAlloc(capacity * sizeof(BorTag));
+
+    if (capacity) {
+      internal_memcpy(p, begin_, old_size * sizeof(BorTag));
+      InternalFree(begin_);
+    }
+
+    begin_ = p;
+    last_ = begin_ + capacity;
   }
+  end_ = begin_ + req_size;
 }
 
 void ConcreteProvenanceSet::insert(Provenance prov) {
   if (prov.info != nullptr) {
-    set_[prov.info].insert(prov.tag);
+    set_[prov.info].Insert(prov.tag);
   }
 }
 
@@ -72,27 +87,27 @@ void ConcreteProvenanceSet::remove(Provenance prov) {
   // shifts in place and never frees, so this takes no allocator lock and is
   // safe to run while the world is stopped.
   if (auto *tags = find(prov.info)) {
-    tags->erase(prov.tag);
+    tags->Erase(prov.tag);
   }
 }
 
 void ConcreteProvenanceSet::clear() {
   set_.forEach([](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
-    KV.second.clear();
+    KV.second.Clear();
     return true;
   });
 }
 
 bool ConcreteProvenanceSet::contains(Provenance prov) {
   if (auto *tags = find(prov.info)) {
-    return tags->contains(prov.tag);
+    return tags->Contains(prov.tag);
   }
   return false;
 }
 
 ConcreteProvenanceSet::~ConcreteProvenanceSet() {
   set_.forEach([](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
-    KV.second.destroy();
+    KV.second.Reset();
     return true;
   });
 }

@@ -62,7 +62,11 @@ void GlobalContext::MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct) {
 }
 
 void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
-  // The `arg` here is a pointer to a `SnapShot` object.
+  Snapshot *snap = static_cast<Snapshot *>(arg);
+  // We need access to the internal allocator so that we can add
+  // live provenance values to the set within the snapshot. Unlocking
+  // it here prevents us from unlocking it again once the closure returns.
+  snap->scope->UnlockInternalAllocator();
   ThreadManager &threads = global_ctx()->Threads();
   // For each thread, add all live provenance values to the snapshot.
   threads.ForEachThread(CollectProvenance, arg);
@@ -73,7 +77,7 @@ void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
   threads.ForEachThread(MergeZeroCountsCallback, arg);
   // We also need to visit the global ZCT, which contains garbage from threads
   // that have exited since the last collection run.
-  MergeZeroCounts(static_cast<Snapshot *>(arg), threads.global_zct);
+  MergeZeroCounts(snap, threads.global_zct);
 }
 
 void GlobalContext::CollectGarbage(Snapshot &snap) {
@@ -82,7 +86,7 @@ void GlobalContext::CollectGarbage(Snapshot &snap) {
   pending_.drain([&](AllocInfo *info, BorTagSet &tags) {
     // If `__bsan_prune` returns true, then the allocation's tree is empty;
     // every single tag was pruned.
-    if (__bsan_prune(info, tags.data(), tags.size())) {
+    if (__bsan_prune(info, tags.Data(), tags.Size())) {
       // Insert the allocation into the quarantine.
       // It might already be present. If so, its generation is
       // updated. It is crucial for this to be a hashmap. Otherwise,
@@ -92,8 +96,8 @@ void GlobalContext::CollectGarbage(Snapshot &snap) {
       // The Rust core zeroes out every tag that no longer needs tracking.
       // The remaining nonzero tags are dead nodes that could not be pruned
       // yet; collect them for a future GC pass.
-      const BorTag *retained = tags.data();
-      for (uptr i = 0; i < tags.size(); ++i) {
+      const BorTag *retained = tags.Data();
+      for (uptr i = 0; i < tags.Size(); ++i) {
         if (retained[i] != 0) {
           still_pending.insert({retained[i], info});
         }
@@ -129,6 +133,7 @@ void GlobalContext::RequestGC() {
       Snapshot state(&live, gen);
       {
         ScopedStopTheWorldLock stopped;
+        state.scope = &stopped;
         StopTheWorld(SnapshotCallback, &state);
       }
       CollectGarbage(state);
