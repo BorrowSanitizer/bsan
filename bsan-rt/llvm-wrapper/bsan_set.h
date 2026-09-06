@@ -1,12 +1,6 @@
 #ifndef BSAN_GC_H
 #define BSAN_GC_H
 
-// We use a variety of custom data structures
-// for BorrowSanitizer's garbage collector. Each
-// relies directly on `InternalMmapVector`, or
-// uses a proxy (e.g. `DenseMap`, which is an
-// `InternalMmapVector` underneath).
-
 #include "bsan.h"
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_dense_map.h"
