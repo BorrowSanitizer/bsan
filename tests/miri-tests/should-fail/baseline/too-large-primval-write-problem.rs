@@ -12,7 +12,7 @@
 // test case, which should fail if pointer to integer conversion is modelled properly.
 #![allow(integer_to_ptr_transmutes)]
 fn main() {
-        use std::mem::transmute;
+    use std::mem::transmute;
 
     // Make the weird PrimVal.
     let x = 1i32;

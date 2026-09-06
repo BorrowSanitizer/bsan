@@ -1,4 +1,5 @@
 //@run:0
+#![allow(internal_features)]
 #![feature(core_intrinsics)]
 #![feature(stmt_expr_attributes)]
 #![feature(closure_track_caller)]
@@ -45,12 +46,12 @@ fn test_basic() {
 
     let nested = nested_intrinsic();
     assert_eq!(nested.file(), file!());
-    assert_eq!(nested.line(), 19);
+    assert_eq!(nested.line(), 21);
     assert_eq!(nested.column(), 5);
 
     let contained = nested_tracked();
     assert_eq!(contained.file(), file!());
-    assert_eq!(contained.line(), 23);
+    assert_eq!(contained.line(), 25);
     assert_eq!(contained.column(), 5);
 
     // `Location::caller()` in a macro should behave similarly to `file!` and `line!`,
