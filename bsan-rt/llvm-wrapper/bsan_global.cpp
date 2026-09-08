@@ -91,20 +91,8 @@ void GlobalContext::CollectGarbage(Snapshot &snap) {
       // updated. It is crucial for this to be a hashmap. Otherwise,
       // we will end up double-freeing allocation metadata.
       quarantine_[info] = snap.gen;
-    } else {
-      // The Rust core zeroes out every tag that no longer needs tracking.
-      // The remaining nonzero tags are dead nodes that could not be pruned
-      // yet; collect them for a future GC pass.
-      const BorTag *retained = tags.data();
-      for (uptr i = 0; i < tags.size(); ++i) {
-        if (retained[i] != 0) {
-          still_pending.insert({retained[i], info});
-        }
-      }
     }
   });
-  pending_.swap(still_pending);
-
   DenseMap<AllocInfo *, uptr> quarantined;
   quarantine_.forEach([&](const DenseMap<AllocInfo *, uptr>::value_type &KV) {
     if (KV.second <= snap.min_drained) {
