@@ -40,26 +40,26 @@
     <p>
       We disable all other forms of run-time checking for each of the Miri baselines, and we intercept
       invocations of Miri's interpreter to avoid including its Cargo plugin in our timing measurements.
-      This ensures that we are only measuring the time when Miri is actually interpreting a program.
+      This ensures that we are measuring only the time when Miri is actually interpreting a program.
     </p>
     <p>
-      BorrowSanitizer has two configurations that we can compare against these baselines:
+      BorrowSanitizer has multiple configurations that we can compare against these baselines:
     </p>
     <ul>
       <li><strong>full</strong> &mdash; All of our checking is enabled.</li>
-      <li><strong>full-no-wildcard</strong> &mdash; All of our checking is enabled, except for wildcard semantics.</li>
-      <li><strong>no-op</strong> &mdash; Inserts all of our run-time instrumentation, but disables the checks
-        themselves.</li>
+      <li><strong>full-no-wildcard</strong> &mdash; All of our checking is enabled except for wildcard semantics.</li>
+      <li><strong>full-terminfo</strong> &mdash; All of our checking is enabled and we parse terminal info.</li>
+      <li><strong>no-op</strong> &mdash; All of our checks are inserted, but they are disabled.</li>
     </ul>
     <p>
       To summarize the performance of a crate, we calculate relative execution time for every unit test
       and report the mean value. We use <a rel="noopener" href="https://github.com/sharkdp/hyperfine">hyperfine</a>
-      to measure individual tests, and we record wall time as the mean of three iterations after a "warm-up" run.
+      to measure individual tests, and we record wall time as the mean of three iterations after a warm-up run.
     </p>
     <p>
       We compile crates under BorrowSanitizer using our Cargo plugin. This plugin configures libtest as if it were
-      being built for Miri, which disables parsing information about the user's terminal. This process is slow under
-      both Miri and BorrowSanitizer.
+      being built for Miri. This disables parsing information about the user's terminal, which is slow under
+      both Miri and BorrowSanitizer. You can see the overhead of this step in our "full-terminfo" configuration.
     </p>
   </div>
 </section>
