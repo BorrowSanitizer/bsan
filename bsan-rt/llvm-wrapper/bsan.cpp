@@ -258,12 +258,24 @@ bool CallerIsInstrumented(void *sym) {
   return matches;
 }
 
+static void OnStackUnwind(const SignalContext &sig, const void *,
+                          BufferedStackTrace *stack) {
+  stack->Unwind(StackTrace::GetNextInstructionPc(sig.pc), sig.bp, sig.context,
+                common_flags()->fast_unwind_on_fatal);
+}
+
+static void BsanOnDeadlySignal(int signo, void *siginfo, void *context) {
+  HandleDeadlySignal(siginfo, context, GetTid(), &OnStackUnwind, nullptr);
+}
+
 extern "C" SANITIZER_WEAK_ATTRIBUTE void
 __bsan_internal_init(SharedSanitizerFlags *_flags) {}
 
 static bool BsanInitInternal() {
   if (LIKELY(BsanInited()))
     return true;
+
+  SanitizerToolName = "BorrowSanitizer";
 
   AvoidCVE_2016_2143();
   SharedSanitizerFlags flags;
@@ -279,6 +291,7 @@ static bool BsanInitInternal() {
     Die();
   }
 
+  InstallDeadlySignalHandlers(BsanOnDeadlySignal);
   InitializeAllocator();
   InitializeInterceptors();
   InitializeTSD(PlatformTSDDtor);
