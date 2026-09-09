@@ -299,7 +299,7 @@ pub(crate) enum AllocInfoSummary {
 /// function having been executed. We assume the global invariant that
 /// no other API functions will be called prior to that point.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_internal_init(flags: NonNull<SharedSanitizerFlags>) {
+unsafe extern "C" fn __bsan_internal_init(flags: NonNull<SharedSanitizerFlags>) {
     unsafe {
         init_global_ctx(flags);
     }
@@ -309,7 +309,7 @@ unsafe extern "C-unwind" fn __bsan_internal_init(flags: NonNull<SharedSanitizerF
 /// We assume the global invariant that no other API functions
 /// will be called after this function has executed.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_internal_deinit() {
+unsafe extern "C" fn __bsan_internal_deinit() {
     unsafe {
         deinit_global_ctx();
     }
@@ -340,7 +340,7 @@ pub struct RetagInfo<'a> {
 
 /// Creates a new borrow tag for the given provenance object.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_retag_impl(
+unsafe extern "C" fn __bsan_retag_impl(
     ptr: *mut c_void,
     size: Size,
     flags: RetagFlags,
@@ -403,7 +403,7 @@ extern "C" fn __bsan_protector_end_impl(bor_tag: BorTag, alloc_info: *mut AllocI
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_read_impl(
+unsafe extern "C" fn __bsan_read_impl(
     ptr: *mut c_void,
     access_size: Size,
     bor_tag: BorTag,
@@ -434,7 +434,7 @@ unsafe extern "C-unwind" fn __bsan_read_impl(
 
 /// Records a write access of size `access_size` at the given address `addr` using the provenance `prov`.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_write_impl(
+unsafe extern "C" fn __bsan_write_impl(
     ptr: *mut c_void,
     access_size: Size,
     bor_tag: BorTag,
@@ -465,7 +465,7 @@ unsafe extern "C-unwind" fn __bsan_write_impl(
 
 // Registers a heap allocation of size `size`, storing its provenance in the return pointer.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_alloc_impl(
+unsafe extern "C" fn __bsan_alloc_impl(
     base_addr: *mut c_void,
     size: Size,
     bor_tag: BorTag,
@@ -508,7 +508,7 @@ extern "C" fn __bsan_dealloc(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_dealloc_stack_impl(
+unsafe extern "C" fn __bsan_dealloc_stack_impl(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
     span: Span,
@@ -525,10 +525,7 @@ unsafe extern "C-unwind" fn __bsan_dealloc_stack_impl(
 ///
 /// Returns `true` if the count transitioned from zero to one.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_rc_inc_impl(
-    bor_tag: BorTag,
-    alloc_info: *mut AllocInfo,
-) -> bool {
+unsafe extern "C" fn __bsan_rc_inc_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo) -> bool {
     // A null `alloc_info` denotes an empty/cleared shadow slot (e.g. one whose
     // info was nulled by `ClearShadow` while a stale tag lingered). There is no
     // allocation to deref, so there is nothing to count.
@@ -543,10 +540,7 @@ unsafe extern "C-unwind" fn __bsan_rc_inc_impl(
 ///
 /// Returns `true` if the count reached zero.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_rc_dec_impl(
-    bor_tag: BorTag,
-    alloc_info: *mut AllocInfo,
-) -> bool {
+unsafe extern "C" fn __bsan_rc_dec_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo) -> bool {
     // See `__bsan_rc_inc_impl`: a null `alloc_info` is an empty shadow slot with
     // no live reference to release.
     if alloc_info.is_null() {
