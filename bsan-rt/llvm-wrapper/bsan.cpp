@@ -291,9 +291,9 @@ static bool BsanInitInternal() {
     Die();
   }
 
-  InstallDeadlySignalHandlers(BsanOnDeadlySignal);
   InitializeAllocator();
   InitializeInterceptors();
+  InstallDeadlySignalHandlers(BsanOnDeadlySignal);
   InitializeTSD(PlatformTSDDtor);
 
   BsanThread *main_thread = BsanThread::Create(nullptr, nullptr);
