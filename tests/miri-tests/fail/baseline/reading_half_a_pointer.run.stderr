@@ -1,0 +1,11 @@
+BorrowSanitizer:DEADLYSIGNAL
+==PID==ERROR: BorrowSanitizer: SEGV on unknown address $HEX (pc $HEX bp $HEX sp $HEX TTID)
+==PID==The signal is caused by a READ memory access.
+    #0 $HEX in reading_half_a_pointer::main bsan/tests/miri-tests/fail/baseline/reading_half_a_pointer.rs:LL:CC
+    #1 $HEX in ReportDeadlySignalImpl /root/.rustup/toolchains/bsan/compiler-rt/lib/sanitizer_common/sanitizer_symbolizer_report.rs:LL:CC
+    #2 $HEX in __sanitizer::ReportDeadlySignal(__sanitizer::SignalContext const&, unsigned int, void (*)(__sanitizer::SignalContext const&, void const*, __sanitizer::BufferedStackTrace*), void const*) /root/.rustup/toolchains/bsan/compiler-rt/lib/sanitizer_common/sanitizer_symbolizer_report.rs:LL:CC
+    #3 $HEX in __sanitizer::HandleDeadlySignal(void*, void*, unsigned int, void (*)(__sanitizer::SignalContext const&, void const*, __sanitizer::BufferedStackTrace*), void const*) /root/.rustup/toolchains/bsan/compiler-rt/lib/sanitizer_common/sanitizer_symbolizer_report.rs:LL:CC
+
+BorrowSanitizer can not provide additional info.
+SUMMARY: BorrowSanitizer: SEGV bsan/tests/miri-tests/fail/baseline/reading_half_a_pointer.rs:LL:CC in reading_half_a_pointer::main
+==PID==ABORTING

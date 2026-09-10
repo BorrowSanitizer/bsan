@@ -1,0 +1,12 @@
+BorrowSanitizer:DEADLYSIGNAL
+==PID==ERROR: BorrowSanitizer: SEGV on unknown address $HEX (pc $HEX bp $HEX sp $HEX TTID)
+==PID==The signal is caused by a READ memory access.
+==PID==HINT: address points to the zero page.
+    #0 $HEX in zst_local_oob::main bsan/tests/miri-tests/fail/baseline/zst_local_oob.rs:LL:CC
+    #1 $HEX in ReportDeadlySignalImpl /root/.rustup/toolchains/bsan/compiler-rt/lib/sanitizer_common/sanitizer_symbolizer_report.rs:LL:CC
+    #2 $HEX in __sanitizer::ReportDeadlySignal(__sanitizer::SignalContext const&, unsigned int, void (*)(__sanitizer::SignalContext const&, void const*, __sanitizer::BufferedStackTrace*), void const*) /root/.rustup/toolchains/bsan/compiler-rt/lib/sanitizer_common/sanitizer_symbolizer_report.rs:LL:CC
+    #3 $HEX in __sanitizer::HandleDeadlySignal(void*, void*, unsigned int, void (*)(__sanitizer::SignalContext const&, void const*, __sanitizer::BufferedStackTrace*), void const*) /root/.rustup/toolchains/bsan/compiler-rt/lib/sanitizer_common/sanitizer_symbolizer_report.rs:LL:CC
+
+BorrowSanitizer can not provide additional info.
+SUMMARY: BorrowSanitizer: SEGV bsan/tests/miri-tests/fail/baseline/zst_local_oob.rs:LL:CC in zst_local_oob::main
+==PID==ABORTING
