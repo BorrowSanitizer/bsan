@@ -129,10 +129,14 @@ fn run_tests(
     // If a test ICEs, we want to see a backtrace.
     config.program.envs.push(("RUST_BACKTRACE".into(), Some("1".into())));
 
-    let default_options =
-        [("stacktrace_max_len", "3"), ("wildcard", "1"), ("node_debug_info", "1"), ("dump_registers", "0")]
-            .map(|(key, val)| format!("{key}={val}"))
-            .join(",");
+    let default_options = [
+        ("stacktrace_max_len", "3"),
+        ("wildcard", "1"),
+        ("node_debug_info", "1"),
+        ("dump_registers", "0"),
+    ]
+    .map(|(key, val)| format!("{key}={val}"))
+    .join(",");
 
     config.program.envs.push(("BSAN_OPTIONS".into(), Some(default_options.into())));
     config
