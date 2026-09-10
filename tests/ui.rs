@@ -259,6 +259,9 @@ regexes! {
     "alloc[0-9]+"                    => "ALLOC",
     // erase thread ids
     r"unnamed-[0-9]+"               => "unnamed-ID",
+    // erase sanitizer_common pids/tids
+    r"==[0-9]+=="                   => "==PID==",
+    r" T[0-9]+\)"                   => " TTID)",
     // erase borrow tags
     "<[0-9]+>"                       => "<TAG>",
     "<[0-9]+="                       => "<TAG=",
