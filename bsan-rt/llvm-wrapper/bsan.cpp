@@ -261,7 +261,7 @@ bool CallerIsInstrumented(void *sym) {
 static void OnStackUnwind(const SignalContext &sig, const void *,
                           BufferedStackTrace *stack) {
   stack->Unwind(StackTrace::GetNextInstructionPc(sig.pc), sig.bp, sig.context,
-                common_flags()->fast_unwind_on_fatal, GetStackTraceLen());
+                /*request_fast=*/true, GetStackTraceLen());
 }
 
 static void BsanOnDeadlySignal(int signo, void *siginfo, void *context) {

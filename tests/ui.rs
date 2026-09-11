@@ -277,6 +277,9 @@ regexes! {
     "([0-9]+: .*)::<.*>"             => "$1",
     // erase long hexadecimals
     r"0x[0-9a-fA-F]+[0-9a-fA-F]{2,2}" => "$$HEX",
+    // x86_64 omits the fault address for non-canonical addresses and adds a hint
+    r"SEGV on unknown address (\$HEX )?\(pc" => "SEGV on unknown address (pc",
+    r"==PID==HINT: this fault was caused by a dereference of a high value address[^\n]*\n" => "",
     // erase specific alignments
     "alignment [0-9]+"               => "alignment ALIGN",
     "[0-9]+ byte alignment but found [0-9]+" => "ALIGN byte alignment but found ALIGN",
