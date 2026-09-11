@@ -1,6 +1,9 @@
-//@run:1
+//@run:0
 // This is a copy of the test `send_patch` from librsync at version 0.2.3
-
+// This test originally triggered UB under BorrowSanitizer and MiriLLI. 
+// Moving a closure triggered a function-entry retag, leading
+// to an invalid foreign access. However, closures are now treated like 
+// `MaybeDangling` on move, eliminating the UB here.  
 use std::thread;
 use librsync::{Patch};
 use std::io::{Read, Cursor};
