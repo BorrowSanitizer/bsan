@@ -40,6 +40,8 @@ void BsanThread::Destroy(void *tsd) {
   BsanThread *t = (BsanThread *)tsd;
   global_ctx()->Threads().DeregisterThread(t);
   t->zct.~ZeroCountTable();
+  if (common_flags()->use_sigaltstack)
+    UnsetAlternateSignalStack(t->altstack_base_);
   UnmapOrDie(t->shadow_stack_bottom_, t->shadow_stack_size_);
   uptr size = RoundUpTo(sizeof(BsanThread), GetPageSizeCached());
   UnmapOrDie(t, size);
@@ -56,6 +58,8 @@ void *BsanThread::StartCallback(void *arg) {
   BsanThread *t = (BsanThread *)arg;
   SetCurrentThread(t);
   t->Init();
+  if (common_flags()->use_sigaltstack)
+    t->altstack_base_ = SetAlternateSignalStack();
 #if SANITIZER_LINUX
   SetSigProcMask(&t->starting_sigset_, nullptr);
 #endif

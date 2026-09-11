@@ -129,10 +129,14 @@ fn run_tests(
     // If a test ICEs, we want to see a backtrace.
     config.program.envs.push(("RUST_BACKTRACE".into(), Some("1".into())));
 
-    let default_options =
-        [("stacktrace_max_len", "3"), ("wildcard", "1"), ("node_debug_info", "1")]
-            .map(|(key, val)| format!("{key}={val}"))
-            .join(",");
+    let default_options = [
+        ("stacktrace_max_len", "3"),
+        ("wildcard", "1"),
+        ("node_debug_info", "1"),
+        ("dump_registers", "0"),
+    ]
+    .map(|(key, val)| format!("{key}={val}"))
+    .join(",");
 
     config.program.envs.push(("BSAN_OPTIONS".into(), Some(default_options.into())));
     config
@@ -259,6 +263,9 @@ regexes! {
     "alloc[0-9]+"                    => "ALLOC",
     // erase thread ids
     r"unnamed-[0-9]+"               => "unnamed-ID",
+    // erase sanitizer_common pids/tids
+    r"==[0-9]+=="                   => "==PID==",
+    r" T[0-9]+\)"                   => " TTID)",
     // erase borrow tags
     "<[0-9]+>"                       => "<TAG>",
     "<[0-9]+="                       => "<TAG=",
@@ -270,6 +277,9 @@ regexes! {
     "([0-9]+: .*)::<.*>"             => "$1",
     // erase long hexadecimals
     r"0x[0-9a-fA-F]+[0-9a-fA-F]{2,2}" => "$$HEX",
+    // x86_64 omits the fault address for non-canonical addresses and adds a hint
+    r"SEGV on unknown address (\$HEX )?\(pc" => "SEGV on unknown address (pc",
+    r"==PID==HINT: this fault was caused by a dereference of a high value address[^\n]*\n" => "",
     // erase specific alignments
     "alignment [0-9]+"               => "alignment ALIGN",
     "[0-9]+ byte alignment but found [0-9]+" => "ALIGN byte alignment but found ALIGN",

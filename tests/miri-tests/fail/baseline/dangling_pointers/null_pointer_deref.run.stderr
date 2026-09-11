@@ -1,0 +1,12 @@
+BorrowSanitizer:DEADLYSIGNAL
+==PID==ERROR: BorrowSanitizer: SEGV on unknown address (pc $HEX bp $HEX sp $HEX TTID)
+==PID==The signal is caused by a READ memory access.
+==PID==HINT: address points to the zero page.
+    #0 $HEX in null_pointer_deref::main bsan/tests/miri-tests/fail/baseline/dangling_pointers/null_pointer_deref.rs:LL:CC
+    #1 $HEX in <fn() as core::ops::function::FnOnce<()>>::call_once RUSTLIB/core/src/ops/function.rs:LL:CC
+    #2 $HEX in std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()> RUSTLIB/std/src/sys/backtrace.rs:LL:CC
+    #3 $HEX in std::rt::lang_start::<()>::{closure#0} RUSTLIB/std/src/rt.rs:LL:CC
+
+BorrowSanitizer can not provide additional info.
+SUMMARY: BorrowSanitizer: SEGV bsan/tests/miri-tests/fail/baseline/dangling_pointers/null_pointer_deref.rs:LL:CC in null_pointer_deref::main
+==PID==ABORTING
