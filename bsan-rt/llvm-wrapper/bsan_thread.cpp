@@ -39,6 +39,7 @@ void BsanThread::Init() {
 void BsanThread::Destroy(void *tsd) {
   BsanThread *t = (BsanThread *)tsd;
   global_ctx()->Threads().DeregisterThread(t);
+  t->malloc_storage().CommitBack();
   t->zct.~ZeroCountTable();
   if (common_flags()->use_sigaltstack)
     UnsetAlternateSignalStack(t->altstack_base_);
