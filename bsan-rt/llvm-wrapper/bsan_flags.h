@@ -26,8 +26,8 @@ struct Flags {
 extern "C" struct SharedSanitizerFlags {
   bool wildcard;
   bool node_debug_info;
-  uptr tree_gc_min_nodes;
   uptr max_compacted_children;
+  uptr tree_gc_min_nodes;
 };
 
 extern Flags bsan_flags_dont_use_directly;

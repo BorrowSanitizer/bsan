@@ -170,8 +170,6 @@ static void *BsanAllocateMetaIntoStack(void *ptr, SIZE_T size, bool is_inst,
     Provenance *slot = GetRetValSlot(slot_idx);
     Provenance prov = BsanAllocateMeta(ptr, size, span);
     *slot = prov;
-  } else {
-    ClearRetValSlot(slot_idx);
   }
   return ptr;
 }
