@@ -14,6 +14,10 @@ set(BSAN_SOURCES
   bsan_preinit.cpp
 )
 
+set(BSAN_PREINIT_SOURCES 
+    bsan_preinit.cpp
+)
+
 SET(BSAN_HEADERS
   bsan.h
   bsan_set.h
@@ -56,6 +60,15 @@ add_compiler_rt_object_libraries(RTBorsan_dynamic
   CFLAGS ${BSAN_DYNAMIC_CFLAGS}
   DEFS ${BSAN_DYNAMIC_DEFINITIONS})
 
+
+add_compiler_rt_object_libraries(RTBorsan_preinit
+  ARCHS ${BSAN_SUPPORTED_ARCH}
+  SOURCES ${BSAN_PREINIT_SOURCES}
+  ADDITIONAL_HEADERS $BASAN_HEADERS}
+  CFLAGS ${BSAN_CFLAGS}
+  DEFS ${BSAN_COMMON_DEFINITIONS}
+)
+
 add_compiler_rt_component(bsan)
 
 if(APPLE)
@@ -65,7 +78,9 @@ if(APPLE)
     SHARED
     OS ${SANITIZER_COMMON_SUPPORTED_OS}
     ARCHS ${BSAN_SUPPORTED_ARCH}
-    OBJECT_LIBS RTBorsan_dynamic
+    OBJECT_LIBS 
+                RTBorsan_preinit
+                RTBorsan_dynamic
                 RTInterception
                 RTSanitizerCommon
                 RTSanitizerCommonLibc
@@ -82,7 +97,9 @@ else()
         STATIC
         ARCHS ${arch}
         SOURCES ${BSAN_SOURCES}
-        OBJECT_LIBS RTInterception
+        OBJECT_LIBS 
+                    RTBorsan_preinit
+                    RTInterception
                     RTSanitizerCommon
                     RTSanitizerCommonLibc
                     RTSanitizerCommonSymbolizer
