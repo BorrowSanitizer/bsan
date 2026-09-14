@@ -29,14 +29,15 @@ impl<'a> DerefMut for ExposedProvenance<'a> {
     }
 }
 
-/// Every action that requires a heap allocation must be performed through a globally
-/// accessible, singleton instance of `GlobalCtx`. Initializing or obtaining
-/// a reference to this instance is unsafe, since it requires having been initialized
-/// with a valid set of `BsanHooks`, which is provided from across the FFI.
-/// Only shared references (&self) can be obtained, since this object will be accessed concurrently.
-/// All of its API endpoints are free from undefined behavior, under
-/// that these invariants hold. This design pattern requires us to pass the `GlobalCtx` instance
-/// around explicitly, but it prevents us from relying on implicit global state and limits the spread
+/// Every action that requires a heap allocation must be performed through a
+/// globally accessible, singleton instance of `GlobalCtx`. Initializing or
+/// obtaining a reference to this instance is unsafe, since it requires having
+/// been initialized with a valid set of `BsanHooks`, which is provided from
+/// across the FFI. Only shared references (&self) can be obtained, since this
+/// object will be accessed concurrently. All of its API endpoints are free
+/// from undefined behavior, under that these invariants hold. This design
+/// pattern requires us to pass the `GlobalCtx` instance around explicitly, but
+/// it prevents us from relying on implicit global state and limits the spread
 /// of unsafety throughout the library.
 pub struct GlobalCtx {
     alloc_metadata_map: Heap<AllocInfo>,

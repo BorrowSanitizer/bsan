@@ -382,15 +382,13 @@ void __bsan_shadow_join(void *dest, void *src_tag, void *src_info, uptr size) {
 /// when we are back within the caller, we can trust the provenance array for
 /// the return value.
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_validate_params(void *current_fn, uptr len, uptr var_len) {
+void __bsan_validate_params(void *current_fn, uptr len, uptr var_arg_bytes) {
   bool trusted = CallerIsInstrumented(current_fn);
   if (!trusted) {
     for (uptr i = 0; i < len; ++i) {
       __bsan_param_tls[i] = OMNIVALID;
     }
-    for (uptr i = 0; i < var_len; ++i) {
-      __bsan_var_arg_tag_tls[i] = OMNIVALID.tag;
-    }
+    internal_memset(&__bsan_var_arg_tag_tls, 0, var_arg_bytes);
   }
 }
 

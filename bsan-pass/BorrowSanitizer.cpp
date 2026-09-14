@@ -1787,11 +1787,14 @@ private:
     // omnivalid provenance.
     if (needsBoundaryValidation(&F)) {
       if (!BS.shouldTrustFunction(TLI, &F)) {
-        uint64_t VarArgSize = F.isVarArg() ? VAHelper->getFixedRegionSize() : 0;
-        uint64_t VarArgLen = alignTo(VarArgSize, kMinProvAlignment) / 8;
-        Value *VarArgLenVal = ConstantInt::get(BS.IntptrTy, VarArgLen);
+        uint64_t VarArgBytes = 0;
+        if (F.isVarArg()) {
+          VarArgBytes =
+              alignTo(VAHelper->getFixedRegionSize(), kMinProvAlignment);
+        }
+        Value *VarArgBytesVal = ConstantInt::get(BS.IntptrTy, VarArgBytes);
         EntryIRB.CreateCall(BS.BsanFuncValidateParams,
-                            {&F, NumParamProv, VarArgLenVal});
+                            {&F, NumParamProv, VarArgBytesVal});
       }
     }
 
