@@ -11,6 +11,7 @@ set(BSAN_SOURCES
   bsan_allocator.cpp
   bsan_shadow.cpp
   bsan_global.cpp
+  bsan_preinit.cpp
 )
 
 SET(BSAN_HEADERS
