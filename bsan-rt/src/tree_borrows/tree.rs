@@ -40,7 +40,7 @@ use crate::*;
 compile_error!("Only one of the following features can be selected: 'lazy', 'eager'");
 
 #[cfg(feature = "lazy")]
-pub type AllocStateImpl = LazyTree;
+pub type AllocStateImpl = BorrowState;
 
 #[cfg(feature = "eager")]
 pub type AllocStateImpl = EagerTree;
@@ -1160,28 +1160,33 @@ impl Node {
     }
 }
 
-/// A tree that is lazily initialized: starts as `Uninit` (storing only the root tag, size, and
-/// span needed to construct the real `Tree` on demand), and transitions to `Init` the first
-/// time a child is added via `new_child`. All operations on a single-node tree short-circuit
-/// without ever allocating the underlying `Tree`.
+/// Allocation-level borrow metadata attached to [`crate::AllocInfo`].
+///
+/// Starts as [`BorrowState::Uninit`] (root tag, size, span, refcount only) and
+/// morphs to [`BorrowState::Tree`] on the first `new_child` / expose. Single-node
+/// accesses short-circuit without building an [`EagerTree`].
+///
+/// Prep for [#279](https://github.com/BorrowSanitizer/bsan/issues/279): this enum
+/// is the named home for allocation borrow state. One-word provenance will add a
+/// Heap-level `Node` kind and stop keying accesses by `BorTag`.
 #[derive(Clone, Debug)]
 #[allow(clippy::large_enum_variant)]
-pub enum LazyTree {
+pub enum BorrowState {
     Uninit { root_tag: BorTag, size: Size, span: Span, refcount: RefCount },
-    Init(EagerTree),
+    Tree(EagerTree),
 }
 
-impl LazyTree {
+impl BorrowState {
     pub fn new(root_tag: BorTag, size: Size, span: Span) -> Self {
-        LazyTree::Uninit { root_tag, size, span, refcount: RefCount::new() }
+        BorrowState::Uninit { root_tag, size, span, refcount: RefCount::new() }
     }
 
-    /// Forces the tree into the `Init` state, constructing the underlying `Tree` if needed.
+    /// Morphs into [`BorrowState::Tree`], constructing the underlying [`EagerTree`] if needed.
     fn ensure_init(&mut self) {
-        if let LazyTree::Uninit { root_tag, size, span, refcount } = self {
+        if let BorrowState::Uninit { root_tag, size, span, refcount } = self {
             let mut tree = EagerTree::new(*root_tag, *size, *span);
             tree.node_mut(*root_tag).refcount = refcount.clone();
-            *self = LazyTree::Init(tree);
+            *self = BorrowState::Tree(tree);
         }
     }
 }
@@ -1256,17 +1261,17 @@ pub trait AllocState: Clone {
     fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool;
 }
 
-impl AllocState for LazyTree {
+impl AllocState for BorrowState {
     fn contains_tag(&self, tag: BorTag) -> bool {
         match self {
-            LazyTree::Uninit { root_tag, .. } => *root_tag == tag,
-            LazyTree::Init(tree) => tree.nodes.contains_key(&tag),
+            BorrowState::Uninit { root_tag, .. } => *root_tag == tag,
+            BorrowState::Tree(tree) => tree.nodes.contains_key(&tag),
         }
     }
     fn node_count(&self) -> usize {
         match self {
-            LazyTree::Uninit { .. } => 1,
-            LazyTree::Init(tree) => tree.nodes.len(),
+            BorrowState::Uninit { .. } => 1,
+            BorrowState::Tree(tree) => tree.nodes.len(),
         }
     }
     fn new_child(
@@ -1280,7 +1285,7 @@ impl AllocState for LazyTree {
         span: Span,
     ) -> UBResult<()> {
         self.ensure_init();
-        let LazyTree::Init(tree) = self else { unreachable!() };
+        let BorrowState::Tree(tree) = self else { unreachable!() };
         tree.new_child(
             base_offset,
             parent_tag,
@@ -1302,8 +1307,8 @@ impl AllocState for LazyTree {
         span: Span,
     ) -> UBResult<()> {
         match self {
-            LazyTree::Uninit { .. } => Ok(()),
-            LazyTree::Init(tree) => tree.perform_access(
+            BorrowState::Uninit { .. } => Ok(()),
+            BorrowState::Tree(tree) => tree.perform_access(
                 tag,
                 access_range,
                 access_kind,
@@ -1323,8 +1328,8 @@ impl AllocState for LazyTree {
         span: Span,
     ) -> UBResult<()> {
         match self {
-            LazyTree::Uninit { .. } => Ok(()),
-            LazyTree::Init(tree) => tree.dealloc(tag, access_range, global, alloc_id, span),
+            BorrowState::Uninit { .. } => Ok(()),
+            BorrowState::Tree(tree) => tree.dealloc(tag, access_range, global, alloc_id, span),
         }
     }
     fn perform_protector_end_access(
@@ -1335,25 +1340,25 @@ impl AllocState for LazyTree {
         span: Span,
     ) -> UBResult<()> {
         match self {
-            LazyTree::Uninit { .. } => Ok(()),
-            LazyTree::Init(tree) => tree.perform_protector_end_access(tag, global, alloc_id, span),
+            BorrowState::Uninit { .. } => Ok(()),
+            BorrowState::Tree(tree) => tree.perform_protector_end_access(tag, global, alloc_id, span),
         }
     }
     fn expose_tag(&mut self, tag: BorTag, protected: bool) {
         self.ensure_init();
-        if let LazyTree::Init(tree) = self {
+        if let BorrowState::Tree(tree) = self {
             tree.expose_tag(tag, protected);
         }
     }
     fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
-        if let LazyTree::Init(tree) = self {
+        if let BorrowState::Tree(tree) = self {
             tree.remove_unreachable_tags(live_tags);
         }
     }
     fn remove_dead_tags(&mut self, dead_tags: &mut [BorTag]) -> bool {
         match self {
-            LazyTree::Init(tree) => tree.remove_dead_tags(dead_tags),
-            LazyTree::Uninit { root_tag, refcount, .. } => {
+            BorrowState::Tree(tree) => tree.remove_dead_tags(dead_tags),
+            BorrowState::Uninit { root_tag, refcount, .. } => {
                 // A tree in the Uninit state only has a single node (the root). If
                 // this node is in the dead list with a zero reference count, then the
                 // tree is dead and the associated AllocInfo metadata can be freed.
@@ -1365,21 +1370,21 @@ impl AllocState for LazyTree {
     }
     fn increment(&self, tag: BorTag) -> bool {
         match self {
-            LazyTree::Uninit { root_tag, refcount, .. } => {
+            BorrowState::Uninit { root_tag, refcount, .. } => {
                 // In the Uninit state the only node is the root, we add an debug_assert instead
                 debug_assert!(*root_tag == tag);
                 refcount.increment_nonatomic()
             }
-            LazyTree::Init(tree) => tree.increment(tag),
+            BorrowState::Tree(tree) => tree.increment(tag),
         }
     }
     fn decrement(&self, tag: BorTag) -> bool {
         match self {
-            LazyTree::Uninit { root_tag, refcount, .. } => {
+            BorrowState::Uninit { root_tag, refcount, .. } => {
                 debug_assert!(*root_tag == tag);
                 refcount.decrement_nonatomic()
             }
-            LazyTree::Init(tree) => tree.decrement(tag),
+            BorrowState::Tree(tree) => tree.decrement(tag),
         }
     }
 }

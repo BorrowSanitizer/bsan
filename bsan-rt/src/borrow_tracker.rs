@@ -43,12 +43,12 @@ impl AllocInfoPtr {
 
     fn tree_opt<'b>(self) -> Option<TreeGuard<'b>> {
         let info: &'b AllocInfo = unsafe { self.0.as_ref() };
-        let tree = info.tree.lock();
-        if tree.is_none() {
+        let borrow = info.borrow.lock();
+        if borrow.is_none() {
             None
         } else {
-            // Safety: the tree contains a valid instance now.
-            Some(unsafe { TreeGuard::new(tree) })
+            // Safety: the borrow state contains a valid instance now.
+            Some(unsafe { TreeGuard::new(borrow) })
         }
     }
 }
