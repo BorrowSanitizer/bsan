@@ -53,7 +53,7 @@ impl<T: Heapable> Heap<T> {
         Self { head, free_list: SpinMutex::new(None), block_size }
     }
 
-    pub fn alloc(&self, elem: T) -> NonNull<T> {
+    pub fn alloc(&self) -> NonNull<T> {
         if let Some(mut free_list) = self.free_list.try_lock()
             && let Some(head) = *free_list
         {
@@ -64,14 +64,12 @@ impl<T: Heapable> Heap<T> {
             *free_list = unsafe { *next };
 
             let head = head.cast::<T>();
-            unsafe { head.write(elem) };
             return head;
         }
         loop {
             let bump_reader = self.head.upgradeable_read();
             if let Some(alloc) = bump_reader.next() {
                 let alloc = alloc.cast::<T>();
-                unsafe { alloc.write(elem) };
                 return alloc;
             }
             if let Ok(mut bump_writer) = bump_reader.try_upgrade() {
@@ -214,7 +212,7 @@ mod test {
     #[test]
     fn alloc_roundtrip() {
         let allocator = Heap::<Link>::new();
-        unsafe { allocator.dealloc(allocator.alloc(Link { next: 0 })) }
+        unsafe { allocator.dealloc(allocator.alloc()) }
     }
 
     #[test]
@@ -228,7 +226,7 @@ mod test {
             threads.push(thread::spawn(move || {
                 // Allocate 10 elements per thread.
                 let mut allocs: Vec<NonNull<Link>> =
-                    (0..10).map(|_| page.alloc(Link { next: 0 })).collect::<Vec<_>>();
+                    (0..10).map(|_| page.alloc()).collect::<Vec<_>>();
 
                 if id % 2 == 0 {
                     // Even-numbered threads will immediately free the elements, adding them to the
@@ -242,7 +240,7 @@ mod test {
                     // Odd-numbered threads will continue to allocate elements,
                     // hopefully picking the allocations freed by even-numbered threads.
                     for _ in 0..10 {
-                        allocs.push(page.alloc(Link { next: 0 }));
+                        allocs.push(page.alloc());
                     }
                     allocs.drain(..).for_each(|alloc| unsafe {
                         page.dealloc(alloc);
