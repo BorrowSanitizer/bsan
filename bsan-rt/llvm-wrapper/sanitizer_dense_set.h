@@ -42,10 +42,11 @@ template <typename ValueT, typename MapTy> class DenseSetImpl {
   static_assert(sizeof(typename MapTy::value_type) == sizeof(ValueT),
                 "DenseMap buckets unexpectedly large!");
   MapTy TheMap;
-  public:
-    using key_type = ValueT;
-    using value_type = ValueT;
-    using size_type = unsigned;
+
+public:
+  using key_type = ValueT;
+  using value_type = ValueT;
+  using size_type = unsigned;
 
   [[nodiscard]] bool empty() const { return TheMap.empty(); }
   [[nodiscard]] size_type size() const { return TheMap.size(); }
@@ -71,14 +72,12 @@ template <typename ValueT, typename MapTy> class DenseSetImpl {
     return {&Result.first->getFirst(), Result.second};
   }
 
-  template <class Fn>
-  void forEach(Fn fn) {
+  template <class Fn> void forEach(Fn fn) {
     TheMap.forEach([&](typename MapTy::value_type &Bucket) {
       fn(Bucket.getFirst());
       return true;
     });
   }
-
 };
 
 template <typename ValueT, typename ValueInfoT>
@@ -91,10 +90,11 @@ using DenseSet = DenseSetImpl<
 template <typename ValueT, typename ValueInfoT = DenseMapInfo<ValueT>>
 class DenseSet : public detail::DenseSet<ValueT, ValueInfoT> {
   using BaseT = detail::DenseSet<ValueT, ValueInfoT>;
+
 public:
   using BaseT::BaseT;
 };
 
 } // end namespace __sanitizer
 
-#endif 
+#endif

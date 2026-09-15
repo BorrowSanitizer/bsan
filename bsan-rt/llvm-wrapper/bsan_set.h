@@ -2,9 +2,9 @@
 #define BSAN_GC_H
 
 #include "bsan.h"
-#include "patched/sanitizer_dense_set.h"
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_dense_map.h"
+#include "sanitizer_dense_set.h"
 using __sanitizer::DenseMap;
 
 namespace __bsan {
