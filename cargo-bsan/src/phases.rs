@@ -331,6 +331,8 @@ fn bsan_rustflags(env: &EnvConfig, deps: &Dependencies, llvm_tools: &LlvmTools) 
     let (llvm_include, llvm_lib) = deps.llvm_runtime();
     additional_args.push(format!("-L{}", llvm_include.display()));
     additional_args.push(format!("-lstatic={llvm_lib}"));
+    // Link the preinit anchor function to populate the `.preinit_array` header
+    additional_args.push(String::from("-Clink-arg=-Wl,-u,__bsan_preinit_anchor"));
 
     if env.nop {
         // We use a dedicated, strong "anchor" symbol to prevent the linker from discarding
@@ -370,6 +372,7 @@ fn bsan_cflags(env: &EnvConfig, deps: &Dependencies, llvm_tools: &LlvmTools) -> 
     let (llvm_include, llvm_lib) = deps.llvm_runtime();
     additional_args.push(format!("-L{}", llvm_include.display()));
     additional_args.push(format!("-l{llvm_lib}"));
+    additional_args.push(String::from("-Wl,-u,__bsan_preinit_anchor"));
     if env.nop {
         // We use a dedicated, strong "anchor" symbol to prevent the linker from discarding
         // the Rust component of the runtime, which is otherwise only used via weak symbols.
