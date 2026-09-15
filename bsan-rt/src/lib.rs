@@ -565,7 +565,7 @@ unsafe extern "C" fn __bsan_reserve_stack_slot_impl() -> NonNull<AllocInfo> {
     unsafe {
         let dest = global_ctx().create_alloc_info();
         dest.write(AllocInfo::invalid());
-        return dest;
+        dest
     }
 }
 
