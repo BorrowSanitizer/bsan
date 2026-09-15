@@ -23,6 +23,7 @@ SET(BSAN_HEADERS
   bsan_shadow.h
   bsan_allocator.h
   bsan_global.h
+  sanitizer_dense_set.h
 )
 
 add_custom_target(clang-format

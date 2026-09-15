@@ -9,12 +9,13 @@
 #include "sanitizer_common/sanitizer_posix.h"
 
 using namespace __sanitizer;
+typedef uptr Epoch;
 
 namespace __bsan {
 
 struct ZeroCountTable {
-  typedef uptr Generation;
   ~ZeroCountTable() {}
+  Epoch epoch = 0;
 
 private:
   // A flag indicating that we are currently adding a value to the zero count
@@ -23,8 +24,6 @@ private:
   // values to garbage collect. We will still examine this thread's
   // shadow stack to exclude reachable provenance values.
   atomic_uint8_t busy_{};
-
-  Generation drained_gen_ = 0;
 
   // Whenever we modify this zero-count table, we need to
   // ensure that we are only doing so from the context of another table.
@@ -55,12 +54,7 @@ public:
     zct_.takeFrom(other.zct_);
   }
 
-  template <typename Fn> void retainIf(Generation gen, Fn retain) {
-    drained_gen_ = gen;
-    zct_.retainIf(retain);
-  }
-
-  Generation lastDrained() { return drained_gen_; }
+  template <typename Fn> void retainIf(Fn retain) { zct_.retainIf(retain); }
 
   bool isBusy() { return atomic_load(&busy_, memory_order_acquire) == 1; }
 };

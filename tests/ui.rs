@@ -134,6 +134,9 @@ fn run_tests(
         ("wildcard", "1"),
         ("node_debug_info", "1"),
         ("dump_registers", "0"),
+        // Ensures that the GC fires even for
+        // small tests, as a stress test.
+        ("visits_per_gc", "3000"),
     ]
     .map(|(key, val)| format!("{key}={val}"))
     .join(",");
