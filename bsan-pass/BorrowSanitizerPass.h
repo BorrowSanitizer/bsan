@@ -6,6 +6,11 @@
 
 namespace llvm {
 
+// Defined in BorrowSanitizer.cpp. True if stack instrumentation is disabled
+// via `-bsan-disable-stack-instrumentation` or the
+// `BSAN_DISABLE_STACK_INSTRUMENTATION` environment variable.
+bool disableStackInstrumentation();
+
 struct BorrowSanitizerOptions {
   BorrowSanitizerOptions() {};
 };
