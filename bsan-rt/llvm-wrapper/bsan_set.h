@@ -2,9 +2,9 @@
 #define BSAN_GC_H
 
 #include "bsan.h"
+#include "patched/sanitizer_dense_set.h"
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_dense_map.h"
-
 using __sanitizer::DenseMap;
 
 namespace __bsan {
@@ -93,6 +93,7 @@ public:
   void remove(Provenance Prov);
 
   void clear();
+  bool contains(AllocInfo *Info);
   bool contains(Provenance prov);
 
   void swap(ConcreteProvenanceSet &other) { set_.swap(other.set_); }
