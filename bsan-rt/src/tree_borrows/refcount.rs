@@ -78,7 +78,7 @@ impl RefCount {
 
     /// Returns the current reference count at the time this function is called.
     pub fn get(&self) -> usize {
-        self.0.load(Ordering::Relaxed)
+        self.0.load(Ordering::Acquire)
     }
 
     /// Creates a new `RefCount` with the given initial value.

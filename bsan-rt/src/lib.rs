@@ -540,9 +540,12 @@ unsafe extern "C" fn __bsan_rc_inc_impl(bor_tag: BorTag, alloc_info: *mut AllocI
         return false;
     }
     debug_assert!(!alloc_info.is_null(), "Concrete tags must be paired with valid metadata.");
-    let _ptr: AllocInfoPtr = unsafe { NonNull::new_unchecked(alloc_info) }.into();
+    let ptr: AllocInfoPtr = unsafe { NonNull::new_unchecked(alloc_info) }.into();
     let prov: Provenance = Provenance { bor_tag, alloc_info };
-    BorrowTracker::for_alloc(prov, |bt| bt.increment()).unwrap_or(false)
+    let incremented_alloc: bool = ptr.rc.increment();
+    let incremented_node =
+        BorrowTracker::for_alloc(prov, |bt| bt.increment()).unwrap_or(incremented_alloc);
+    incremented_alloc || incremented_node
 }
 
 /// Decrements the reference count associated with a provenance value.
@@ -554,9 +557,11 @@ unsafe extern "C" fn __bsan_rc_dec_impl(bor_tag: BorTag, alloc_info: *mut AllocI
         return false;
     }
     debug_assert!(!alloc_info.is_null(), "Concrete tags must be paired with valid metadata.");
-    let _ptr: AllocInfoPtr = unsafe { NonNull::new_unchecked(alloc_info) }.into();
+    let ptr: AllocInfoPtr = unsafe { NonNull::new_unchecked(alloc_info) }.into();
     let prov = Provenance { bor_tag, alloc_info };
-    BorrowTracker::for_alloc(prov, |bt| bt.decrement()).unwrap_or(false)
+    let decremented_alloc = ptr.rc.decrement();
+    let decremented_node = BorrowTracker::for_alloc(prov, |bt| bt.decrement()).unwrap_or(true);
+    decremented_alloc || decremented_node
 }
 
 /// Reserves a stack slot for allocation metadata.
@@ -570,12 +575,7 @@ unsafe extern "C" fn __bsan_reserve_stack_slot_impl() -> NonNull<AllocInfo> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_destroy_stack_slot_impl(slot: NonNull<AllocInfo>) {
-    let ctx = unsafe { global_ctx() };
-    unsafe {
-        ctx.destroy_alloc_info(slot);
-    }
-}
+unsafe extern "C" fn __bsan_destroy_stack_slot_impl(_slot: NonNull<AllocInfo>) {}
 
 /// Initializes stack allocation metadata in-place.
 #[unsafe(no_mangle)]

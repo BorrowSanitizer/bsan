@@ -503,7 +503,7 @@ void __bsan_retag(void *object_addr, uptr access_size, u8 flags,
     *(Provenance *)(dest) = prov;
     // A retag mints a fresh provenance value with no references yet; record it
     // in this thread's zero-count set as a collection candidate.
-    CurrentThread()->zct.acquireProvenance(prov);
+    AcquireProvenance(prov);
     MaybeRequestGC();
   }
 }
@@ -557,7 +557,7 @@ void __bsan_rc_dec(BorTag Tag, AllocInfo *Info) {
   if (__bsan_rc_dec_impl) {
     InterceptorBarrier barrier;
     if (__bsan_rc_dec_impl(Tag, Info)) {
-      CurrentThread()->zct.acquireProvenance({Tag, Info});
+      AcquireProvenance({Tag, Info});
     }
   }
 }
@@ -605,7 +605,7 @@ AllocInfo *__bsan_alloc(void *base_addr, uptr size, BorTag bor_tag, Span pc) {
   if (__bsan_alloc_impl) {
     InterceptorBarrier barrier;
     AllocInfo *info = __bsan_alloc_impl(base_addr, size, bor_tag, pc);
-    CurrentThread()->zct.acquireProvenance({bor_tag, info});
+    AcquireProvenance({bor_tag, info});
     return info;
   } else {
     return nullptr;
@@ -671,7 +671,7 @@ void __bsan_pop_frame(const Provenance *frame_start, uptr prot,
         __bsan_protector_end_impl(prov.tag, prov.info, span);
       } else {
         __bsan_dealloc_stack_impl(prov.tag, prov.info, span);
-        __bsan_destroy_stack_slot_impl(prov.info);
+        AcquireProvenance(prov);
       }
     }
   }

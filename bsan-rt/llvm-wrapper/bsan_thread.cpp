@@ -13,6 +13,15 @@ BsanThread *CurrentThread() { return (BsanThread *)TSDGet(); }
 
 void SetCurrentThread(BsanThread *t) { TSDSet((void *)t); }
 
+void AcquireProvenance(Provenance prov) {
+  BsanThread *t = CurrentThread();
+  if (LIKELY(t)) {
+    t->zct.acquireProvenance(prov);
+  } else {
+    global_ctx()->Threads().AcquireProvenance(prov);
+  }
+}
+
 BsanThread *BsanThread::Create(thread_callback_t start_routine, void *arg) {
   uptr PageSize = GetPageSizeCached();
   uptr size = RoundUpTo(sizeof(BsanThread), PageSize);

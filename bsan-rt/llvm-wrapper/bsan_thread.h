@@ -155,6 +155,7 @@ private:
 
 BsanThread *CurrentThread();
 void SetCurrentThread(BsanThread *t);
+void AcquireProvenance(Provenance prov);
 
 struct SANITIZER_MUTEX ThreadManager {
 public:
@@ -167,6 +168,11 @@ public:
   // happen before we deinitialize any of the other states associated
   // with this thread.
   void DeregisterThread(BsanThread *thread);
+
+  void AcquireProvenance(Provenance prov) {
+    Lock l(&mtx_);
+    global_zct.acquireProvenance(prov);
+  }
 
   void LockThreads() SANITIZER_ACQUIRE() { mtx_.Lock(); }
   void UnlockThreads() SANITIZER_RELEASE() { mtx_.Unlock(); }
