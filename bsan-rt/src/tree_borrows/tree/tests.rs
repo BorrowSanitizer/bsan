@@ -868,19 +868,41 @@ fn add_child_perm(tree: &mut EagerTree, parent: BorTag, child: BorTag, perm: Per
     assert!(result.is_ok());
 }
 
+fn is_dead(tree: &EagerTree, tag: BorTag) -> bool {
+    let idx = tree.tag_mapping.get(&tag).unwrap();
+    tree.nodes.get(idx).unwrap().is_dead
+}
+
 #[test]
-fn dead_leaf_is_removed_and_zeroed() {
+fn dead_leaf_is_removed() {
     let ctx = GlobalCtx::new(&SharedSanitizerFlags::default());
     let mut tree = new_tree(t(10));
     add_child(&mut tree, t(10), t(11));
 
-    let mut dead = [t(11)];
-    let empty = tree.remove_dead_tags(&ctx, &mut dead);
+    let empty = tree.remove_dead_tags(&ctx, &[t(11)]);
 
     assert!(!empty, "the root is still in the tree");
-    assert_eq!(dead, [BorTag::omnivalid()]);
     assert!(!tree.contains_tag(t(11)));
     assert_eq!(tree.node_count(), 1);
+}
+
+#[test]
+fn live_tag_is_not_marked_dead() {
+    let ctx = GlobalCtx::new(&SharedSanitizerFlags::default());
+    let mut tree = new_tree(t(10));
+    add_child(&mut tree, t(10), t(11));
+    tree.increment(t(11));
+
+    assert!(!tree.remove_dead_tags(&ctx, &[t(11)]));
+    assert!(tree.contains_tag(t(11)));
+    assert!(!is_dead(&tree, t(11)));
+
+    tree.decrement(t(11));
+    assert!(!tree.remove_dead_tags(&ctx, &[]));
+    assert!(tree.contains_tag(t(11)));
+
+    assert!(!tree.remove_dead_tags(&ctx, &[t(11)]));
+    assert!(!tree.contains_tag(t(11)));
 }
 
 #[test]
@@ -902,14 +924,42 @@ fn dead_node_with_multiple_children_is_compacted() {
     tree.increment(t(12));
     tree.increment(t(13));
 
-    let mut dead = [t(11)];
-    let empty = tree.remove_dead_tags(&ctx, &mut dead);
+    let empty = tree.remove_dead_tags(&ctx, &[t(11)]);
 
     assert!(!empty);
-    // The dead node was removed; its slot is zeroed so the caller drops it.
-    assert_eq!(dead, [BorTag::omnivalid()]);
     assert!(!tree.contains_tag(t(11)));
     // The two children survive, now reparented onto the root.
+    assert!(tree.contains_tag(t(12)));
+    assert!(tree.contains_tag(t(13)));
+    assert_eq!(tree.node_count(), 3);
+}
+
+#[test]
+fn dead_node_is_compacted_once_sibling_is_pruned() {
+    let flags = SharedSanitizerFlags {
+        max_compacted_children: 2,
+        tree_gc_min_nodes: 0,
+        ..Default::default()
+    };
+    let ctx = GlobalCtx::new(&flags);
+    let mut tree = new_tree(t(10));
+    add_child(&mut tree, t(10), t(11));
+    add_child(&mut tree, t(11), t(12));
+    add_child(&mut tree, t(11), t(13));
+    add_child(&mut tree, t(10), t(14));
+    tree.increment(t(12));
+    tree.increment(t(13));
+    tree.increment(t(14));
+
+    // Compacting would leave the root with three children, exceeding `max_compacted_children`.
+    assert!(!tree.remove_dead_tags(&ctx, &[t(11)]));
+    assert!(tree.contains_tag(t(11)));
+    assert!(is_dead(&tree, t(11)));
+
+    tree.decrement(t(14));
+    assert!(!tree.remove_dead_tags(&ctx, &[t(14)]));
+    assert!(!tree.contains_tag(t(14)));
+    assert!(!tree.contains_tag(t(11)));
     assert!(tree.contains_tag(t(12)));
     assert!(tree.contains_tag(t(13)));
     assert_eq!(tree.node_count(), 3);
@@ -927,14 +977,11 @@ fn dead_node_with_incompatible_children_is_retained() {
     tree.increment(t(12));
     tree.increment(t(13));
 
-    let mut dead = [t(11)];
-    let empty = tree.remove_dead_tags(&ctx, &mut dead);
+    let empty = tree.remove_dead_tags(&ctx, &[t(11)]);
 
     assert!(!empty);
-    // The dead node cannot be pruned yet. Its slot must stay nonzero so the caller keeps it
-    // pending.
-    assert_eq!(dead, [t(11)]);
     assert!(tree.contains_tag(t(11)));
+    assert!(is_dead(&tree, t(11)));
     assert_eq!(tree.node_count(), 4);
 }
 
@@ -951,20 +998,17 @@ fn retained_tag_is_pruned_once_children_die() {
     tree.increment(t(13));
 
     // First GC pass: the dead parent is blocked by its two live, non-replacing children.
-    let mut dead = [t(11)];
-    assert!(!tree.remove_dead_tags(&ctx, &mut dead));
-    assert_eq!(dead, [t(11)]);
+    assert!(!tree.remove_dead_tags(&ctx, &[t(11)]));
+    assert!(is_dead(&tree, t(11)));
 
     // The children die, re-entering a ZCT. The next pass removes them as leaves, and the
-    // retained parent then becomes a childless leaf and is pruned too (the pending set keeps
-    // tags in ascending order).
+    // retained parent then becomes a childless leaf and is pruned too, even though its tag
+    // is not passed again.
     tree.decrement(t(12));
     tree.decrement(t(13));
-    let mut dead = [t(11), t(12), t(13)];
-    let empty = tree.remove_dead_tags(&ctx, &mut dead);
+    let empty = tree.remove_dead_tags(&ctx, &[t(12), t(13)]);
 
     assert!(!empty, "the root is still in the tree");
-    assert_eq!(dead, [BorTag::omnivalid(); 3]);
     assert_eq!(tree.node_count(), 1);
     assert!(tree.contains_tag(t(10)));
 }
@@ -988,13 +1032,12 @@ fn dead_root_with_children_is_retained() {
     tree.increment(t(20));
     tree.increment(t(30));
 
-    let mut dead = [t(10)];
-    let empty = tree.remove_dead_tags(&ctx, &mut dead);
+    let empty = tree.remove_dead_tags(&ctx, &[t(10)]);
 
     assert!(!empty);
-    // The root cannot be pruned while it has a child; it must stay pending.
-    assert_eq!(dead, [t(10)]);
+    // The root cannot be pruned while it has a child.
     assert!(tree.contains_tag(t(10)));
+    assert!(is_dead(&tree, t(10)));
     assert_eq!(root_tags(&tree), [t(10), t(20)]);
 }
 
@@ -1008,9 +1051,8 @@ fn dead_root_is_pruned_as_leaf_once_subtree_dies() {
     tree.increment(t(30));
 
     // First pass: the dead root is retained while its child is alive.
-    let mut dead = [t(10)];
-    assert!(!tree.remove_dead_tags(&ctx, &mut dead));
-    assert_eq!(dead, [t(10)]);
+    assert!(!tree.remove_dead_tags(&ctx, &[t(10)]));
+    assert!(is_dead(&tree, t(10)));
     assert_eq!(root_tags(&tree), [t(10), t(20)]);
 
     // The wildcard root and the child die. The next pass removes both as leaves, which
@@ -1018,10 +1060,8 @@ fn dead_root_is_pruned_as_leaf_once_subtree_dies() {
     // empty so the caller can reclaim the tree.
     tree.decrement(t(20));
     tree.decrement(t(30));
-    let mut dead = [t(10), t(20), t(30)];
-    let empty = tree.remove_dead_tags(&ctx, &mut dead);
+    let empty = tree.remove_dead_tags(&ctx, &[t(20), t(30)]);
 
     assert!(empty, "every root was removed as a leaf");
-    assert_eq!(dead, [BorTag::omnivalid(); 3]);
     assert_eq!(tree.node_count(), 0);
 }
