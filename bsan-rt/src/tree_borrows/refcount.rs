@@ -4,7 +4,7 @@ use core::sync::atomic::{fence, AtomicUsize, Ordering};
 // TODO: remove `allow(dead_code)` once the `__bsan_rc_inc`/`__bsan_rc_dec`
 // endpoints (lib.rs) actually drive this type.
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Default)]
 #[repr(transparent)]
 pub struct RefCount(AtomicUsize);
 
@@ -85,7 +85,7 @@ impl RefCount {
     ///
     /// Test-only: the runtime always starts a count at 0 via [`RefCount::new`].
     #[cfg(test)]
-    fn with_count(n: usize) -> Self {
+    pub(crate) fn with_count(n: usize) -> Self {
         Self(AtomicUsize::new(n))
     }
 

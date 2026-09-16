@@ -127,7 +127,7 @@ void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
 }
 
 void GlobalContext::Retire(AllocInfo *to_retire) {
-  quarantine_.insert(to_retire);
+  quarantine_[0].insert(to_retire);
 }
 
 void GlobalContext::Shift(Snapshot &snap) {
@@ -135,13 +135,14 @@ void GlobalContext::Shift(Snapshot &snap) {
   // advance it, and free the oldest collection of objects.
   if (snap.min_epoch == epoch) {
     epoch += 1;
-    deferred_.forEach([&](AllocInfo *info) {
+    quarantine_[1].forEach([&](AllocInfo *info) {
       DCHECK(!snap.live->contains(info));
       __bsan_eject(info);
     });
-    deferred_.clear();
-    quarantine_.forEach([&](AllocInfo *info) { deferred_.insert(info); });
-    quarantine_.clear();
+    quarantine_[1].clear();
+    quarantine_[0].forEach(
+        [&](AllocInfo *info) { quarantine_[1].insert(info); });
+    quarantine_[0].clear();
   }
 }
 

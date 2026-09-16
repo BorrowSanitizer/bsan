@@ -35,7 +35,12 @@ impl ErrorFormatContext {
             UBInfo::UseAfterFree => {
                 "trying to access an allocation that has been freed.\n".to_string()
             }
-            UBInfo::AccessOutOfBounds { alloc_id, access_size, alloc_size, offset } => format!(
+            UBInfo::AccessOutOfBounds {
+                alloc_id,
+                access_size,
+                alloc_size,
+                offset,
+            } => format!(
                 "an access of size {access_size:x}b at offset 0x{offset:x} is out of bounds for {alloc_id:?} of size {alloc_size:x}b.\n"
             ),
             UBInfo::AliasingViolation(error) => {

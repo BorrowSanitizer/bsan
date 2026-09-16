@@ -96,10 +96,8 @@ private:
 
   // Allocations that are unreachable and have had all of their nodes pruned,
   // but that cannot be ejected yet, because they might still be stored within a
-  // thread's zero count table. Maps each allocation to the generation when it
-  // was retired.
-  DenseSet<AllocInfo *> quarantine_;
-  DenseSet<AllocInfo *> deferred_;
+  // thread's zero count table.
+  DenseSet<AllocInfo *> quarantine_[2];
 
   // Guards `at_exit_stack_`.
   Mutex at_exit_lock_;

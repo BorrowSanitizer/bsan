@@ -522,10 +522,9 @@ mod spurious_read {
             let accessed = match ptr {
                 PtrSelector::X => self.x.state.accessed,
                 PtrSelector::Y => self.y.state.accessed,
-                PtrSelector::Other =>
-                    panic!(
-                        "the `accessed` status of `PtrSelector::Other` is unknown, do not pass it to `read_if_accessed`"
-                    ),
+                PtrSelector::Other => panic!(
+                    "the `accessed` status of `PtrSelector::Other` is unknown, do not pass it to `read_if_accessed`"
+                ),
             };
             if accessed {
                 self.perform_test_access(&TestAccess { ptr, kind: AccessKind::Read })

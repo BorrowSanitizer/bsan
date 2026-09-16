@@ -1,8 +1,6 @@
 // Components in this library were ported from Miri and then modified by our team.
-use core::ops::{Deref, DerefMut};
+use core::ops::Deref;
 use core::ptr::NonNull;
-
-use spin::MutexGuard;
 
 use crate::errors::{UBInfo, UBResult};
 use crate::helpers::{AllocRange, Size};
@@ -10,9 +8,9 @@ use crate::sanitizer_common::Span;
 use crate::tree_borrows::data_structures::{AccessType, DedupRangeMap};
 use crate::tree_borrows::diagnostics::AccessCause;
 use crate::tree_borrows::perms::{AccessKind, Permission};
-use crate::tree_borrows::tree::LocationState;
-use crate::tree_borrows::{AllocState, AllocStateImpl, IdempotentForeignAccess, NewPermission};
-use crate::{AllocInfo, BorTag, GlobalCtx, Provenance, RetagFlags, RetagInfo};
+use crate::tree_borrows::tree::{AllocStateGuard, LocationState};
+use crate::tree_borrows::{IdempotentForeignAccess, LazyTree, NewPermission};
+use crate::{AllocId, AllocInfo, BorTag, GlobalCtx, Provenance, RetagFlags, RetagInfo};
 
 // A reference to an instance of `AllocInfo`
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -25,31 +23,12 @@ impl AllocInfoPtr {
     /// This instance of `AllocInfo` must represent a valid, non-freed allocation.
     /// Otherwise, the contents of its base address will be initialized with the next
     /// pointer in a free list.
-    pub unsafe fn range(&self) -> AllocRange {
-        AllocRange { start: unsafe { self.base_addr() }, size: self.size.get() }
-    }
-
-    /// # Safety
-    /// This instance of `AllocInfo` must represent a valid, non-freed allocation.
-    /// Otherwise, the contents of its base address will be initialized with the next
-    /// pointer in a free list.
     pub unsafe fn base_addr(&self) -> Size {
         unsafe { self.free_or_addr.get().base_addr }
     }
 
-    fn tree<'b>(self) -> UBResult<TreeGuard<'b>> {
-        self.tree_opt().ok_or(UBInfo::UseAfterFree)
-    }
-
-    fn tree_opt<'b>(self) -> Option<TreeGuard<'b>> {
-        let info: &'b AllocInfo = unsafe { self.0.as_ref() };
-        let tree = info.tree.lock();
-        if tree.is_none() {
-            None
-        } else {
-            // Safety: the tree contains a valid instance now.
-            Some(unsafe { TreeGuard::new(tree) })
-        }
+    fn state<'b>(self) -> AllocStateGuard<'b> {
+        unsafe { (*self.0.as_ptr()).state.inner() }
     }
 }
 
@@ -67,110 +46,78 @@ impl From<NonNull<AllocInfo>> for AllocInfoPtr {
     }
 }
 
-// A guard over the `Tree` for an allocation.
-#[derive(Debug)]
-struct TreeGuard<'b>(MutexGuard<'b, Option<AllocStateImpl>>);
-
-impl<'b> TreeGuard<'b> {
-    /// # Safety
-    /// The inner `Option` must always contain `AllocStateImpl`.
-    #[must_use]
-    #[inline]
-    unsafe fn new(value: MutexGuard<'b, Option<AllocStateImpl>>) -> Self {
-        debug_assert!(value.is_some());
-        Self(value)
-    }
-
-    //
-    #[inline]
-    fn take(&mut self) -> AllocStateImpl {
-        // Safety: the inner `Option` must always contain a value.
-        unsafe { self.0.take().unwrap_unchecked() }
-    }
-}
-
-impl Deref for TreeGuard<'_> {
-    type Target = AllocStateImpl;
-    fn deref(&self) -> &AllocStateImpl {
-        self.0.as_ref().unwrap()
-    }
-}
-
-impl DerefMut for TreeGuard<'_> {
-    fn deref_mut(&mut self) -> &mut AllocStateImpl {
-        self.0.as_mut().unwrap()
-    }
-}
-
 #[derive(Debug)]
 pub struct BorrowTracker<'a> {
     bor_tag: BorTag,
+    alloc_id: AllocId,
     alloc_info: AllocInfoPtr,
     range: AllocRange,
-    tree: TreeGuard<'a>,
+    tree: &'a mut LazyTree,
+    freed: &'a mut bool,
 }
 
-impl<'b> BorrowTracker<'b> {
+impl BorrowTracker<'_> {
+    fn with_tree<T, R, F>(
+        alloc_info: AllocInfoPtr,
+        bor_tag: BorTag,
+        guard: &mut AllocStateGuard<'_>,
+        range: R,
+        f: F,
+    ) -> Option<T>
+    where
+        R: FnOnce(&LazyTree) -> Result<AllocRange, T>,
+        F: FnOnce(BorrowTracker<'_>) -> T,
+    {
+        let alloc_id = guard.alloc_id();
+        let mut freed = false;
+        let result = {
+            let tree = guard.tree()?;
+            match range(tree) {
+                Ok(range) => f(BorrowTracker {
+                    bor_tag,
+                    alloc_id,
+                    alloc_info,
+                    range,
+                    tree,
+                    freed: &mut freed,
+                }),
+                Err(result) => result,
+            }
+        };
+        if freed {
+            guard.kill();
+        }
+        Some(result)
+    }
+
     /// # Safety
     /// The caller must provide concrete provenance whose allocation metadata is
     /// valid and live.
     #[allow(dead_code)]
     pub unsafe fn for_alloc_unchecked<T, F>(prov: Provenance, f: F) -> UBResult<T>
     where
-        F: FnOnce(Self) -> UBResult<T>,
-        T: Default,
+        F: FnOnce(BorrowTracker<'_>) -> UBResult<T>,
     {
         debug_assert!(!prov.alloc_info.is_null());
         let alloc_info: AllocInfoPtr = unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
-        let tree = alloc_info.tree()?;
-        let size = alloc_info.size.get();
-        let range = AllocRange { start: Size::ZERO, size };
-        f(Self { tree, bor_tag: prov.bor_tag, alloc_info, range })
-    }
-
-    pub fn for_alloc<T, F>(prov: Provenance, f: F) -> UBResult<T>
-    where
-        F: FnOnce(Self) -> UBResult<T>,
-        T: Default,
-    {
-        if prov.bor_tag == BorTag::omnivalid() || prov.bor_tag.is_wildcard() {
-            // Only concrete provenance values have `AllocInfo` that we can
-            // access directly. This API is intended to have an affect in this case,
-            // so we also skip wildcard provenance.
-            Ok(T::default())
-        } else if prov.bor_tag == BorTag::invalid() {
-            Err(UBInfo::UseAfterFree)
-        } else {
-            // Safety:
-            // Our instrumentation pass guarantees that if a pointer's
-            // provenance is non-null and not omnivalid, then it will contain
-            // valid allocation info pointer.
-            debug_assert!(!prov.alloc_info.is_null());
-            let alloc_info: AllocInfoPtr =
-                unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
-            let tree = alloc_info.tree()?;
-            let size = alloc_info.size.get();
-            let range = AllocRange { start: Size::ZERO, size };
-            f(Self { tree, bor_tag: prov.bor_tag, alloc_info, range })
-        }
+        let mut guard = alloc_info.state();
+        let range = |tree: &LazyTree| Ok(AllocRange { start: Size::ZERO, size: tree.size() });
+        Self::with_tree(alloc_info, prov.bor_tag, &mut guard, range, f)
+            .unwrap_or(Err(UBInfo::UseAfterFree))
     }
 
     pub fn for_alloc_weak<T, F>(prov: Provenance, f: F) -> T
     where
-        F: FnOnce(Self) -> T,
+        F: FnOnce(BorrowTracker<'_>) -> T,
         T: Default,
     {
         if !prov.bor_tag.is_concrete() {
             return T::default();
         }
         let alloc_info: AllocInfoPtr = unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
-        if let Some(tree) = alloc_info.tree_opt() {
-            let size = alloc_info.size.get();
-            let range = AllocRange { start: Size::ZERO, size };
-            f(Self { tree, bor_tag: prov.bor_tag, alloc_info, range })
-        } else {
-            T::default()
-        }
+        let mut guard = alloc_info.state();
+        let range = |tree: &LazyTree| Ok(AllocRange { start: Size::ZERO, size: tree.size() });
+        Self::with_tree(alloc_info, prov.bor_tag, &mut guard, range, f).unwrap_or_default()
     }
 
     /// # Safety
@@ -184,17 +131,17 @@ impl<'b> BorrowTracker<'b> {
         f: F,
     ) -> UBResult<T>
     where
-        F: FnOnce(Self) -> UBResult<T>,
-        T: Default,
+        F: FnOnce(BorrowTracker<'_>) -> UBResult<T>,
     {
         let alloc_info: AllocInfoPtr = unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
-        let alloc_size = alloc_info.size.get();
         let base_addr = unsafe { alloc_info.base_addr() };
         let offset = Size::from_bytes(start.bytes().wrapping_sub(base_addr.bytes()));
-        let tree = alloc_info.tree()?;
-
-        let range = AllocRange { start: offset, size: access_size.unwrap_or(alloc_size) };
-        f(Self { tree, bor_tag: prov.bor_tag, alloc_info, range })
+        let mut guard = alloc_info.state();
+        let range = |tree: &LazyTree| {
+            Ok(AllocRange { start: offset, size: access_size.unwrap_or(tree.size()) })
+        };
+        Self::with_tree(alloc_info, prov.bor_tag, &mut guard, range, f)
+            .unwrap_or(Err(UBInfo::UseAfterFree))
     }
 
     /// # Safety
@@ -207,7 +154,7 @@ impl<'b> BorrowTracker<'b> {
         f: F,
     ) -> UBResult<T>
     where
-        F: FnOnce(Self) -> UBResult<T>,
+        F: FnOnce(BorrowTracker<'_>) -> UBResult<T>,
         T: Default,
     {
         if prov.bor_tag == BorTag::omnivalid() {
@@ -237,40 +184,55 @@ impl<'b> BorrowTracker<'b> {
                 unsafe { NonNull::new_unchecked(prov.alloc_info).into() }
             };
 
-            let alloc_id = alloc_info.alloc_id.get();
-            let alloc_size = alloc_info.size.get();
             let base_addr = unsafe { alloc_info.base_addr() };
-            let access_size = access_size.unwrap_or(alloc_size);
-            let is_sized_access = access_size != Size::ZERO;
+            let mut guard = alloc_info.state();
+            let alloc_id = guard.alloc_id();
+
+            // If the access size is unspecified, then we use the size of the
+            // allocation, which is never zero, because we do not track metadata
+            // for zero-sized allocations.
+            let is_zero_sized_access = access_size == Some(Size::ZERO);
+
+            let range = |tree: &LazyTree| {
+                // If the tree does not contain the borrow tag that we are using to
+                // validate the access, then this is also a UAF, unless this is a
+                // zero-sized access, or we have a wildcard tag.
+                if !tree.contains_tag(prov.bor_tag) && prov.bor_tag.is_concrete() {
+                    return Err(if is_zero_sized_access {
+                        Ok(T::default())
+                    } else {
+                        Err(UBInfo::UseAfterFree)
+                    });
+                }
+
+                let alloc_size = tree.size();
+                let access_size = access_size.unwrap_or(alloc_size);
+
+                // At this point, we know that we are accessing a valid allocation, but we cannot
+                // tell if our access is in-bounds. It is crucial for this to be a wrapping sub here,
+                // since we want to accurately model the effect of applying an oversized offset on
+                // the allocation.
+                let offset = Size::from_bytes(start.bytes().wrapping_sub(base_addr.bytes()));
+                if start < base_addr || (offset + access_size > alloc_size) {
+                    return Err(if access_size != Size::ZERO {
+                        Err(UBInfo::AccessOutOfBounds { alloc_id, access_size, alloc_size, offset })
+                    } else {
+                        Ok(T::default())
+                    });
+                }
+
+                Ok(AllocRange { start: offset, size: access_size })
+            };
 
             // If there is no tree for this allocation, then this is a UAF,
             // unless this is a zero-sized access.
-            let Some(tree) = alloc_info.tree_opt() else {
-                return if is_sized_access { Err(UBInfo::UseAfterFree) } else { Ok(T::default()) };
-            };
-
-            // If the tree does not contain the borrow tag that we are using to
-            // validate the access, then this is also a UAF, unless this is a
-            // zero-sized access, or we have a wildcard tag.
-            if !tree.contains_tag(prov.bor_tag) && prov.bor_tag.is_concrete() {
-                return if is_sized_access { Err(UBInfo::UseAfterFree) } else { Ok(T::default()) };
-            }
-
-            // At this point, we know that we are accessing a valid allocation, but we cannot
-            // tell if our access is in-bounds. It is crucial for this to be a wrapping sub here,
-            // since we want to accurately model the effect of applying an oversized offset on
-            // the allocation.
-            let offset = Size::from_bytes(start.bytes().wrapping_sub(base_addr.bytes()));
-            if start < base_addr || (offset + access_size > alloc_size) {
-                return if access_size != Size::ZERO {
-                    Err(UBInfo::AccessOutOfBounds { alloc_id, access_size, alloc_size, offset })
-                } else {
+            Self::with_tree(alloc_info, prov.bor_tag, &mut guard, range, f).unwrap_or_else(|| {
+                if is_zero_sized_access {
                     Ok(T::default())
-                };
-            }
-
-            let range = AllocRange { start: offset, size: access_size };
-            f(Self { tree, bor_tag: prov.bor_tag, alloc_info, range })
+                } else {
+                    Err(UBInfo::UseAfterFree)
+                }
+            })
         }
     }
 
@@ -280,7 +242,7 @@ impl<'b> BorrowTracker<'b> {
         retag_info: RetagInfo<'_>,
         span: Span,
     ) -> UBResult<Provenance> {
-        let alloc_id = self.alloc_info.alloc_id.get();
+        let range = self.range;
         let parent_tag = self.bor_tag;
         let new_tag = BorTag::default();
         // A wildcard parent is never present in the tree: retagging it adds
@@ -289,7 +251,6 @@ impl<'b> BorrowTracker<'b> {
             return Err(UBInfo::UseAfterFree);
         }
         let new_perm: NewPermission = NewPermission::new(retag_info);
-
         let protected = new_perm.protector.is_some();
 
         // Compute initial "inside" permissions.
@@ -335,24 +296,23 @@ impl<'b> BorrowTracker<'b> {
             }
         }
 
-        let base_offset = self.range.start;
         for (perm_range, loc_state) in inside_perms.iter_all() {
             if let Some(access_kind) = loc_state.permission().associated_access() {
                 // Some reborrows incur a read access to the parent.
                 // Adjust range to be relative to allocation start
                 let range_in_alloc = AllocRange {
-                    start: Size::from_bytes(perm_range.start) + base_offset,
+                    start: Size::from_bytes(perm_range.start) + range.start,
                     size: Size::from_bytes(perm_range.end - perm_range.start),
                 };
 
                 // Perform the access (update the Tree Borrows FSM)
                 self.tree.perform_access(
                     global_ctx,
+                    self.alloc_id,
                     parent_tag,
                     range_in_alloc,
                     access_kind,
                     AccessCause::Reborrow,
-                    alloc_id,
                     span,
                 )?;
             }
@@ -360,7 +320,7 @@ impl<'b> BorrowTracker<'b> {
 
         // base offset should be the offset, from zero, where the retag is taking place within the allocation.
         self.tree.new_child(
-            base_offset,
+            range.start,
             parent_tag,
             new_tag,
             inside_perms,
@@ -373,24 +333,33 @@ impl<'b> BorrowTracker<'b> {
     }
 
     pub fn protector_end(&mut self, global_ctx: &GlobalCtx, span: Span) -> UBResult<()> {
-        self.tree.perform_protector_end_access(
-            global_ctx,
-            self.bor_tag,
-            self.alloc_info.alloc_id.get(),
-            span,
-        )
+        self.tree.perform_protector_end_access(global_ctx, self.alloc_id, self.bor_tag, span)
     }
 
     /// Increments the reference count, returning `true` if the count went from
     /// zero to one.
-    pub fn increment(&self) -> UBResult<bool> {
-        Ok(self.tree.increment(self.bor_tag))
+    pub fn increment(prov: Provenance) -> bool {
+        let alloc_info: AllocInfoPtr = unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
+        let mut guard = alloc_info.state();
+        if let Some(tree) = guard.tree() {
+            alloc_info.state.rc.increment_nonatomic();
+            tree.increment(prov.bor_tag)
+        } else {
+            alloc_info.state.rc.increment()
+        }
     }
 
     /// Decrements the reference count, returning `true` if the count reached
     /// zero.
-    pub fn decrement(&self) -> UBResult<bool> {
-        Ok(self.tree.decrement(self.bor_tag))
+    pub fn decrement(prov: Provenance) -> bool {
+        let alloc_info: AllocInfoPtr = unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
+        let mut guard = alloc_info.state();
+        if let Some(tree) = guard.tree() {
+            alloc_info.state.rc.decrement_nonatomic();
+            tree.decrement(prov.bor_tag)
+        } else {
+            alloc_info.state.rc.decrement()
+        }
     }
 
     pub fn access(
@@ -399,26 +368,23 @@ impl<'b> BorrowTracker<'b> {
         access_kind: AccessKind,
         span: Span,
     ) -> UBResult<()> {
+        let range = self.range;
         self.tree.perform_access(
             global_ctx,
+            self.alloc_id,
             self.bor_tag,
-            self.range,
+            range,
             access_kind,
             AccessCause::Explicit(access_kind),
-            self.alloc_info.alloc_id.get(),
             span,
         )
     }
 
-    pub fn dealloc(mut self, global_ctx: &GlobalCtx, span: Span) -> UBResult<()> {
-        self.tree.take().dealloc(
-            global_ctx,
-            self.bor_tag,
-            self.range,
-            self.alloc_info.alloc_id.get(),
-            span,
-        )?;
-        let range = unsafe { self.alloc_info.range() };
+    pub fn dealloc(&mut self, global_ctx: &GlobalCtx, span: Span) -> UBResult<()> {
+        let range = self.range;
+        *self.freed = true;
+        self.tree.dealloc(global_ctx, self.alloc_id, self.bor_tag, range, span)?;
+        let range = unsafe { AllocRange { start: self.alloc_info.base_addr(), size: range.size } };
         global_ctx.remove_exposed_provenance(range, true);
         Ok(())
     }
@@ -428,7 +394,9 @@ impl<'b> BorrowTracker<'b> {
             return Ok(());
         }
         let tag = self.bor_tag;
-        let range = unsafe { self.alloc_info.range() };
+
+        let range =
+            unsafe { AllocRange { start: self.alloc_info.base_addr(), size: self.tree.size() } };
 
         // Ranges in the mapping must be non-empty, and a wildcard access can
         // never resolve to a zero-sized allocation anyway.
@@ -447,11 +415,11 @@ impl<'b> BorrowTracker<'b> {
     }
 
     pub fn debug_take_snapshot(&self, ctx: &GlobalCtx) {
-        ctx.take_snapshot(self.alloc_info.alloc_id.get(), self.tree.clone());
+        ctx.take_snapshot(self.alloc_id, self.tree.clone());
     }
 
     pub fn debug_print_diff(&self, ctx: &GlobalCtx) {
-        ctx.with_snapshot(self.alloc_info.alloc_id.get(), |old_tree: &AllocStateImpl| {
+        ctx.with_snapshot(self.alloc_id, |old_tree: &LazyTree| {
             self.tree.print_tree_diff(old_tree);
         });
     }

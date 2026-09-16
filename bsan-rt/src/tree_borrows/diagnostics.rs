@@ -1002,28 +1002,23 @@ impl EagerTree {
 }
 
 impl LazyTree {
-    pub fn print_tree(&self, show_unnamed: bool) {
+    fn to_eager(&self) -> EagerTree {
         match self {
-            LazyTree::Init(tree) => tree.print_tree(show_unnamed),
+            LazyTree::Init(tree) => tree.clone(),
             LazyTree::Uninit { root_tag, size, span, .. } => {
-                EagerTree::new(*root_tag, *size, *span).print_tree(show_unnamed)
+                EagerTree::new(*root_tag, *size, *span)
             }
         }
     }
 
+    pub fn print_tree(&self, show_unnamed: bool) {
+        match self {
+            LazyTree::Init(tree) => tree.print_tree(show_unnamed),
+            LazyTree::Uninit { .. } => self.to_eager().print_tree(show_unnamed),
+        }
+    }
+
     pub fn print_tree_diff(&self, old_tree: &LazyTree) {
-        let self_tree = match self {
-            LazyTree::Init(t) => t.clone(),
-            LazyTree::Uninit { root_tag, size, span, .. } => {
-                EagerTree::new(*root_tag, *size, *span)
-            }
-        };
-        let old_tree = match old_tree {
-            LazyTree::Init(t) => t.clone(),
-            LazyTree::Uninit { root_tag, size, span, .. } => {
-                EagerTree::new(*root_tag, *size, *span)
-            }
-        };
-        self_tree.print_tree_diff(&old_tree);
+        self.to_eager().print_tree_diff(&old_tree.to_eager());
     }
 }
