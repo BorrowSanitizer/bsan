@@ -623,41 +623,40 @@ impl EagerTree {
         dead_tags: &[BorTag],
         compact: bool,
     ) {
-        // Iterating through dead_tags in reverse (descending tag order)
-        for entry in dead_tags.iter().rev() {
-            let tag = *entry;
-
-            // A missing entry means the node was already removed; zero out the entry
+        for &tag in dead_tags {
+            // A missing entry means the node was already removed
             let Some(idx) = self.tag_mapping.get(&tag) else {
                 continue;
             };
+            let node = self.nodes.get_mut(idx).unwrap();
 
-            let _opt_parent_idx = {
-                let node = self.nodes.get_mut(idx).unwrap();
+            if node.refcount.get() != 0 {
+                continue;
+            }
 
-                // The ZCT may contain tags with a non-zero reference count. These must
-                // be dropped; the tag will re-enter the ZCT when it drops back to zero.
-                if node.refcount.get() != 0 {
-                    continue;
-                }
+            if node.is_exposed {
+                continue;
+            }
 
-                // Do not remove exposed nodes. They could be used for future accesses
-                // via wildcard pointers.
-                if node.is_exposed {
-                    continue;
-                }
+            node.is_dead = true;
+        }
 
-                node.is_dead = true;
-                node.parent
-            };
-
+        // Visit every dead node bottom-up (descending tags), including ones marked by earlier passes
+        let mut dead_nodes: SmallVec<[(BorTag, UniIndex); 8]> = self
+            .nodes
+            .iter()
+            .filter(|(_, node)| node.is_dead)
+            .map(|(idx, node)| (node.tag, idx))
+            .collect();
+        dead_nodes.sort_unstable_by_key(|&(tag, _)| cmp::Reverse(tag));
+        for (_, idx) in dead_nodes {
             self.try_remove_node(global_ctx, idx, compact);
-            // recursively remove grandparents?
         }
     }
 
     fn try_remove_node(&mut self, ctx: &GlobalCtx, idx: UniIndex, compact: bool) {
         let node = self.nodes.get(idx).unwrap();
+        debug_assert!(node.is_dead && node.refcount.get() == 0 && !node.is_exposed);
         let parent = node.parent;
         // Branches are mutually exclusive on child count: `can_be_replaced_by_single_child`
         // only yields `Some` for exactly one child, and `can_be_replaced_by_children` only
@@ -1201,8 +1200,7 @@ impl AllocState for LazyTree {
                 // A tree in the Uninit state only has a single node (the root). If
                 // this node is in the dead list with a zero reference count, then the
                 // tree is dead and the associated AllocInfo metadata can be freed.
-                let root_is_dead = refcount.get() == 0 && dead_tags.contains(root_tag);
-                root_is_dead
+                refcount.get() == 0 && dead_tags.contains(root_tag)
             }
         }
     }

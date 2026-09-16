@@ -604,7 +604,7 @@ unsafe extern "C" fn __bsan_expose_prov_impl(bor_tag: BorTag, alloc_info: *mut A
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_prune(
     alloc_info: NonNull<AllocInfo>,
-    bor_tags: *mut BorTag,
+    bor_tags: *const BorTag,
     len: usize,
 ) -> bool {
     let global_ctx = unsafe { global_ctx() };
