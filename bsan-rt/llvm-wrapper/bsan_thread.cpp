@@ -68,18 +68,16 @@ void *BsanThread::StartCallback(void *arg) {
 }
 
 void ThreadManager::RegisterThread(BsanThread *thread) {
+  Lock l(&mtx_);
   uptr tid = atomic_fetch_add(&thread_id_ctr, 1, memory_order_relaxed);
+  threads[tid] = thread;
   thread->id = tid;
-  {
-    Lock l(&mtx_);
-    threads[tid] = thread;
-  }
 }
 
 void ThreadManager::DeregisterThread(BsanThread *thread) {
   Lock l(&mtx_);
-  threads.erase(thread->id);
   global_zct.drainFrom(thread->zct);
+  threads.erase(thread->id);
 }
 
 } // namespace __bsan

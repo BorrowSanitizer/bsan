@@ -56,8 +56,8 @@ impl GlobalCtx {
         }
     }
 
-    pub(crate) fn create_alloc_info(&self) -> NonNull<AllocInfo> {
-        self.alloc_metadata_map.alloc()
+    pub(crate) fn create_alloc_info(&self, info: AllocInfo) -> NonNull<AllocInfo> {
+        self.alloc_metadata_map.alloc(info)
     }
 
     pub(crate) unsafe fn destroy_alloc_info(&self, ptr: NonNull<AllocInfo>) {

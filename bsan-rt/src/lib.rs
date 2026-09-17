@@ -32,7 +32,6 @@ mod memory;
 use crate::helpers::{AllocRange, Size};
 use crate::sanitizer_common::{SharedSanitizerFlags, Span};
 use crate::tree_borrows::perms::AccessKind;
-use crate::tree_borrows::refcount::RefCount;
 use crate::tree_borrows::tree::AllocStateImpl;
 use crate::tree_borrows::AllocState;
 
@@ -247,7 +246,6 @@ pub struct AllocInfo {
     free_or_addr: Cell<FreeListOrAddr>,
     size: Cell<Size>,
     tree: Mutex<Option<AllocStateImpl>>,
-    rc: RefCount,
 }
 
 impl AllocInfo {
@@ -257,7 +255,6 @@ impl AllocInfo {
             free_or_addr: Cell::new(FreeListOrAddr { base_addr: Size::ZERO }),
             size: Cell::new(Size::ZERO),
             tree: Mutex::default(),
-            rc: RefCount::new(),
         }
     }
 
@@ -267,23 +264,15 @@ impl AllocInfo {
             free_or_addr: Cell::new(FreeListOrAddr { base_addr }),
             size: Cell::new(size),
             tree: Mutex::new(Some(AllocStateImpl::new(bor_tag, size, span))),
-            rc: RefCount::new(),
-        }
-    }
-
-    unsafe fn reinit(dest: NonNull<AllocInfo>, instance: AllocInfo) {
-        unsafe {
-            let prev = dest.replace(instance);
-            (*dest.as_ptr()).rc = prev.rc;
         }
     }
 
     #[cfg(feature = "debug")]
     fn summarize(&self) -> AllocInfoSummary {
         AllocInfoSummary::Valid {
-            alloc_id: self.alloc_id.get(),
-            base_addr: self.free_or_addr.get(),
-            size: self.size.get(),
+            alloc_id: self.alloc_id,
+            base_addr: self.base_addr,
+            size: self.size,
         }
     }
 }
@@ -300,7 +289,7 @@ pub(crate) enum AllocInfoSummary {
     /// When Prov is valid, only drop the tree_lock field
     Valid {
         alloc_id: AllocId,
-        base_addr: FreeListOrAddr,
+        base_addr: FreeListAddrUnion,
         size: Size,
     },
 }
@@ -486,10 +475,10 @@ unsafe extern "C" fn __bsan_alloc_impl(
     let range = AllocRange { start: Size::from_addr(base_addr), size };
     ctx.removing_exposed_provenance(range, false, || {
         #[allow(clippy::let_and_return)]
-        let dest = ctx.create_alloc_info();
-        unsafe { dest.write(AllocInfo::new(Size::from_addr(base_addr), size, bor_tag, pc)) };
-        debug_bsan!("alloc", base_addr, bor_tag, dest.as_ptr());
-        dest
+        let alloc_info =
+            ctx.create_alloc_info(AllocInfo::new(Size::from_addr(base_addr), size, bor_tag, pc));
+        debug_bsan!("alloc", base_addr, bor_tag, alloc_info.as_ptr());
+        alloc_info
     })
 }
 
@@ -505,6 +494,7 @@ extern "C" fn __bsan_dealloc(
     debug_bsan!("dealloc", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov: Provenance = Provenance { bor_tag, alloc_info };
+
     if checked {
         unsafe {
             BorrowTracker::for_access_unchecked(ctx, prov, Size::from_addr(ptr), None, |bt| {
@@ -536,12 +526,13 @@ unsafe extern "C" fn __bsan_dealloc_stack_impl(
 /// Returns `true` if the count transitioned from zero to one.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_rc_inc_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo) -> bool {
-    if !bor_tag.is_concrete() {
+    // A null `alloc_info` denotes an empty/cleared shadow slot (e.g. one whose
+    // info was nulled by `ClearShadow` while a stale tag lingered). There is no
+    // allocation to deref, so there is nothing to count.
+    if alloc_info.is_null() {
         return false;
     }
-    debug_assert!(!alloc_info.is_null(), "Concrete tags must be paired with valid metadata.");
-    let _ptr: AllocInfoPtr = unsafe { NonNull::new_unchecked(alloc_info) }.into();
-    let prov: Provenance = Provenance { bor_tag, alloc_info };
+    let prov = Provenance { bor_tag, alloc_info };
     BorrowTracker::for_alloc(prov, |bt| bt.increment()).unwrap_or(false)
 }
 
@@ -550,11 +541,11 @@ unsafe extern "C" fn __bsan_rc_inc_impl(bor_tag: BorTag, alloc_info: *mut AllocI
 /// Returns `true` if the count reached zero.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_rc_dec_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo) -> bool {
-    if !bor_tag.is_concrete() {
+    // See `__bsan_rc_inc_impl`: a null `alloc_info` is an empty shadow slot with
+    // no live reference to release.
+    if alloc_info.is_null() {
         return false;
     }
-    debug_assert!(!alloc_info.is_null(), "Concrete tags must be paired with valid metadata.");
-    let _ptr: AllocInfoPtr = unsafe { NonNull::new_unchecked(alloc_info) }.into();
     let prov = Provenance { bor_tag, alloc_info };
     BorrowTracker::for_alloc(prov, |bt| bt.decrement()).unwrap_or(false)
 }
@@ -562,11 +553,7 @@ unsafe extern "C" fn __bsan_rc_dec_impl(bor_tag: BorTag, alloc_info: *mut AllocI
 /// Reserves a stack slot for allocation metadata.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_reserve_stack_slot_impl() -> NonNull<AllocInfo> {
-    unsafe {
-        let dest = global_ctx().create_alloc_info();
-        dest.write(AllocInfo::invalid());
-        dest
-    }
+    unsafe { global_ctx().create_alloc_info(AllocInfo::invalid()) }
 }
 
 #[unsafe(no_mangle)]
@@ -583,15 +570,15 @@ unsafe extern "C" fn __bsan_alloc_stack_impl(
     base_addr: *mut c_void,
     size: Size,
     bor_tag: BorTag,
-    dest: NonNull<AllocInfo>,
+    alloc_info: NonNull<AllocInfo>,
     pc: Span,
 ) {
-    debug_bsan!("alloc_stack", base_addr, bor_tag, dest.as_ptr());
+    debug_bsan!("alloc_stack", base_addr, bor_tag, alloc_info.as_ptr());
     let global_ctx = unsafe { global_ctx() };
     let start = Size::from_addr(base_addr);
     let range = AllocRange { start, size };
     global_ctx.removing_exposed_provenance(range, false, || unsafe {
-        AllocInfo::reinit(dest, AllocInfo::new(start, size, bor_tag, pc));
+        alloc_info.write(AllocInfo::new(start, size, bor_tag, pc));
     });
 }
 

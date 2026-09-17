@@ -4,7 +4,7 @@
 #include "bsan.h"
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_dense_map.h"
-#include "sanitizer_dense_set.h"
+
 using __sanitizer::DenseMap;
 
 namespace __bsan {
@@ -93,7 +93,6 @@ public:
   void remove(Provenance Prov);
 
   void clear();
-  bool contains(AllocInfo *Info);
   bool contains(Provenance prov);
 
   void swap(ConcreteProvenanceSet &other) { set_.swap(other.set_); }

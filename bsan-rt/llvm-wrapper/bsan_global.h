@@ -9,19 +9,18 @@
 namespace __bsan {
 
 struct ScopedStopTheWorldLock;
-typedef uptr Epoch;
 
 struct Snapshot {
 public:
-  Snapshot(ConcreteProvenanceSet *live, Epoch global_epoch)
-      : live(live), min_epoch(global_epoch), global_epoch(global_epoch) {};
+  Snapshot(ConcreteProvenanceSet *live, uptr gen)
+      : live(live), gen(gen), min_drained(gen) {};
   // The set of borrow tags that are currently
   // reachable from any of the shadow stacks.
   ConcreteProvenanceSet *live;
-  // The minimum epoch recorded by any live thread.
-  Epoch min_epoch;
-  // The current global epoch.
-  Epoch global_epoch;
+  // The current generation
+  uptr gen;
+  // The minimum generation recorded by any live thread.
+  uptr min_drained;
   // The scope holding the lock for global state. We need
   // access to this within the closure that executes when
   // the world is stopped, so that we can selectively
@@ -59,7 +58,7 @@ private:
   // moment that we acquired the lock. In that case, we can release
   // the lock without running the GC.
   atomic_uintptr_t gc_gen{0};
-  uptr epoch = 0;
+
   // A set of provenance values with a zero reference count that are
   // ready to be garbage collected. These values are no longer reachable
   // in shadow memory, or within the zero count tables associated with
@@ -91,15 +90,11 @@ private:
   // has restarted.
   void CollectGarbage(Snapshot &snap);
 
-  void Shift(Snapshot &snap);
-  void Retire(AllocInfo *to_retire);
-
   // Allocations that are unreachable and have had all of their nodes pruned,
   // but that cannot be ejected yet, because they might still be stored within a
   // thread's zero count table. Maps each allocation to the generation when it
   // was retired.
-  DenseSet<AllocInfo *> quarantine_;
-  DenseSet<AllocInfo *> deferred_;
+  DenseMap<AllocInfo *, uptr> quarantine_{};
 
   // Guards `at_exit_stack_`.
   Mutex at_exit_lock_;

@@ -107,10 +107,6 @@ bool ConcreteProvenanceSet::contains(Provenance prov) {
   return false;
 }
 
-bool ConcreteProvenanceSet::contains(AllocInfo *info) {
-  return find(info) != nullptr;
-}
-
 ConcreteProvenanceSet::~ConcreteProvenanceSet() {
   set_.forEach([](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
     KV.second.reset();
