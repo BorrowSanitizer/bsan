@@ -521,14 +521,8 @@ unsafe extern "C" fn __bsan_dealloc_stack_impl(
     });
 }
 
-/// Increments the reference count associated with a provenance value.
-///
-/// Returns `true` if the count transitioned from zero to one.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_rc_inc_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo) -> bool {
-    // A null `alloc_info` denotes an empty/cleared shadow slot (e.g. one whose
-    // info was nulled by `ClearShadow` while a stale tag lingered). There is no
-    // allocation to deref, so there is nothing to count.
     if alloc_info.is_null() {
         return false;
     }
@@ -536,13 +530,8 @@ unsafe extern "C" fn __bsan_rc_inc_impl(bor_tag: BorTag, alloc_info: *mut AllocI
     BorrowTracker::for_alloc(prov, |bt| bt.increment()).unwrap_or(false)
 }
 
-/// Decrements the reference count associated with a provenance value.
-///
-/// Returns `true` if the count reached zero.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_rc_dec_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo) -> bool {
-    // See `__bsan_rc_inc_impl`: a null `alloc_info` is an empty shadow slot with
-    // no live reference to release.
     if alloc_info.is_null() {
         return false;
     }
@@ -603,14 +592,27 @@ unsafe extern "C" fn __bsan_prune(
 ) -> bool {
     let global_ctx = unsafe { global_ctx() };
     let alloc: AllocInfoPtr = alloc_info.into();
-    let dead_tags = unsafe { slice::from_raw_parts_mut(bor_tags, len) };
-    match alloc.tree.lock().as_mut() {
-        Some(tree) => tree.remove_dead_tags(global_ctx, dead_tags),
-        None => {
-            // The tree is already deallocated, so we can zero out dead_tags
-            dead_tags.fill(BorTag::omnivalid());
-            false
+    // The safety invariants for `slice::from_raw_parts_mut` require a nonnull pointer,
+    // even when the length of the slice is zero.
+    let dead_tags =
+        if len > 0 { unsafe { slice::from_raw_parts_mut(bor_tags, len) } } else { &mut [] };
+    if let Some(mut guard) = alloc.tree.try_lock() {
+        match guard.as_mut() {
+            Some(tree) => tree.remove_dead_tags(global_ctx, dead_tags),
+            None => {
+                // The tree is already deallocated.
+                // We do not need to clear the contents of the array of tags,
+                // because it will be discarded
+                true
+            }
         }
+    } else {
+        // The world was stopped in the middle of validating an
+        // access to this allocation. We have no way to determine
+        // if its tree is still valid. Returning false keeps it in
+        // the pending set. We'll try to prune it again the next
+        // time that the GC runs.
+        false
     }
 }
 

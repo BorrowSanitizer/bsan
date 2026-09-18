@@ -38,9 +38,9 @@ private:
 
   ConcreteProvenanceSet zct_;
 
+public:
   // Adds a provenance value with a zero reference count
   // to this table.
-public:
   void acquireProvenance(Provenance Prov) {
     // We use a release order here so that each of these
     // stores is ordered before the "acquire" load used
@@ -55,10 +55,7 @@ public:
     zct_.takeFrom(other.zct_);
   }
 
-  template <typename Fn> void retainIf(Generation gen, Fn retain) {
-    drained_gen_ = gen;
-    zct_.retainIf(retain);
-  }
+  template <typename Fn> void retainIf(Fn retain) { zct_.retainIf(retain); }
 
   Generation lastDrained() { return drained_gen_; }
 
@@ -134,11 +131,13 @@ public:
 
   BsanThreadLocalMallocStorage &malloc_storage() { return malloc_storage_; }
 
-  ZeroCountTable zct;
+  void acquireProvenance(Provenance prov) { zct_.acquireProvenance(prov); }
 
 private:
   friend struct GlobalContext;
   friend struct ThreadManager;
+
+  ZeroCountTable zct_;
 
   // Executes the start routine.
   thread_return_t Start();
@@ -164,8 +163,6 @@ BsanThread *CurrentThread();
 void SetCurrentThread(BsanThread *t);
 
 struct SANITIZER_MUTEX ThreadManager {
-  friend struct GlobalContext;
-
 public:
   // Initializes a thread, making its state accessible
   // to global processes (e.g. the garbage collector)
@@ -184,9 +181,9 @@ public:
 
   // Executes the provided callback for every thread.
   // This can only be called when the world has been stopped.
-  template <class Fn> void ForEachThread(Fn fn, void *arg) {
+  template <class Fn> void forEachThread(Fn fn) {
     threads.forEach([&](const auto &KV) {
-      fn(KV.getFirst(), KV.getSecond(), arg);
+      fn(KV.getSecond());
       return true;
     });
   }

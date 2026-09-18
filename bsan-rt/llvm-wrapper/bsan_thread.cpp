@@ -42,7 +42,7 @@ void BsanThread::Destroy(void *tsd) {
   BsanThread *t = (BsanThread *)tsd;
   global_ctx()->Threads().DeregisterThread(t);
   t->malloc_storage().CommitBack();
-  t->zct.~ZeroCountTable();
+  t->zct_.~ZeroCountTable();
   if (common_flags()->use_sigaltstack)
     UnsetAlternateSignalStack(t->altstack_base_);
   UnmapOrDie(t->shadow_stack_bottom_, t->shadow_stack_size_);
@@ -76,7 +76,7 @@ void ThreadManager::RegisterThread(BsanThread *thread) {
 
 void ThreadManager::DeregisterThread(BsanThread *thread) {
   Lock l(&mtx_);
-  global_zct_.drainFrom(thread->zct);
+  global_zct_.drainFrom(thread->zct_);
   threads.erase(thread->id);
 }
 
