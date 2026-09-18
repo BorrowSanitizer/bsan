@@ -105,6 +105,10 @@ void PlatformTSDDtor(void *tsd);
 /// Creates a new borrow tag.
 BorTag NewBorTag();
 
+/// Marks a provenance value as potentially
+/// viable for garbage collection.
+void AcquireProvenance(Provenance prov);
+
 /// Enables interception.
 void InitializeInterceptors();
 

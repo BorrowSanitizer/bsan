@@ -614,7 +614,6 @@ AllocInfo *__bsan_alloc(void *base_addr, uptr size, BorTag bor_tag, Span pc) {
   if (__bsan_alloc_impl) {
     InterceptorBarrier barrier;
     AllocInfo *info = __bsan_alloc_impl(base_addr, size, bor_tag, pc);
-    CurrentThread()->zct.acquireProvenance({bor_tag, info});
     return info;
   } else {
     return nullptr;
