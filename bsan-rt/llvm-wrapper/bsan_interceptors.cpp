@@ -153,7 +153,7 @@ INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
   InterceptorBarrier barrier;
   void *ptr = bsan_calloc(nmemb, size);
   bool is_inst = !already_in_scope && INST_CALLER(calloc);
-  BsanAllocateMetaIntoStack(ptr, size, is_inst, span, 0);
+  BsanAllocateMetaIntoStack(ptr, nmemb * size, is_inst, span, 0);
   return ptr;
 }
 
