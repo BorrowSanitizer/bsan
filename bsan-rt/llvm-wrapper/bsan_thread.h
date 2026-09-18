@@ -39,9 +39,9 @@ private:
 
   ConcreteProvenanceSet zct_;
 
+public:
   // Adds a provenance value with a zero reference count
   // to this table.
-public:
   void acquireProvenance(Provenance Prov) {
     // We use a release order here so that each of these
     // stores is ordered before the "acquire" load used
@@ -56,10 +56,7 @@ public:
     zct_.takeFrom(other.zct_);
   }
 
-  template <typename Fn> void retainIf(Generation gen, Fn retain) {
-    drained_gen_ = gen;
-    zct_.retainIf(retain);
-  }
+  template <typename Fn> void retainIf(Fn retain) { zct_.retainIf(retain); }
 
   Generation lastDrained() { return drained_gen_; }
 
@@ -168,17 +165,20 @@ public:
 
   RustAllocatorCache *rust_allocator_cache() { return &rust_allocator_cache_; }
 
-  ZeroCountTable zct;
   uptr os_id;
+  void acquireProvenance(Provenance prov) { zct_.acquireProvenance(prov); }
 
 private:
   friend struct BsanThreadContext;
+  friend struct GlobalContext;
   static BsanThread *Create(const void *start_data, uptr data_size,
                             u32 parent_tid, bool detached);
 
   void GetStartData(void *out, uptr out_size) const;
 
   BsanThreadContext *context_;
+
+  ZeroCountTable zct_;
 
   // Executes the start routine.
   thread_return_t Start();
@@ -223,14 +223,14 @@ BsanThreadContext *GetThreadContextByTidLocked(u32 tid);
 void LockThreads() SANITIZER_NO_THREAD_SAFETY_ANALYSIS;
 void UnlockThreads() SANITIZER_NO_THREAD_SAFETY_ANALYSIS;
 
-template <typename Fn> inline void ForEachThread(Fn callback, void *arg) {
+template <typename Fn, typename T> inline void ForEachThread(Fn callback, T *arg) {
   GetThreadRegistry().CheckLocked();
   // We need an intermediate struct here,
   // because `RunCallbackForEachThreadLocked`
   // requires a non-capturing lambda.
   struct CallbackArgs {
     Fn callback;
-    void *arg;
+    T *arg;
   } ctx{callback, arg};
   GetThreadRegistry().RunCallbackForEachThreadLocked(
       [](ThreadContextBase *tctx_base, void *raw_ctx) {

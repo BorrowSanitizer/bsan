@@ -20,7 +20,7 @@ void BsanThreadContext::OnFinished() {
   // Any thread-local state that involves the GC must be handled
   // within this function.
   if (thread) {
-    global_ctx()->acquireProvenance(thread->zct);
+    global_ctx()->acquireProvenance(thread->zct_);
   }
   thread = nullptr;
 }
@@ -169,7 +169,7 @@ void BsanThread::Destroy() {
     CommitBackRustCache(this->rust_allocator_cache());
     if (common_flags()->use_sigaltstack)
       UnsetAlternateSignalStack(altstack_base_);
-    zct.~ZeroCountTable();
+    zct_.~ZeroCountTable();
     UnmapOrDie(shadow_stack_bottom_, shadow_stack_size_);
   } else {
     CHECK_NE(this, CurrentThread());
