@@ -680,9 +680,6 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
       M.getOrInsertFunction(BSAN("reserve_stack_slot"),
                             FunctionType::get(PtrTy, /*isVarArg=*/false), AL);
 
-  BsanFuncDestroyStackSlot = M.getOrInsertFunction(BSAN("destroy_stack_slot"),
-                                                   AL, IRB.getVoidTy(), PtrTy);
-
   BsanFuncExposeProv = M.getOrInsertFunction(BSAN("expose_prov"), AL,
                                              IRB.getVoidTy(), IntptrTy, PtrTy);
 
@@ -1150,11 +1147,6 @@ class ShadowStackAllocator {
   // The size of a slot within the shadow stack.
   Value *SlotSize;
 
-  // The number of stack slots allocated to store the provenance
-  // of allocations that live for the duration of the stack frame,
-  // and will be deallocated before the function returns.
-  unsigned NumStackAllocSlots = 0;
-
   // A pointer to where the frame pointer is stored.
   Value *FramePtrSrc;
 
@@ -1241,17 +1233,19 @@ public:
     return FrameHeaderBottom;
   }
 
-  // Extends the frame header down by one provenance slot to store the
-  // provenance associated with a stack allocation. This includes allocas and
-  // byval arguments.
-  Value *getStackAllocSlot(IRBuilder<> &IRB) {
-    FrameHeaderBottom = ptrsub(IRB, getOrInitFrameHeaderBottom(IRB), SlotSize);
-    NumStackAllocSlots += 1;
+  // Extends the frame header down by a number of provenance slots.
+  // This is used to allocate space for arguments, stack allocas,
+  // and any other unprotected provenance value that is kept within
+  // the header.
+  Value *extendFrameHeader(IRBuilder<> &IRB, Value *NumParamProv) {
+    Value *Bytes = IRB.CreateMul(NumParamProv, SlotSize);
+    FrameHeaderBottom = ptrsub(IRB, getOrInitFrameHeaderBottom(IRB), Bytes);
     return FrameHeaderBottom;
   }
 
-  Value *getNumStackAllocSlots(IRBuilder<> &IRB, Type *Ty) {
-    return ConstantInt::get(Ty, NumStackAllocSlots);
+  // Extends the frame header down by one provenance slot.
+  Value *extendFrameHeaderByOne(IRBuilder<> &IRB) {
+    return extendFrameHeader(IRB, ConstantInt::get(SlotSize->getType(), 1));
   }
 
   // Allocates one or more shadow stack slots from the requested section.
@@ -1350,17 +1344,15 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   SmallDenseMap<Argument *, SmallVector<std::pair<Value *, ElementCount>>>
       ArgumentProvenance;
 
+  // We copy parameter provenance onto the shadow stack so
+  // that it can be seen by the GC.
+  Value *ParamRegion = nullptr;
+
   // A map from values to their provenance.
   ProvenanceMap ProvMap;
 
-  // For each alloca that has an explicit `lifetime.start` (and so gets a
-  // fresh borrow tag minted on every entry into its scope), this records
-  // where its provenance lives in this frame's shadow-stack header. At
-  // function exit, `popFrame` reads directly out of that header to pop/
-  // deallocate every slot in it -- so every time a fresh tag is minted, we
-  // must also refresh the copy stored here, or `popFrame` will act on
-  // whatever stale (tag, info) pair was written at function entry instead
-  // of the alloca's current one.
+  // The location where provenance is stored for
+  // each alloca within the frame header.
   DenseMap<AllocaInst *, ProvenanceDest> AllocaFrameSlots;
 
   // Information needed to reconstruct the shadow memory of a `byval` argument
@@ -1650,7 +1642,7 @@ private:
         ElementCount Elems = ProvVec[Key.Offset].second;
         Value *ByteOffset =
             EntryIRB.CreateMul(BS.ProvenanceSize, ArgProvOffset);
-        Value *ArgProvenancePtr = ptradd(EntryIRB, BS.ParamTLS, ByteOffset);
+        Value *ArgProvenancePtr = ptradd(EntryIRB, ParamRegion, ByteOffset);
         Provenance ArgProvenance =
             loadProvenanceAligned(EntryIRB, ArgProvenancePtr, Elems);
         ProvMap.setProvenance(Key, ArgProvenance);
@@ -1798,6 +1790,18 @@ private:
       }
     }
 
+    // We need to copy arguments to the shadow stack as well. Otherwise,
+    // they will not be rooted anywhere for the GC to see. Subsequent
+    // function calls will overwrite the TLS array that we use to pass
+    // provenance.
+    // TODO: only do this when the body of the function contains a call.
+    if (!ArgumentProvenance.empty()) {
+      ParamRegion = ShadowStack.extendFrameHeader(EntryIRB, NumParamProv);
+      Value *Bytes = EntryIRB.CreateMul(NumParamProv, BS.ProvenanceSize);
+      EntryIRB.CreateMemCpy(ParamRegion, kMinProvAlignment, BS.ParamTLS,
+                            kMinProvAlignment, Bytes);
+    }
+
     // Afterward, we can load the provenance of the byval type,
     // and store it to the shadow memory of the byval pointer.
     for (auto &Info : ByValArgs) {
@@ -1814,7 +1818,7 @@ private:
       copyProvenance(EntryIRB, ShadowPtr, Fields, Info.Size,
                      AtomicOrdering::NotAtomic);
 
-      Value *Slot = ShadowStack.getStackAllocSlot(EntryIRB);
+      Value *Slot = ShadowStack.extendFrameHeaderByOne(EntryIRB);
       auto SlotPtr = getMainProvenancePtr(EntryIRB, Slot);
       storeProvenance(EntryIRB, SlotPtr, Info.AllocProv);
     }
@@ -1823,7 +1827,7 @@ private:
     // static allocas.
     for (auto [Idx, AI] : llvm::enumerate(Plan.allocas())) {
       NextNodeIRBuilder IRB(AI);
-      Value *Slot = ShadowStack.getStackAllocSlot(EntryIRB);
+      Value *Slot = ShadowStack.extendFrameHeaderByOne(EntryIRB);
       Provenance Prov;
       if (!Plan.hasLifetimeStart(AI)) {
         Prov = createAllocaMetadata(EntryIRB);
@@ -2615,8 +2619,8 @@ private:
   void popFrame(IRBuilder<> &IRB, Instruction &I, Value *RetVal) {
     BasicBlock *BB = IRB.GetInsertBlock();
     if (ShadowStack.wasUsed()) {
-      Value *NumStackAllocs =
-          ShadowStack.getNumStackAllocSlots(IRB, BS.IntptrTy);
+      unsigned NumAllocs = ByValAllocs.size() + AllocaFrameSlots.size();
+      Value *NumStackAllocs = ConstantInt::get(BS.IntptrTy, NumAllocs);
       Value *NumProtectors =
           ShadowStack.getOutgoingOffset(Cycles, IRB, BS.IntptrTy, true);
       Value *MaxNumProtectors =
@@ -2644,13 +2648,13 @@ private:
           Value *ByteWidth = IRB.CreateMul(NumReturnProv, BS.ProvenanceSize);
           ReturnProvPtrs.push_back(ptrsub(IRB, FrameTop, ByteWidth));
         }
-        IRB.CreateStore(ReturnProvPtrs.back(), BS.ProvStackTLS);
         for (const auto &[Idx, Ptr] : llvm::enumerate(ReturnProvPtrs)) {
           auto MainPtr = getMainProvenancePtr(IRB, Ptr);
           Provenance Prov =
               assertProvenance(IRB, ProvDesc[Idx].Elems, {RetVal, Idx});
           storeProvenance(IRB, MainPtr, Prov);
         }
+        IRB.CreateStore(ReturnProvPtrs.back(), BS.ProvStackTLS);
         return;
       }
     }
