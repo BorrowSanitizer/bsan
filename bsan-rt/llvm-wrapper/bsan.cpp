@@ -118,6 +118,15 @@ BorTag NewBorTag() {
   return atomic_fetch_add(&__bsan_bor_tag_ctr, 1, memory_order_relaxed);
 }
 
+void AcquireProvenance(Provenance prov) {
+  BsanThread *thread = CurrentThread();
+  if (LIKELY(thread != nullptr)) {
+    thread->zct.acquireProvenance(prov);
+  } else {
+    global_ctx()->Threads().acquireProvenance(prov);
+  }
+}
+
 // Asks the global context to run the garbage collector once the Rust runtime
 // has reported at least `visits_per_gc` tree-node visits since the last
 // request, then resets the counter. Concurrent requests across threads are
@@ -501,9 +510,10 @@ void __bsan_retag(void *object_addr, uptr access_size, u8 flags,
                       checked);
     HANDLE_ERROR;
     *(Provenance *)(dest) = prov;
-    // A retag mints a fresh provenance value with no references yet; record it
-    // in this thread's zero-count set as a collection candidate.
-    CurrentThread()->zct.acquireProvenance(prov);
+    // We can only acquire provenance *after* we have rooted it to the
+    // shadow stack. Otherwise, the GC could clean it up before we have
+    // even started using it!
+    AcquireProvenance(prov);
     MaybeRequestGC();
   }
 }
@@ -550,14 +560,14 @@ void __bsan_rc_inc(BorTag Tag, AllocInfo *Info) {
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-bool __bsan_rc_dec_impl(BorTag Tag, AllocInfo *Info);
+bool __bsan_rc_dec_impl(BorTag tag, AllocInfo *info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_rc_dec(BorTag Tag, AllocInfo *Info) {
+void __bsan_rc_dec(BorTag tag, AllocInfo *info) {
   if (__bsan_rc_dec_impl) {
     InterceptorBarrier barrier;
-    if (__bsan_rc_dec_impl(Tag, Info)) {
-      CurrentThread()->zct.acquireProvenance({Tag, Info});
+    if (__bsan_rc_dec_impl(tag, info)) {
+      AcquireProvenance({tag, info});
     }
   }
 }
@@ -605,7 +615,6 @@ AllocInfo *__bsan_alloc(void *base_addr, uptr size, BorTag bor_tag, Span pc) {
   if (__bsan_alloc_impl) {
     InterceptorBarrier barrier;
     AllocInfo *info = __bsan_alloc_impl(base_addr, size, bor_tag, pc);
-    CurrentThread()->zct.acquireProvenance({bor_tag, info});
     return info;
   } else {
     return nullptr;

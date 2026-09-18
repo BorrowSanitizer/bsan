@@ -42,6 +42,11 @@ struct AllocInfo;
 struct Provenance {
   BorTag tag;
   AllocInfo *info;
+  bool isConcrete() {
+    bool cond = tag > 2;
+    DCHECK(cond || info == nullptr);
+    return cond;
+  }
 };
 
 struct AtExitRecord {
@@ -99,6 +104,10 @@ void PlatformTSDDtor(void *tsd);
 
 /// Creates a new borrow tag.
 BorTag NewBorTag();
+
+/// Marks a provenance value as potentially
+/// viable for garbage collection.
+void AcquireProvenance(Provenance prov);
 
 /// Enables interception.
 void InitializeInterceptors();

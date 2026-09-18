@@ -47,6 +47,36 @@ struct LocalInterceptorContext {
   bool block_interception;
 };
 
+static Provenance BsanAllocateMeta(void *ptr, SIZE_T size, uptr span) {
+  BorTag tag = NewBorTag();
+  AllocInfo *info = __bsan_alloc(ptr, size, tag, span);
+  Provenance prov = {tag, info};
+  return prov;
+}
+
+static void *BsanAllocateMetaIntoStack(void *ptr, SIZE_T size, bool is_inst,
+                                       uptr span, uptr slot_idx) {
+  if (is_inst) {
+    Provenance *slot = GetRetValSlot(slot_idx);
+    Provenance prov = BsanAllocateMeta(ptr, size, span);
+    *slot = prov;
+    AcquireProvenance(prov);
+  }
+  return ptr;
+}
+
+static void *BsanAllocateMetaIntoHeap(void *ptr, SIZE_T size, bool is_inst,
+                                      uptr span, void *dest) {
+  if (is_inst) {
+    Provenance prov = BsanAllocateMeta(ptr, size, span);
+    WriteShadow(dest, prov);
+    AcquireProvenance(prov);
+  } else {
+    ClearShadow(dest, sizeof(void *));
+  }
+  return ptr;
+}
+
 INTERCEPTOR(int, pthread_create, void *th, void *attr,
             void *(*callback)(void *), void *param) {
   ENSURE_BSAN_INITED();
@@ -86,11 +116,8 @@ INTERCEPTOR(void *, malloc, SIZE_T size) {
   bool already_in_scope = BlockInterception();
   InterceptorBarrier barrier;
   void *ptr = bsan_malloc(size);
-  if (!already_in_scope && INST_CALLER(malloc)) {
-    Provenance *RetSlot = GetRetValSlot(0);
-    BorTag Tag = NewBorTag();
-    *RetSlot = {Tag, __bsan_alloc(ptr, size, Tag, span)};
-  }
+  bool is_inst = !already_in_scope && INST_CALLER(malloc);
+  BsanAllocateMetaIntoStack(ptr, size, is_inst, span, 0);
   return ptr;
 }
 
@@ -125,11 +152,8 @@ INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
   bool already_in_scope = BlockInterception();
   InterceptorBarrier barrier;
   void *ptr = bsan_calloc(nmemb, size);
-  if (!already_in_scope && INST_CALLER(calloc)) {
-    Provenance *RetSlot = GetRetValSlot(0);
-    BorTag Tag = NewBorTag();
-    *RetSlot = {Tag, __bsan_alloc(ptr, nmemb * size, Tag, span)};
-  }
+  bool is_inst = !already_in_scope && INST_CALLER(calloc);
+  BsanAllocateMetaIntoStack(ptr, nmemb * size, is_inst, span, 0);
   return ptr;
 }
 
@@ -149,40 +173,9 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
   }
   void *nptr = bsan_realloc(ptr, size);
   if (is_inst) {
-    Provenance *RetSlot = GetRetValSlot(0);
-    BorTag Tag = NewBorTag();
-    *RetSlot = {Tag, __bsan_alloc(nptr, size, Tag, span)};
+    BsanAllocateMetaIntoStack(nptr, size, is_inst, span, 0);
   }
   return nptr;
-}
-
-static Provenance BsanAllocateMeta(void *ptr, SIZE_T size, uptr span) {
-  BorTag tag = NewBorTag();
-  AllocInfo *info = __bsan_alloc(ptr, size, tag, span);
-  Provenance prov = {tag, info};
-  CurrentThread()->zct.acquireProvenance(prov);
-  return prov;
-}
-
-static void *BsanAllocateMetaIntoStack(void *ptr, SIZE_T size, bool is_inst,
-                                       uptr span, uptr slot_idx) {
-  if (is_inst) {
-    Provenance *slot = GetRetValSlot(slot_idx);
-    Provenance prov = BsanAllocateMeta(ptr, size, span);
-    *slot = prov;
-  }
-  return ptr;
-}
-
-static void *BsanAllocateMetaIntoHeap(void *ptr, SIZE_T size, bool is_inst,
-                                      uptr span, void *dest) {
-  if (is_inst) {
-    Provenance prov = BsanAllocateMeta(ptr, size, span);
-    WriteShadow(dest, prov);
-  } else {
-    ClearShadow(dest, sizeof(void *));
-  }
-  return ptr;
 }
 
 INTERCEPTOR(void *, aligned_alloc, SIZE_T alignment, SIZE_T size) {
