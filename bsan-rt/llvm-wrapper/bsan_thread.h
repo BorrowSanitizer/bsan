@@ -138,6 +138,7 @@ public:
 
 private:
   friend struct GlobalContext;
+  friend struct ThreadManager;
 
   // Executes the start routine.
   thread_return_t Start();

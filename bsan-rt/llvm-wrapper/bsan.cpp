@@ -510,9 +510,10 @@ void __bsan_retag(void *object_addr, uptr access_size, u8 flags,
                       checked);
     HANDLE_ERROR;
     *(Provenance *)(dest) = prov;
-    // A retag mints a fresh provenance value with no references yet; record it
-    // in this thread's zero-count set as a collection candidate.
-    CurrentThread()->zct.acquireProvenance(prov);
+    // We can only acquire provenance *after* we have rooted it to the
+    // shadow stack. Otherwise, the GC could clean it up before we have
+    // even started using it!
+    AcquireProvenance(prov);
     MaybeRequestGC();
   }
 }
@@ -559,14 +560,14 @@ void __bsan_rc_inc(BorTag Tag, AllocInfo *Info) {
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-bool __bsan_rc_dec_impl(BorTag Tag, AllocInfo *Info);
+bool __bsan_rc_dec_impl(BorTag tag, AllocInfo *info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_rc_dec(BorTag Tag, AllocInfo *Info) {
+void __bsan_rc_dec(BorTag tag, AllocInfo *info) {
   if (__bsan_rc_dec_impl) {
     InterceptorBarrier barrier;
-    if (__bsan_rc_dec_impl(Tag, Info)) {
-      CurrentThread()->zct.acquireProvenance({Tag, Info});
+    if (__bsan_rc_dec_impl(tag, info)) {
+      AcquireProvenance({tag, info});
     }
   }
 }
