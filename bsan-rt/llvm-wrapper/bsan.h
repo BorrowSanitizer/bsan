@@ -42,6 +42,11 @@ struct AllocInfo;
 struct Provenance {
   BorTag tag;
   AllocInfo *info;
+  bool isConcrete() {
+    bool cond = tag > 2;
+    DCHECK(cond || info == nullptr);
+    return cond;
+  }
 };
 
 struct AtExitRecord {

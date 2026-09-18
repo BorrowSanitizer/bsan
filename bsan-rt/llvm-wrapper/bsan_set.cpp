@@ -76,13 +76,13 @@ void BorTagSet::EnsureCapacity(uptr req_size) {
 }
 
 void ConcreteProvenanceSet::insert(Provenance prov) {
-  if (prov.info != nullptr) {
+  if (prov.isConcrete()) {
     set_[prov.info].insert(prov.tag);
   }
 }
 
 void ConcreteProvenanceSet::remove(Provenance prov) {
-  if (prov.info == nullptr) {
+  if (prov.isConcrete()) {
     return;
   }
   // Only erase the tag; leave the (possibly now-empty) tag set in place. erase
