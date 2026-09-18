@@ -77,7 +77,7 @@ void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
   threads.ForEachThread(MergeZeroCountsCallback, arg);
   // We also need to visit the global ZCT, which contains garbage from threads
   // that have exited since the last collection run.
-  MergeZeroCounts(snap, threads.global_zct);
+  MergeZeroCounts(snap, threads.global_zct_);
 }
 
 void GlobalContext::CollectGarbage(Snapshot &snap) {

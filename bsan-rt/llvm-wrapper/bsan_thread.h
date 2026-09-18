@@ -163,6 +163,8 @@ BsanThread *CurrentThread();
 void SetCurrentThread(BsanThread *t);
 
 struct SANITIZER_MUTEX ThreadManager {
+  friend struct GlobalContext;
+
 public:
   // Initializes a thread, making its state accessible
   // to global processes (e.g. the garbage collector)
@@ -176,6 +178,8 @@ public:
 
   void LockThreads() SANITIZER_ACQUIRE() { mtx_.Lock(); }
   void UnlockThreads() SANITIZER_RELEASE() { mtx_.Unlock(); }
+
+  void acquireProvenance(Provenance prov);
 
   // Executes the provided callback for every thread.
   // This can only be called when the world has been stopped.
@@ -197,7 +201,7 @@ private:
   // When a thread exits, its zero count table needs to be
   // retained, so that we can clean up any of the provenance
   // values that it acquired in a future garbage collection pass.
-  ZeroCountTable global_zct;
+  ZeroCountTable global_zct_;
   // We use an atomic counter to generate new `ThreadIds`.
   // We create a new ID every time a thread is registered.
   atomic_uintptr_t thread_id_ctr{0};

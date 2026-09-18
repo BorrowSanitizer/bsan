@@ -118,6 +118,15 @@ BorTag NewBorTag() {
   return atomic_fetch_add(&__bsan_bor_tag_ctr, 1, memory_order_relaxed);
 }
 
+void AcquireProvenance(Provenance prov) {
+  BsanThread *thread = CurrentThread();
+  if (LIKELY(thread != nullptr)) {
+    thread->zct.acquireProvenance(prov);
+  } else {
+    global_ctx()->Threads().acquireProvenance(prov);
+  }
+}
+
 // Asks the global context to run the garbage collector once the Rust runtime
 // has reported at least `visits_per_gc` tree-node visits since the last
 // request, then resets the counter. Concurrent requests across threads are

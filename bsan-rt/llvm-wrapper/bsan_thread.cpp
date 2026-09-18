@@ -76,8 +76,12 @@ void ThreadManager::RegisterThread(BsanThread *thread) {
 
 void ThreadManager::DeregisterThread(BsanThread *thread) {
   Lock l(&mtx_);
-  global_zct.drainFrom(thread->zct);
+  global_zct_.drainFrom(thread->zct);
   threads.erase(thread->id);
 }
 
+void ThreadManager::acquireProvenance(Provenance prov) {
+  Lock l(&mtx_);
+  global_zct_.acquireProvenance(prov);
+}
 } // namespace __bsan
