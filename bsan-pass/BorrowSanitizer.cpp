@@ -1353,14 +1353,8 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // A map from values to their provenance.
   ProvenanceMap ProvMap;
 
-  // For each alloca that has an explicit `lifetime.start` (and so gets a
-  // fresh borrow tag minted on every entry into its scope), this records
-  // where its provenance lives in this frame's shadow-stack header. At
-  // function exit, `popFrame` reads directly out of that header to pop/
-  // deallocate every slot in it -- so every time a fresh tag is minted, we
-  // must also refresh the copy stored here, or `popFrame` will act on
-  // whatever stale (tag, info) pair was written at function entry instead
-  // of the alloca's current one.
+  // Every alloca has a stack slot where its provenance starts.
+  //
   DenseMap<AllocaInst *, ProvenanceDest> AllocaFrameSlots;
 
   // Information needed to reconstruct the shadow memory of a `byval` argument
@@ -1694,9 +1688,9 @@ private:
       if (Prov != Provenance::omnivalid(BS)) {
         IRB.CreateCall(BS.BsanFuncRcInc, {Prov.Tag, Prov.Info});
       }
-      // We only decrement on nonatomic store. This leaks provenance values that
-      // are exposed to atomic operations, which is necessary to support atomics
-      // without locking.
+      // We only decrement on nonatomic stores. This leaks provenance
+      // values that are exposed to atomic operations, which is necessary
+      // to support atomics without locking.
       if (Ordering == AtomicOrdering::NotAtomic) {
         Provenance Old = loadProvenanceAlignedPairwise(IRB, Dest, Ordering);
         IRB.CreateCall(BS.BsanFuncRcDec, {Old.Tag, Old.Info});
@@ -2644,13 +2638,13 @@ private:
           Value *ByteWidth = IRB.CreateMul(NumReturnProv, BS.ProvenanceSize);
           ReturnProvPtrs.push_back(ptrsub(IRB, FrameTop, ByteWidth));
         }
-        IRB.CreateStore(ReturnProvPtrs.back(), BS.ProvStackTLS);
         for (const auto &[Idx, Ptr] : llvm::enumerate(ReturnProvPtrs)) {
           auto MainPtr = getMainProvenancePtr(IRB, Ptr);
           Provenance Prov =
               assertProvenance(IRB, ProvDesc[Idx].Elems, {RetVal, Idx});
           storeProvenance(IRB, MainPtr, Prov);
         }
+        IRB.CreateStore(ReturnProvPtrs.back(), BS.ProvStackTLS);
         return;
       }
     }
