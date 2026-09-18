@@ -10,23 +10,15 @@ namespace __bsan {
 
 struct ScopedStopTheWorldLock;
 
+typedef uptr Epoch;
+
 struct Snapshot {
 public:
-  Snapshot(ConcreteProvenanceSet *live, uptr gen)
-      : live(live), gen(gen), min_drained(gen) {};
+  Snapshot() {};
   // The set of borrow tags that are currently
   // reachable from any of the shadow stacks.
-  ConcreteProvenanceSet *live;
-  // The current generation
-  uptr gen;
-  // The minimum generation recorded by any live thread.
-  uptr min_drained;
-  // The scope holding the lock for global state. We need
-  // access to this within the closure that executes when
-  // the world is stopped, so that we can selectively
-  // unlock the internal allocator. We only want to unlock
-  // this once, so we need to update the state of the scope.
-  ScopedStopTheWorldLock *scope = nullptr;
+  ConcreteProvenanceSet live;
+  uptr num_busy_threads = 0;
 };
 
 // Global state associated with the runtime.
@@ -71,10 +63,10 @@ private:
   // each thread.
   ConcreteProvenanceSet pending_;
 
-  // A callback passed to `StopTheWorld` that takes a "snapshot" of the state
-  // associated with each thread and uses it to populate the set of pending
-  // provenance values.
-  static void SnapshotCallback(const SuspendedThreadsList &, void *arg);
+  Epoch epoch_ = 1;
+
+  // A callback passed to `StopTheWorld`. Runs the garbage collector.
+  static void GCCallback(const SuspendedThreadsList &, void *arg);
 
   // Iterates over every thread's shadow stack, creating a set of all reachable
   // provenance values. The last argument is a pointer to the
@@ -85,19 +77,16 @@ private:
   // the set of pending provenance values. We only add values to the pending set
   // if they are not present on any shadow stack. Values that we add to the
   // pending set are also removed from their thread's zero-count-table.
-  static void MergeZeroCountsCallback(BsanThread *const &thread, void *arg);
   static void MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct);
-
   // Drains the contents of the pending provenance set, pruning the associated
   // state from the tree for each allocation. Ejects any retired allocation
   // objects that are confirmed to be unreachable. This happens after the world
   // has restarted.
-  void CollectGarbage(Snapshot &snap);
+  void CollectGarbage(Snapshot *snap);
 
-  // Allocations that are unreachable and have had all of their nodes pruned,
-  // but that cannot be ejected yet, because they might still be stored within a
-  // thread's zero count table. Maps each allocation to the generation when it
-  // was retired.
+  void Retire(AllocInfo *info);
+  void Shift(Snapshot *snap);
+
   DenseMap<AllocInfo *, uptr> quarantine_{};
 
   // Guards `at_exit_stack_`.

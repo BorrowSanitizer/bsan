@@ -521,11 +521,13 @@ unsafe extern "C" fn __bsan_prune(
     let global_ctx = unsafe { global_ctx() };
     let alloc: AllocInfoPtr = alloc_info.into();
     let dead_tags = unsafe { slice::from_raw_parts_mut(bor_tags, len) };
-    if let Some(tree) = alloc.state.lock().tree_opt_mut() {
-        tree.remove_dead_tags(global_ctx, dead_tags)
-    } else {
-        // The tree is already deallocated, so we can zero out dead_tags
-        dead_tags.fill(BorTag::OMNIVALID);
+    if let Some(mut state) = alloc.state.try_lock() {
+        if let Some(tree) = state.tree_opt_mut() {
+            tree.remove_dead_tags(global_ctx, dead_tags)
+        } else {
+            false
+        }
+    }else{
         false
     }
 }
