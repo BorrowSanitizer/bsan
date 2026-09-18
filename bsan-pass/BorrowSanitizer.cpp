@@ -1124,9 +1124,6 @@ private:
 // The shadow stack has multiple regions, and each has a different purpose.
 //
 // |-----------------------|  <-- FrameHeaderTop
-// | parameter provenance  |
-// |_______________________|
-// |                       |
 // | static/byval allocas  |
 // |_______________________|
 // |                       |  <-- FnEntryTop
@@ -1353,8 +1350,9 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // A map from values to their provenance.
   ProvenanceMap ProvMap;
 
-  // Every alloca has a stack slot where its provenance starts.
-  //
+  // Every alloca has a shadow stack slot where we "root" its provenance,
+  // so that it can be found by the GC. We update the contents of this
+  // slot every time we start a new lifetime for an alloca.
   DenseMap<AllocaInst *, ProvenanceDest> AllocaFrameSlots;
 
   // Information needed to reconstruct the shadow memory of a `byval` argument
