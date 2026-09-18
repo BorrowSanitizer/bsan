@@ -147,33 +147,6 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
   return nptr;
 }
 
-static Provenance BsanAllocateMeta(void *ptr, SIZE_T size, uptr span) {
-  BorTag tag = NewBorTag();
-  AllocInfo *info = __bsan_alloc(ptr, size, tag, span);
-  Provenance prov = {tag, info};
-  return prov;
-}
-
-static void *BsanAllocateMetaIntoStack(void *ptr, SIZE_T size, bool is_inst,
-                                       uptr span, uptr slot_idx) {
-  if (is_inst) {
-    Provenance *slot = GetRetValSlot(slot_idx);
-    Provenance prov = BsanAllocateMeta(ptr, size, span);
-    *slot = prov;
-  }
-  return ptr;
-}
-
-static void *BsanAllocateMetaIntoHeap(void *ptr, SIZE_T size, bool is_inst,
-                                      uptr span, void *dest) {
-  if (is_inst) {
-    Provenance prov = BsanAllocateMeta(ptr, size, span);
-    WriteShadow(dest, prov);
-  } else {
-    ClearShadow(dest, sizeof(void *));
-  }
-  return ptr;
-}
 
 INTERCEPTOR(void *, aligned_alloc, SIZE_T alignment, SIZE_T size) {
   GET_SPAN;
