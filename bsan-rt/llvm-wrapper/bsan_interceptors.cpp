@@ -178,7 +178,6 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
   return nptr;
 }
 
-
 INTERCEPTOR(void *, aligned_alloc, SIZE_T alignment, SIZE_T size) {
   GET_SPAN;
   if (DlsymAlloc::Use())
