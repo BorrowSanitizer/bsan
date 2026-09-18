@@ -34,12 +34,17 @@ void BsanThread::Init() {
   // that the GC can accurately read the initialized contents of the
   // shadow stack when it stops the world.
   shadow_stack_ptr_ = &__bsan_shadow_stack;
+  if (common_flags()->use_sigaltstack)
+    altstack_base_ = SetAlternateSignalStack();
 }
 
 void BsanThread::Destroy(void *tsd) {
   BsanThread *t = (BsanThread *)tsd;
   global_ctx()->Threads().DeregisterThread(t);
+  t->malloc_storage().CommitBack();
   t->zct.~ZeroCountTable();
+  if (common_flags()->use_sigaltstack)
+    UnsetAlternateSignalStack(t->altstack_base_);
   UnmapOrDie(t->shadow_stack_bottom_, t->shadow_stack_size_);
   uptr size = RoundUpTo(sizeof(BsanThread), GetPageSizeCached());
   UnmapOrDie(t, size);

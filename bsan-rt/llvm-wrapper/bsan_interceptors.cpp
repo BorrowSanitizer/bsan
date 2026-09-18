@@ -140,7 +140,9 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
   bool already_in_scope = BlockInterception();
   InterceptorBarrier barrier;
   bool is_inst = !already_in_scope && INST_CALLER(realloc);
-  if (is_inst) {
+  // If the pointer is null, then realloc behaves like malloc,
+  // so we can skip instrumenting the deallocation.
+  if (is_inst && ptr != nullptr) {
     Provenance *slot = GetParamSlot(0);
     __bsan_dealloc(ptr, slot->tag, slot->info, span, false);
     HANDLE_ERROR_PC_BP(pc, bp);
@@ -168,8 +170,6 @@ static void *BsanAllocateMetaIntoStack(void *ptr, SIZE_T size, bool is_inst,
     Provenance *slot = GetRetValSlot(slot_idx);
     Provenance prov = BsanAllocateMeta(ptr, size, span);
     *slot = prov;
-  } else {
-    ClearRetValSlot(slot_idx);
   }
   return ptr;
 }

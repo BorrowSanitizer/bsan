@@ -127,6 +127,11 @@ public:
   // Signal handler settings.
   __sanitizer_sigset_t starting_sigset_;
 
+  // The base of this thread's alternate signal stack.
+  // This is needed when deadly signal handlers run on a thread whose
+  // stack has overflowed.
+  void *altstack_base_ = nullptr;
+
   BsanThreadLocalMallocStorage &malloc_storage() { return malloc_storage_; }
 
   ZeroCountTable zct;

@@ -258,12 +258,24 @@ bool CallerIsInstrumented(void *sym) {
   return matches;
 }
 
+static void OnStackUnwind(const SignalContext &sig, const void *,
+                          BufferedStackTrace *stack) {
+  stack->Unwind(StackTrace::GetNextInstructionPc(sig.pc), sig.bp, sig.context,
+                /*request_fast=*/true, GetStackTraceLen());
+}
+
+static void BsanOnDeadlySignal(int signo, void *siginfo, void *context) {
+  HandleDeadlySignal(siginfo, context, GetTid(), &OnStackUnwind, nullptr);
+}
+
 extern "C" SANITIZER_WEAK_ATTRIBUTE void
 __bsan_internal_init(SharedSanitizerFlags *_flags) {}
 
 static bool BsanInitInternal() {
   if (LIKELY(BsanInited()))
     return true;
+
+  SanitizerToolName = "BorrowSanitizer";
 
   AvoidCVE_2016_2143();
   SharedSanitizerFlags flags;
@@ -281,6 +293,7 @@ static bool BsanInitInternal() {
 
   InitializeAllocator();
   InitializeInterceptors();
+  InstallDeadlySignalHandlers(BsanOnDeadlySignal);
   InitializeTSD(PlatformTSDDtor);
 
   BsanThread *main_thread = BsanThread::Create(nullptr, nullptr);
@@ -369,15 +382,13 @@ void __bsan_shadow_join(void *dest, void *src_tag, void *src_info, uptr size) {
 /// when we are back within the caller, we can trust the provenance array for
 /// the return value.
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_validate_params(void *current_fn, uptr len, uptr var_len) {
+void __bsan_validate_params(void *current_fn, uptr len, uptr var_arg_bytes) {
   bool trusted = CallerIsInstrumented(current_fn);
   if (!trusted) {
     for (uptr i = 0; i < len; ++i) {
       __bsan_param_tls[i] = OMNIVALID;
     }
-    for (uptr i = 0; i < var_len; ++i) {
-      __bsan_var_arg_tag_tls[i] = OMNIVALID.tag;
-    }
+    internal_memset(&__bsan_var_arg_tag_tls, 0, var_arg_bytes);
   }
 }
 

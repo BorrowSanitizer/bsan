@@ -13,6 +13,10 @@ set(BSAN_SOURCES
   bsan_global.cpp
 )
 
+set(BSAN_PREINIT_SOURCES 
+    bsan_preinit.cpp
+)
+
 SET(BSAN_HEADERS
   bsan.h
   bsan_set.h
@@ -26,12 +30,12 @@ SET(BSAN_HEADERS
 )
 
 add_custom_target(clang-format
-  COMMAND ${BSAN_CLANG_FORMAT} ${BSAN_SOURCES} ${BSAN_HEADERS} -i --style=LLVM
+  COMMAND ${BSAN_CLANG_FORMAT} ${BSAN_SOURCES} ${BSAN_PREINIT_SOURCES} ${BSAN_HEADERS} -i --style=LLVM
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 add_custom_target(clang-format-check
-  COMMAND ${BSAN_CLANG_FORMAT} ${BSAN_SOURCES} ${BSAN_HEADERS} --dry-run --Werror --style=LLVM
+  COMMAND ${BSAN_CLANG_FORMAT} ${BSAN_SOURCES} ${BSAN_PREINIT_SOURCES} ${BSAN_HEADERS} --dry-run --Werror --style=LLVM
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
@@ -39,6 +43,7 @@ set(BSAN_COMMON_CFLAGS ${SANITIZER_COMMON_CFLAGS})
 append_rtti_flag(OFF BSAN_COMMON_CFLAGS)
 # Prevent clang from generating libc calls.
 append_list_if(COMPILER_RT_HAS_FFREESTANDING_FLAG -ffreestanding BSAN_COMMON_CFLAGS)
+set(BSAN_CFLAGS ${BSAN_COMMON_CFLAGS})
 set(BSAN_DYNAMIC_CFLAGS ${BSAN_COMMON_CFLAGS})
 
 set_source_files_properties(bsan_interceptors.cpp PROPERTIES
@@ -55,6 +60,15 @@ add_compiler_rt_object_libraries(RTBorsan_dynamic
   CFLAGS ${BSAN_DYNAMIC_CFLAGS}
   DEFS ${BSAN_DYNAMIC_DEFINITIONS})
 
+
+add_compiler_rt_object_libraries(RTBorsan_preinit
+  ARCHS ${BSAN_SUPPORTED_ARCH}
+  SOURCES ${BSAN_PREINIT_SOURCES}
+  ADDITIONAL_HEADERS ${BSAN_HEADERS}
+  CFLAGS ${BSAN_CFLAGS}
+  DEFS ${BSAN_COMMON_DEFINITIONS}
+)
+
 add_compiler_rt_component(bsan)
 
 if(APPLE)
@@ -64,7 +78,9 @@ if(APPLE)
     SHARED
     OS ${SANITIZER_COMMON_SUPPORTED_OS}
     ARCHS ${BSAN_SUPPORTED_ARCH}
-    OBJECT_LIBS RTBorsan_dynamic
+    OBJECT_LIBS 
+                RTBorsan_preinit
+                RTBorsan_dynamic
                 RTInterception
                 RTSanitizerCommon
                 RTSanitizerCommonLibc
@@ -74,14 +90,15 @@ if(APPLE)
     DEFS ${BSAN_DYNAMIC_DEFINITIONS}
     PARENT_TARGET bsan)
 else()
-  set(BSAN_CFLAGS ${BSAN_COMMON_CFLAGS})
   foreach(arch ${BSAN_SUPPORTED_ARCH})
     if(CAN_TARGET_${arch})
       add_compiler_rt_runtime(clang_rt.bsan
         STATIC
         ARCHS ${arch}
         SOURCES ${BSAN_SOURCES}
-        OBJECT_LIBS RTInterception
+        OBJECT_LIBS 
+                    RTBorsan_preinit
+                    RTInterception
                     RTSanitizerCommon
                     RTSanitizerCommonLibc
                     RTSanitizerCommonSymbolizer
