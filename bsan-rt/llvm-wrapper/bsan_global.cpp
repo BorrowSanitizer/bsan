@@ -40,47 +40,105 @@ void GlobalContext::MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct) {
 }
 
 void GlobalContext::GCCallback(const SuspendedThreadsList &, void *arg) {
+  // We store all of the GC-relevant state in a "snapshot". This contains
+  // a set of all reachable provenance values, and the number of threads
+  // that were busy during this GC run.
+  Snapshot *snap = static_cast<Snapshot *>(arg);
   // The data structures used by the GC require the internal allocator.
   // It's much faster than using the `InternalMmap` vector types
   // provided by `sanitizer_common`, since we have a lot of smaller, short
   // lived allocations. We lock the internal allocator prior to stopping
   // the world, so we need to unlock it here, and record that we have done
   // so, to avoid unlocking it again when we restart the world.
-  auto *scope = static_cast<ScopedStopTheWorldLock *>(arg);
-  scope->UnlockRuntimeAllocators();
-  // We store all of the GC-relevant state in a "snapshot". This contains
-  // a set of all reachable provenance values, and the number of threads
-  // that were busy during this GC run.
-  Snapshot snap;
+  snap->lock->UnlockRuntimeAllocators();
   // Collect all of the provenance values that are reachable from each
   // thread.
-  ForEachThread([](BsanThread *thread, Snapshot *snap) {
-    for (auto prov : thread->shadow_stack()) {
-      snap->live.insert(prov);
-    }
-  }, &snap);
+  ForEachThread(
+      [](BsanThread *thread, Snapshot *snap) {
+        for (auto prov : thread->shadow_stack()) {
+          snap->live.insert(prov);
+        }
+      },
+      snap);
   // Drain the zero-count tables for each thread, as well
   // as the global zero count table.
-  ForEachThread([](BsanThread *thread, Snapshot *snap) { MergeZeroCounts(snap, thread->zct_); }, &snap);
-  MergeZeroCounts(&snap, global_ctx()->global_zct_);
+  ForEachThread([](BsanThread *thread,
+                   Snapshot *snap) { MergeZeroCounts(snap, thread->zct_); },
+                snap);
+  MergeZeroCounts(snap, global_ctx()->global_zct_);
   // Only one thread needs to reach `visits_per_gc` to get us here, so every
   // thread's counter starts over from the collection we are about to perform.
-  ForEachThread([](BsanThread *thread, Snapshot *) { thread->ResetVisitCount(); }, &snap);
+  ForEachThread(
+      [](BsanThread *thread, Snapshot *) { thread->ResetVisitCount(); }, snap);
   // Prune all unreachable nodes, destroying
   // allocations that have had their trees fully pruned.
-  global_ctx()->CollectGarbage(&snap);
+  // At the moment, we wait until after restarting the
+  // world to actually "eject" allocations that have had
+  // all of their nodes pruned. This is because we
+  // do not have a dedicated lock for the concurrent
+  // bump allocator used to hand out allocation metadata,
+  // so a thread might be in the middle of its critical
+  // section during this point.
+  global_ctx()->CollectGarbage(snap);
 }
 
-void GlobalContext::Retire(AllocInfo *info) {
-  CHECK(!quarantine_.contains(info));
-  quarantine_[info] = epoch_ + 2;
-}
-
-void GlobalContext::Shift(Snapshot *snap) {
-  if (snap->num_busy_threads > 0) {
-    return;
+void GlobalContext::CollectGarbage(Snapshot *snap) {
+  if (snap->num_busy_threads == 0) {
+    epoch_ += 1;
   }
-  epoch_ += 1;
+  ConcreteProvenanceSet still_pending;
+  pending_.drain([&](AllocInfo *info, BorTagSet &tags) {
+    tags.forEach([&](BorTag tag) {
+      // None of the borrow tags in the pending set
+      // should be live on the stack at this point.
+      // They might be live on the heap, with a nonzero
+      // reference count, or their underlying allocation
+      // could be live on the shadow stack under a different
+      // tag, though.
+      DCHECK(!snap->live.contains({tag, info}));
+    });
+    if (__bsan_prune(info, tags.data(), tags.size())) {
+      // Every tag has been removed from the tree.
+      // The reference count for this allocation is zero.
+      if (!snap->live.contains(info)) {
+        // The root is no longer present on any
+        // of the shadow stacks. We can retire it.
+        if (snap->num_busy_threads == 0) {
+          // No threads were busy this time,
+          // so we can guarantee that there
+          // are no copies of this allocation
+          // still flowing through the ZCT.
+          quarantine_[info] = epoch_;
+        } else {
+          // One or more threads were busy this time,
+          // so we couldn't visit their ZCTs. We need
+          // to wait until the next time we have a
+          // clear picture of shadow memory to be able
+          // to prune this.
+          quarantine_[info] = epoch_ + 1;
+        }
+        return;
+      }
+      // It is possible for an allocation to have been
+      // fully pruned but for it to still be alive
+      // on the shadow stack. For example, this will
+      // happen if an allocation is freed while one
+      // of its aliases is within a ZCT.
+    }
+    still_pending.insert(info);
+    // The Rust core zeroes out every tag that no longer needs tracking.
+    // The remaining nonzero tags are dead nodes that could not be pruned
+    // yet; collect them for a future GC pass.
+    tags.forEach([&](BorTag tag) {
+      if (tag != 0) {
+        still_pending.insert({tag, info});
+      }
+    });
+  });
+  pending_.swap(still_pending);
+}
+
+void GlobalContext::EjectGarbage(Snapshot &snap) {
   Vector<AllocInfo *> to_eject;
   quarantine_.forEach([&](auto &KV) {
     if (epoch_ >= KV.getSecond()) {
@@ -94,43 +152,6 @@ void GlobalContext::Shift(Snapshot *snap) {
   }
 }
 
-void GlobalContext::CollectGarbage(Snapshot *snap) {
-  ConcreteProvenanceSet still_pending;
-  pending_.drain([&](AllocInfo *info, BorTagSet &tags) {
-    tags.forEach([&](BorTag tag) {
-      // None of the borrow tags in the pending set
-      // should be live on the stack at this point.
-      // They might be live on the heap, with a nonzero
-      // reference count, or their underlying allocation
-      // could be live on the shadow stack under a different
-      // tag, though.
-      DCHECK(!snap->live.contains({tag, info}));
-    });
-    if (__bsan_prune(info, tags.data(), tags.size())) {
-      CHECK(snap->live.contains(info));
-      // Every tag has been removed from the tree.
-      // The reference count for this allocation is zero.
-      // However, it is possible that the allocation's
-      // metadata still lives somewhere on the shadow
-      // stack.
-      if (!snap->live.contains(info)) {
-        Retire(info);
-      }
-    } else {
-      still_pending.insert(info);
-      // The Rust core zeroes out every tag that no longer needs tracking.
-      // The remaining nonzero tags are dead nodes that could not be pruned
-      // yet; collect them for a future GC pass.
-      tags.forEach([&](BorTag tag) {
-        if (tag != 0) {
-          still_pending.insert({tag, info});
-        }
-      });
-    }
-  });
-  pending_.swap(still_pending);
-}
-
 void GlobalContext::requestGC() {
   // Get the current generation count
   uptr gen = atomic_load(&gc_gen, memory_order_acquire);
@@ -142,10 +163,13 @@ void GlobalContext::requestGC() {
     // then somebody else got here first and already ran the GC.
     uptr current_gen = atomic_load(&gc_gen, memory_order_acquire);
     if (gen == current_gen) {
+      Snapshot snap;
       {
         ScopedStopTheWorldLock stopped;
-        StopTheWorld(GCCallback, &stopped);
+        snap.lock = &stopped;
+        StopTheWorld(GCCallback, &snap);
       }
+      EjectGarbage(snap);
       atomic_fetch_add(&gc_gen, 1, memory_order_relaxed);
     }
     // Release the lock, allowing the GC to run again.

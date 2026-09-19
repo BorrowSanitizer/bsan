@@ -85,7 +85,7 @@ void ConcreteProvenanceSet::insert(Provenance prov) {
 }
 
 void ConcreteProvenanceSet::remove(Provenance prov) {
-  if (prov.isConcrete()) {
+  if (!prov.isConcrete()) {
     return;
   }
   if (auto *tags = find(prov.info)) {

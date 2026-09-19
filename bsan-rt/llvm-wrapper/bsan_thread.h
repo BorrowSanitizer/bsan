@@ -14,7 +14,6 @@ using namespace __sanitizer;
 namespace __bsan {
 
 struct ZeroCountTable {
-  typedef uptr Generation;
   ~ZeroCountTable() {}
 
 private:
@@ -24,8 +23,6 @@ private:
   // values to garbage collect. We will still examine this thread's
   // shadow stack to exclude reachable provenance values.
   atomic_uint8_t busy_{};
-
-  Generation drained_gen_ = 0;
 
   // Whenever we modify this zero-count table, we need to
   // ensure that we are only doing so from the context of another table.
@@ -55,11 +52,7 @@ public:
     GCBarrier this_barrier(*this);
     zct_.takeFrom(other.zct_);
   }
-
   template <typename Fn> void retainIf(Fn retain) { zct_.retainIf(retain); }
-
-  Generation lastDrained() { return drained_gen_; }
-
   bool isBusy() { return atomic_load(&busy_, memory_order_acquire) == 1; }
 };
 
@@ -223,7 +216,8 @@ BsanThreadContext *GetThreadContextByTidLocked(u32 tid);
 void LockThreads() SANITIZER_NO_THREAD_SAFETY_ANALYSIS;
 void UnlockThreads() SANITIZER_NO_THREAD_SAFETY_ANALYSIS;
 
-template <typename Fn, typename T> inline void ForEachThread(Fn callback, T *arg) {
+template <typename Fn, typename T>
+inline void ForEachThread(Fn callback, T *arg) {
   GetThreadRegistry().CheckLocked();
   // We need an intermediate struct here,
   // because `RunCallbackForEachThreadLocked`
