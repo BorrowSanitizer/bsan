@@ -19,6 +19,7 @@ public:
   // reachable from any of the shadow stacks.
   ConcreteProvenanceSet live;
   uptr num_busy_threads = 0;
+  ScopedStopTheWorldLock *lock;
 };
 
 // Global state associated with the runtime.
@@ -67,12 +68,6 @@ private:
 
   // A callback passed to `StopTheWorld`. Runs the garbage collector.
   static void GCCallback(const SuspendedThreadsList &, void *arg);
-
-  // Iterates over every thread's shadow stack, creating a set of all reachable
-  // provenance values. The last argument is a pointer to the
-  // `ConcreteProvenanceSet` being populated.
-  static void CollectProvenance(BsanThread *const &thread, void *arg);
-
   // Iterates over every thread's zero-count-table, merging its contents into
   // the set of pending provenance values. We only add values to the pending set
   // if they are not present on any shadow stack. Values that we add to the
@@ -80,14 +75,11 @@ private:
   static void MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct);
   // Drains the contents of the pending provenance set, pruning the associated
   // state from the tree for each allocation. Ejects any retired allocation
-  // objects that are confirmed to be unreachable. This happens after the world
-  // has restarted.
+  // objects that are confirmed to be unreachable.
   void CollectGarbage(Snapshot *snap);
+  void EjectGarbage(Snapshot &snap);
 
-  void Retire(AllocInfo *info);
-  void Shift(Snapshot *snap);
-
-  DenseMap<AllocInfo *, uptr> quarantine_{};
+  DenseMap<AllocInfo *, Epoch> quarantine_{};
 
   // Guards `at_exit_stack_`.
   Mutex at_exit_lock_;
