@@ -68,16 +68,11 @@ public:
   }
 
   static Block *Map(BlockIndex idx) {
-    // We return 0 to preserve `nullptr` being
-    // the block address for an invalid, omnivalid,
-    // or wildcard provenance value.
-    if(idx == 0) return nullptr;
     uptr addr = kRegionStart + (static_cast<uptr>(idx) << kBlockShift);
     return reinterpret_cast<Block *>(addr);
   }
 
   static BlockIndex InvMap(Block *elem) {
-    if(!elem) return 0;
     uptr addr = reinterpret_cast<uptr>(elem);
     return static_cast<BlockIndex>((addr - kRegionStart) >> kBlockShift);
   }
