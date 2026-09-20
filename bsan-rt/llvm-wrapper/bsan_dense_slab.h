@@ -21,7 +21,6 @@ class DenseSlabAllocCache {
   BlockIndex cursor;
   BlockIndex end;
   template <uptr> friend class DenseSlabAlloc;
-
 public:
   constexpr DenseSlabAllocCache() : pos(0), cache(), cursor(0), end(0) {}
 };
@@ -61,7 +60,6 @@ public:
   }
 
   void Free(Cache *c, BlockIndex idx) {
-    DCHECK_NE(idx, 0);
     if (c->pos == Cache::kSize)
       Drain(c);
     c->cache[c->pos++] = idx;
