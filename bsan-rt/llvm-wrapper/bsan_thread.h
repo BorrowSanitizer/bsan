@@ -7,6 +7,7 @@
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_internal_defs.h"
 #include "sanitizer_common/sanitizer_posix.h"
+#include "sanitizer_common/sanitizer_thread_arg_retval.h"
 
 using namespace __sanitizer;
 
@@ -65,15 +66,40 @@ public:
   bool isBusy() { return atomic_load(&busy_, memory_order_acquire) == 1; }
 };
 
+class BsanThread;
+class BsanThreadContext final : public ThreadContextBase {
+public:
+  explicit BsanThreadContext(int tid)
+      : ThreadContextBase(tid), announced(false),
+        destructor_iterations(GetPthreadDestructorIterations()),
+        thread(nullptr) {}
+  bool announced;
+  u8 destructor_iterations;
+  BsanThread *thread;
+  void OnCreated(void *arg) override;
+  void OnFinished() override;
+};
+
+// BsanThreadContext objects are never freed, so we need many of them.
+COMPILER_CHECK(sizeof(BsanThreadContext) <= 256);
+
 class BsanThread {
 public:
-  // Allocates, but does not initialize an instance of the thread state
-  // object within a thread-local variable.
-  static BsanThread *Create(thread_callback_t start_routine, void *arg);
+  template <typename T>
+  static BsanThread *Create(const T &data, u32 parent_tid, bool detached) {
+    return Create(&data, sizeof(data), parent_tid, detached);
+  }
+  static BsanThread *Create(u32 parent_tid, bool detached) {
+    return Create(nullptr, 0, parent_tid, detached);
+  }
+
+  // A destructor called when this thread's context is deinitialized.
+  // A pointer to the context is stored in a thread-local variable.
+  static void TSDDtor(void *tsd);
 
   // Destroys an instance of `BsanThread` stored at the given address,
   // which is a thread-local allocation.
-  static void Destroy(void *tsd);
+  void Destroy();
 
   // Initializes the object, allocating its shadow stack.
   // This must be called from the thread itself, before it
@@ -84,9 +110,15 @@ public:
   // It configures signal handling and then executes the start routine.
   static void *StartCallback(void *arg);
 
-  // Every thread, including the main thread, has an associated
-  // state. The main thread does not have a start_routine.
-  bool IsMainThread() const { return start_routine_ == nullptr; }
+  void ThreadStart(ThreadID os_id);
+
+  template <typename T> void GetStartData(T &data) const {
+    GetStartData(&data, sizeof(data));
+  }
+
+  u32 tid() { return context_->tid; }
+  BsanThreadContext *context() { return context_; }
+  void set_context(BsanThreadContext *context) { context_ = context; }
 
   // Returns the top of the "real" stack associated with this thread.
   uptr stack_top() const { return stack_top_; }
@@ -115,15 +147,6 @@ public:
   Provenance *shadow_stack_cursor() const {
     return shadow_stack_ptr_ ? *shadow_stack_ptr_ : nullptr;
   }
-
-  // The remaining number of times that TSD destructors will
-  // execute for this thread. This is initialized to the maximum value,
-  // and then decremented every time the destructor runs.
-  int destructor_iterations_;
-
-  // A unique ID for this thread.
-  uptr id;
-
   // Signal handler settings.
   __sanitizer_sigset_t starting_sigset_;
 
@@ -137,10 +160,15 @@ public:
   RustAllocatorCache *rust_allocator_cache() { return &rust_allocator_cache_; }
 
   ZeroCountTable zct;
+  uptr os_id;
 
 private:
-  friend struct GlobalContext;
-  friend struct ThreadManager;
+  static BsanThread *Create(const void *start_data, uptr data_size,
+                            u32 parent_tid, bool detached);
+
+  void GetStartData(void *out, uptr out_size) const;
+
+  BsanThreadContext *context_;
 
   // Executes the start routine.
   thread_return_t Start();
@@ -163,55 +191,40 @@ private:
   // containing the current value of its shadow stack
   // pointer (`__bsan_shadow_stack`).
   Provenance **shadow_stack_ptr_;
+
+  char start_data_[];
 };
 
 BsanThread *CurrentThread();
 void SetCurrentThread(BsanThread *t);
+u32 GetCurrentTidOrInvalid();
+BsanThread *CreateMainThread();
+void EnsureMainThreadIDIsCorrect();
 
-struct SANITIZER_MUTEX ThreadManager {
-  friend struct GlobalContext;
+ThreadRegistry &GetThreadRegistry();
+ThreadArgRetval &GetThreadArgRetval();
 
-public:
-  // Initializes a thread, making its state accessible
-  // to global processes (e.g. the garbage collector)
-  void RegisterThread(BsanThread *thread);
+BsanThreadContext *GetThreadContextByTidLocked(u32 tid);
 
-  // Removes a thread's global entry. This prevents the thread
-  // from being visited by the garbage collector, so it needs to
-  // happen before we deinitialize any of the other states associated
-  // with this thread.
-  void DeregisterThread(BsanThread *thread);
+void LockThreads() SANITIZER_NO_THREAD_SAFETY_ANALYSIS;
+void UnlockThreads() SANITIZER_NO_THREAD_SAFETY_ANALYSIS;
 
-  void LockThreads() SANITIZER_ACQUIRE() { mtx_.Lock(); }
-  void UnlockThreads() SANITIZER_RELEASE() { mtx_.Unlock(); }
-
-  void acquireProvenance(Provenance prov);
-
-  // Executes the provided callback for every thread.
-  // This can only be called when the world has been stopped.
-  template <class Fn> void ForEachThread(Fn fn, void *arg) {
-    threads.forEach([&](const auto &KV) {
-      fn(KV.getFirst(), KV.getSecond(), arg);
-      return true;
-    });
-  }
-
-private:
-  friend struct GlobalContext;
-  // Locks the map.
-  Mutex mtx_;
-  using ThreadStateMap = DenseMap<ThreadId, BsanThread *>;
-  // A hashmap from each thread's `ThreadId`
-  // to its state object.
-  ThreadStateMap threads;
-  // When a thread exits, its zero count table needs to be
-  // retained, so that we can clean up any of the provenance
-  // values that it acquired in a future garbage collection pass.
-  ZeroCountTable global_zct_;
-  // We use an atomic counter to generate new `ThreadIds`.
-  // We create a new ID every time a thread is registered.
-  atomic_uintptr_t thread_id_ctr{0};
-};
-
+template <typename Fn> inline void ForEachThread(Fn callback, void *arg) {
+  GetThreadRegistry().CheckLocked();
+  // We need an intermediate struct here,
+  // because `RunCallbackForEachThreadLocked`
+  // requires a non-capturing lambda.
+  struct CallbackArgs {
+    Fn callback;
+    void *arg;
+  } ctx{callback, arg};
+  GetThreadRegistry().RunCallbackForEachThreadLocked(
+      [](ThreadContextBase *tctx_base, void *raw_ctx) {
+        CallbackArgs *ctx = static_cast<CallbackArgs *>(raw_ctx);
+        BsanThreadContext *tctx = static_cast<BsanThreadContext *>(tctx_base);
+        ctx->callback(tctx->thread, ctx->arg);
+      },
+      &ctx);
+}
 } // namespace __bsan
 #endif // BSAN_THREAD_H

@@ -23,19 +23,14 @@ void *TSDGet() {
 }
 
 void PlatformTSDDtor(void *tsd) {
-  BsanThread *t = (BsanThread *)tsd;
-  if (t->destructor_iterations_ > 1) {
-    t->destructor_iterations_--;
+  BsanThreadContext *context = (BsanThreadContext *)tsd;
+  if (context->destructor_iterations > 1) {
+    context->destructor_iterations--;
     CHECK_EQ(0, pthread_setspecific(TSD_KEY, tsd));
     return;
   }
-#if SANITIZER_LINUX
-  ScopedBlockSignals block(nullptr);
-#endif
-  TSDSet(nullptr);
-  // Make sure that signal handler can not see a stale current thread pointer.
-  atomic_signal_fence(memory_order_seq_cst);
-  BsanThread::Destroy(tsd);
+  BlockSignals();
+  BsanThread::TSDDtor(tsd);
 }
 
 void InitializeTSD(void (*destructor)(void *tsd)) {
