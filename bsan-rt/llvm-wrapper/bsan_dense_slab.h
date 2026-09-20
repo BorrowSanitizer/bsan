@@ -1,9 +1,9 @@
 #ifndef BSAN_DENSE_ALLOC_H
 #define BSAN_DENSE_ALLOC_H
 
-// This is a port of ThreadSanitizer's `DenseSlabAlloc`. The original design
-// can only be used for objects smaller than 32 bits. Our version hands out 
-// 256-byte blocks from a preallocated 1 TB region.
+// This is a port of ThreadSanitizer's DenseSlabAlloc. Hands out 
+// 256-byte blocks of memory from a fixed, 1 TB region. Each 
+// block is identified by a 32-bit index. 
 
 #include "bsan.h"
 #include "bsan_shadow.h"
@@ -18,6 +18,10 @@ class DenseSlabAllocCache {
   static const BlockIndex kSize = 128;
   uptr pos;
   BlockIndex cache[kSize];
+  // Each cache owns a "slab" of memory,
+  // which is an array of blocks. If the
+  // cache is empty, then we refill it by
+  // bump-allocating through the slab.
   BlockIndex cursor;
   BlockIndex end;
   template <uptr> friend class DenseSlabAlloc;
