@@ -13,9 +13,9 @@ edition = "2021"
 colored = "3"
 ui_test = "0.30.7"
 rustc_version = "0.4"
-regex = "1.12.4"
+regex = "1.13.1"
 tempfile = "3"
-libc = "0.2.186"
+libc = "0.2.189"
 
 [[test]]
 name = "ui"
