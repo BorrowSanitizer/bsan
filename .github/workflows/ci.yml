@@ -30,7 +30,7 @@ jobs:
         password: ${{ secrets.github_token }}
     name: '${{ matrix.config.target }}'
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         persist-credentials: false
     - name: Setup dependencies

@@ -4,13 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-cargo_metadata = "0.21"
+cargo_metadata = "0.23"
 directories = "6.0.0"
 rustc-build-sysroot = "0.5.13"
 rustc_version = "0.4"
-which = "8.0.4"
-regex = "1.12.4"
-cfg-if = "1.0.4"
+which = "8.0.6"
+regex = "1.13.1"
+cfg-if = "1.0.5"
 tempfile = "3.27.0"
 
 [build-dependencies]
