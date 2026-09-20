@@ -15,7 +15,6 @@
 #include "sanitizer_common/sanitizer_errno.h"
 #include "sanitizer_common/sanitizer_errno_codes.h"
 #include "sanitizer_common/sanitizer_libc.h"
-#include "sanitizer_common/sanitizer_linux.h"
 #include "sanitizer_common/sanitizer_placement_new.h"
 #include "sanitizer_common/sanitizer_platform_interceptors.h"
 #include "sanitizer_common/sanitizer_stacktrace.h"
@@ -75,32 +74,6 @@ static void *BsanAllocateMetaIntoHeap(void *ptr, SIZE_T size, bool is_inst,
     ClearShadow(dest, sizeof(void *));
   }
   return ptr;
-}
-
-INTERCEPTOR(int, pthread_create, void *th, void *attr,
-            void *(*callback)(void *), void *param) {
-  ENSURE_BSAN_INITED();
-  __sanitizer_pthread_attr_t myattr;
-  if (!attr) {
-    pthread_attr_init(&myattr);
-    attr = &myattr;
-  }
-  BsanThread *t = BsanThread::Create(callback, param);
-
-#if SANITIZER_LINUX
-  ScopedBlockSignals block(&t->starting_sigset_);
-#endif
-
-  int res = REAL(pthread_create)(th, attr, BsanThread::StartCallback, t);
-
-  if (attr == &myattr) {
-    pthread_attr_destroy(&myattr);
-  }
-  return res;
-}
-
-INTERCEPTOR(int, pthread_join, void *thread, void **retval) {
-  return REAL(pthread_join)(thread, retval);
 }
 
 extern "C" void *__bsan_crt_malloc(SIZE_T size) {
@@ -484,6 +457,80 @@ static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso) {
 #include "sanitizer_common/sanitizer_syscalls_netbsd.inc"
 // clang-format on
 
+static thread_return_t THREAD_CALLING_CONV bsan_thread_start(void *arg) {
+  BsanThread *t = (BsanThread *)arg;
+  SetCurrentThread(t);
+  auto self = GetThreadSelf();
+  auto args = GetThreadArgRetval().GetArgs(self);
+  t->ThreadStart(GetTid());
+
+#if SANITIZER_FREEBSD || SANITIZER_LINUX || SANITIZER_NETBSD ||                \
+    SANITIZER_SOLARIS
+  __sanitizer_sigset_t sigset;
+  t->GetStartData(sigset);
+  SetSigProcMask(&sigset, nullptr);
+#endif
+
+  thread_return_t retval = (*args.routine)(args.arg_retval);
+  GetThreadArgRetval().Finish(self, retval);
+  return retval;
+}
+
+INTERCEPTOR(int, pthread_create, void *thread, void *attr,
+            void *(*start_routine)(void *), void *arg) {
+  ENSURE_BSAN_INITED();
+  EnsureMainThreadIDIsCorrect();
+  bool detached = [attr]() {
+    int d = 0;
+    return attr && !REAL(pthread_attr_getdetachstate)(attr, &d) &&
+           IsStateDetached(d);
+  }();
+  u32 current_tid = GetCurrentTidOrInvalid();
+  __sanitizer_sigset_t sigset = {};
+#if SANITIZER_LINUX
+  ScopedBlockSignals block(&sigset);
+#endif
+  BsanThread *t = BsanThread::Create(sigset, current_tid, detached);
+
+  int result;
+  {
+    GetThreadArgRetval().Create(detached, {start_routine, arg}, [&]() -> uptr {
+      result = REAL(pthread_create)(thread, attr, bsan_thread_start, t);
+      return result ? 0 : *(uptr *)(thread);
+    });
+  }
+  if (result != 0) {
+    // If the thread didn't start delete the BsanThread to avoid leaking it.
+    // Note BsanThreadContexts never get destroyed so the BsanThreadContext
+    // that was just created for the BsanThread is wasted.
+    t->Destroy();
+  }
+  return result;
+}
+
+INTERCEPTOR(int, pthread_join, void *thread, void **retval) {
+  int result;
+  GetThreadArgRetval().Join((uptr)thread, [&]() {
+    result = REAL(pthread_join)(thread, retval);
+    return !result;
+  });
+  return result;
+}
+
+INTERCEPTOR(int, pthread_detach, void *thread) {
+  int result;
+  GetThreadArgRetval().Detach((uptr)thread, [&]() {
+    result = REAL(pthread_detach)(thread);
+    return !result;
+  });
+  return result;
+}
+
+INTERCEPTOR(void, pthread_exit, void *retval) {
+  GetThreadArgRetval().Finish(GetThreadSelf(), retval);
+  REAL(pthread_exit)(retval);
+}
+
 namespace __bsan {
 
 void InitializeInterceptors() {
@@ -494,6 +541,8 @@ void InitializeInterceptors() {
 
   BSAN_INTERCEPT_FUNC(pthread_create);
   BSAN_INTERCEPT_FUNC(pthread_join);
+  BSAN_INTERCEPT_FUNC(pthread_detach);
+  BSAN_INTERCEPT_FUNC(pthread_exit);
   BSAN_INTERCEPT_FUNC(free);
   BSAN_INTERCEPT_FUNC(malloc);
   BSAN_INTERCEPT_FUNC(calloc);

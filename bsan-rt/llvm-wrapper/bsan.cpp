@@ -123,7 +123,7 @@ void AcquireProvenance(Provenance prov) {
   if (LIKELY(thread != nullptr)) {
     thread->zct.acquireProvenance(prov);
   } else {
-    global_ctx()->Threads().acquireProvenance(prov);
+    global_ctx()->acquireProvenance(prov);
   }
 }
 
@@ -142,7 +142,7 @@ static void MaybeRequestGC() {
   // thread is already collecting or has just finished, and only a collection
   // that succeeds resets our counter.
   __bsan_visits_since_gc = 0;
-  global_ctx()->RequestGC();
+  global_ctx()->requestGC();
 }
 
 // Returns the desired length for the current stack trace.
@@ -306,9 +306,7 @@ static bool BsanInitInternal() {
   InstallDeadlySignalHandlers(BsanOnDeadlySignal);
   InitializeTSD(PlatformTSDDtor);
 
-  BsanThread *main_thread = BsanThread::Create(nullptr, nullptr);
-  SetCurrentThread(main_thread);
-  main_thread->Init();
+  CreateMainThread();
 
   SetBsanInited();
   return true;
@@ -739,7 +737,7 @@ void __bsan_debug_print_diff(void *ptr) {
 // Asks the global state to run the garbage collector. Any thread may call this;
 // concurrent requests are coalesced into a single collection.
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_request_gc() { global_ctx()->RequestGC(); }
+void __bsan_request_gc() { global_ctx()->requestGC(); }
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_abort() { Die(); }
