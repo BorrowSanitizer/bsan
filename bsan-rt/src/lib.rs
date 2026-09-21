@@ -113,26 +113,9 @@ pub static ALLOC_ID_CTR: AtomicUsize = AtomicUsize::new(3);
 pub struct AllocId(usize);
 
 impl AllocId {
+    const ZERO: AllocId = AllocId(0);
     pub fn get(&self) -> usize {
         self.0
-    }
-    /// Represents any valid allocation
-    pub const fn wildcard() -> Self {
-        AllocId(0)
-    }
-
-    /// An invalid allocation
-    pub const fn invalid() -> Self {
-        AllocId(1)
-    }
-
-    /// A global or stack allocation, which cannot be manually freed
-    pub const fn sticky() -> Self {
-        AllocId(2)
-    }
-
-    pub const fn min() -> Self {
-        AllocId(3)
     }
 }
 
@@ -169,39 +152,13 @@ unsafe extern "C" {
 pub struct BorTag(usize);
 
 impl BorTag {
-    #[inline]
-    pub fn is_wildcard(self) -> bool {
-        self == Self::wildcard()
-    }
+    const OMNIVALID: BorTag = BorTag(0);
+    const INVALID: BorTag = BorTag(1);
+    const WILDCARD: BorTag = BorTag(2);
 
     #[inline]
-    pub fn is_invalid(self) -> bool {
-        self == Self::invalid()
-    }
-
-    #[inline]
-    pub fn is_omnivalid(self) -> bool {
-        self == Self::omnivalid()
-    }
-
-    #[inline]
-    pub fn is_concrete(&self) -> bool {
-        self.0 > Self::wildcard().0
-    }
-
-    #[inline]
-    pub const fn omnivalid() -> Self {
-        BorTag(0)
-    }
-
-    #[inline]
-    pub const fn invalid() -> Self {
-        BorTag(1)
-    }
-
-    #[inline]
-    pub const fn wildcard() -> Self {
-        BorTag(2)
+    pub fn is_concrete(self) -> bool {
+        self > Self::WILDCARD
     }
 
     #[inline]
@@ -228,9 +185,6 @@ pub struct Provenance {
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 }
-
-unsafe impl Sync for Provenance {}
-unsafe impl Send for Provenance {}
 
 #[repr(C)]
 pub struct AllocInfo {
@@ -574,7 +528,7 @@ unsafe extern "C" fn __bsan_prune(
         Some(tree) => tree.remove_dead_tags(global_ctx, dead_tags),
         None => {
             // The tree is already deallocated, so we can zero out dead_tags
-            dead_tags.fill(BorTag::omnivalid());
+            dead_tags.fill(BorTag::OMNIVALID);
             false
         }
     }
