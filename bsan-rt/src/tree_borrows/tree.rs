@@ -36,16 +36,14 @@ use crate::sanitizer_common::Span;
 use crate::tree_borrows::ProtectorKind;
 use crate::*;
 
-// Features in ./bsan-rt/Cargo.toml
-
 #[cfg(all(feature = "lazy", feature = "eager"))] // Ensure one selection
 compile_error!("Only one of the following features can be selected: 'lazy', 'eager'");
 
 #[cfg(feature = "lazy")]
-pub type AllocStateImpl = LazyTree;
+pub type TreeImpl = LazyTree;
 
 #[cfg(feature = "eager")]
-pub type AllocStateImpl = EagerTree;
+pub type TreeImpl = EagerTree;
 
 mod tests;
 
@@ -1070,7 +1068,7 @@ impl LocationTree {
 /// Consumers outside this module interact with the tree exclusively
 /// through this trait; the underlying implementations are
 /// module-private.
-pub trait AllocState: Clone {
+pub trait Tree: Clone {
     fn get_protector_kind(&self, tag: BorTag) -> Option<ProtectorKind>;
     fn contains_tag(&self, tag: BorTag) -> bool;
     fn node_count(&self) -> usize;
@@ -1121,7 +1119,7 @@ pub trait AllocState: Clone {
     fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_tags: &mut [BorTag]) -> bool;
 }
 
-impl AllocState for LazyTree {
+impl Tree for LazyTree {
     fn contains_tag(&self, tag: BorTag) -> bool {
         match self {
             LazyTree::Uninit { root_tag, .. } => *root_tag == tag,
@@ -1279,7 +1277,7 @@ impl AllocState for LazyTree {
     }
 }
 
-impl AllocState for EagerTree {
+impl Tree for EagerTree {
     fn contains_tag(&self, tag: BorTag) -> bool {
         self.tag_mapping.contains_key(&tag)
     }
