@@ -1045,6 +1045,7 @@ pub trait AllocState: Clone {
     fn node_count(&self) -> usize;
     fn increment(&self, tag: BorTag) -> bool;
     fn decrement(&self, tag: BorTag) -> bool;
+    fn size(&self) -> Size;
     fn new_child(
         &mut self,
         base_offset: Size,
@@ -1227,6 +1228,13 @@ impl AllocState for LazyTree {
         match self {
             LazyTree::Uninit { .. } => None,
             LazyTree::Init(tree) => tree.get_protector_kind(tag),
+        }
+    }
+
+    fn size(&self) -> Size {
+        match self {
+            LazyTree::Uninit { size, .. } => *size,
+            LazyTree::Init(eager_tree) => eager_tree.size(),
         }
     }
 }
@@ -1524,5 +1532,9 @@ impl AllocState for EagerTree {
             .get(&tag)
             .and_then(|idx| self.nodes.get(idx))
             .and_then(|node| node.protector_kind)
+    }
+
+    fn size(&self) -> Size {
+        self.locations.size()
     }
 }

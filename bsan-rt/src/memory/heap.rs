@@ -17,10 +17,13 @@ use crate::memory::{mmap, munmap, round_mut_ptr_up_to_unchecked, PageSize, WordA
 /// but large enough to store a pointer to another `Heapable` instance.
 /// This allows values to act as nodes in a free list.
 pub(crate) unsafe trait Heapable: WordAligned {
-    fn next(ptr: *mut Self) -> *mut Option<NonNull<Self>>;
+    fn next(ptr: *mut Self) -> *mut Option<NonNull<Self>> {
+        ptr.cast::<Option<NonNull<Self>>>()
+    }
 
     fn is_heapable() -> bool {
-        debug_assert!(Self::is_word_aligned());
+        assert!(Self::is_word_aligned());
+        assert!(mem::size_of::<Self>() >= mem::size_of::<usize>());
         let block_size = PageSize::get();
         let overhead = mem::size_of::<HeapBlockHeader<Self>>();
         block_size
