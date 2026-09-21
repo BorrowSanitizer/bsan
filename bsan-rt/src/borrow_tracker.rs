@@ -45,8 +45,8 @@ impl From<NonNull<AllocInfo>> for AllocInfoPtr {
 
 #[derive(Debug)]
 pub struct AllocState {
-    alloc_id: AllocId,
-    base_addr: Size,
+    pub alloc_id: AllocId,
+    pub base_addr: Size,
     tree: Option<TreeImpl>,
 }
 
@@ -84,7 +84,7 @@ impl AllocState {
 
 impl Default for AllocState {
     fn default() -> Self {
-        Self { alloc_id: AllocId::invalid(), base_addr: Size::ZERO, tree: None }
+        Self { alloc_id: AllocId::ZERO, base_addr: Size::ZERO, tree: None }
     }
 }
 
@@ -128,12 +128,12 @@ impl<'b> BorrowTracker<'b> {
         T: Default,
     {
         let bor_tag = prov.bor_tag;
-        if bor_tag == BorTag::omnivalid() || bor_tag.is_wildcard() {
+        if bor_tag == BorTag::OMNIVALID || bor_tag == BorTag::WILDCARD {
             // Only concrete provenance values have `AllocInfo` that we can
             // access directly. This API is intended to have an affect in this case,
             // so we also skip wildcard provenance.
             Ok(T::default())
-        } else if bor_tag == BorTag::invalid() {
+        } else if bor_tag == BorTag::INVALID {
             Err(UBInfo::UseAfterFree)
         } else {
             // Safety:
@@ -206,16 +206,16 @@ impl<'b> BorrowTracker<'b> {
         F: FnOnce(Self) -> UBResult<T>,
         T: Default,
     {
-        if prov.bor_tag == BorTag::omnivalid() {
+        if prov.bor_tag == BorTag::OMNIVALID {
             Ok(T::default())
-        } else if prov.bor_tag == BorTag::invalid() {
+        } else if prov.bor_tag == BorTag::INVALID {
             if access_size == Some(Size::ZERO) {
                 Ok(T::default())
             } else {
                 Err(UBInfo::UseAfterFree)
             }
         } else {
-            let alloc_info: AllocInfoPtr = if prov.bor_tag.is_wildcard() {
+            let alloc_info: AllocInfoPtr = if prov.bor_tag == BorTag::WILDCARD {
                 let size = access_size.unwrap_or(Size::ZERO);
                 let range = AllocRange { start, size };
                 if let Some(exposed) = global_ctx.get_exposed_provenance(range) {
@@ -291,7 +291,7 @@ impl<'b> BorrowTracker<'b> {
         let new_tag = BorTag::default();
         // A wildcard parent is never present in the tree: retagging it adds
         // the new tag as a fresh wildcard root instead.
-        if !parent_tag.is_wildcard() && !self.tree().contains_tag(parent_tag) {
+        if !(parent_tag == BorTag::WILDCARD) && !self.tree().contains_tag(parent_tag) {
             return Err(UBInfo::UseAfterFree);
         }
         let new_perm: NewPermission = NewPermission::new(retag_info);
