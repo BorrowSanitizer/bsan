@@ -18,7 +18,8 @@ pub use foreign_access_skipping::IdempotentForeignAccess;
 pub use perms::*;
 
 use self::perms::Permission;
-pub use self::tree::{AllocState, AllocStateImpl, EagerTree, LazyTree, VisitCounter};
+pub use self::tree::{EagerTree, LazyTree, VisitCounter};
+pub use self::tree::{Tree, TreeImpl};
 
 /// Policy for a new borrow.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
