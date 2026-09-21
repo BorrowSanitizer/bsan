@@ -229,6 +229,8 @@ INTERCEPTOR(void *, pvalloc, SIZE_T size) {
 }
 #endif
 
+INTERCEPTOR(uptr, malloc_usable_size, void *ptr) { return bsan_mz_size(ptr); }
+
 INTERCEPTOR(void *, valloc, SIZE_T size) {
   GET_SPAN;
   if (DlsymAlloc::Use())
