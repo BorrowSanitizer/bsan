@@ -1096,7 +1096,7 @@ fn dead_root_with_children_is_retained() {
     // larger tag than the wildcard subtree root (tag 20), so the pre-guard promotion would
     // have produced roots [30, 20].
     let mut tree = new_tree(t(10));
-    add_child(&mut tree, BorTag::wildcard(), t(20));
+    add_child(&mut tree, BorTag::WILDCARD, t(20));
     add_child(&mut tree, t(10), t(30));
     tree.increment(t(20));
     tree.increment(t(30));
@@ -1114,7 +1114,7 @@ fn dead_root_with_children_is_retained() {
 fn dead_root_is_pruned_as_leaf_once_subtree_dies() {
     let ctx: GlobalCtx = GlobalCtx::new(&SharedSanitizerFlags::default());
     let mut tree = new_tree(t(10));
-    add_child(&mut tree, BorTag::wildcard(), t(20));
+    add_child(&mut tree, BorTag::WILDCARD, t(20));
     add_child(&mut tree, t(10), t(30));
     tree.increment(t(20));
     tree.increment(t(30));

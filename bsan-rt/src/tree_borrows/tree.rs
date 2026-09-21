@@ -1307,7 +1307,7 @@ impl Tree for EagerTree {
     ) -> UBResult<()> {
         let protected = protector.is_some();
         let idx = self.tag_mapping.insert(new_tag);
-        let parent_idx = if parent_tag.is_wildcard() {
+        let parent_idx = if parent_tag == BorTag::WILDCARD {
             None
         } else {
             Some(self.tag_mapping.get(&parent_tag).unwrap())
@@ -1379,7 +1379,7 @@ impl Tree for EagerTree {
         }
 
         let source_idx =
-            if tag.is_wildcard() { None } else { Some(self.tag_mapping.get(&tag).unwrap()) };
+            if tag == BorTag::WILDCARD { None } else { Some(self.tag_mapping.get(&tag).unwrap()) };
 
         // `visits_since_gc` is only written once per access.
         let mut visits: u32 = 0;
@@ -1428,7 +1428,7 @@ impl Tree for EagerTree {
         )?;
 
         let start_idx =
-            if tag.is_wildcard() { None } else { Some(self.tag_mapping.get(&tag).unwrap()) };
+            if tag == BorTag::WILDCARD { None } else { Some(self.tag_mapping.get(&tag).unwrap()) };
 
         for (loc_range, loc) in self.locations.iter_mut(access_range.start, access_range.size) {
             let diagnostics = DiagnosticInfo {
