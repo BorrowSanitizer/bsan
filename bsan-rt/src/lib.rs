@@ -1,22 +1,30 @@
+//! BorrowSanitizer's "core" runtime library. This library
+//! provides APIs for creating and updating allocation-level
+//! metadata. This began as a fork of Miri's Tree Borrows
+//! implementation. We have adapted it to support concurrent
+//! accesses and a different garbage collection algorithm.
 #![cfg_attr(not(test), no_std)]
-#![cfg_attr(not(test), feature(core_intrinsics))]
 #![feature(thread_local)]
 #![feature(allocator_api)]
 #![allow(internal_features)]
 
 #[macro_use]
 extern crate alloc;
-use core::cell::Cell;
+
 use core::ffi::c_void;
-use core::fmt::Debug;
+use core::fmt::{self, Debug};
+// We use a custom panic handler in release mode,
+// which is necessary for `#[no_std]`. However,
+// panics are compiled away as aborts, so it is never
+// actually executed.
 #[cfg(not(test))]
 use core::panic::PanicInfo;
-use core::ptr::NonNull;
+use core::ptr::{self, NonNull};
+use core::slice;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use core::{fmt, ptr, slice};
+use libc_print::std_name::*;
 
 mod borrow_tracker;
-use libc_print::std_name::*;
 use spin::Mutex;
 mod tree_borrows;
 
@@ -31,7 +39,7 @@ mod errors;
 use crate::helpers::{AllocRange, Size};
 use crate::sanitizer_common::{SharedSanitizerFlags, Span};
 use crate::tree_borrows::perms::AccessKind;
-use crate::tree_borrows::tree::AllocStateImpl;
+use crate::tree_borrows::refcount::RefCount;
 use crate::tree_borrows::AllocState;
 
 /// We link against the Rust component of our runtime
@@ -94,10 +102,12 @@ macro_rules! debug_bsan {
     };
 }
 
+/// A global atomic counter used to generate unique allocation IDs.
+/// The count begins at 3, to reserve identifiers for 
 #[unsafe(no_mangle)]
-pub static __BSAN_ALLOC_ID_CTR: AtomicUsize = AtomicUsize::new(3);
+pub static ALLOC_ID_CTR: AtomicUsize = AtomicUsize::new(3);
 
-/// Unique identifier for an allocation
+/// A unique identifier for an allocation
 #[repr(transparent)]
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AllocId(usize);
@@ -128,7 +138,7 @@ impl AllocId {
 
 impl Default for AllocId {
     fn default() -> Self {
-        AllocId(__BSAN_ALLOC_ID_CTR.fetch_add(1, Ordering::Relaxed))
+        AllocId(ALLOC_ID_CTR.fetch_add(1, Ordering::Relaxed))
     }
 }
 
@@ -229,37 +239,43 @@ unsafe impl Send for Provenance {}
 /// the tree for the allocation.
 #[repr(C)]
 pub struct AllocInfo {
-    alloc_id: Cell<AllocId>,
-    base_addr: Cell<Size>,
-    size: Cell<Size>,
-    tree: Mutex<Option<AllocStateImpl>>,
+    rc: RefCount,
+    state: Mutex<StateImpl>,
 }
 
 impl AllocInfo {
     fn invalid() -> Self {
+        AllocInfo { rc: RefCount::new(), state: Mutex::default() }
+    }
+
+    fn new(base_addr: Size, size: Size, root_tag: BorTag, span: Span) -> Self {
         AllocInfo {
-            alloc_id: Cell::new(AllocId::invalid()),
-            base_addr: Cell::new(Size::ZERO),
-            size: Cell::new(Size::ZERO),
-            tree: Mutex::default(),
+            rc: RefCount::new(),
+            state: Mutex::new(StateImpl::new(root_tag, base_addr, size, span)),
         }
     }
 
-    fn new(base_addr: Size, size: Size, bor_tag: BorTag, span: Span) -> Self {
-        Self {
-            alloc_id: Cell::new(AllocId::default()),
-            base_addr: Cell::new(base_addr),
-            size: Cell::new(size),
-            tree: Mutex::new(Some(AllocStateImpl::new(bor_tag, size, span))),
+    unsafe fn new_in(
+        dest: NonNull<AllocInfo>,
+        base_addr: Size,
+        size: Size,
+        root_tag: BorTag,
+        span: Span,
+    ) {
+        unsafe {
+            let mut init = Self::new(base_addr, size, root_tag, span);
+            init.rc = (*dest.as_ptr()).rc.clone();
+            dest.write(init)
         }
     }
 
     #[cfg(feature = "debug")]
     fn summarize(&self) -> AllocInfoSummary {
+        let state = self.state.lock();
         AllocInfoSummary::Valid {
-            alloc_id: self.alloc_id,
-            base_addr: self.base_addr,
-            size: self.size,
+            alloc_id: state.alloc_id,
+            base_addr: state.base_addr,
+            size: state.tree_opt().map_or(Size::ZERO, |tree| tree.size()),
         }
     }
 }
@@ -276,7 +292,7 @@ pub(crate) enum AllocInfoSummary {
     /// When Prov is valid, only drop the tree_lock field
     Valid {
         alloc_id: AllocId,
-        base_addr: FreeListAddrUnion,
+        base_addr: Size,
         size: Size,
     },
 }
@@ -357,13 +373,9 @@ unsafe extern "C" fn __bsan_retag_impl(
 
     let prov = if checked {
         unsafe {
-            BorrowTracker::for_access_unchecked(
-                ctx,
-                prov,
-                Size::from_addr(ptr),
-                Some(size),
-                |mut bt| bt.retag(ctx, retag_info, pc).map(Some),
-            )
+            BorrowTracker::for_access_unchecked(ctx, prov, Size::from_addr(ptr), size, |mut bt| {
+                bt.retag(ctx, retag_info, pc).map(Some)
+            })
         }
     } else {
         BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(size), |mut bt| {
@@ -407,7 +419,7 @@ unsafe extern "C" fn __bsan_read_impl(
                 ctx,
                 prov,
                 Size::from_addr(ptr),
-                Some(access_size),
+                access_size,
                 |mut bt| bt.access(ctx, AccessKind::Read, pc),
             )
         }
@@ -438,7 +450,7 @@ unsafe extern "C" fn __bsan_write_impl(
                 ctx,
                 prov,
                 Size::from_addr(ptr),
-                Some(access_size),
+                access_size,
                 |mut bt| bt.access(ctx, AccessKind::Write, pc),
             )
         }
@@ -481,13 +493,8 @@ extern "C" fn __bsan_dealloc(
     debug_bsan!("dealloc", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov: Provenance = Provenance { bor_tag, alloc_info };
-
     if checked {
-        unsafe {
-            BorrowTracker::for_access_unchecked(ctx, prov, Size::from_addr(ptr), None, |bt| {
-                bt.dealloc(ctx, pc)
-            })
-        }
+        BorrowTracker::for_alloc(prov, |bt| bt.dealloc(ctx, pc))
     } else {
         BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), None, |bt| bt.dealloc(ctx, pc))
     }
@@ -513,28 +520,14 @@ unsafe extern "C" fn __bsan_dealloc_stack_impl(
 /// Returns `true` if the count transitioned from zero to one.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_rc_inc_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo) -> bool {
-    // A null `alloc_info` denotes an empty/cleared shadow slot (e.g. one whose
-    // info was nulled by `ClearShadow` while a stale tag lingered). There is no
-    // allocation to deref, so there is nothing to count.
-    if alloc_info.is_null() {
-        return false;
-    }
     let prov = Provenance { bor_tag, alloc_info };
-    BorrowTracker::for_alloc(prov, |bt| bt.increment()).unwrap_or(false)
+    BorrowTracker::increment(prov)
 }
 
-/// Decrements the reference count associated with a provenance value.
-///
-/// Returns `true` if the count reached zero.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_rc_dec_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo) -> bool {
-    // See `__bsan_rc_inc_impl`: a null `alloc_info` is an empty shadow slot with
-    // no live reference to release.
-    if alloc_info.is_null() {
-        return false;
-    }
     let prov = Provenance { bor_tag, alloc_info };
-    BorrowTracker::for_alloc(prov, |bt| bt.decrement()).unwrap_or(false)
+    BorrowTracker::decrement(prov)
 }
 
 /// Initializes stack allocation metadata in-place.
@@ -551,7 +544,7 @@ unsafe extern "C" fn __bsan_alloc_stack_impl(
     let start = Size::from_addr(base_addr);
     let range = AllocRange { start, size };
     global_ctx.removing_exposed_provenance(range, false, || unsafe {
-        alloc_info.write(AllocInfo::new(start, size, bor_tag, pc));
+        AllocInfo::new_in(alloc_info, start, size, bor_tag, pc);
     });
 }
 
@@ -577,7 +570,7 @@ unsafe extern "C" fn __bsan_prune(
     let global_ctx = unsafe { global_ctx() };
     let alloc: AllocInfoPtr = alloc_info.into();
     let dead_tags = unsafe { slice::from_raw_parts_mut(bor_tags, len) };
-    match alloc.tree.lock().as_mut() {
+    match alloc.state.lock().tree_opt_mut() {
         Some(tree) => tree.remove_dead_tags(global_ctx, dead_tags),
         None => {
             // The tree is already deallocated, so we can zero out dead_tags
@@ -644,5 +637,5 @@ extern "C" fn __bsan_print_diff(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
     eprintln!("The BorrowSanitizer runtime panicked! {:?}", info);
-    core::intrinsics::abort()
+    loop {}
 }
