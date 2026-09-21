@@ -51,20 +51,25 @@ void GlobalContext::GCCallback(const SuspendedThreadsList &, void *arg) {
   // the world, so we need to unlock it here, and record that we have done
   // so, to avoid unlocking it again when we restart the world.
   snap->lock->UnlockInternalAllocator();
-  // Collect all of the provenance values that are reachable from each
-  // thread.
+
   ForEachThread(
       [](BsanThread *thread, Snapshot *snap) {
+        // Collect all of the provenance values that are reachable from each
+        // thread.
         for (auto prov : thread->shadow_stack()) {
           snap->live.insert(prov);
         }
       },
       snap);
-  // Drain the zero-count tables for each thread, as well
-  // as the global zero count table.
-  ForEachThread([](BsanThread *thread,
-                   Snapshot *snap) { MergeZeroCounts(snap, thread->zct_); },
-                snap);
+
+  ForEachThread(
+      [](BsanThread *thread, Snapshot *snap) {
+        // Drain the zero-count tables for each thread, as well
+        // as the global zero count table.
+        MergeZeroCounts(snap, thread->zct_);
+      },
+      snap);
+
   MergeZeroCounts(snap, global_ctx()->global_zct_);
   // Prune all unreachable nodes, destroying
   // allocations that have had their trees fully pruned.
