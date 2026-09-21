@@ -197,8 +197,9 @@ impl Node {
 }
 
 /// Counts the tree nodes visited over the course of a single borrow-tracker
-/// operation. When dropped, the total is added to `__bsan_visits_since_gc`,
-/// which the C++ runtime uses to decide when to request a garbage collection.
+/// operation. When dropped, the total is added to this thread's
+/// `__bsan_visits_since_gc`, which the C++ runtime uses to decide when to
+/// request a garbage collection.
 #[derive(Debug, Default)]
 pub struct VisitCounter(Cell<u32>);
 
@@ -219,8 +220,8 @@ impl Drop for VisitCounter {
         let visits = self.0.get();
         if visits != 0 {
             unsafe {
-                crate::sanitizer_common::__bsan_visits_since_gc
-                    .fetch_add(visits as usize, core::sync::atomic::Ordering::Relaxed);
+                crate::sanitizer_common::__bsan_visits_since_gc =
+                    crate::sanitizer_common::__bsan_visits_since_gc.saturating_add(visits as usize);
             }
         }
     }

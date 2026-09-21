@@ -33,6 +33,13 @@ void GlobalContext::MergeZeroCountsCallback(const ThreadId id,
   MergeZeroCounts(snap, thread->zct);
 }
 
+void GlobalContext::ResetVisitCounts(const ThreadId id,
+                                     BsanThread *const &thread, void *arg) {
+  if (thread) {
+    thread->ResetVisitCount();
+  }
+}
+
 void GlobalContext::MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct) {
   // If the thread is not in the middle of updating its zero
   // count table, then we can drain its contents for garbage collection.
@@ -78,6 +85,9 @@ void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
   // We also need to visit the global ZCT, which contains garbage from threads
   // that have exited since the last collection run.
   MergeZeroCounts(snap, threads.global_zct_);
+  // Only one thread needs to reach `visits_per_gc` to get us here, so every
+  // thread's counter starts over from the collection we are about to perform.
+  threads.ForEachThread(ResetVisitCounts, nullptr);
 }
 
 void GlobalContext::CollectGarbage(Snapshot &snap) {
