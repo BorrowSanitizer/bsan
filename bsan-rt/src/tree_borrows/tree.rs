@@ -669,17 +669,19 @@ impl EagerTree {
                     *entry = BorTag::omnivalid();
                 }
                 // Node has exactly one child (and, per the guard above, a parent)
-                1 if compact && self.can_be_replaced_by_single_child(idx) => {
-                    // Replace the node with its only child.
-                    let child_idx = node.children[0];
-                    let parent_idx = parent.unwrap();
-                    let siblings = &mut self.nodes.get_mut(parent_idx).unwrap().children;
-                    let pos = siblings.iter().position(|&c| c == idx).unwrap();
-                    siblings[pos] = child_idx;
-                    self.nodes.get_mut(child_idx).unwrap().parent = parent;
-                    self.remove_useless_node(idx);
-                    *entry = BorTag::omnivalid();
-                    // Otherwise, the dead node could not be pruned this pass.
+                1 => {
+                    if compact && self.can_be_replaced_by_single_child(idx) {
+                        // Replace the node with its only child.
+                        let child_idx = node.children[0];
+                        let parent_idx = parent.unwrap();
+                        let siblings = &mut self.nodes.get_mut(parent_idx).unwrap().children;
+                        let pos = siblings.iter().position(|&c| c == idx).unwrap();
+                        siblings[pos] = child_idx;
+                        self.nodes.get_mut(child_idx).unwrap().parent = parent;
+                        self.remove_useless_node(idx);
+                        *entry = BorTag::omnivalid();
+                        // Otherwise, the dead node could not be pruned this pass.
+                    }
                 }
                 // Node has more than one child. If every child can soundly replace it, compact it
                 // by reparenting all of its children onto its parent.
