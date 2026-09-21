@@ -238,11 +238,11 @@ pub fn phase_cc(args: impl Iterator<Item = String>) {
 
     // For rustc invocations, the flag `--target` is *not* provided, then we do not
     // configure rustc to instrument its output. This lets us ignore nything for the
-    // host (e.g. procedural macros and build scripts). For clang, there isn't a 
-    // similar heuristic, and our host and target are always going to be the same 
+    // host (e.g. procedural macros and build scripts). For clang, there isn't a
+    // similar heuristic, and our host and target are always going to be the same
     // (unless we end up supporting cross compilation).
     // Instead, we detect this by comparing the current value of `OUT_DIR`, set
-    // by Cargo, against the expected target output directory for instrumented 
+    // by Cargo, against the expected target output directory for instrumented
     // artifacts (e.g. ./target/bsan/<target-triple>/ ) If `OUT_DIR` is within
     // this directory, then we enable instrumentation. Otherwise, we skip it.
     let build_output_root = expect_env("BSAN_TARGET_OUT_DIR");
