@@ -65,7 +65,10 @@ void GlobalContext::GCCallback(const SuspendedThreadsList &, void *arg) {
   ForEachThread(
       [](BsanThread *thread, Snapshot *snap) {
         // Drain the zero-count tables for each thread, as well
-        // as the global zero count table.
+        // as the global zero count table. This happens in a separate
+        // step from scanning the stacks, since we need to know if a
+        // provenance value is reachable, globally, before we can remove
+        // it from a ZCT.
         MergeZeroCounts(snap, thread->zct_);
       },
       snap);
@@ -91,11 +94,10 @@ void GlobalContext::CollectGarbage(Snapshot *snap) {
   pending_.drain([&](AllocInfo *info, BorTagSet &tags) {
     tags.forEach([&](BorTag tag) {
       // None of the borrow tags in the pending set
-      // should be live on the stack at this point.
+      // are live on the stack at this point.
       // They might be live on the heap, with a nonzero
       // reference count, or their underlying allocation
-      // could be live on the shadow stack under a different
-      // tag, though.
+      // could be live on the shadow stack under a different tag,
       DCHECK(!snap->live.contains({tag, info}));
     });
     if (__bsan_prune(info, tags.data(), tags.size())) {
@@ -118,16 +120,44 @@ void GlobalContext::CollectGarbage(Snapshot *snap) {
           // to prune this.
           quarantine_[info] = epoch_ + 1;
         }
+        // If an allocation has been quarantined,
+        // then we can return immediately; it should
+        // have exited the pending set entirely.
         return;
       }
       // It is possible for an allocation to have been
       // fully pruned but for it to still be alive
       // on the shadow stack. For example, this will
       // happen if an allocation is freed while one
-      // of its aliases is within a ZCT.
+      // of its aliases is within a ZCT. We need to
+      // insert the allocation into the pending set,
+      // without providing any tags for it.
+      //
+      // Another possibility is that we tried to lock the
+      // tree for this allocation, but a thread was
+      // paused while holding the lock. We want to
+      // keep everything in the pending set for
+      // the next attempt.
     }
-    still_pending.insert(info);
-    tags.forEach([&](BorTag tag) { still_pending.insert({tag, info}); });
+    // At this point, we know that either the root
+    // or one of the tags for this allocation is alive
+    // somewhere in shadow memory. If there are no tags
+    // left to prune, then the root allocation is all
+    // that's left, and we still want to make sure that
+    // it gets inserted into the next pending set.
+    if tags
+      .size() == 0 { still_pending.insert(info); };
+    // Any leftover tags must be kept around
+    // for the next cycle.
+    tags.forEach([&](BorTag tag) {
+      // When we prune a tag, we write
+      // zero into the list of tags. This
+      // is treated as a special "omnivalid"
+      // provenance value, which is filtered
+      // out when we try to insert it into
+      // the pending set.
+      still_pending.insert({tag, info});
+    });
   });
   pending_.swap(still_pending);
 }
