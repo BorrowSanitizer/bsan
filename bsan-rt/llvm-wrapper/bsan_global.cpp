@@ -126,13 +126,14 @@ void GlobalContext::CollectGarbage(Snapshot &snap) {
   quarantine_.forEach([&](const DenseMap<Block *, uptr>::value_type &KV) {
     if (KV.second <= snap.min_drained) {
       __bsan_eject(KV.first);
-      CurrentThread()->FreeBlock(BLOCK_IDX(KV.first));
+      global_ctx()->FreeBlock(BLOCK_IDX(KV.first));
     } else {
       quarantined.try_emplace(KV.first, KV.second);
     }
     return true;
   });
   quarantine_.swap(quarantined);
+  block_allocator.FlushCache(&block_cache_);
 }
 
 void GlobalContext::requestGC() {
