@@ -400,7 +400,6 @@ extern "C" fn __bsan_protector_end_impl(bor_tag: BorTag, alloc_info: *mut AllocI
     });
 }
 
-/// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_read_impl(
     ptr: *mut c_void,
@@ -431,7 +430,6 @@ unsafe extern "C" fn __bsan_read_impl(
     .unwrap_or_else(|err| ctx.handle_error(err, pc));
 }
 
-/// Records a write access of size `access_size` at the given address `addr` using the provenance `prov`.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_write_impl(
     ptr: *mut c_void,
@@ -515,15 +513,22 @@ unsafe extern "C" fn __bsan_dealloc_stack_impl(
     });
 }
 
-/// Increments the reference count associated with a provenance value.
+/// Increments the reference count associated with a provenance value,
+/// returning `true` if the count transitioned from zero to one.
 ///
-/// Returns `true` if the count transitioned from zero to one.
+/// If the state associated with this allocation has been invalidated,
+/// then the reference count update is applied to the allocation as a whole.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_rc_inc_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo) -> bool {
     let prov = Provenance { bor_tag, alloc_info };
     BorrowTracker::increment(prov)
 }
 
+/// Decrements the reference count associated with the given provenance value,
+/// returning `true` if the count transitioned from zero to one.
+///
+/// If the state associated with this allocation has been invalidated,
+/// then the reference count update is applied to the allocation as a whole.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_rc_dec_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo) -> bool {
     let prov = Provenance { bor_tag, alloc_info };
