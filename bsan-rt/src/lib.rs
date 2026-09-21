@@ -232,11 +232,6 @@ pub struct Provenance {
 unsafe impl Sync for Provenance {}
 unsafe impl Send for Provenance {}
 
-/// Every allocation is associated with a "lock" object, which is an instance of `AllocInfo`.
-/// Provenance is the "key" to this lock. To validate a memory access, we compare the allocation ID
-/// of a pointer's provenance with the value stored in its corresponding `AllocInfo` object. If the values
-/// do not match, then the access is invalid. If they do match, then we proceed to validate the access against
-/// the tree for the allocation.
 #[repr(C)]
 pub struct AllocInfo {
     rc: RefCount,
