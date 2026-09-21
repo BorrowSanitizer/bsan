@@ -622,7 +622,7 @@ impl EagerTree {
             let tag = *entry;
             // A missing entry means the node was already removed; zero out the entry
             let Some(idx) = self.tag_mapping.get(&tag) else {
-                *entry = BorTag::omnivalid();
+                *entry = BorTag::OMNIVALID;
                 continue;
             };
             let node = self.nodes.get(idx).unwrap();
@@ -630,14 +630,14 @@ impl EagerTree {
             // The ZCT may contain tags with a non-zero reference count. These must be
             // dropped; the tag will re-enter the ZCT when it drops back to zero.
             if node.refcount.get() != 0 {
-                *entry = BorTag::omnivalid();
+                *entry = BorTag::OMNIVALID;
                 continue;
             }
 
             // Do not remove exposed nodes. They could be used for future accesses via
             // wildcard pointers.
             if node.is_exposed {
-                *entry = BorTag::omnivalid();
+                *entry = BorTag::OMNIVALID;
                 continue;
             }
 
@@ -664,7 +664,7 @@ impl EagerTree {
                         }
                     }
                     self.remove_useless_node(idx);
-                    *entry = BorTag::omnivalid();
+                    *entry = BorTag::OMNIVALID;
                 }
                 // Node has exactly one child (and, per the guard above, a parent)
                 1 if compact && self.can_be_replaced_by_single_child(idx) => {
@@ -676,7 +676,7 @@ impl EagerTree {
                     siblings[pos] = child_idx;
                     self.nodes.get_mut(child_idx).unwrap().parent = parent;
                     self.remove_useless_node(idx);
-                    *entry = BorTag::omnivalid();
+                    *entry = BorTag::OMNIVALID;
                     // Otherwise, the dead node could not be pruned this pass.
                 }
                 // Node has more than one child. If every child can soundly replace it, compact it
@@ -697,7 +697,7 @@ impl EagerTree {
                         siblings.push(children[i]);
                     }
                     self.remove_useless_node(idx);
-                    *entry = BorTag::omnivalid();
+                    *entry = BorTag::OMNIVALID;
                     // Otherwise, the dead node could not be pruned this pass.
                 }
                 // A dead interior node on a tree too small to be worth compacting. Leave its
@@ -1192,7 +1192,7 @@ impl Tree for LazyTree {
                 // this node is in the dead list with a zero reference count, then the
                 // tree is dead and the associated AllocInfo metadata can be freed.
                 let root_is_dead = refcount.get() == 0 && dead_tags.contains(root_tag);
-                dead_tags.fill(BorTag::omnivalid());
+                dead_tags.fill(BorTag::OMNIVALID);
                 root_is_dead
             }
         }
@@ -1256,7 +1256,7 @@ impl Tree for EagerTree {
     ) -> UBResult<()> {
         let protected = protector.is_some();
         let idx = self.tag_mapping.insert(new_tag);
-        let parent_idx = if parent_tag.is_wildcard() {
+        let parent_idx = if parent_tag == BorTag::WILDCARD {
             None
         } else {
             Some(self.tag_mapping.get(&parent_tag).unwrap())
@@ -1327,7 +1327,7 @@ impl Tree for EagerTree {
         }
 
         let source_idx =
-            if tag.is_wildcard() { None } else { Some(self.tag_mapping.get(&tag).unwrap()) };
+            if tag == BorTag::WILDCARD { None } else { Some(self.tag_mapping.get(&tag).unwrap()) };
 
         for (loc_range, loc) in self.locations.iter_mut(access_range.start, access_range.size) {
             let diagnostics = DiagnosticInfo {
@@ -1369,7 +1369,7 @@ impl Tree for EagerTree {
         )?;
 
         let start_idx =
-            if tag.is_wildcard() { None } else { Some(self.tag_mapping.get(&tag).unwrap()) };
+            if tag == BorTag::WILDCARD { None } else { Some(self.tag_mapping.get(&tag).unwrap()) };
 
         for (loc_range, loc) in self.locations.iter_mut(access_range.start, access_range.size) {
             let diagnostics = DiagnosticInfo {
