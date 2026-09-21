@@ -3,8 +3,8 @@
 #include "bsan_interface_internal.h"
 #include "sanitizer_common/sanitizer_allocator_internal.h"
 #include "sanitizer_common/sanitizer_common.h"
+#include "sanitizer_common/sanitizer_mutex.h"
 #include "sanitizer_common/sanitizer_placement_new.h"
-#include "sanitizer_common/sanitizer_stoptheworld.h"
 #include "sanitizer_common/sanitizer_type_traits.h"
 
 using namespace __bsan;
@@ -13,19 +13,59 @@ namespace __bsan {
 
 void GlobalContext::acquireProvenance(Provenance prov) {
   Lock lock(&global_zct_lock_);
-  global_zct_.acquireProvenance(prov);
+  global_zct_.insert(prov);
 }
 
-void GlobalContext::acquireProvenance(ZeroCountTable &source) {
+void GlobalContext::acquireProvenance(ConcreteProvenanceSet &source) {
   Lock lock(&global_zct_lock_);
-  global_zct_.drainFrom(source);
+  global_zct_.takeFrom(source);
 }
 
-void GlobalContext::MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct) {
-  if (zct.isBusy()) {
-    snap->num_busy_threads++;
+void GlobalContext::InitGC() { InitAsymmetricBarrier(); }
+
+void GlobalContext::WaitAtSafePoint() {
+  BsanThread *thread = CurrentThread();
+  if (!thread || !atomic_load(&__bsan_gc_pending, memory_order_acquire))
     return;
+  u32 epoch = atomic_load(&gc_epoch_, memory_order_acquire);
+  if (!(epoch & 1))
+    return;
+  thread->setAtSafePoint(epoch);
+  while (atomic_load(&gc_epoch_, memory_order_acquire) == epoch)
+    FutexWait(&gc_epoch_, epoch);
+}
+
+bool GlobalContext::AtSafePoint(ScopedThreadLock &) {
+  u32 epoch = atomic_fetch_add(&gc_epoch_, 1, memory_order_acq_rel) + 1;
+  atomic_store(&__bsan_gc_pending, 1, memory_order_release);
+  // Pairs with the fence that instrumented code executes between clearing
+  // `__bsan_gc_safe` and loading `__bsan_gc_pending`. Either that thread
+  // sees the GC as pending and polls its safepoint, or we see it as unsafe
+  // and wait for it.
+  AsymmetricBarrier();
+  for (;;) {
+    bool all_stopped = true;
+    ForEachThread(
+        [&](BsanThread *thread, u32 *epoch) {
+          if (thread != CurrentThread() && !thread->atSafePoint(*epoch) &&
+              !thread->isGCSafe())
+            all_stopped = false;
+        },
+        &epoch);
+    if (all_stopped)
+      return true;
+    internal_sched_yield();
   }
+}
+
+void GlobalContext::ClearSafePoint(ScopedThreadLock &) {
+  atomic_store(&__bsan_gc_pending, 0, memory_order_release);
+  atomic_fetch_add(&gc_epoch_, 1, memory_order_release);
+  FutexWake(&gc_epoch_, 0x7fffffff);
+}
+
+void GlobalContext::MergeZeroCounts(Snapshot *snap,
+                                    ConcreteProvenanceSet &zct) {
   // If the thread is not in the middle of updating its zero
   // count table, then we can drain its contents for garbage
   // collection.
@@ -39,19 +79,10 @@ void GlobalContext::MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct) {
   });
 }
 
-void GlobalContext::GCCallback(const SuspendedThreadsList &, void *arg) {
+void GlobalContext::GCCallback(Snapshot *snap) {
   // We store all of the GC-relevant state in a "snapshot". This contains
   // a set of all reachable provenance values, and the number of threads
   // that were busy during this GC run.
-  Snapshot *snap = static_cast<Snapshot *>(arg);
-  // The data structures used by the GC require the internal allocator.
-  // It's much faster than using the `InternalMmap` vector types
-  // provided by `sanitizer_common`, since we have a lot of smaller, short
-  // lived allocations. We lock the internal allocator prior to stopping
-  // the world, so we need to unlock it here, and record that we have done
-  // so, to avoid unlocking it again when we restart the world.
-  snap->lock->UnlockRuntimeAllocators();
-
   ForEachThread(
       [](BsanThread *thread, Snapshot *snap) {
         // Collect all of the provenance values that are reachable from each
@@ -87,9 +118,6 @@ void GlobalContext::GCCallback(const SuspendedThreadsList &, void *arg) {
 }
 
 void GlobalContext::CollectGarbage(Snapshot *snap) {
-  if (snap->num_busy_threads == 0) {
-    epoch_ += 1;
-  }
   ConcreteProvenanceSet still_pending;
   pending_.drain([&](AllocInfo *info, BorTagSet &tags) {
     tags.forEach([&](BorTag tag) {
@@ -107,20 +135,7 @@ void GlobalContext::CollectGarbage(Snapshot *snap) {
       if (!snap->live.contains(info)) {
         // The root is no longer present on any
         // of the shadow stacks. We can retire it.
-        if (snap->num_busy_threads == 0) {
-          // No threads were busy this time,
-          // so we can guarantee that there
-          // are no copies of this allocation
-          // still flowing through the ZCT.
-          quarantine_[info] = epoch_;
-        } else {
-          // One or more threads were busy this time,
-          // so we couldn't visit their ZCTs. We need
-          // to wait until the next time we have a
-          // clear picture of shadow memory to be able
-          // to prune this.
-          quarantine_[info] = epoch_ + 1;
-        }
+        __bsan_eject(info);
       } else {
         still_pending.insert(info);
       }
@@ -142,7 +157,7 @@ void GlobalContext::CollectGarbage(Snapshot *snap) {
     // to indicate that a thread was busy during collection,
     // so it could indicate that a node was a singleton.
     // We want to ensure that it gets added regardless.
-    if (!tags.Size())
+    if (!tags.size())
       still_pending.insert(info);
     // Any leftover tags must be kept around
     // for the next cycle.
@@ -159,20 +174,6 @@ void GlobalContext::CollectGarbage(Snapshot *snap) {
   pending_.swap(still_pending);
 }
 
-void GlobalContext::EjectGarbage(Snapshot &snap) {
-  Vector<AllocInfo *> to_eject;
-  quarantine_.forEach([&](auto &KV) {
-    if (epoch_ >= KV.getSecond()) {
-      to_eject.PushBack(KV.getFirst());
-    }
-    return true;
-  });
-  for (unsigned ix = 0; ix < to_eject.Size(); ++ix) {
-    __bsan_eject(to_eject[ix]);
-    quarantine_.erase(to_eject[ix]);
-  }
-}
-
 void GlobalContext::requestGC() {
   // Get the current generation count
   uptr gen = atomic_load(&gc_gen, memory_order_acquire);
@@ -186,11 +187,14 @@ void GlobalContext::requestGC() {
     if (gen == current_gen) {
       Snapshot snap;
       {
-        ScopedStopTheWorldLock stopped;
-        snap.lock = &stopped;
-        StopTheWorld(GCCallback, &snap);
+        ScopedThreadLock threads;
+        if (AtSafePoint(threads)) {
+          Lock zct_lock(&global_zct_lock_);
+          GCCallback(&snap);
+        }
+        ClearSafePoint(threads);
       }
-      EjectGarbage(snap);
+
       atomic_fetch_add(&gc_gen, 1, memory_order_relaxed);
     }
     // Release the lock, allowing the GC to run again.

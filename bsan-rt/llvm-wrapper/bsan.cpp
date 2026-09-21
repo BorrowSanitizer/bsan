@@ -77,6 +77,19 @@ THREADLOCAL Provenance __bsan_param_tls[kParamTLSSizeProv];
 SANITIZER_INTERFACE_ATTRIBUTE
 THREADLOCAL Provenance *__bsan_shadow_stack = nullptr;
 
+// Set while this thread may be executing uninstrumented code, which has no
+// safepoints. The GC does not wait for these threads to reach a safepoint.
+// It is set by `__bsan_mark` and `__bsan_enter_uninst`, and cleared by
+// `__bsan_exit_uninst`. The GC reads it with an acquire load.
+SANITIZER_INTERFACE_ATTRIBUTE
+THREADLOCAL atomic_uint8_t __bsan_gc_safe = {1};
+
+// Set while the GC is waiting for every thread to reach a safepoint. When
+// the runtime clears `__bsan_gc_safe`, it checks this flag, and polls
+// its safepoint immediately if it is set.
+SANITIZER_INTERFACE_ATTRIBUTE
+atomic_uint8_t __bsan_gc_pending = {0};
+
 // A flag set by the Rust "core" runtime to indicate to the LLVM
 // wrapper that an error has occurred.
 SANITIZER_INTERFACE_ATTRIBUTE
@@ -125,6 +138,38 @@ void AcquireProvenance(Provenance prov) {
   } else {
     global_ctx()->acquireProvenance(prov);
   }
+}
+
+// Marks this thread as executing instrumented code, so that the GC waits for
+// it to reach a safepoint. If the GC is already waiting, then we stop at a
+// safepoint immediately. Returns whether this thread was previously marked as
+// executing uninstrumented code.
+static u8 ClearGCSafe() {
+  u8 was_safe = atomic_load(&__bsan_gc_safe, memory_order_relaxed);
+  if (LIKELY(!was_safe))
+    return 0;
+  atomic_store(&__bsan_gc_safe, 0, memory_order_relaxed);
+  // Pairs with the barrier that the GC executes between setting
+  // `__bsan_gc_pending` and reading each thread's GC-safe flag. Either we see
+  // the GC as pending, or it sees this thread as unsafe and waits for it.
+  atomic_signal_fence(memory_order_seq_cst);
+  if (UNLIKELY(atomic_load(&__bsan_gc_pending, memory_order_acquire)))
+    global_ctx()->WaitAtSafePoint();
+  return was_safe;
+}
+
+// Marks this thread as executing uninstrumented code. The release store
+// ensures that the GC observes every prior write to the shadow stack once it
+// sees this thread as safe.
+static void SetGCSafe() {
+  atomic_store(&__bsan_gc_safe, 1, memory_order_release);
+}
+
+GCUnsafeScope::GCUnsafeScope() { was_safe_ = ClearGCSafe(); }
+
+GCUnsafeScope::~GCUnsafeScope() {
+  if (was_safe_)
+    SetGCSafe();
 }
 
 // Asks the global context to run the garbage collector once the Rust runtime
@@ -290,6 +335,7 @@ static bool BsanInitInternal() {
   SharedSanitizerFlags flags;
   InitializeFlags(flags);
   new (global_ctx()) GlobalContext();
+  global_ctx()->InitGC();
 
   InitializePlatformEarly();
 
@@ -370,8 +416,29 @@ SANITIZER_INTERFACE_ATTRIBUTE
 void *__bsan_mark(void *callee) {
   void *prev_marker = __bsan_marker;
   __bsan_marker = callee;
+  if (callee != kTrustedMarker)
+    SetGCSafe();
   return prev_marker;
 }
+
+/// Marks this thread as executing instrumented code, so that the GC waits for
+/// it to reach a safepoint. If the GC is already waiting, then we stop at a
+/// safepoint immediately. Returns whether this thread was previously marked as
+/// executing uninstrumented code, which should be passed to
+/// `__bsan_enter_uninst` once we leave instrumented code.
+SANITIZER_INTERFACE_ATTRIBUTE
+u8 __bsan_exit_uninst() { return ClearGCSafe(); }
+
+/// Marks this thread as executing uninstrumented code if `was_uninst` is set,
+/// restoring the state returned by `__bsan_exit_uninst`.
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_enter_uninst(u8 was_uninst) {
+  if (was_uninst)
+    SetGCSafe();
+}
+
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_safepoint() { global_ctx()->WaitAtSafePoint(); }
 
 /// A general-purpose utility for copying shadow memory.
 /// Receives precomputed shadow addresses for the source and
@@ -503,6 +570,7 @@ void __bsan_retag(void *object_addr, uptr access_size, u8 flags,
                   void *dest, bool checked) {
   if (__bsan_retag_impl) {
     GET_SPAN;
+    GCUnsafeScope gc_unsafe;
     InterceptorBarrier barrier;
     Provenance prov;
     __bsan_retag_impl(object_addr, access_size, flags, im_data, im_len,
@@ -527,6 +595,7 @@ void __bsan_read(void *ptr, uptr access_size, BorTag bor_tag,
                  AllocInfo *alloc_info, bool checked) {
   if (__bsan_read_impl) {
     GET_SPAN;
+    GCUnsafeScope gc_unsafe;
     InterceptorBarrier barrier;
     __bsan_read_impl(ptr, access_size, bor_tag, alloc_info, span, checked);
     HANDLE_ERROR;
@@ -542,6 +611,7 @@ void __bsan_write(void *ptr, uptr access_size, BorTag bor_tag,
                   AllocInfo *alloc_info, bool checked) {
   if (__bsan_write_impl) {
     GET_SPAN;
+    GCUnsafeScope gc_unsafe;
     InterceptorBarrier barrier;
     __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, span, checked);
     HANDLE_ERROR;
@@ -554,6 +624,7 @@ bool __bsan_rc_inc_impl(BorTag Tag, AllocInfo *Info);
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_rc_inc(BorTag Tag, AllocInfo *Info) {
   if (__bsan_rc_inc_impl) {
+    GCUnsafeScope gc_unsafe;
     InterceptorBarrier barrier;
     __bsan_rc_inc_impl(Tag, Info);
   }
@@ -565,6 +636,7 @@ bool __bsan_rc_dec_impl(BorTag tag, AllocInfo *info);
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_rc_dec(BorTag tag, AllocInfo *info) {
   if (__bsan_rc_dec_impl) {
+    GCUnsafeScope gc_unsafe;
     InterceptorBarrier barrier;
     if (__bsan_rc_dec_impl(tag, info)) {
       AcquireProvenance({tag, info});
@@ -589,6 +661,7 @@ AllocInfo *__bsan_reserve_stack_slot_impl();
 SANITIZER_INTERFACE_ATTRIBUTE
 AllocInfo *__bsan_reserve_stack_slot() {
   if (__bsan_reserve_stack_slot_impl) {
+    GCUnsafeScope gc_unsafe;
     InterceptorBarrier barrier;
     return __bsan_reserve_stack_slot_impl();
   }
@@ -601,6 +674,7 @@ void __bsan_destroy_stack_slot_impl(AllocInfo *slot);
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_destroy_stack_slot(AllocInfo *slot) {
   if (__bsan_destroy_stack_slot_impl) {
+    GCUnsafeScope gc_unsafe;
     InterceptorBarrier barrier;
     __bsan_destroy_stack_slot_impl(slot);
   }
@@ -613,6 +687,7 @@ AllocInfo *__bsan_alloc_impl(void *base_addr, uptr size, BorTag bor_tag,
 SANITIZER_INTERFACE_ATTRIBUTE
 AllocInfo *__bsan_alloc(void *base_addr, uptr size, BorTag bor_tag, Span pc) {
   if (__bsan_alloc_impl) {
+    GCUnsafeScope gc_unsafe;
     InterceptorBarrier barrier;
     AllocInfo *info = __bsan_alloc_impl(base_addr, size, bor_tag, pc);
     return info;
@@ -634,6 +709,7 @@ void __bsan_alloc_stack(void *base_addr, uptr size, BorTag bor_tag,
                         AllocInfo *alloc_info) {
   if (__bsan_alloc_stack_impl) {
     GET_SPAN;
+    GCUnsafeScope gc_unsafe;
     InterceptorBarrier barrier;
     __bsan_alloc_stack_impl(base_addr, size, bor_tag, alloc_info, span);
     HANDLE_ERROR;
@@ -647,6 +723,7 @@ SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_dealloc_stack(void *ptr, BorTag bor_tag, AllocInfo *alloc_info) {
   if (__bsan_dealloc_stack_impl) {
     GET_SPAN;
+    GCUnsafeScope gc_unsafe;
     InterceptorBarrier barrier;
     __bsan_dealloc_stack_impl(bor_tag, alloc_info, span);
     HANDLE_ERROR;
@@ -659,6 +736,7 @@ void __bsan_expose_prov_impl(BorTag bor_tag, AllocInfo *alloc_info);
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_expose_prov(BorTag bor_tag, AllocInfo *alloc_info) {
   if (__bsan_expose_prov_impl) {
+    GCUnsafeScope gc_unsafe;
     InterceptorBarrier barrier;
     __bsan_expose_prov_impl(bor_tag, alloc_info);
   }
@@ -672,6 +750,7 @@ void __bsan_pop_frame(const Provenance *frame_start, uptr prot,
                       uptr alloca_vec_size) {
   if (__bsan_protector_end_impl && __bsan_dealloc_stack_impl) {
     GET_SPAN;
+    GCUnsafeScope gc_unsafe;
     InterceptorBarrier barrier;
     for (uptr i = 0; i < prot + alloca_vec_size; i++) {
       const Provenance prov = frame_start[i];

@@ -1,5 +1,6 @@
 #ifndef BSAN_THREAD_H
 #define BSAN_THREAD_H
+
 #include "bsan.h"
 #include "bsan_allocator.h"
 #include "bsan_set.h"
@@ -12,49 +13,6 @@
 using namespace __sanitizer;
 
 namespace __bsan {
-
-struct ZeroCountTable {
-  ~ZeroCountTable() {}
-
-private:
-  // A flag indicating that we are currently adding a value to the zero count
-  // table for this thread. If this flag is set when we stop the world, then we
-  // will skip merging its zero count table into the set of pending provenance
-  // values to garbage collect. We will still examine this thread's
-  // shadow stack to exclude reachable provenance values.
-  atomic_uint8_t busy_{};
-
-  // Whenever we modify this zero-count table, we need to
-  // ensure that we are only doing so from the context of another table.
-  struct GCBarrier {
-    ZeroCountTable &zct;
-    GCBarrier(ZeroCountTable &zct) : zct(zct) {
-      atomic_store(&zct.busy_, 1, memory_order_release);
-    }
-    ~GCBarrier() { atomic_store(&zct.busy_, 0, memory_order_release); }
-  };
-
-  ConcreteProvenanceSet zct_;
-
-public:
-  // Adds a provenance value with a zero reference count
-  // to this table.
-  void acquireProvenance(Provenance Prov) {
-    // We use a release order here so that each of these
-    // stores is ordered before the "acquire" load used
-    // to check the value in `IsBusy`.
-    GCBarrier barrier(*this);
-    zct_.insert(Prov);
-  }
-
-  void drainFrom(ZeroCountTable &other) {
-    GCBarrier other_barrier(other);
-    GCBarrier this_barrier(*this);
-    zct_.takeFrom(other.zct_);
-  }
-  template <typename Fn> void retainIf(Fn retain) { zct_.retainIf(retain); }
-  bool isBusy() { return atomic_load(&busy_, memory_order_acquire) == 1; }
-};
 
 class BsanThread;
 class BsanThreadContext final : public ThreadContextBase {
@@ -124,6 +82,20 @@ public:
     return (uptr)shadow_stack_bottom_ + shadow_stack_size_;
   }
 
+  void setAtSafePoint(u32 epoch) {
+    atomic_store(&at_safepoint_, epoch, memory_order_release);
+  }
+
+  // Returns true if this thread may be executing uninstrumented code.
+  bool isGCSafe() {
+    return atomic_load(gc_safe_ptr_, memory_order_acquire) == 1;
+  }
+
+  // Returns true if this thread has stopped at a GC safepoint.
+  bool atSafePoint(u32 epoch) {
+    return atomic_load(&at_safepoint_, memory_order_acquire) == epoch;
+  }
+
   ArrayRef<Provenance> shadow_stack() const {
     Provenance *cursor = shadow_stack_cursor();
     Provenance *top = (Provenance *)(shadow_stack_top());
@@ -150,7 +122,7 @@ public:
   RustAllocatorCache *rust_allocator_cache() { return &rust_allocator_cache_; }
 
   uptr os_id;
-  void acquireProvenance(Provenance prov) { zct_.acquireProvenance(prov); }
+  void acquireProvenance(Provenance prov) { zct_.insert(prov); }
 
 private:
   friend struct BsanThreadContext;
@@ -163,7 +135,7 @@ private:
 
   BsanThreadContext *context_;
 
-  ZeroCountTable zct_;
+  ConcreteProvenanceSet zct_;
 
   // Executes the start routine.
   thread_return_t Start();
@@ -186,7 +158,12 @@ private:
   // containing the current value of its shadow stack
   // pointer (`__bsan_shadow_stack`).
   Provenance **shadow_stack_ptr_;
+  // The address of this thread's thread-local GC-safe flag (`__bsan_gc_safe`).
+  atomic_uint8_t *gc_safe_ptr_;
 
+  // A flag indicating that this thread has been paused,
+  // waiting for garbage collection to begin.
+  atomic_uint32_t at_safepoint_;
   char start_data_[];
 };
 

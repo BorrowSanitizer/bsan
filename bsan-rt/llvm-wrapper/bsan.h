@@ -59,6 +59,10 @@ static constexpr uptr kMinProvAlignment = 8;
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance
     *__bsan_shadow_stack;
 
+extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL atomic_uint8_t __bsan_gc_safe;
+
+extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uint8_t __bsan_gc_pending;
+
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __bsan_had_error;
 
 extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uintptr_t __bsan_bor_tag_ctr;
@@ -78,6 +82,14 @@ extern THREADLOCAL int block_interception;
 struct InterceptorBarrier {
   InterceptorBarrier() { ++block_interception; }
   ~InterceptorBarrier() { --block_interception; }
+};
+
+struct GCUnsafeScope {
+  GCUnsafeScope();
+  ~GCUnsafeScope();
+
+private:
+  bool was_safe_;
 };
 
 // Should interceptors be blocked?
@@ -118,7 +130,8 @@ void ClearParamSlot(uptr Idx);
 void ClearRetValSlot(uptr Idx);
 
 bool CallerIsInstrumented(void *sym);
-
+void InitAsymmetricBarrier();
+void AsymmetricBarrier();
 } // namespace __bsan
 
 extern "C" {

@@ -4,13 +4,10 @@
 #include "bsan.h"
 #include "bsan_set.h"
 #include "bsan_thread.h"
-#include "sanitizer_common/sanitizer_stoptheworld.h"
 
 namespace __bsan {
 
-struct ScopedStopTheWorldLock;
-
-typedef uptr Epoch;
+struct ScopedThreadLock;
 
 struct Snapshot {
 public:
@@ -18,8 +15,6 @@ public:
   // The set of borrow tags that are currently
   // reachable from any of the shadow stacks.
   ConcreteProvenanceSet live;
-  uptr num_busy_threads = 0;
-  ScopedStopTheWorldLock *lock;
 };
 
 // Global state associated with the runtime.
@@ -34,15 +29,23 @@ public:
   void requestGC();
 
   void acquireProvenance(Provenance prov);
-  void acquireProvenance(ZeroCountTable &source);
+  void acquireProvenance(ConcreteProvenanceSet &source);
+  void RequestGC();
+  void InitGC();
+  // Waits until each thread has reached a safepoint.
+  bool AtSafePoint(ScopedThreadLock &threads);
+  // Releases each waiting thread.
+  void ClearSafePoint(ScopedThreadLock &threads);
+  // Blocks the current thread at a safepoint until the GC releases it.
+  void WaitAtSafePoint();
 
 private:
-  friend struct ScopedStopTheWorldLock;
+  friend struct ScopedThreadLock;
   Mutex global_zct_lock_;
   // When a thread exits, its zero count table needs to be
   // retained, so that we can clean up any of the provenance
   // values that it acquired in a future garbage collection pass.
-  ZeroCountTable global_zct_;
+  ConcreteProvenanceSet global_zct_;
 
   // A lock held by the thread that succeeds at invoking
   // the garbage collector. While this lock is held, the
@@ -58,29 +61,24 @@ private:
   // the lock without running the GC.
   atomic_uintptr_t gc_gen{0};
 
+  atomic_uint32_t gc_epoch_{0};
+
   // A set of provenance values with a zero reference count that are
   // ready to be garbage collected. These values are no longer reachable
   // in shadow memory, or within the zero count tables associated with
   // each thread.
   ConcreteProvenanceSet pending_;
-
-  Epoch epoch_ = 1;
-
-  // A callback passed to `StopTheWorld`. Runs the garbage collector.
-  static void GCCallback(const SuspendedThreadsList &, void *arg);
+  // Runs the garbage collector.
+  static void GCCallback(Snapshot *snap);
   // Iterates over every thread's zero-count-table, merging its contents into
   // the set of pending provenance values. We only add values to the pending set
   // if they are not present on any shadow stack. Values that we add to the
   // pending set are also removed from their thread's zero-count-table.
-  static void MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct);
+  static void MergeZeroCounts(Snapshot *snap, ConcreteProvenanceSet &zct);
   // Drains the contents of the pending provenance set, pruning the associated
   // state from the tree for each allocation. Ejects any retired allocation
   // objects that are confirmed to be unreachable.
   void CollectGarbage(Snapshot *snap);
-  void EjectGarbage(Snapshot &snap);
-
-  DenseMap<AllocInfo *, Epoch> quarantine_{};
-
   // Guards `at_exit_stack_`.
   Mutex at_exit_lock_;
   // Exit handlers.
@@ -90,40 +88,11 @@ private:
 /// Returns a pointer to the singleton `GlobalContext` object.
 GlobalContext *global_ctx();
 
-struct ScopedStopTheWorldLock {
-  ScopedStopTheWorldLock() {
-    // We need to ensure that every existing thread is blocked
-    // from the allocator, and that every new thread is blocked
-    // from registering its shadow stack in the global state.
-    // If we stop the world when a thread is within either of
-    // these critical sections, then our state might be corrupted
-    // once we resume.
-    LockThreads();
-    LockShadowedAllocator();
-    LockRustAllocator();
-    InternalAllocatorLock();
-  }
-
-  void UnlockRuntimeAllocators() {
-    InternalAllocatorUnlock();
-    UnlockRustAllocator();
-    runtime_alloc_locked_ = false;
-  }
-
-  ~ScopedStopTheWorldLock() {
-    if (runtime_alloc_locked_) {
-      InternalAllocatorUnlock();
-      UnlockRustAllocator();
-    }
-    UnlockShadowedAllocator();
-    UnlockThreads();
-  }
-
-  ScopedStopTheWorldLock &operator=(const ScopedStopTheWorldLock &) = delete;
-  ScopedStopTheWorldLock(const ScopedStopTheWorldLock &) = delete;
-
-private:
-  bool runtime_alloc_locked_ = true;
+struct ScopedThreadLock {
+  ScopedThreadLock() { LockThreads(); }
+  ~ScopedThreadLock() { UnlockThreads(); }
+  ScopedThreadLock &operator=(const ScopedThreadLock &) = delete;
+  ScopedThreadLock(const ScopedThreadLock &) = delete;
 };
 
 } // namespace __bsan

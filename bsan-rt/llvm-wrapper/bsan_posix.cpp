@@ -3,7 +3,10 @@
 
 #include "bsan.h"
 #include "bsan_thread.h"
+#include <linux/membarrier.h>
 #include <pthread.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 namespace __bsan {
 
@@ -31,6 +34,15 @@ void PlatformTSDDtor(void *tsd) {
   }
   BlockSignals();
   BsanThread::TSDDtor(tsd);
+}
+
+void InitAsymmetricBarrier() {
+  CHECK_EQ(
+      syscall(SYS_membarrier, MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED, 0), 0);
+}
+
+void AsymmetricBarrier() {
+  CHECK_EQ(syscall(SYS_membarrier, MEMBARRIER_CMD_PRIVATE_EXPEDITED, 0), 0);
 }
 
 void InitializeTSD(void (*destructor)(void *tsd)) {

@@ -15,14 +15,17 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/EHPersonalities.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Transforms/Scalar/PlaceSafepoints.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/EscapeEnumerator.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
@@ -37,6 +40,9 @@
 
 using namespace llvm;
 using namespace llvm::PatternMatch;
+
+static const char *const kSafepointGCName = "statepoint-example";
+static const char *const kSafepointPollName = "gc.safepoint_poll";
 
 // Provenance is two words: a borrow tag and
 // a pointer to an allocation metadata object.
@@ -276,8 +282,12 @@ public:
   bool instrumentModule(Module &M);
   bool instrumentFunction(Function &F, FunctionAnalysisManager &FAM,
                           const StackSafetyGlobalInfo &SSGI);
+  void enableSafepoints(Module &M);
+  void disableSafepoints(Module &M);
 
 private:
+  void placeSafepoints(Function &F, FunctionAnalysisManager &FAM);
+  void emitSafepointPoll(IRBuilder<> &IRB);
   friend struct VarArgHelperBase;
   friend struct VarArgAMD64Helper;
   friend struct VarArgAArch64Helper;
@@ -330,6 +340,13 @@ private:
   /// Thread local atomic counter used to generate borrow tags.
   Value *BorTagCounter = nullptr;
 
+  /// Global flag, set while the GC is waiting for threads to reach
+  /// a safepoint.
+  Value *GCPendingGV = nullptr;
+
+  /// The default GC safepoint function.
+  Function *SafepointPollFn = nullptr;
+
   /// Are the instrumentation callbacks set up?
   bool CallbacksInitialized = false;
 
@@ -356,6 +373,14 @@ private:
 
   /// Runtime function for setting the boundary marker.
   FunctionCallee BsanFuncMark;
+
+  /// Runtime function for marking the current thread as executing
+  /// instrumented code. Returns whether it was executing uninstrumented code.
+  FunctionCallee BsanFuncExitUninst;
+
+  /// Runtime function for restoring the state returned by
+  /// `BsanFuncExitUninst` when leaving instrumented code.
+  FunctionCallee BsanFuncEnterUninst;
 
   /// Runtime function for validating the section of the shadow stack containing
   /// the return value from a function call.
@@ -395,6 +420,8 @@ private:
 
   /// Runtime function for deallocating alloca metadata.
   FunctionCallee BsanFuncDestroyStackSlot;
+
+  FunctionCallee BsanFuncSafepoint;
 
   /// A default personality function used for exception-handling.
   FunctionCallee DefaultPersonalityFn;
@@ -647,6 +674,12 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
       BSAN("dealloc_stack"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, PtrTy);
 
   BsanFuncMark = M.getOrInsertFunction(BSAN("mark"), AL, PtrTy, PtrTy);
+
+  BsanFuncExitUninst =
+      M.getOrInsertFunction(BSAN("exit_uninst"), AL, IRB.getInt8Ty());
+
+  BsanFuncEnterUninst = M.getOrInsertFunction(BSAN("enter_uninst"), AL,
+                                              IRB.getVoidTy(), IRB.getInt8Ty());
 
   BsanFuncValidateParams = M.getOrInsertFunction(
       BSAN("validate_params"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, IntptrTy);
@@ -993,14 +1026,15 @@ PreservedAnalyses BorrowSanitizerPass::run(Module &M,
   const StackSafetyGlobalInfo &SSGI =
       MAM.getResult<StackSafetyGlobalAnalysis>(M);
 
+  ModuleSanitizer.enableSafepoints(M);
   for (Function &F : M) {
     Modified |= ModuleSanitizer.instrumentFunction(F, FAM, SSGI);
   }
+  ModuleSanitizer.disableSafepoints(M);
   if (!Modified)
     return PreservedAnalyses::all();
 
   Modified |= ModuleSanitizer.instrumentModule(M);
-
   PreservedAnalyses PA = PreservedAnalyses::none();
   // We incrementally update the dominator tree throughout
   // these analysis passes.
@@ -1381,6 +1415,23 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // invoke instructions involving uninstrumented functions.
   AllocaInst *MarkerAlloca = nullptr;
 
+  // Whether this thread was executing uninstrumented code on entry, if this
+  // function may have been called from uninstrumented code. It is restored
+  // when we return.
+  Value *PrevUninst = nullptr;
+
+  // Marks this thread as executing instrumented code. If the GC is waiting
+  // for threads to reach a safepoint, then the runtime polls one immediately.
+  Value *exitUninst(IRBuilder<> &IRB) {
+    return IRB.CreateCall(BS.BsanFuncExitUninst);
+  }
+
+  // Restores the state returned by `exitUninst` on entry.
+  void restoreUninst(IRBuilder<> &IRB) {
+    if (PrevUninst)
+      IRB.CreateCall(BS.BsanFuncEnterUninst, {PrevUninst});
+  }
+
   // Memory intrinsics that have been replaced by a call to the runtime. Their
   // removal is deferred until after checks have been inserted, because each one
   // is the insertion point for the checks guarding its own access.
@@ -1430,6 +1481,13 @@ public:
     patchShadowPHINodes();
     ProvMap.patch(DT);
     ShadowStack.patchStackSlots(DT);
+    // We may have unwound out of uninstrumented code.
+    for (BasicBlock &BB : F) {
+      if (BB.isLandingPad()) {
+        IRBuilder<> IRB(&BB, BB.getFirstInsertionPt());
+        exitUninst(IRB);
+      }
+    }
     return true;
   }
 
@@ -1721,6 +1779,11 @@ private:
     Value *NumParamProv = ConstantInt::get(BS.IntptrTy, 0);
 
     bool Validation = needsBoundaryValidation(&F);
+    // If we may have been called from uninstrumented code, then our caller
+    // could have marked this thread as executing uninstrumented code. We need
+    // to clear that until we return.
+    if (Validation)
+      PrevUninst = exitUninst(EntryIRB);
     // Iterate over each argument to compute how many provenance slots
     // we need.
     SmallVector<ByValArgInfo> ByValArgs;
@@ -2015,6 +2078,8 @@ private:
       // the semantics of a tail call are equivalent
       // to a return and then another call.
       popFrame(Before, CB, nullptr);
+      if (needsBoundaryValidation(Callee))
+        restoreUninst(Before);
     }
 
     // If we have parameter provenance, then store it to the TLS array.
@@ -2113,6 +2178,10 @@ private:
         // pointer that we are calling, so that the callee can check
         // against it.
         Marker = Before.CreateCall(BS.BsanFuncMark, {CB.getCalledOperand()});
+        // `__bsan_mark` marked this thread as executing uninstrumented code,
+        // since the callee may be uninstrumented. We are back in instrumented
+        // code, so we clear it.
+        exitUninst(After);
         // If we do not have any return provenance, then
         // we do not need to validate any part of the shadow stack
         // on return.
@@ -2659,11 +2728,13 @@ private:
         return;
     IRBuilder<> IRB(&I);
     popFrame(IRB, I, I.getReturnValue());
+    restoreUninst(IRB);
   }
 
   void visitResumeInst(ResumeInst &I) {
     IRBuilder<> IRB(&I);
     popFrame(IRB, I, I.getValue());
+    restoreUninst(IRB);
   }
 };
 
@@ -3272,6 +3343,10 @@ bool BorrowSanitizer::instrumentFunction(Function &F,
     return false;
   }
 
+  if (&F == SafepointPollFn) {
+    return false;
+  }
+
   if (F.getName().starts_with(RUST_FN("retag"))) {
     return false;
   }
@@ -3285,9 +3360,11 @@ bool BorrowSanitizer::instrumentFunction(Function &F,
   }
 
   const TargetLibraryInfo &TLI = FAM.getResult<TargetLibraryAnalysis>(F);
-  DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
-
   initializeCallbacks(*F.getParent(), TLI);
+
+  placeSafepoints(F, FAM);
+
+  DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
   BorrowSanitizerVisitor Visitor(F, *this, TLI, DT, SSGI);
 
   AttributeMask B;
@@ -3298,4 +3375,54 @@ bool BorrowSanitizer::instrumentFunction(Function &F,
 
   F.addFnAttr(Attribute::DisableSanitizerInstrumentation);
   return true;
+}
+
+void BorrowSanitizer::enableSafepoints(Module &M) {
+  AttributeList AL;
+  AL = AL.addFnAttribute(*C, Attribute::NoUnwind);
+  BsanFuncSafepoint =
+      M.getOrInsertFunction(BSAN("safepoint"), AL, Type::getVoidTy(*C));
+  GCPendingGV = getOrInsertGlobal(M, BSAN("gc_pending"), Type::getInt8Ty(*C));
+  SafepointPollFn =
+      Function::Create(FunctionType::get(Type::getVoidTy(*C), false),
+                       GlobalValue::InternalLinkage, kSafepointPollName, M);
+  SafepointPollFn->addFnAttr(Attribute::NoUnwind);
+  BasicBlock *Entry = BasicBlock::Create(*C, "entry", SafepointPollFn);
+  BasicBlock *Wait = BasicBlock::Create(*C, "wait", SafepointPollFn);
+  BasicBlock *Exit = BasicBlock::Create(*C, "exit", SafepointPollFn);
+  IRBuilder<> IRB(Entry);
+  LoadInst *Pending =
+      IRB.CreateAlignedLoad(IRB.getInt8Ty(), GCPendingGV, Align(1));
+  Pending->setAtomic(AtomicOrdering::Monotonic);
+  Pending->setMetadata(LLVMContext::MD_nosanitize, MDNode::get(*C, {}));
+  IRB.CreateCondBr(IRB.CreateIsNotNull(Pending), Wait, Exit,
+                   MDBuilder(*C).createUnlikelyBranchWeights());
+  IRB.SetInsertPoint(Wait);
+  emitSafepointPoll(IRB);
+  IRB.CreateBr(Exit);
+  IRB.SetInsertPoint(Exit);
+  IRB.CreateRetVoid();
+}
+
+void BorrowSanitizer::disableSafepoints(Module &M) {
+  if (SafepointPollFn) {
+    SafepointPollFn->eraseFromParent();
+    SafepointPollFn = nullptr;
+  }
+}
+
+void BorrowSanitizer::placeSafepoints(Function &F,
+                                      FunctionAnalysisManager &FAM) {
+  assert(SafepointPollFn && "enableSafepoints must be called first");
+  assert(!F.hasGC() && "functions should not already use a GC strategy");
+  F.setGC(kSafepointGCName);
+  PreservedAnalyses PA = PlaceSafepointsPass().run(F, FAM);
+  F.clearGC();
+  FAM.invalidate(F, PA);
+}
+
+void BorrowSanitizer::emitSafepointPoll(IRBuilder<> &IRB) {
+  CallInst *Poll = IRB.CreateCall(BsanFuncSafepoint);
+  Poll->setDoesNotThrow();
+  Poll->setMetadata(LLVMContext::MD_nosanitize, MDNode::get(*C, {}));
 }

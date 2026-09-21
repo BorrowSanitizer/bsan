@@ -56,6 +56,7 @@ static Provenance BsanAllocateMeta(void *ptr, SIZE_T size, uptr span) {
 static void *BsanAllocateMetaIntoStack(void *ptr, SIZE_T size, bool is_inst,
                                        uptr span, uptr slot_idx) {
   if (is_inst) {
+    GCUnsafeScope gc_unsafe;
     Provenance *slot = GetRetValSlot(slot_idx);
     Provenance prov = BsanAllocateMeta(ptr, size, span);
     *slot = prov;
@@ -67,6 +68,7 @@ static void *BsanAllocateMetaIntoStack(void *ptr, SIZE_T size, bool is_inst,
 static void *BsanAllocateMetaIntoHeap(void *ptr, SIZE_T size, bool is_inst,
                                       uptr span, void *dest) {
   if (is_inst) {
+    GCUnsafeScope gc_unsafe;
     Provenance prov = BsanAllocateMeta(ptr, size, span);
     WriteShadow(dest, prov);
     AcquireProvenance(prov);
@@ -107,6 +109,7 @@ INTERCEPTOR(void, free, void *ptr) {
   bool already_in_scope = BlockInterception();
   InterceptorBarrier barrier;
   if (!already_in_scope && INST_CALLER(free)) {
+    GCUnsafeScope gc_unsafe;
     Provenance *slot = GetParamSlot(0);
     __bsan_dealloc(ptr, slot->tag, slot->info, span, false);
     HANDLE_ERROR_PC_BP(pc, bp);
@@ -136,6 +139,7 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
   // If the pointer is null, then realloc behaves like malloc,
   // so we can skip instrumenting the deallocation.
   if (is_inst && ptr != nullptr) {
+    GCUnsafeScope gc_unsafe;
     Provenance *slot = GetParamSlot(0);
     __bsan_dealloc(ptr, slot->tag, slot->info, span, false);
     HANDLE_ERROR_PC_BP(pc, bp);

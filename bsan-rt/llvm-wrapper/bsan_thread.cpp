@@ -145,10 +145,12 @@ void BsanThread::Init() {
   // that the GC can accurately read the initialized contents of the
   // shadow stack when it stops the world.
   shadow_stack_ptr_ = &__bsan_shadow_stack;
+  gc_safe_ptr_ = &__bsan_gc_safe;
 }
 
 void BsanThread::TSDDtor(void *tsd) {
   BsanThreadContext *context = (BsanThreadContext *)tsd;
+  atomic_store(&__bsan_gc_safe, 1, memory_order_release);
   if (context->thread)
     context->thread->Destroy();
 }
@@ -165,7 +167,7 @@ void BsanThread::Destroy() {
     CommitBackRustCache(this->rust_allocator_cache());
     if (common_flags()->use_sigaltstack)
       UnsetAlternateSignalStack(altstack_base_);
-    zct_.~ZeroCountTable();
+    zct_.~ConcreteProvenanceSet();
     UnmapOrDie(shadow_stack_bottom_, shadow_stack_size_);
   } else {
     CHECK_NE(this, CurrentThread());
