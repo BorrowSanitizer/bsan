@@ -310,14 +310,15 @@ unsafe extern "C" fn __bsan_retag_impl(
         pin_layout: opt_slice(pin_data, pin_len),
     };
 
+    let offset = Size::from_addr(ptr);
     let prov = if checked {
         unsafe {
-            BorrowTracker::for_access_unchecked(ctx, prov, Size::from_addr(ptr), size, |mut bt| {
+            BorrowTracker::for_access_unchecked(ctx, prov, offset, size, |mut bt| {
                 bt.retag(ctx, retag_info, pc).map(Some)
             })
         }
     } else {
-        BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(size), |mut bt| {
+        BorrowTracker::for_access(ctx, prov, offset, Some(size), |mut bt| {
             bt.retag(ctx, retag_info, pc).map(Some)
         })
     }
@@ -380,19 +381,20 @@ unsafe extern "C" fn __bsan_write_impl(
 ) {
     debug_bsan!("write", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
+    let offset = Size::from_addr(ptr);
     let prov = Provenance { bor_tag, alloc_info };
     if checked {
         unsafe {
             BorrowTracker::for_access_unchecked(
                 ctx,
                 prov,
-                Size::from_addr(ptr),
+                offset,
                 access_size,
                 |mut bt| bt.access(ctx, AccessKind::Write, pc),
             )
         }
     } else {
-        BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(access_size), |mut bt| {
+        BorrowTracker::for_access(ctx, prov, offset, Some(access_size), |mut bt| {
             bt.access(ctx, AccessKind::Write, pc)
         })
     }
@@ -429,11 +431,12 @@ extern "C" fn __bsan_dealloc(
 ) {
     debug_bsan!("dealloc", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
+    let offset = Size::from_addr(ptr);
     let prov: Provenance = Provenance { bor_tag, alloc_info };
     if checked {
         BorrowTracker::for_alloc(prov, |bt| bt.dealloc(ctx, pc))
     } else {
-        BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), None, |bt| bt.dealloc(ctx, pc))
+        BorrowTracker::for_access(ctx, prov, offset, None, |bt| bt.dealloc(ctx, pc))
     }
     .unwrap_or_else(|err| ctx.handle_error(err, pc));
 }
@@ -482,10 +485,7 @@ unsafe extern "C" fn __bsan_reserve_stack_slot_impl() -> NonNull<AllocInfo> {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_destroy_stack_slot_impl(slot: NonNull<AllocInfo>) {
-    let ctx = unsafe { global_ctx() };
-    unsafe {
-        ctx.destroy_alloc_info(slot);
-    }
+    unsafe { global_ctx().destroy_alloc_info(slot) };
 }
 
 /// Initializes stack allocation metadata in-place.
