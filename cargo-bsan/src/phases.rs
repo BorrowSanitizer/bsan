@@ -153,7 +153,7 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
         Some(dir) => PathBuf::from(dir),
         None => Cargo::get_target_dir(),
     };
-    cmd.arg("--target-dir").arg(target_dir);
+    cmd.arg("--target-dir").arg(&target_dir);
 
     // *After* we set all the flags that need setting, forward everything else. Make sure to skip
     // `--target-dir` (which would otherwise be set twice).
@@ -178,7 +178,7 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     cmd.env("CXX", &cc_wrapper);
     cmd.env("BSAN_CC_WRAPPER", &cc_wrapper);
 
-    let mut target_out_dir = Cargo::get_target_dir();
+    let mut target_out_dir = target_dir;
     target_out_dir.push(&rustc_version.host);
     cmd.env("BSAN_TARGET_OUT_DIR", target_out_dir);
 
