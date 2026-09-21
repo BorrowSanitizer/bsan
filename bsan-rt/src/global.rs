@@ -15,7 +15,7 @@ use crate::*;
 
 pub struct ExposedProvenance<'a>(RwLockWriteGuard<'a, RangeObjectMap<AllocInfoPtr>>);
 
-impl<'a> Deref for ExposedProvenance<'a> {
+impl Deref for ExposedProvenance<'_> {
     type Target = RangeObjectMap<AllocInfoPtr>;
 
     fn deref(&self) -> &Self::Target {
@@ -23,7 +23,7 @@ impl<'a> Deref for ExposedProvenance<'a> {
     }
 }
 
-impl<'a> DerefMut for ExposedProvenance<'a> {
+impl DerefMut for ExposedProvenance<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
@@ -64,7 +64,7 @@ impl GlobalCtx {
         unsafe { self.alloc_metadata_map.dealloc(ptr) }
     }
 
-    pub fn exposed_provenance<'a>(&'a self) -> ExposedProvenance<'a> {
+    pub fn exposed_provenance(&self) -> ExposedProvenance<'_> {
         ExposedProvenance(self.exposed_provenance.write())
     }
 

@@ -3,7 +3,6 @@
 #![feature(thread_local)]
 #![feature(allocator_api)]
 #![allow(internal_features)]
-
 #[macro_use]
 extern crate alloc;
 use core::ffi::c_void;
@@ -104,6 +103,7 @@ pub struct AllocId(usize);
 
 impl AllocId {
     const ZERO: AllocId = AllocId(0);
+    #[must_use]
     pub fn get(&self) -> usize {
         self.0
     }
@@ -127,7 +127,7 @@ impl fmt::Debug for AllocId {
 
 impl fmt::Display for AllocId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_fmt(format_args!("{:?}", self))
+        f.write_fmt(format_args!("{self:?}"))
     }
 }
 
@@ -147,11 +147,13 @@ impl BorTag {
     const WILDCARD: BorTag = BorTag(2);
 
     #[inline]
+    #[must_use]
     pub fn is_concrete(self) -> bool {
         self > Self::WILDCARD
     }
 
     #[inline]
+    #[must_use]
     pub fn get(&self) -> usize {
         self.0
     }
@@ -204,7 +206,7 @@ impl AllocInfo {
         unsafe {
             let mut init = Self::new(base_addr, size, root_tag, span);
             init.rc = (*dest.as_ptr()).rc.clone();
-            dest.write(init)
+            dest.write(init);
         }
     }
 
@@ -219,21 +221,14 @@ impl AllocInfo {
     }
 }
 
-/// A shallow version of `AllocInfo`, for use in debug logging.
+/// A shallow version of [`AllocInfo`], for use in debug logging.
 #[cfg(feature = "debug")]
 #[derive(Debug)]
 pub(crate) enum AllocInfoSummary {
     Omnivalid,
-    /// When Prov is wildcard, AllocInfo is invalid
     Wildcard,
-    /// When Prov is null, AllocInfo is invalid
     Null,
-    /// When Prov is valid, only drop the tree_lock field
-    Valid {
-        alloc_id: AllocId,
-        base_addr: Size,
-        size: Size,
-    },
+    Valid { alloc_id: AllocId, base_addr: Size, size: Size },
 }
 
 /// Initializes the global state of the runtime library.
@@ -322,11 +317,13 @@ unsafe extern "C" fn __bsan_retag_impl(
             bt.retag(ctx, retag_info, pc).map(Some)
         })
     }
-    .map(|opt| opt.unwrap_or(prov))
-    .unwrap_or_else(|err| {
-        ctx.handle_error(err, pc);
-        prov
-    });
+    .map_or_else(
+        |err| {
+            ctx.handle_error(err, pc);
+            prov
+        },
+        |opt| opt.unwrap_or(prov),
+    );
 
     unsafe { dest.write(prov) };
 }
@@ -385,13 +382,9 @@ unsafe extern "C" fn __bsan_write_impl(
     let prov = Provenance { bor_tag, alloc_info };
     if checked {
         unsafe {
-            BorrowTracker::for_access_unchecked(
-                ctx,
-                prov,
-                offset,
-                access_size,
-                |mut bt| bt.access(ctx, AccessKind::Write, pc),
-            )
+            BorrowTracker::for_access_unchecked(ctx, prov, offset, access_size, |mut bt| {
+                bt.access(ctx, AccessKind::Write, pc)
+            })
         }
     } else {
         BorrowTracker::for_access(ctx, prov, offset, Some(access_size), |mut bt| {
@@ -528,17 +521,16 @@ unsafe extern "C" fn __bsan_prune(
     let global_ctx = unsafe { global_ctx() };
     let alloc: AllocInfoPtr = alloc_info.into();
     let dead_tags = unsafe { slice::from_raw_parts_mut(bor_tags, len) };
-    match alloc.state.lock().tree_opt_mut() {
-        Some(tree) => tree.remove_dead_tags(global_ctx, dead_tags),
-        None => {
-            // The tree is already deallocated, so we can zero out dead_tags
-            dead_tags.fill(BorTag::OMNIVALID);
-            false
-        }
+    if let Some(tree) = alloc.state.lock().tree_opt_mut() {
+        tree.remove_dead_tags(global_ctx, dead_tags)
+    } else {
+        // The tree is already deallocated, so we can zero out dead_tags
+        dead_tags.fill(BorTag::OMNIVALID);
+        false
     }
 }
 
-/// Deallocates an instance of [AllocInfo]. This instance must
+/// Deallocates an allocation metadata object. This instance must
 /// be unreachable from any provenance value in shadow memory.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_eject(alloc_info: NonNull<AllocInfo>) {
