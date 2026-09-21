@@ -11,7 +11,7 @@ use crate::tree_borrows::data_structures::{AccessType, DedupRangeMap};
 use crate::tree_borrows::diagnostics::AccessCause;
 use crate::tree_borrows::perms::{AccessKind, Permission};
 use crate::tree_borrows::tree::LocationState;
-use crate::tree_borrows::{AllocState, AllocStateImpl, IdempotentForeignAccess, NewPermission};
+use crate::tree_borrows::{IdempotentForeignAccess, NewPermission, Tree, TreeImpl};
 use crate::{AllocId, AllocInfo, BorTag, GlobalCtx, Provenance, RetagFlags, RetagInfo};
 
 // A reference to an instance of `AllocInfo`
@@ -42,45 +42,45 @@ impl From<NonNull<AllocInfo>> for AllocInfoPtr {
 }
 
 #[derive(Debug)]
-pub struct StateImpl {
+pub struct AllocState {
     alloc_id: AllocId,
     base_addr: Size,
-    tree: Option<AllocStateImpl>,
+    tree: Option<TreeImpl>,
 }
 
-impl StateImpl {
+impl AllocState {
     pub fn new(root_tag: BorTag, base_addr: Size, size: Size, span: Span) -> Self {
         Self {
             alloc_id: AllocId::default(),
             base_addr,
-            tree: Some(AllocStateImpl::new(root_tag, size, span)),
+            tree: Some(TreeImpl::new(root_tag, size, span)),
         }
     }
 
-    pub unsafe fn tree_unchecked(&self) -> &AllocStateImpl {
+    pub unsafe fn tree_unchecked(&self) -> &TreeImpl {
         debug_assert!(self.tree.is_some());
         unsafe { self.tree.as_ref().unwrap_unchecked() }
     }
 
-    pub unsafe fn tree_unchecked_mut(&mut self) -> &mut AllocStateImpl {
+    pub unsafe fn tree_unchecked_mut(&mut self) -> &mut TreeImpl {
         debug_assert!(self.tree.is_some());
         unsafe { self.tree.as_mut().unwrap_unchecked() }
     }
 
-    pub fn tree_opt(&self) -> Option<&AllocStateImpl> {
+    pub fn tree_opt(&self) -> Option<&TreeImpl> {
         self.tree.as_ref()
     }
 
-    pub fn tree_opt_mut(&mut self) -> Option<&mut AllocStateImpl> {
+    pub fn tree_opt_mut(&mut self) -> Option<&mut TreeImpl> {
         self.tree.as_mut()
     }
 
-    fn take_tree(&mut self) -> Option<AllocStateImpl> {
+    fn take_tree(&mut self) -> Option<TreeImpl> {
         self.tree.take()
     }
 }
 
-impl Default for StateImpl {
+impl Default for AllocState {
     fn default() -> Self {
         Self { alloc_id: AllocId::invalid(), base_addr: Size::ZERO, tree: None }
     }
@@ -88,17 +88,17 @@ impl Default for StateImpl {
 
 // A guard over the `Tree` for an allocation.
 #[derive(Debug)]
-struct AllocStateGuard<'b>(MutexGuard<'b, StateImpl>);
+struct AllocStateGuard<'b>(MutexGuard<'b, AllocState>);
 
 impl Deref for AllocStateGuard<'_> {
-    type Target = StateImpl;
-    fn deref(&self) -> &StateImpl {
+    type Target = AllocState;
+    fn deref(&self) -> &AllocState {
         &self.0
     }
 }
 
 impl DerefMut for AllocStateGuard<'_> {
-    fn deref_mut(&mut self) -> &mut StateImpl {
+    fn deref_mut(&mut self) -> &mut AllocState {
         &mut self.0
     }
 }
@@ -112,11 +112,11 @@ pub struct BorrowTracker<'a> {
 }
 
 impl<'b> BorrowTracker<'b> {
-    fn tree(&self) -> &AllocStateImpl {
+    fn tree(&self) -> &TreeImpl {
         unsafe { self.state.tree_unchecked() }
     }
 
-    fn tree_mut(&mut self) -> &mut AllocStateImpl {
+    fn tree_mut(&mut self) -> &mut TreeImpl {
         unsafe { self.state.tree_unchecked_mut() }
     }
 
@@ -473,7 +473,7 @@ impl<'b> BorrowTracker<'b> {
     }
 
     pub fn debug_print_diff(&self, ctx: &GlobalCtx) {
-        ctx.with_snapshot(self.state.alloc_id, |old_tree: &AllocStateImpl| {
+        ctx.with_snapshot(self.state.alloc_id, |old_tree: &TreeImpl| {
             self.tree().print_tree_diff(old_tree);
         });
     }
