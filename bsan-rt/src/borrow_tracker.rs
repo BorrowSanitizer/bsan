@@ -392,7 +392,7 @@ impl<'b> BorrowTracker<'b> {
             let mut state = alloc_info.state();
             if let Some(tree) = state.tree_opt_mut() {
                 //alloc_info.rc.increment_nonatomic();
-                return tree.increment(prov.bor_tag)
+                return tree.increment(prov.bor_tag);
             }
         }
         false
@@ -408,7 +408,7 @@ impl<'b> BorrowTracker<'b> {
             let mut state = alloc_info.state();
             if let Some(tree) = state.tree_opt_mut() {
                 //alloc_info.rc.decrement_nonatomic();
-                return tree.decrement(prov.bor_tag)
+                return tree.decrement(prov.bor_tag);
             }
         }
         false
