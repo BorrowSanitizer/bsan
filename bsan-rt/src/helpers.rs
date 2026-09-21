@@ -126,7 +126,7 @@ impl fmt::Debug for AllocRange {
 
 impl fmt::Display for AllocRange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_fmt(format_args!("{:?}", self))
+        f.write_fmt(format_args!("{self:?}"))
     }
 }
 
