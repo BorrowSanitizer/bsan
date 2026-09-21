@@ -40,7 +40,7 @@ use crate::helpers::{AllocRange, Size};
 use crate::sanitizer_common::{SharedSanitizerFlags, Span};
 use crate::tree_borrows::perms::AccessKind;
 use crate::tree_borrows::refcount::RefCount;
-use crate::tree_borrows::AllocState;
+use crate::tree_borrows::Tree;
 
 /// We link against the Rust component of our runtime
 /// via weak symbols. Unless we intervene, the linker
@@ -240,7 +240,7 @@ unsafe impl Send for Provenance {}
 #[repr(C)]
 pub struct AllocInfo {
     rc: RefCount,
-    state: Mutex<StateImpl>,
+    state: Mutex<AllocState>,
 }
 
 impl AllocInfo {
@@ -251,7 +251,7 @@ impl AllocInfo {
     fn new(base_addr: Size, size: Size, root_tag: BorTag, span: Span) -> Self {
         AllocInfo {
             rc: RefCount::new(),
-            state: Mutex::new(StateImpl::new(root_tag, base_addr, size, span)),
+            state: Mutex::new(AllocState::new(root_tag, base_addr, size, span)),
         }
     }
 
