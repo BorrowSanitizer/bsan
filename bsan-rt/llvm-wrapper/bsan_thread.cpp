@@ -15,13 +15,12 @@ void BsanThreadContext::OnCreated(void *arg) {
 }
 
 void BsanThreadContext::OnFinished() {
-  // This callback is executed while the `ThreadRegistry`
-  // is locked, so we can ensure that the GC will not be running.
-  // Any thread-local state that involves the GC must be handled
-  // within this function.
-  if (thread) {
+  // When a thread is being cleaned-up, this callback
+  // is executed while the ThreadRegistry is locked.
+  // Any cleanup operations that affect the GC,
+  // which needs to acquire this lock, should happen here.
+  if (thread)
     global_ctx()->acquireProvenance(thread->zct_);
-  }
   thread = nullptr;
 }
 
@@ -160,6 +159,7 @@ void BsanThread::TSDDtor(void *tsd) {
 
 void BsanThread::Destroy() {
   int tid = this->tid();
+  // Acquiring this state calls `BsanThreadContext::OnFinished()` above.
   bool was_running =
       (GetThreadRegistry().FinishThread(tid) == ThreadStatusRunning);
   if (was_running) {
