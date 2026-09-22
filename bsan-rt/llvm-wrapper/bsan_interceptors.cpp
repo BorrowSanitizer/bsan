@@ -104,8 +104,6 @@ INTERCEPTOR(int, pthread_join, void *thread, void **retval) {
 }
 
 extern "C" void *__bsan_crt_malloc(SIZE_T size, uptr alignment) {
-  if (DlsymAlloc::Use())
-    return DlsymAlloc::Allocate(size, alignment);
   InternalAllocatorCache *cache = nullptr;
   BsanThread *thread = CurrentThread();
   if (LIKELY(thread)) {
@@ -129,8 +127,6 @@ INTERCEPTOR(void *, malloc, SIZE_T size) {
 extern "C" void __bsan_crt_free(void *ptr) {
   if (UNLIKELY(!ptr))
     return;
-  if (DlsymAlloc::PointerIsMine(ptr))
-    return DlsymAlloc::Free(ptr);
   InternalAllocatorCache *cache = nullptr;
   BsanThread *thread = CurrentThread();
   if (LIKELY(thread)) {
