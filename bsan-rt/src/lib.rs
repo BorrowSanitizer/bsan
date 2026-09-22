@@ -233,8 +233,8 @@ pub(crate) enum AllocInfoSummary {
 
 /// Initializes the global state of the runtime library.
 /// The safety of this library is entirely dependent on this
-/// function having been executed. We assume the global invariant that
-/// no other API functions will be called prior to that point.
+/// function having been executed. We assume the global invariant
+/// that no other API functions will be called prior to that point.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_internal_init(flags: NonNull<SharedSanitizerFlags>) {
     unsafe {
