@@ -145,6 +145,7 @@ namespace __bsan {
   if (UNLIKELY(__bsan_had_error)) {                                            \
     uptr pc = StackTrace::GetCurrentPc();                                      \
     uptr bp = GET_CURRENT_FRAME();                                             \
+    ScopedErrorReportLock::Lock();                                             \
     __bsan_format_pending_ub(__bsan::FindUserFramePc(pc, bp));                 \
     UNINITIALIZED BufferedStackTrace stack;                                    \
     stack.Unwind(pc, bp, nullptr, true, __bsan::GetStackTraceLen());           \
@@ -154,6 +155,7 @@ namespace __bsan {
 
 #define HANDLE_ERROR_PC_BP(pc, bp)                                             \
   if (UNLIKELY(__bsan_had_error)) {                                            \
+    ScopedErrorReportLock::Lock();                                             \
     __bsan_format_pending_ub(__bsan::FindUserFramePc(pc, bp));                 \
     UNINITIALIZED BufferedStackTrace stack;                                    \
     stack.Unwind(pc, bp, nullptr, true, __bsan::GetStackTraceLen());           \
