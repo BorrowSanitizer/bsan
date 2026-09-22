@@ -229,7 +229,7 @@ template <typename Fn> inline void ForEachThread(Fn callback, void *arg) {
   } ctx{callback, arg};
   GetThreadRegistry().RunCallbackForEachThreadLocked(
       [](ThreadContextBase *tctx_base, void *raw_ctx) {
-        if(tctx_base->status == ThreadStatusRunning) {
+        if (tctx_base->status == ThreadStatusRunning) {
           CallbackArgs *ctx = static_cast<CallbackArgs *>(raw_ctx);
           BsanThreadContext *tctx = static_cast<BsanThreadContext *>(tctx_base);
           ctx->callback(tctx->thread, ctx->arg);
