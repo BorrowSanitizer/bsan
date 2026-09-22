@@ -100,7 +100,8 @@ void GlobalContext::CollectGarbage(Snapshot *snap) {
       // could be live on the shadow stack under a different tag,
       DCHECK(!snap->live.contains({tag, info}));
     });
-    if (__bsan_prune(info, tags.data(), tags.size())) {
+    auto status = __bsan_prune(info, tags.data(), tags.size());
+    if (status == EjectStatus::Ejectable) {
       // Every tag has been removed from the tree.
       // The reference count for this allocation is zero.
       if (!snap->live.contains(info)) {
@@ -120,11 +121,12 @@ void GlobalContext::CollectGarbage(Snapshot *snap) {
           // to prune this.
           quarantine_[info] = epoch_ + 1;
         }
-        // If an allocation has been quarantined,
-        // then we can return immediately; it should
-        // have exited the pending set entirely.
-        return;
+      } else {
+        still_pending.insert(info);
       }
+      return;
+    }
+    if (status == EjectStatus::RetainEmpty) {
       // It is possible for an allocation to have been
       // fully pruned but for it to still be alive
       // on the shadow stack. For example, this will
@@ -132,14 +134,10 @@ void GlobalContext::CollectGarbage(Snapshot *snap) {
       // of its aliases is within a ZCT. We need to
       // insert the allocation into the pending set,
       // without providing any tags for it.
-      //
-      // Another possibility is that we tried to lock the
-      // tree for this allocation, but a thread was
-      // paused while holding the lock. We want to
-      // keep everything in the pending set for
-      // the next attempt.
       still_pending.insert(info);
+      return;
     }
+    CHECK(status == EjectStatus::RetainNonEmpty);
     // Any leftover tags must be kept around
     // for the next cycle.
     tags.forEach([&](BorTag tag) {

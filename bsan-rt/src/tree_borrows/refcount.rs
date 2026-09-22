@@ -18,14 +18,13 @@ impl Clone for RefCount {
 #[allow(dead_code)]
 impl RefCount {
     /// Creates a new `RefCount` initialized to 0.
-    ///
-    /// A freshly minted tag has no references yet: it is reachable only as a
-    /// root (live on a shadow stack) until a reference to it is written into
-    /// shadow *memory*, at which point [`Self::increment`] raises the count.
-    /// The runtime records every fresh tag in its thread's zero-count table as
-    /// a collection candidate (see `__bsan_retag`/`__bsan_alloc`).
     pub fn new() -> Self {
         Self(AtomicUsize::new(0))
+    }
+
+    /// Creates a new `RefCount` with the given initial value.
+    pub fn with_count(ct: usize) -> Self {
+        Self(AtomicUsize::new(ct))
     }
 
     /// Increments the reference count.
@@ -81,17 +80,7 @@ impl RefCount {
         self.0.load(Ordering::Relaxed)
     }
 
-    /// Creates a new `RefCount` with the given initial value.
-    ///
-    /// Test-only: the runtime always starts a count at 0 via [`RefCount::new`].
-    #[cfg(test)]
-    fn with_count(n: usize) -> Self {
-        Self(AtomicUsize::new(n))
-    }
-
     /// Returns `true` if the reference count is exactly 1 at the time this function is called.
-    ///
-    /// Test-only: the zero transition is reported by [`RefCount::decrement`] instead.
     #[cfg(test)]
     fn is_unique(&self) -> bool {
         self.0.load(Ordering::Acquire) == 1
