@@ -116,11 +116,6 @@ u32 GetStackTraceLen();
 void PrintStackTrace(StackTrace &stack);
 uptr FindUserFramePc(uptr pc, uptr bp);
 
-/// Locks error reporting so that only one thread reports UB. The caller must
-/// Die() once it has printed: there is no matching unlock, so only process
-/// exit releases it. Other threads that hit UB meanwhile block here forever.
-void BeginErrorReport();
-
 Provenance *GetParamSlot(uptr Idx);
 Provenance *GetRetValSlot(uptr Idx);
 void ClearParamSlot(uptr Idx);
@@ -150,7 +145,7 @@ namespace __bsan {
   if (UNLIKELY(__bsan_had_error)) {                                            \
     uptr pc = StackTrace::GetCurrentPc();                                      \
     uptr bp = GET_CURRENT_FRAME();                                             \
-    __bsan::BeginErrorReport();                                                \
+    ScopedErrorReportLock::Lock();                                             \
     __bsan_format_pending_ub(__bsan::FindUserFramePc(pc, bp));                 \
     UNINITIALIZED BufferedStackTrace stack;                                    \
     stack.Unwind(pc, bp, nullptr, true, __bsan::GetStackTraceLen());           \
@@ -160,7 +155,7 @@ namespace __bsan {
 
 #define HANDLE_ERROR_PC_BP(pc, bp)                                             \
   if (UNLIKELY(__bsan_had_error)) {                                            \
-    __bsan::BeginErrorReport();                                                \
+    ScopedErrorReportLock::Lock();                                             \
     __bsan_format_pending_ub(__bsan::FindUserFramePc(pc, bp));                 \
     UNINITIALIZED BufferedStackTrace stack;                                    \
     stack.Unwind(pc, bp, nullptr, true, __bsan::GetStackTraceLen());           \

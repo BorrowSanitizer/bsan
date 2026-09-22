@@ -169,10 +169,6 @@ Provenance *GetRetValSlot(uptr idx) {
 void ClearParamSlot(uptr Idx) { *GetParamSlot(Idx) = OMNIVALID; }
 void ClearRetValSlot(uptr Idx) { *GetRetValSlot(Idx) = OMNIVALID; }
 
-void BeginErrorReport() SANITIZER_NO_THREAD_SAFETY_ANALYSIS {
-  ScopedErrorReportLock::Lock();
-}
-
 // Prints a note suggesting users raise stacktrace_max_len when the trace was
 // truncated. The unwind in HANDLE_ERROR is bounded by GetStackTraceLen(), so a
 // trace that fills that buffer was (almost certainly) cut short.
