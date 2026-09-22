@@ -564,9 +564,9 @@ unsafe extern "C" fn __bsan_prune(
         // node level reference counts.
         if tree_is_empty && absent_from_heap {
             EjectStatus::Ejectable
-        } else if tree_is_empty{
+        } else if tree_is_empty {
             EjectStatus::RetainEmpty
-        }else{
+        } else {
             EjectStatus::RetainNonEmpty
         }
     } else {
