@@ -20,6 +20,7 @@ BsanThread *BsanThread::Create(thread_callback_t start_routine, void *arg) {
   thread->start_routine_ = start_routine;
   thread->arg_ = arg;
   thread->destructor_iterations_ = GetPthreadDestructorIterations();
+  internal_allocator()->InitCache(thread->internal_cache());
   global_ctx()->Threads().RegisterThread(thread);
   return thread;
 }
@@ -43,6 +44,7 @@ void BsanThread::Destroy(void *tsd) {
   global_ctx()->Threads().DeregisterThread(t);
   t->malloc_storage().CommitBack();
   t->zct.~ZeroCountTable();
+  internal_allocator()->DestroyCache(t->internal_cache());
   if (common_flags()->use_sigaltstack)
     UnsetAlternateSignalStack(t->altstack_base_);
   UnmapOrDie(t->shadow_stack_bottom_, t->shadow_stack_size_);

@@ -103,10 +103,15 @@ INTERCEPTOR(int, pthread_join, void *thread, void **retval) {
   return REAL(pthread_join)(thread, retval);
 }
 
-extern "C" void *__bsan_crt_malloc(SIZE_T size) {
+extern "C" void *__bsan_crt_malloc(SIZE_T size, uptr alignment) {
   if (DlsymAlloc::Use())
-    return DlsymAlloc::Allocate(size);
-  return REAL(malloc)(size);
+    return DlsymAlloc::Allocate(size, alignment);
+  InternalAllocatorCache *cache = nullptr;
+  BsanThread *thread = CurrentThread();
+  if (LIKELY(thread)) {
+    cache = thread->internal_cache();
+  }
+  return InternalAlloc(size, cache, alignment);
 }
 
 INTERCEPTOR(void *, malloc, SIZE_T size) {
@@ -126,7 +131,12 @@ extern "C" void __bsan_crt_free(void *ptr) {
     return;
   if (DlsymAlloc::PointerIsMine(ptr))
     return DlsymAlloc::Free(ptr);
-  REAL(free)(ptr);
+  InternalAllocatorCache *cache = nullptr;
+  BsanThread *thread = CurrentThread();
+  if (LIKELY(thread)) {
+    cache = thread->internal_cache();
+  }
+  InternalFree(ptr, cache);
 }
 
 INTERCEPTOR(void, free, void *ptr) {

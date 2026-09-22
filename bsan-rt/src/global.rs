@@ -155,7 +155,7 @@ mod global_alloc {
 
     #[cfg(not(test))]
     unsafe extern "C" {
-        fn __bsan_crt_malloc(size: usize) -> *mut core::ffi::c_void;
+        fn __bsan_crt_malloc(size: usize, align: usize) -> *mut core::ffi::c_void;
         fn __bsan_crt_free(ptr: *mut core::ffi::c_void);
     }
 
@@ -172,7 +172,7 @@ mod global_alloc {
             }
             #[cfg(not(test))]
             unsafe {
-                __bsan_crt_malloc(layout.size()).cast::<u8>()
+                __bsan_crt_malloc(layout.size(), layout.align()).cast::<u8>()
             }
         }
         unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {

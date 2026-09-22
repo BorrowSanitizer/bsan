@@ -3,6 +3,7 @@
 #include "bsan.h"
 #include "bsan_allocator.h"
 #include "bsan_set.h"
+#include "sanitizer_common/sanitizer_allocator_internal.h"
 #include "sanitizer_common/sanitizer_array_ref.h"
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_internal_defs.h"
@@ -134,6 +135,8 @@ public:
 
   BsanThreadLocalMallocStorage &malloc_storage() { return malloc_storage_; }
 
+  InternalAllocatorCache *internal_cache() { return &internal_cache_; }
+
   ZeroCountTable zct;
 
 private:
@@ -153,6 +156,7 @@ private:
   uptr shadow_stack_size_;
 
   BsanThreadLocalMallocStorage malloc_storage_;
+  InternalAllocatorCache internal_cache_;
 
   // The address of this thread's thread-local allocation
   // containing the current value of its shadow stack
