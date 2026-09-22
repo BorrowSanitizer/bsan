@@ -163,6 +163,7 @@ public:
   uptr os_id;
 
 private:
+  friend struct BsanThreadContext;
   static BsanThread *Create(const void *start_data, uptr data_size,
                             u32 parent_tid, bool detached);
 

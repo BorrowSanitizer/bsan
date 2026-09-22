@@ -15,7 +15,13 @@ void BsanThreadContext::OnCreated(void *arg) {
 }
 
 void BsanThreadContext::OnFinished() {
-  // Drop the link to the AsanThread object.
+  // This callback is executed while the `ThreadRegistry`
+  // is locked, so we can ensure that the GC will not be running.
+  // Any thread-local state that involves the GC must be handled
+  // within this function.
+  if (thread) {
+    global_ctx()->acquireProvenance(thread->zct);
+  }
   thread = nullptr;
 }
 
@@ -159,7 +165,6 @@ void BsanThread::Destroy() {
     CommitBackRustCache(this->rust_allocator_cache());
     if (common_flags()->use_sigaltstack)
       UnsetAlternateSignalStack(altstack_base_);
-    global_ctx()->acquireProvenance(zct);
     zct.~ZeroCountTable();
     UnmapOrDie(shadow_stack_bottom_, shadow_stack_size_);
   } else {
