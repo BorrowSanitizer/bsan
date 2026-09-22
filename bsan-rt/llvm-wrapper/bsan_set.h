@@ -100,15 +100,15 @@ public:
   // Removes all entries from the set, after executing the
   // given callback for each allocation.
   void takeFrom(ConcreteProvenanceSet &other) {
-    other.drain([&](Block *info, BorTagSet &tags) {
-      tags.forEach([&](BorTag tag) { set_[info].insert(tag); });
+    other.drain([&](BlockIndex idx, BorTagSet &tags) {
+      tags.forEach([&](BorTag tag) { set_[idx].insert(tag); });
     });
   }
 
   // Removes all entries from the set, after executing the
   // given callback for each allocation.
   template <typename Fn> void drain(Fn visit) {
-    set_.forEach([&](DenseMap<Block *, BorTagSet>::value_type &KV) {
+    set_.forEach([&](DenseMap<BlockIndex, BorTagSet>::value_type &KV) {
       visit(KV.first, KV.second);
       KV.second.reset();
       return true;
@@ -118,32 +118,32 @@ public:
 
   // Retain only the provenance values that satisfy the given predicate.
   template <typename Fn> void retainIf(Fn retain) {
-    InternalMmapVector<Block *> ToErase;
-    set_.forEach([&](DenseMap<Block *, BorTagSet>::value_type &KV) {
-      Block *info = KV.first;
-      KV.second.retainIf([&](BorTag tag) { return retain(info, tag); });
+    InternalMmapVector<BlockIndex> ToErase;
+    set_.forEach([&](DenseMap<BlockIndex, BorTagSet>::value_type &KV) {
+      BlockIndex idx = KV.first;
+      KV.second.retainIf([&](BorTag tag) { return retain(idx, tag); });
       if (KV.second.size() == 0) {
         KV.second.reset();
-        ToErase.push_back(info);
+        ToErase.push_back(idx);
       }
       return true;
     });
-    for (unsigned Idx = 0; Idx < ToErase.size(); ++Idx)
-      set_.erase(ToErase[Idx]);
+    for (unsigned i = 0; i < ToErase.size(); ++i)
+      set_.erase(ToErase[i]);
   }
 
-  BorTagSet *find(Block *Info) {
-    auto *KV = set_.find(Info);
+  BorTagSet *find(BlockIndex idx) {
+    auto *KV = set_.find(idx);
     return KV ? &KV->second : nullptr;
   }
 
-  const BorTagSet *find(Block *Info) const {
-    const auto *KV = set_.find(Info);
+  const BorTagSet *find(BlockIndex idx) const {
+    const auto *KV = set_.find(idx);
     return KV ? &KV->second : nullptr;
   }
 
 private:
-  DenseMap<Block *, BorTagSet> set_;
+  DenseMap<BlockIndex, BorTagSet> set_;
 };
 
 } // namespace __bsan

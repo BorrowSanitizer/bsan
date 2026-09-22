@@ -55,8 +55,8 @@ void GlobalContext::MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct) {
     // ones in this thread's zero count table for a future collection. Record
     // the current generation as the last one when this thread's zero count
     // table was drained.
-    zct.retainIf(snap->gen, [&](Block *info, BorTag tag) -> bool {
-      Provenance prov = {tag, info};
+    zct.retainIf(snap->gen, [&](BlockIndex idx, BorTag tag) -> bool {
+      Provenance prov = {tag, BLOCK_PTR(idx)};
       if (snap->live->contains(prov)) {
         return true;
       }
@@ -99,7 +99,8 @@ void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
 
 void GlobalContext::CollectGarbage(Snapshot &snap) {
   ConcreteProvenanceSet still_pending;
-  pending_.drain([&](Block *info, BorTagSet &tags) {
+  pending_.drain([&](BlockIndex idx, BorTagSet &tags) {
+    Block *info = BLOCK_PTR(idx);
     // If `__bsan_prune` returns true, then the allocation's tree is empty;
     // every single tag was pruned.
     if (__bsan_prune(info, tags.data(), tags.size())) {
