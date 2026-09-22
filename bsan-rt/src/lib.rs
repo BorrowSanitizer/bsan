@@ -520,14 +520,21 @@ unsafe extern "C" fn __bsan_prune(
 ) -> bool {
     let global_ctx = unsafe { global_ctx() };
     let alloc: AllocInfoPtr = alloc_info.into();
-    let dead_tags = unsafe { slice::from_raw_parts_mut(bor_tags, len) };
+    let dead_tags = if len > 0 {
+        unsafe { slice::from_raw_parts_mut(bor_tags, len) }
+    } else {
+        // We pass a null pointer for `bor_tags` when the list is empty.
+        // The function `slice::from_raw_parts_mut` requires a nonnull pointer,
+        // even for an empty slice.
+        &mut []
+    };
     if let Some(mut state) = alloc.state.try_lock() {
         if let Some(tree) = state.tree_opt_mut() {
             tree.remove_dead_tags(global_ctx, dead_tags)
         } else {
             false
         }
-    }else{
+    } else {
         false
     }
 }

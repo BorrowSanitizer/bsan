@@ -138,15 +138,8 @@ void GlobalContext::CollectGarbage(Snapshot *snap) {
       // paused while holding the lock. We want to
       // keep everything in the pending set for
       // the next attempt.
+      still_pending.insert(info);
     }
-    // At this point, we know that either the root
-    // or one of the tags for this allocation is alive
-    // somewhere in shadow memory. If there are no tags
-    // left to prune, then the root allocation is all
-    // that's left, and we still want to make sure that
-    // it gets inserted into the next pending set.
-    if tags
-      .size() == 0 { still_pending.insert(info); };
     // Any leftover tags must be kept around
     // for the next cycle.
     tags.forEach([&](BorTag tag) {
