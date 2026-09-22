@@ -1239,7 +1239,8 @@ impl Tree for LazyTree {
         match self {
             LazyTree::Uninit { root_tag, refcount, .. } => {
                 if *root_tag == tag {
-                    refcount.increment_nonatomic()
+                    // Safety: the tree is locked when this operation occurs.
+                    unsafe { refcount.increment_nonatomic() }
                 } else {
                     false
                 }
@@ -1562,13 +1563,15 @@ impl Tree for EagerTree {
         self.tag_mapping
             .get(&tag)
             .and_then(|idx| self.nodes.get(idx))
-            .map(|node| node.refcount.increment_nonatomic())
+            // Safety: the tree is locked when this operation occurs.
+            .map(|node| unsafe { node.refcount.increment_nonatomic() })
             .unwrap_or(false)
     }
     fn decrement(&self, tag: BorTag) -> bool {
         self.tag_mapping
             .get(&tag)
             .and_then(|idx| self.nodes.get(idx))
+            // Safety: the tree is locked when this operation occurs.
             .map(|node| node.refcount.decrement_nonatomic())
             .unwrap_or(false)
     }
