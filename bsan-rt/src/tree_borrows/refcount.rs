@@ -18,6 +18,11 @@ impl RefCount {
         Self(AtomicUsize::new(0))
     }
 
+    /// Creates a new `RefCount` with the given initial value.
+    pub fn with_count(ct: usize) -> Self {
+        Self(AtomicUsize::new(ct))
+    }
+
     /// Increments the reference count.
     ///
     /// Returns `true` if the count transitioned from zero to one.
@@ -81,11 +86,6 @@ impl RefCount {
     /// Returns the current reference count at the time this function is called.
     pub fn get(&self) -> usize {
         self.0.load(Ordering::Relaxed)
-    }
-
-    /// Creates a new `RefCount` with the given initial value.
-    fn with_count(n: usize) -> Self {
-        Self(AtomicUsize::new(n))
     }
 
     /// Returns `true` if the reference count is exactly 1 at the time this function is called.

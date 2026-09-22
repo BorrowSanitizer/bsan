@@ -229,6 +229,7 @@ impl<'b> BorrowTracker<'b> {
     {
         let alloc_info: AllocInfoPtr = unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
         let state = alloc_info.state();
+        // The caller must guarantee that this allocation contains a valid tree.
         debug_assert!(state.tree_opt().is_some());
         let base_addr = state.base_addr;
         let offset = Size::from_bytes(start.bytes().wrapping_sub(base_addr.bytes()));
@@ -437,8 +438,11 @@ impl<'b> BorrowTracker<'b> {
                 unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
             let mut state = alloc_info.state();
             if let Some(tree) = state.tree_opt_mut() {
-                //alloc_info.rc.increment_nonatomic();
+                // Safety: the tree is locked when this operation occurs.
+                unsafe { alloc_info.rc.increment_nonatomic() };
                 return tree.increment(prov.bor_tag);
+            } else {
+                return alloc_info.rc.increment();
             }
         }
         false
@@ -453,8 +457,10 @@ impl<'b> BorrowTracker<'b> {
                 unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
             let mut state = alloc_info.state();
             if let Some(tree) = state.tree_opt_mut() {
-                //alloc_info.rc.decrement_nonatomic();
+                alloc_info.rc.decrement_nonatomic();
                 return tree.decrement(prov.bor_tag);
+            } else {
+                return alloc_info.rc.decrement();
             }
         }
         false
