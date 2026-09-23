@@ -116,6 +116,14 @@ public:
     return shadow_stack_ptr_ ? *shadow_stack_ptr_ : nullptr;
   }
 
+  // Zeroes this thread's tree-node visit counter. This writes to another
+  // thread's thread-local storage, so it can only be called when the world
+  // has been stopped.
+  void ResetVisitCount() {
+    if (visits_ptr_)
+      *visits_ptr_ = 0;
+  }
+
   // The remaining number of times that TSD destructors will
   // execute for this thread. This is initialized to the maximum value,
   // and then decremented every time the destructor runs.
@@ -158,6 +166,11 @@ private:
   // containing the current value of its shadow stack
   // pointer (`__bsan_shadow_stack`).
   Provenance **shadow_stack_ptr_;
+
+  // The address of this thread's thread-local visit counter
+  // (`__bsan_visits_since_gc`), so that the GC can reset it when it stops
+  // the world.
+  uptr *visits_ptr_;
 };
 
 BsanThread *CurrentThread();

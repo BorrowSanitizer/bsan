@@ -84,6 +84,11 @@ private:
                                       BsanThread *const &thread, void *arg);
   static void MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct);
 
+  // Zeroes every thread's tree-node visit counter, restarting the interval
+  // until the next collection for all of them.
+  static void ResetVisitCounts(const ThreadId id, BsanThread *const &thread,
+                               void *arg);
+
   // Drains the contents of the pending provenance set, pruning the associated
   // state from the tree for each allocation. Ejects any retired allocation
   // objects that are confirmed to be unreachable. This happens after the world

@@ -92,9 +92,9 @@ SANITIZER_INTERFACE_ATTRIBUTE
 atomic_uintptr_t __bsan_bor_tag_ctr{3};
 
 // Accumulates the number of tree-node visits performed by the Rust runtime
-// since the last garbage collection request
+// on this thread since the last garbage collection.
 SANITIZER_INTERFACE_ATTRIBUTE
-atomic_uintptr_t __bsan_visits_since_gc{0};
+THREADLOCAL uptr __bsan_visits_since_gc = 0;
 
 // Path substrings that identify a file as belonging to a dependency/toolchain
 static const char *const kLibraryPathMarkers[] = {".cargo/", ".rustup/",
@@ -127,20 +127,21 @@ void AcquireProvenance(Provenance prov) {
   }
 }
 
-// Asks the global context to run the garbage collector once the Rust runtime
-// has reported at least `visits_per_gc` tree-node visits since the last
-// request, then resets the counter. Concurrent requests across threads are
-// coalesced by `RequestGC`.
+// Asks the global context to run the garbage collector once this thread has
+// reported at least `visits_per_gc` tree-node visits since the last
+// collection. The first thread to reach the threshold restarts the interval
+// for all of them. Concurrent requests across threads are coalesced by
+// `RequestGC`.
 static void MaybeRequestGC() {
   uptr interval = flags()->visits_per_gc;
   if (interval == 0)
     return;
-  uptr visits = atomic_load(&__bsan_visits_since_gc, memory_order_acquire);
-  if (visits < interval)
+  if (__bsan_visits_since_gc < interval)
     return;
-  // Multiple threads can reach this store, but that's okay, because
-  // our GC allows for multiple simultaneous requests
-  atomic_store(&__bsan_visits_since_gc, 0, memory_order_release);
+  // Clear our own counter up front. `RequestGC` does nothing if another
+  // thread is already collecting or has just finished, and only a collection
+  // that succeeds resets our counter.
+  __bsan_visits_since_gc = 0;
   global_ctx()->RequestGC();
 }
 

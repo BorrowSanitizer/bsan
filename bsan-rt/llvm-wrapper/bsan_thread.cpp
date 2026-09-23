@@ -34,6 +34,10 @@ void BsanThread::Init() {
   // that the GC can accurately read the initialized contents of the
   // shadow stack when it stops the world.
   shadow_stack_ptr_ = &__bsan_shadow_stack;
+  // Likewise, we record the address of the thread-local visit counter so that
+  // the GC can zero it for every thread once any one of them has reached the
+  // collection threshold.
+  visits_ptr_ = &__bsan_visits_since_gc;
   if (common_flags()->use_sigaltstack)
     altstack_base_ = SetAlternateSignalStack();
 }

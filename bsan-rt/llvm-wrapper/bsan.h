@@ -67,8 +67,9 @@ extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __bsan_had_error;
 
 extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uintptr_t __bsan_bor_tag_ctr;
 
-// Tree-node visits accumulated by the Rust runtime since the last GC request.
-extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uintptr_t __bsan_visits_since_gc;
+// Tree-node visits accumulated by the Rust runtime on this thread since the
+// last GC.
+extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __bsan_visits_since_gc;
 
 namespace __bsan {
 
