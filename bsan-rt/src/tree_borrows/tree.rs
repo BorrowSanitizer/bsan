@@ -196,8 +196,8 @@ impl Node {
     }
 }
 
-/// Counts the tree nodes visited during a single access. When dropped, 
-/// the total is added to this thread's `__bsan_visits_since_gc`, which 
+/// Counts the tree nodes visited during a single access. When dropped,
+/// the total is added to this thread's `__bsan_visits_since_gc`, which
 /// the llvm-wrapper runtime uses to decide when to request a GC.
 #[derive(Debug, Default)]
 pub struct VisitCounter(Cell<u32>);
