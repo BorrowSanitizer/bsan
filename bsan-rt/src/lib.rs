@@ -11,7 +11,7 @@ use core::fmt::Debug;
 use core::panic::PanicInfo;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use core::{fmt, ptr, slice};
+use core::{fmt, mem, ptr, slice};
 
 mod borrow_tracker;
 use libc_print::std_name::*;
@@ -203,11 +203,10 @@ impl AllocInfo {
         root_tag: BorTag,
         span: Span,
     ) {
-        unsafe {
-            let mut init = Self::new(base_addr, size, root_tag, span);
-            init.rc = (*dest.as_ptr()).rc.clone();
-            dest.write(init);
-        }
+        let info = unsafe { dest.as_ref() };
+        let new_state = AllocState::new(root_tag, base_addr, size, span);
+        let old_state = mem::replace(&mut *info.state.lock(), new_state);
+        drop(old_state);
     }
 
     #[cfg(feature = "debug")]
