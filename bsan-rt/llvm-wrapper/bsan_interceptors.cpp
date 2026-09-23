@@ -76,10 +76,8 @@ static void *BsanAllocateMetaIntoHeap(void *ptr, SIZE_T size, bool is_inst,
   return ptr;
 }
 
-extern "C" void *__bsan_crt_malloc(SIZE_T size) {
-  if (DlsymAlloc::Use())
-    return DlsymAlloc::Allocate(size);
-  return REAL(malloc)(size);
+extern "C" void *__bsan_crt_malloc(SIZE_T size, uptr alignment) {
+  return RustAlloc(size, alignment);
 }
 
 INTERCEPTOR(void *, malloc, SIZE_T size) {
@@ -97,9 +95,7 @@ INTERCEPTOR(void *, malloc, SIZE_T size) {
 extern "C" void __bsan_crt_free(void *ptr) {
   if (UNLIKELY(!ptr))
     return;
-  if (DlsymAlloc::PointerIsMine(ptr))
-    return DlsymAlloc::Free(ptr);
-  REAL(free)(ptr);
+  RustDealloc(ptr);
 }
 
 INTERCEPTOR(void, free, void *ptr) {
