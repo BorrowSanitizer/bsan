@@ -50,7 +50,7 @@ void GlobalContext::GCCallback(const SuspendedThreadsList &, void *arg) {
   // lived allocations. We lock the internal allocator prior to stopping
   // the world, so we need to unlock it here, and record that we have done
   // so, to avoid unlocking it again when we restart the world.
-  snap->lock->UnlockInternalAllocator();
+  snap->lock->UnlockRuntimeAllocators();
 
   ForEachThread(
       [](BsanThread *thread, Snapshot *snap) {
