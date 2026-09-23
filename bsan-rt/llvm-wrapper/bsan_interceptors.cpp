@@ -371,6 +371,12 @@ static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso) {
   return res;
 }
 
+// Miri-specific interceptors
+
+INTERCEPTOR(void, miri_promise_symbolic_alignment, void *ptr, SIZE_T align) {
+  CHECK(((uptr)ptr % align) == 0);
+}
+
 #define COMMON_INTERCEPT_FUNCTION(name) BSAN_INTERCEPT_FUNC(name)
 
 #define COMMON_INTERCEPT_FUNCTION_VER(name, ver)                               \
