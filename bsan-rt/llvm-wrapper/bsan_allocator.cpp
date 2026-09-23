@@ -15,49 +15,12 @@ static uptr max_malloc_size;
 const uptr kMaxAllowedMallocSize = 1ULL << 40;
 
 namespace {
-
-struct Metadata {
-  uptr requested_size;
-};
-
-// Parameters for the primary allocator that replaces
-// malloc. All allocations created from this allocator
-// have a corresponding region in shadow memory.
-struct ShadowedAP64 {
-  static const uptr kSpaceBeg = kAllocatorSpace;
-  static const uptr kSpaceSize = kAllocatorSpaceSize;
-  static const uptr kMetadataSize = sizeof(Metadata);
-  using SizeClassMap = DefaultSizeClassMap;
-  typedef NoOpMapUnmapCallback MapUnmapCallback;
-  static const uptr kFlags = 0;
-  using AddressSpaceView = LocalAddressSpaceView;
-};
-
-typedef SizeClassAllocator64<ShadowedAP64> PrimaryAllocator;
-typedef CombinedAllocator<PrimaryAllocator> Allocator;
-typedef Allocator::AllocatorCache AllocatorCache;
-
 static Allocator allocator;
 static AllocatorCache fallback_allocator_cache;
 static StaticSpinMutex fallback_mutex;
 } // namespace
 
 namespace {
-
-struct RustAP64 {
-  static const uptr kSpaceBeg = ~(uptr)0;
-  static const uptr kSpaceSize = kAllocatorSpaceSize;
-  static const uptr kMetadataSize = 0;
-  using SizeClassMap = DefaultSizeClassMap;
-  typedef NoOpMapUnmapCallback MapUnmapCallback;
-  static const uptr kFlags = 0;
-  using AddressSpaceView = LocalAddressSpaceView;
-};
-
-typedef SizeClassAllocator64<RustAP64> PrimaryRustAllocator;
-typedef CombinedAllocator<PrimaryRustAllocator> RustAllocator;
-typedef RustAllocator::AllocatorCache RustAllocatorCache;
-
 static RustAllocator rust_allocator;
 static RustAllocatorCache fallback_rust_allocator_cache;
 static StaticSpinMutex fallback_rust_mutex;
@@ -83,6 +46,10 @@ void __bsan::UnlockRustAllocator() {
   fallback_rust_mutex.Unlock();
 }
 
+void __bsan::CommitBackRustCache(RustAllocatorCache *cache) {
+  rust_allocator.SwallowCache(cache);
+}
+
 void __bsan::InitializeShadowedAllocator() {
   SetAllocatorMayReturnNull(common_flags()->allocator_may_return_null);
   allocator.Init(common_flags()->allocator_release_to_os_interval_ms);
@@ -97,14 +64,8 @@ void __bsan::LockShadowedAllocator() { allocator.ForceLock(); }
 
 void __bsan::UnlockShadowedAllocator() { allocator.ForceUnlock(); }
 
-static AllocatorCache *GetAllocatorCache(BsanThreadLocalMallocStorage *ms) {
-  CHECK(ms);
-  CHECK_LE(sizeof(AllocatorCache), sizeof(ms->allocator_cache));
-  return reinterpret_cast<AllocatorCache *>(ms->allocator_cache);
-}
-
-void BsanThreadLocalMallocStorage::CommitBack() {
-  allocator.SwallowCache(GetAllocatorCache(this));
+void __bsan::CommitBackShadowedCache(AllocatorCache *cache) {
+  allocator.SwallowCache(cache);
 }
 
 static void *BsanAllocate(uptr size, uptr alignment, bool zeroise) {
@@ -125,7 +86,7 @@ static void *BsanAllocate(uptr size, uptr alignment, bool zeroise) {
   BsanThread *t = CurrentThread();
   void *allocated;
   if (t) {
-    AllocatorCache *cache = GetAllocatorCache(&t->malloc_storage());
+    AllocatorCache *cache = t->allocator_cache();
     allocated = allocator.Allocate(cache, size, alignment);
   } else {
     SpinMutexLock l(&fallback_mutex);
@@ -154,7 +115,7 @@ void __bsan::bsan_deallocate(void *p) {
   meta->requested_size = 0;
   BsanThread *t = CurrentThread();
   if (t) {
-    AllocatorCache *cache = GetAllocatorCache(&t->malloc_storage());
+    AllocatorCache *cache = t->allocator_cache();
     allocator.Deallocate(cache, p);
   } else {
     SpinMutexLock l(&fallback_mutex);
@@ -184,8 +145,12 @@ void *__bsan::RustAlloc(uptr size, uptr alignment) {
     UNINITIALIZED BufferedStackTrace stack;
     ReportRssLimitExceeded(&stack);
   }
+  BsanThread *t = CurrentThread();
   void *allocated;
-  {
+  if (t) {
+    allocated =
+        rust_allocator.Allocate(t->rust_allocator_cache(), size, alignment);
+  } else {
     SpinMutexLock l(&fallback_rust_mutex);
     allocated = rust_allocator.Allocate(&fallback_rust_allocator_cache, size,
                                         alignment);
@@ -202,8 +167,13 @@ void *__bsan::RustAlloc(uptr size, uptr alignment) {
 
 void __bsan::RustDealloc(void *p) {
   CHECK(p);
-  SpinMutexLock l(&fallback_rust_mutex);
-  rust_allocator.Deallocate(&fallback_rust_allocator_cache, p);
+  BsanThread *t = CurrentThread();
+  if (t) {
+    rust_allocator.Deallocate(t->rust_allocator_cache(), p);
+  } else {
+    SpinMutexLock l(&fallback_rust_mutex);
+    rust_allocator.Deallocate(&fallback_rust_allocator_cache, p);
+  }
 }
 
 uptr __bsan::bsan_mz_size(const void *p) {
