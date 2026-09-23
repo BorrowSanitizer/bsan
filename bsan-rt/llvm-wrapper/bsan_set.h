@@ -1,5 +1,5 @@
-#ifndef BSAN_GC_H
-#define BSAN_GC_H
+#ifndef BSAN_SET_H
+#define BSAN_SET_H
 
 #include "bsan.h"
 #include "sanitizer_common/sanitizer_common.h"
