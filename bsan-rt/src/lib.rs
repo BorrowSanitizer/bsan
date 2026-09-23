@@ -11,7 +11,7 @@ use core::fmt::Debug;
 use core::panic::PanicInfo;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use core::{fmt, ptr, slice};
+use core::{fmt, mem, ptr, slice};
 
 mod borrow_tracker;
 use libc_print::std_name::*;
@@ -226,14 +226,22 @@ impl AllocInfo {
         }
     }
 
-    /// Initializes metadata for a new allocation within an existing object,
-    /// preserving the reference count.
-    fn new_in(dest: NonNull<AllocInfo>, base_addr: Size, size: Size, root_tag: BorTag, span: Span) {
-        unsafe {
-            let mut init = Self::new(base_addr, size, root_tag, span);
-            init.rc = (*dest.as_ptr()).rc.clone();
-            dest.write(init);
-        }
+    /// Reinitializes the metadata for an existing allocation object in place,
+    /// preserving its reference count. The previous state is dropped.
+    ///
+    /// # Safety
+    /// `dest` must point to a valid, initialized [`AllocInfo`].
+    unsafe fn new_in(
+        dest: NonNull<AllocInfo>,
+        base_addr: Size,
+        size: Size,
+        root_tag: BorTag,
+        span: Span,
+    ) {
+        let info = unsafe { dest.as_ref() };
+        let new_state = AllocState::new(root_tag, base_addr, size, span);
+        let old_state = mem::replace(&mut *info.state.lock(), new_state);
+        drop(old_state);
     }
 
     #[cfg(feature = "debug")]
