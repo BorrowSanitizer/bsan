@@ -196,10 +196,9 @@ impl Node {
     }
 }
 
-/// Counts the tree nodes visited over the course of a single borrow-tracker
-/// operation. When dropped, the total is added to this thread's
-/// `__bsan_visits_since_gc`, which the C++ runtime uses to decide when to
-/// request a garbage collection.
+/// Counts the tree nodes visited during a single access. When dropped, 
+/// the total is added to this thread's `__bsan_visits_since_gc`, which 
+/// the llvm-wrapper runtime uses to decide when to request a GC.
 #[derive(Debug, Default)]
 pub struct VisitCounter(Cell<u32>);
 
@@ -207,8 +206,6 @@ impl VisitCounter {
     pub fn new() -> Self {
         Self::default()
     }
-
-    /// The slot that tree operations accumulate their visit counts into.
     pub fn cell(&self) -> &Cell<u32> {
         &self.0
     }

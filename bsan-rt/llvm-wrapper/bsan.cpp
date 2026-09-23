@@ -129,8 +129,7 @@ void AcquireProvenance(Provenance prov) {
 
 // Asks the global context to run the garbage collector once this thread has
 // reported at least `visits_per_gc` tree-node visits since the last
-// collection. A collection zeroes the counter of every thread while the world
-// is stopped, so the first thread to reach the threshold restarts the interval
+// collection. The first thread to reach the threshold restarts the interval
 // for all of them. Concurrent requests across threads are coalesced by
 // `RequestGC`.
 static void MaybeRequestGC() {
@@ -141,8 +140,7 @@ static void MaybeRequestGC() {
     return;
   // Clear our own counter up front. `RequestGC` does nothing if another
   // thread is already collecting or has just finished, and only a collection
-  // that actually stops the world resets our counter. Without this we would
-  // stay above the threshold and retry on every subsequent retag.
+  // that succeeds resets our counter.
   __bsan_visits_since_gc = 0;
   global_ctx()->RequestGC();
 }
