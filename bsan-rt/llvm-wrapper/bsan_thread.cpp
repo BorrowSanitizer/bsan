@@ -9,23 +9,135 @@ using namespace __bsan;
 
 namespace __bsan {
 
-BsanThread *CurrentThread() { return (BsanThread *)TSDGet(); }
+void BsanThreadContext::OnCreated(void *arg) {
+  thread = static_cast<BsanThread *>(arg);
+  thread->set_context(this);
+}
 
-void SetCurrentThread(BsanThread *t) { TSDSet((void *)t); }
+void BsanThreadContext::OnFinished() {
+  // This callback is executed while the `ThreadRegistry`
+  // is locked, so we can ensure that the GC will not be running.
+  // Any thread-local state that involves the GC must be handled
+  // within this function.
+  if (thread) {
+    global_ctx()->acquireProvenance(thread->zct);
+  }
+  thread = nullptr;
+}
 
-BsanThread *BsanThread::Create(thread_callback_t start_routine, void *arg) {
+static ThreadRegistry *bsan_thread_registry;
+static ThreadArgRetval *thread_data;
+
+static Mutex mu_for_thread_context;
+
+static LowLevelAllocator allocator_for_thread_context;
+
+static ThreadContextBase *GetBsanThreadContext(u32 tid) {
+  Lock lock(&mu_for_thread_context);
+  return new (allocator_for_thread_context) BsanThreadContext(tid);
+}
+
+static void InitThreads() {
+  static bool initialized;
+  // Don't worry about thread_safety - this should be called when there is
+  // a single thread.
+  if (LIKELY(initialized))
+    return;
+  // Never reuse BSan threads: we store pointer to BsanThreadContext
+  // in TSD and can't reliably tell when no more TSD destructors will
+  // be called. It would be wrong to reuse BsanThreadContext for another
+  // thread before all TSD destructors will be called for it.
+
+  // MIPS requires aligned address
+  alignas(alignof(ThreadRegistry)) static char
+      thread_registry_placeholder[sizeof(ThreadRegistry)];
+  alignas(alignof(ThreadArgRetval)) static char
+      thread_data_placeholder[sizeof(ThreadArgRetval)];
+
+  bsan_thread_registry =
+      new (thread_registry_placeholder) ThreadRegistry(GetBsanThreadContext);
+  thread_data = new (thread_data_placeholder) ThreadArgRetval();
+  initialized = true;
+}
+
+ThreadRegistry &GetThreadRegistry() {
+  InitThreads();
+  return *bsan_thread_registry;
+}
+
+ThreadArgRetval &GetThreadArgRetval() {
+  InitThreads();
+  return *thread_data;
+}
+
+BsanThreadContext *GetThreadContextByTidLocked(u32 tid) {
+  return static_cast<BsanThreadContext *>(
+      GetThreadRegistry().GetThreadLocked(tid));
+}
+
+BsanThread *CurrentThread() {
+  BsanThreadContext *context = reinterpret_cast<BsanThreadContext *>(TSDGet());
+  if (!context) {
+    return nullptr;
+  }
+  return context->thread;
+}
+
+void SetCurrentThread(BsanThread *t) {
+  CHECK(t->context());
+  // Make sure we do not reset the current BsanThread.
+  CHECK_EQ(0, TSDGet());
+  TSDSet(t->context());
+  CHECK_EQ(t->context(), TSDGet());
+}
+
+u32 GetCurrentTidOrInvalid() {
+  BsanThread *t = CurrentThread();
+  return t ? t->tid() : kInvalidTid;
+}
+
+void EnsureMainThreadIDIsCorrect() {
+  if (GetCurrentTidOrInvalid() == kMainTid)
+    CurrentThread()->os_id = GetTid();
+}
+
+BsanThread *BsanThread::Create(const void *start_data, uptr data_size,
+                               u32 parent_tid, bool detached) {
   uptr PageSize = GetPageSizeCached();
   uptr size = RoundUpTo(sizeof(BsanThread), PageSize);
   BsanThread *thread = (BsanThread *)MmapOrDie(size, __func__);
-  thread->start_routine_ = start_routine;
-  thread->arg_ = arg;
-  thread->destructor_iterations_ = GetPthreadDestructorIterations();
-  global_ctx()->Threads().RegisterThread(thread);
+  if (data_size) {
+    uptr availible_size = (uptr)thread + size - (uptr)(thread->start_data_);
+    CHECK_LE(data_size, availible_size);
+    internal_memcpy(thread->start_data_, start_data, data_size);
+  }
+  GetThreadRegistry().CreateThread(0, detached, parent_tid, thread);
   return thread;
 }
 
+void BsanThread::ThreadStart(ThreadID os_id) {
+  Init();
+  GetThreadRegistry().StartThread(tid(), os_id, ThreadType::Regular, nullptr);
+  if (common_flags()->use_sigaltstack)
+    altstack_base_ = SetAlternateSignalStack();
+}
+
+void BsanThread::GetStartData(void *out, uptr out_size) const {
+  internal_memcpy(out, start_data_, out_size);
+}
+
+BsanThread *CreateMainThread() {
+  BsanThread *main_thread = BsanThread::Create(
+      /* parent_tid */ kMainTid,
+      /* detached */ true);
+  SetCurrentThread(main_thread);
+  main_thread->ThreadStart(internal_getpid());
+  return main_thread;
+}
+
 void BsanThread::Init() {
-  GetThreadStackTopAndBottom(IsMainThread(), &stack_top_, &stack_bottom_);
+  bool is_main_thread = this->tid() == kMainTid;
+  GetThreadStackTopAndBottom(is_main_thread, &stack_top_, &stack_bottom_);
   shadow_stack_size_ = stack_top_ - stack_bottom_;
   shadow_stack_bottom_ = MmapOrDie(shadow_stack_size_, __func__);
   __bsan_shadow_stack =
@@ -38,54 +150,41 @@ void BsanThread::Init() {
   // the GC can zero it for every thread once any one of them has reached the
   // collection threshold.
   visits_ptr_ = &__bsan_visits_since_gc;
-  if (common_flags()->use_sigaltstack)
-    altstack_base_ = SetAlternateSignalStack();
 }
 
-void BsanThread::Destroy(void *tsd) {
-  BsanThread *t = (BsanThread *)tsd;
-  global_ctx()->Threads().DeregisterThread(t);
-  t->malloc_storage().CommitBack();
-  t->zct.~ZeroCountTable();
-  if (common_flags()->use_sigaltstack)
-    UnsetAlternateSignalStack(t->altstack_base_);
-  UnmapOrDie(t->shadow_stack_bottom_, t->shadow_stack_size_);
-  uptr size = RoundUpTo(sizeof(BsanThread), GetPageSizeCached());
-  UnmapOrDie(t, size);
+void BsanThread::TSDDtor(void *tsd) {
+  BsanThreadContext *context = (BsanThreadContext *)tsd;
+  if (context->thread)
+    context->thread->Destroy();
 }
 
-thread_return_t BsanThread::Start() {
-  if (!start_routine_) {
-    return 0;
+void BsanThread::Destroy() {
+  int tid = this->tid();
+  bool was_running =
+      (GetThreadRegistry().FinishThread(tid) == ThreadStatusRunning);
+  if (was_running) {
+    if (BsanThread *thread = CurrentThread())
+      CHECK_EQ(this, thread);
+    this->malloc_storage().CommitBack();
+    if (common_flags()->use_sigaltstack)
+      UnsetAlternateSignalStack(altstack_base_);
+    zct.~ZeroCountTable();
+    UnmapOrDie(shadow_stack_bottom_, shadow_stack_size_);
+  } else {
+    CHECK_NE(this, CurrentThread());
   }
-  return start_routine_(arg_);
+  uptr size = RoundUpTo(sizeof(BsanThread), GetPageSizeCached());
+  UnmapOrDie(this, size);
 }
 
-void *BsanThread::StartCallback(void *arg) {
-  BsanThread *t = (BsanThread *)arg;
-  SetCurrentThread(t);
-  t->Init();
-#if SANITIZER_LINUX
-  SetSigProcMask(&t->starting_sigset_, nullptr);
-#endif
-  return t->Start();
+void LockThreads() {
+  GetThreadRegistry().Lock();
+  GetThreadArgRetval().Lock();
 }
 
-void ThreadManager::RegisterThread(BsanThread *thread) {
-  Lock l(&mtx_);
-  uptr tid = atomic_fetch_add(&thread_id_ctr, 1, memory_order_relaxed);
-  threads[tid] = thread;
-  thread->id = tid;
+void UnlockThreads() {
+  GetThreadArgRetval().Unlock();
+  GetThreadRegistry().Unlock();
 }
 
-void ThreadManager::DeregisterThread(BsanThread *thread) {
-  Lock l(&mtx_);
-  global_zct_.drainFrom(thread->zct);
-  threads.erase(thread->id);
-}
-
-void ThreadManager::acquireProvenance(Provenance prov) {
-  Lock l(&mtx_);
-  global_zct_.acquireProvenance(prov);
-}
 } // namespace __bsan

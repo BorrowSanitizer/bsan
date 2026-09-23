@@ -11,8 +11,17 @@ using namespace __bsan;
 
 namespace __bsan {
 
-void GlobalContext::CollectProvenance(const ThreadId id,
-                                      BsanThread *const &thread, void *arg) {
+void GlobalContext::acquireProvenance(Provenance prov) {
+  Lock lock(&global_zct_lock_);
+  global_zct_.acquireProvenance(prov);
+}
+
+void GlobalContext::acquireProvenance(ZeroCountTable &source) {
+  Lock lock(&global_zct_lock_);
+  global_zct_.drainFrom(source);
+}
+
+void GlobalContext::CollectProvenance(BsanThread *const &thread, void *arg) {
   // Iterate over the shadow stacks for each thread,
   // collecting all provenance values into the snapshot.
   auto *state = static_cast<Snapshot *>(arg);
@@ -23,8 +32,7 @@ void GlobalContext::CollectProvenance(const ThreadId id,
   }
 }
 
-void GlobalContext::MergeZeroCountsCallback(const ThreadId id,
-                                            BsanThread *const &thread,
+void GlobalContext::MergeZeroCountsCallback(BsanThread *const &thread,
                                             void *arg) {
   auto *snap = static_cast<Snapshot *>(arg);
   if (!thread) {
@@ -33,8 +41,7 @@ void GlobalContext::MergeZeroCountsCallback(const ThreadId id,
   MergeZeroCounts(snap, thread->zct);
 }
 
-void GlobalContext::ResetVisitCounts(const ThreadId id,
-                                     BsanThread *const &thread, void *arg) {
+void GlobalContext::ResetVisitCounts(BsanThread *const &thread, void *arg) {
   if (thread) {
     thread->ResetVisitCount();
   }
@@ -74,20 +81,19 @@ void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
   // live provenance values to the set within the snapshot. Unlocking
   // it here prevents us from unlocking it again once the closure returns.
   snap->scope->UnlockInternalAllocator();
-  ThreadManager &threads = global_ctx()->Threads();
   // For each thread, add all live provenance values to the snapshot.
-  threads.ForEachThread(CollectProvenance, arg);
+  ForEachThread(CollectProvenance, arg);
   // For each thread, if a provenance value in the ZCT is not present
   // in the set of live provenance values in the `SnapShot`, then remove
   // it from the ZCT and add it to the global "pending" set of provenance
   // values that need pruning.
-  threads.ForEachThread(MergeZeroCountsCallback, arg);
+  ForEachThread(MergeZeroCountsCallback, arg);
   // We also need to visit the global ZCT, which contains garbage from threads
   // that have exited since the last collection run.
-  MergeZeroCounts(snap, threads.global_zct_);
+  MergeZeroCounts(snap, global_ctx()->global_zct_);
   // Only one thread needs to reach `visits_per_gc` to get us here, so every
   // thread's counter starts over from the collection we are about to perform.
-  threads.ForEachThread(ResetVisitCounts, nullptr);
+  ForEachThread(ResetVisitCounts, nullptr);
 }
 
 void GlobalContext::CollectGarbage(Snapshot &snap) {
@@ -127,7 +133,7 @@ void GlobalContext::CollectGarbage(Snapshot &snap) {
   quarantine_.swap(quarantined);
 }
 
-void GlobalContext::RequestGC() {
+void GlobalContext::requestGC() {
   // Get the current generation count
   uptr gen = atomic_load(&gc_gen, memory_order_acquire);
   // Try and lock the garbage collector
