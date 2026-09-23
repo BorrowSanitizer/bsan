@@ -15,9 +15,16 @@ private:
   BsanThreadLocalMallocStorage() {}
 };
 
-void InitializeAllocator();
-void LockAllocator();
-void UnlockAllocator();
+void InitializeShadowedAllocator();
+void LockShadowedAllocator();
+void UnlockShadowedAllocator();
+
+void InitializeRustAllocator();
+void LockRustAllocator();
+void UnlockRustAllocator();
+
+void *RustAlloc(uptr size, uptr alignment = sizeof(u64));
+void RustDealloc(void *ptr);
 
 void *bsan_malloc(uptr size);
 void bsan_deallocate(void *ptr);

@@ -11,46 +11,79 @@
 
 using namespace __bsan;
 
+static uptr max_malloc_size;
+const uptr kMaxAllowedMallocSize = 1ULL << 40;
+
 namespace {
 
 struct Metadata {
   uptr requested_size;
 };
 
-struct BsanMapUnmapCallback {
-  void OnMap(uptr p, uptr size) const {}
-  void OnMapSecondary(uptr p, uptr size, uptr user_begin,
-                      uptr user_size) const {
-    OnMap(p, size);
-  }
-  void OnUnmap(uptr p, uptr size) const {}
-};
-
-const uptr kMaxAllowedMallocSize = 1ULL << 40;
-
-struct AP64 { // Allocator64 parameters. Deliberately using a short name.
+// Parameters for the primary allocator that replaces
+// malloc. All allocations created from this allocator
+// have a corresponding region in shadow memory.
+struct ShadowedAP64 {
   static const uptr kSpaceBeg = kAllocatorSpace;
   static const uptr kSpaceSize = kAllocatorSpaceSize;
   static const uptr kMetadataSize = sizeof(Metadata);
   using SizeClassMap = DefaultSizeClassMap;
-  using MapUnmapCallback = BsanMapUnmapCallback;
+  typedef NoOpMapUnmapCallback MapUnmapCallback;
   static const uptr kFlags = 0;
   using AddressSpaceView = LocalAddressSpaceView;
 };
 
-typedef SizeClassAllocator64<AP64> PrimaryAllocator;
-
+typedef SizeClassAllocator64<ShadowedAP64> PrimaryAllocator;
 typedef CombinedAllocator<PrimaryAllocator> Allocator;
 typedef Allocator::AllocatorCache AllocatorCache;
 
 static Allocator allocator;
 static AllocatorCache fallback_allocator_cache;
 static StaticSpinMutex fallback_mutex;
-
-static uptr max_malloc_size;
 } // namespace
 
-void __bsan::InitializeAllocator() {
+namespace {
+
+struct RustAP64 {
+  static const uptr kSpaceBeg = ~(uptr)0;
+  static const uptr kSpaceSize = kAllocatorSpaceSize;
+  static const uptr kMetadataSize = 0;
+  using SizeClassMap = DefaultSizeClassMap;
+  typedef NoOpMapUnmapCallback MapUnmapCallback;
+  static const uptr kFlags = 0;
+  using AddressSpaceView = LocalAddressSpaceView;
+};
+
+typedef SizeClassAllocator64<RustAP64> PrimaryRustAllocator;
+typedef CombinedAllocator<PrimaryRustAllocator> RustAllocator;
+typedef RustAllocator::AllocatorCache RustAllocatorCache;
+
+static RustAllocator rust_allocator;
+static RustAllocatorCache fallback_rust_allocator_cache;
+static StaticSpinMutex fallback_rust_mutex;
+static uptr max_rust_malloc_size;
+} // namespace
+
+void __bsan::InitializeRustAllocator() {
+  rust_allocator.Init(common_flags()->allocator_release_to_os_interval_ms);
+  if (common_flags()->max_allocation_size_mb)
+    max_rust_malloc_size = Min(common_flags()->max_allocation_size_mb << 20,
+                               kMaxAllowedMallocSize);
+  else
+    max_rust_malloc_size = kMaxAllowedMallocSize;
+}
+
+void __bsan::LockRustAllocator() {
+  fallback_rust_mutex.Lock();
+  rust_allocator.ForceLock();
+}
+
+void __bsan::UnlockRustAllocator() {
+  rust_allocator.ForceUnlock();
+  fallback_rust_mutex.Unlock();
+}
+
+void __bsan::InitializeShadowedAllocator() {
   SetAllocatorMayReturnNull(common_flags()->allocator_may_return_null);
   allocator.Init(common_flags()->allocator_release_to_os_interval_ms);
   if (common_flags()->max_allocation_size_mb)
@@ -60,9 +93,9 @@ void __bsan::InitializeAllocator() {
     max_malloc_size = kMaxAllowedMallocSize;
 }
 
-void __bsan::LockAllocator() { allocator.ForceLock(); }
+void __bsan::LockShadowedAllocator() { allocator.ForceLock(); }
 
-void __bsan::UnlockAllocator() { allocator.ForceUnlock(); }
+void __bsan::UnlockShadowedAllocator() { allocator.ForceUnlock(); }
 
 static AllocatorCache *GetAllocatorCache(BsanThreadLocalMallocStorage *ms) {
   CHECK(ms);
@@ -130,7 +163,50 @@ void __bsan::bsan_deallocate(void *p) {
   }
 }
 
-static uptr GetMallocUsableSize(const void *p) {
+void *__bsan::RustAlloc(uptr size, uptr alignment) {
+  if (UNLIKELY(size > max_rust_malloc_size)) {
+    if (AllocatorMayReturnNull()) {
+      Report("WARNING: BorrowSanitizer failed to allocate 0x%zx bytes\n", size);
+      return nullptr;
+    }
+    UNINITIALIZED BufferedStackTrace stack;
+    ReportAllocationSizeTooBig(size, max_rust_malloc_size, &stack);
+  }
+  if (UNLIKELY(!IsPowerOfTwo(alignment))) {
+    if (AllocatorMayReturnNull())
+      return nullptr;
+    UNINITIALIZED BufferedStackTrace stack;
+    ReportInvalidAllocationAlignment(alignment, &stack);
+  }
+  if (UNLIKELY(IsRssLimitExceeded())) {
+    if (AllocatorMayReturnNull())
+      return nullptr;
+    UNINITIALIZED BufferedStackTrace stack;
+    ReportRssLimitExceeded(&stack);
+  }
+  void *allocated;
+  {
+    SpinMutexLock l(&fallback_rust_mutex);
+    allocated = rust_allocator.Allocate(&fallback_rust_allocator_cache, size,
+                                        alignment);
+  }
+  if (UNLIKELY(!allocated)) {
+    SetAllocatorOutOfMemory();
+    if (AllocatorMayReturnNull())
+      return nullptr;
+    UNINITIALIZED BufferedStackTrace stack;
+    ReportOutOfMemory(size, &stack);
+  }
+  return allocated;
+}
+
+void __bsan::RustDealloc(void *p) {
+  CHECK(p);
+  SpinMutexLock l(&fallback_rust_mutex);
+  rust_allocator.Deallocate(&fallback_rust_allocator_cache, p);
+}
+
+uptr __bsan::bsan_mz_size(const void *p) {
   if (!p)
     return 0;
   Metadata *meta = reinterpret_cast<Metadata *>(allocator.GetMetaData(p));
@@ -138,8 +214,6 @@ static uptr GetMallocUsableSize(const void *p) {
     return 0;
   return meta->requested_size;
 }
-
-uptr __bsan::bsan_mz_size(const void *p) { return GetMallocUsableSize(p); }
 
 static void *BsanReallocate(void *old_p, uptr new_size, uptr alignment) {
   Metadata *meta = reinterpret_cast<Metadata *>(allocator.GetMetaData(old_p));
