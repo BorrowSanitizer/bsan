@@ -138,6 +138,12 @@ void GlobalContext::CollectGarbage(Snapshot *snap) {
       return;
     }
     CHECK(status == EjectStatus::RetainNonEmpty);
+    // The `RetainNonEmpty` status is also used
+    // to indicate that a thread was busy during collection,
+    // so it could indicate that a node was a singleton.
+    // We want to ensure that it gets added regardless.
+    if (!tags.Size())
+      still_pending.insert(info);
     // Any leftover tags must be kept around
     // for the next cycle.
     tags.forEach([&](BorTag tag) {
