@@ -81,7 +81,6 @@ void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
   // live provenance values to the set within the snapshot. Unlocking
   // it here prevents us from unlocking it again once the closure returns.
   snap->scope->UnlockInternalAllocator();
-  //
   // For each thread, add all live provenance values to the snapshot.
   ForEachThread(CollectProvenance, arg);
   // For each thread, if a provenance value in the ZCT is not present
