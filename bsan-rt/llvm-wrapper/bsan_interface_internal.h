@@ -41,7 +41,7 @@ SANITIZER_WEAK_ATTRIBUTE
 AllocInfo *__bsan_alloc(void *base_addr, uptr size, BorTag bor_tag, Span pc);
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info, Span pc,
+bool __bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info, Span pc,
                     bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE
@@ -61,11 +61,30 @@ void __bsan_release(BorTag bor_tag, AllocInfo *alloc_info);
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_request_gc();
 
+// The result of attempting to "prune" dead nodes from a tree.
+enum class EjectStatus : int {
+  // The allocation can be "ejected" from the GC,
+  // as long as it is no longer alive on any of the
+  // shadow stacks. All of its nodes are gone.
+  Ejectable = 0,
+  // All of the nodes in this allocation have been
+  // removed by deallocation, but the allocation
+  // itself is still somewhere in shadow memory
+  // with a nonzero reference count. It needs to
+  // be kept around.
+  RetainEmpty = 1,
+  // Some of the nodes in this allocation are still
+  // alive, or the allocation is being accessed by another
+  // thread. It could not be pruned, and needs to be visited
+  // again the next time that the world is stopped.
+  RetainNonEmpty = 2,
+};
+
 // Prunes a list of nodes from a tree that correspond to the tags in the list.
-// Returns true if every tag has been pruned, indicating that the allocation
-// metadata object can also be reclaimed.
+// Returns an `EjectStatus`, indicating if the allocation metadata object
+// can be reclaimed.
 SANITIZER_WEAK_ATTRIBUTE
-bool __bsan_prune(AllocInfo *Info, BorTag *tags, uptr len);
+EjectStatus __bsan_prune(AllocInfo *Info, BorTag *tags, uptr len);
 
 // Frees an `AllocInfo` object. The pointer must be nonnull and unreachable
 // in shadow memory.

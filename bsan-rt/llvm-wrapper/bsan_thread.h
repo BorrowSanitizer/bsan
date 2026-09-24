@@ -14,7 +14,6 @@ using namespace __sanitizer;
 namespace __bsan {
 
 struct ZeroCountTable {
-  typedef uptr Generation;
   ~ZeroCountTable() {}
 
 private:
@@ -24,8 +23,6 @@ private:
   // values to garbage collect. We will still examine this thread's
   // shadow stack to exclude reachable provenance values.
   atomic_uint8_t busy_{};
-
-  Generation drained_gen_ = 0;
 
   // Whenever we modify this zero-count table, we need to
   // ensure that we are only doing so from the context of another table.
@@ -39,9 +36,9 @@ private:
 
   ConcreteProvenanceSet zct_;
 
+public:
   // Adds a provenance value with a zero reference count
   // to this table.
-public:
   void acquireProvenance(Provenance Prov) {
     // We use a release order here so that each of these
     // stores is ordered before the "acquire" load used
@@ -55,14 +52,7 @@ public:
     GCBarrier this_barrier(*this);
     zct_.takeFrom(other.zct_);
   }
-
-  template <typename Fn> void retainIf(Generation gen, Fn retain) {
-    drained_gen_ = gen;
-    zct_.retainIf(retain);
-  }
-
-  Generation lastDrained() { return drained_gen_; }
-
+  template <typename Fn> void retainIf(Fn retain) { zct_.retainIf(retain); }
   bool isBusy() { return atomic_load(&busy_, memory_order_acquire) == 1; }
 };
 
@@ -168,10 +158,12 @@ public:
 
   RustAllocatorCache *rust_allocator_cache() { return &rust_allocator_cache_; }
 
-  ZeroCountTable zct;
   uptr os_id;
+  void acquireProvenance(Provenance prov) { zct_.acquireProvenance(prov); }
 
 private:
+  friend struct BsanThreadContext;
+  friend struct GlobalContext;
   friend struct BsanThreadContext;
   static BsanThread *Create(const void *start_data, uptr data_size,
                             u32 parent_tid, bool detached);
@@ -179,6 +171,8 @@ private:
   void GetStartData(void *out, uptr out_size) const;
 
   BsanThreadContext *context_;
+
+  ZeroCountTable zct_;
 
   // Executes the start routine.
   thread_return_t Start();
@@ -223,14 +217,15 @@ BsanThreadContext *GetThreadContextByTidLocked(u32 tid);
 void LockThreads() SANITIZER_NO_THREAD_SAFETY_ANALYSIS;
 void UnlockThreads() SANITIZER_NO_THREAD_SAFETY_ANALYSIS;
 
-template <typename Fn> inline void ForEachThread(Fn callback, void *arg) {
+template <typename Fn, typename T>
+inline void ForEachThread(Fn callback, T *arg) {
   GetThreadRegistry().CheckLocked();
   // We need an intermediate struct here,
   // because `RunCallbackForEachThreadLocked`
   // requires a non-capturing lambda.
   struct CallbackArgs {
     Fn callback;
-    void *arg;
+    T *arg;
   } ctx{callback, arg};
   GetThreadRegistry().RunCallbackForEachThreadLocked(
       [](ThreadContextBase *tctx_base, void *raw_ctx) {

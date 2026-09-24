@@ -1,15 +1,11 @@
 use core::sync::atomic::{fence, AtomicUsize, Ordering};
 
-/// A thread-safe reference count with correct atomic ordering semantics.
-// TODO: remove `allow(dead_code)` once the `__bsan_rc_inc`/`__bsan_rc_dec`
-// endpoints (lib.rs) actually drive this type.
-#[allow(dead_code)]
+/// An atomic reference count.
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct RefCount(AtomicUsize);
 
 impl Clone for RefCount {
-    /// Snapshots the current count into a fresh `RefCount`.
     fn clone(&self) -> Self {
         Self(AtomicUsize::new(self.0.load(Ordering::Relaxed)))
     }
@@ -17,15 +13,14 @@ impl Clone for RefCount {
 
 #[allow(dead_code)]
 impl RefCount {
-    /// Creates a new `RefCount` initialized to 0.
-    ///
-    /// A freshly minted tag has no references yet: it is reachable only as a
-    /// root (live on a shadow stack) until a reference to it is written into
-    /// shadow *memory*, at which point [`Self::increment`] raises the count.
-    /// The runtime records every fresh tag in its thread's zero-count table as
-    /// a collection candidate (see `__bsan_retag`/`__bsan_alloc`).
+    /// Creates a new [`RefCount`] initialized to 0.
     pub fn new() -> Self {
         Self(AtomicUsize::new(0))
+    }
+
+    /// Creates a new `RefCount` with the given initial value.
+    pub fn with_count(ct: usize) -> Self {
+        Self(AtomicUsize::new(ct))
     }
 
     /// Increments the reference count.
@@ -42,7 +37,7 @@ impl RefCount {
     /// Returns `true` if the count reached zero.
     pub fn decrement(&self) -> bool {
         let prev = self.0.fetch_sub(1, Ordering::Release);
-        debug_assert!(prev > 0, "RefCount decremented below zero");
+        debug_assert!(prev > 0, "`RefCount` decremented below zero");
         if prev == 1 {
             // Pair with every prior Release decrement. Ensures operations
             // before the last decrement happen before the RefCount becomes 0.
@@ -53,9 +48,15 @@ impl RefCount {
         }
     }
 
-    /// Increments the reference count **without** atomic synchronization,
-    /// returning `true` if the count transitioned from zero to one.
-    pub fn increment_nonatomic(&self) -> bool {
+    /// Increments the reference count without atomic synchronization.
+    /// Returns `true` if the count transitioned from zero to one.
+    ///
+    /// # Safety
+    /// The default "mode" of a reference count is to support atomic
+    /// increments and decrements. For this operation to be sound,
+    /// no other thread can be updating this reference count at the
+    /// same time.
+    pub unsafe fn increment_nonatomic(&self) -> bool {
         unsafe {
             let count = self.0.as_ptr();
             debug_assert!(*count < usize::MAX, "RefCount overflow");
@@ -65,12 +66,18 @@ impl RefCount {
         }
     }
 
-    /// Decrements the reference count **without** atomic synchronization,
-    /// returning `true` if the count reached zero.
+    /// Decrements the reference count without atomic synchronization.
+    /// Returns `true` if the count reached zero.
+    ///
+    /// # Safety
+    /// The default "mode" of a reference count is to support atomic
+    /// increments and decrements. For this operation to be sound,
+    /// no other thread can be updating this reference count at the
+    /// same time.
     pub fn decrement_nonatomic(&self) -> bool {
         unsafe {
             let count = self.0.as_ptr();
-            debug_assert!(*count > 0, "RefCount decremented below zero");
+            debug_assert!(*count > 0, "`RefCount` decremented below zero");
             *count -= 1;
             *count == 0
         }
@@ -81,17 +88,7 @@ impl RefCount {
         self.0.load(Ordering::Relaxed)
     }
 
-    /// Creates a new `RefCount` with the given initial value.
-    ///
-    /// Test-only: the runtime always starts a count at 0 via [`RefCount::new`].
-    #[cfg(test)]
-    fn with_count(n: usize) -> Self {
-        Self(AtomicUsize::new(n))
-    }
-
     /// Returns `true` if the reference count is exactly 1 at the time this function is called.
-    ///
-    /// Test-only: the zero transition is reported by [`RefCount::decrement`] instead.
     #[cfg(test)]
     fn is_unique(&self) -> bool {
         self.0.load(Ordering::Acquire) == 1
@@ -172,7 +169,6 @@ mod tests {
     #[test]
     fn concurrent_balanced_inc_dec() {
         let rc = Arc::new(RefCount::with_count(1));
-
         let handles: Vec<_> = (0..THREADS)
             .map(|_| {
                 let rc = Arc::clone(&rc);
@@ -220,17 +216,8 @@ mod tests {
         assert_eq!(rc.get(), 0);
     }
 
-    /// Mirrors `Arc`'s drop protocol and is the test that actually exercises
-    /// the ordering: each thread writes to its own disjoint slot, then releases
-    /// its reference. The single thread that observes the count reach zero then
-    /// reads *all* slots. Correct `Release`/`Acquire` ordering makes every prior
-    /// write happen-before that read; if the orderings were weakened (e.g. a
-    /// `Relaxed` decrement), Miri's data-race detector would flag the read.
     #[test]
     fn release_acquire_publishes_writes() {
-        // One `UnsafeCell` per thread: writers touch disjoint cells through a
-        // raw pointer (never a `&mut` to the whole buffer), so threads only ever
-        // share `&Slots`. The sole zero-observer reads every cell.
         struct Slots(Vec<UnsafeCell<u64>>);
         unsafe impl Sync for Slots {}
 

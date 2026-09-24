@@ -57,12 +57,9 @@ unsafe impl WordAligned for AllocInfo {}
 unsafe impl WordAligned for BorTag {}
 
 /// # Safety
-/// Values of type `AllocInfo` can fit within the size of a heap chunk.
-unsafe impl Heapable for AllocInfo {
-    fn next(ptr: *mut AllocInfo) -> *mut Option<NonNull<AllocInfo>> {
-        unsafe { (&raw mut (*((*ptr).free_or_addr).as_ptr()).free_list_next) }
-    }
-}
+/// Values of type `AllocInfo` can fit within the size of a heap chunk,
+/// and have enough space to store the "next" pointer.
+unsafe impl Heapable for AllocInfo {}
 
 /// Credit: bumpalo
 /// Like `round_up_to` but turns overflow into undefined behavior rather than

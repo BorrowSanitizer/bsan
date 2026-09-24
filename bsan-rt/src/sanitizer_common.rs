@@ -103,7 +103,6 @@ impl Bridge {
             }
             let ptr = Box::into_raw(Box::new((ub_info, pc)));
             *PENDING_ERROR.get() = ptr;
-            __bsan_had_error = 1;
         }
     }
 
@@ -113,8 +112,9 @@ impl Bridge {
         let mut buf = [0u8; 512];
         let mut line: u32 = 0;
         let mut column: u32 = 0;
-        let ok =
-            unsafe { __bsan_symbolize_pc(pc, buf.as_mut_ptr(), buf.len(), &mut line, &mut column) };
+        let ok = unsafe {
+            __bsan_symbolize_pc(pc, buf.as_mut_ptr(), buf.len(), &raw mut line, &raw mut column)
+        };
         if ok != 0 {
             let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
             if let Ok(s) = core::str::from_utf8(&buf[..end]) {
@@ -165,7 +165,7 @@ impl Bridge {
         let mut buf_size: usize = 0;
 
         unsafe {
-            let bytes_read = __bsan_read_file(c_path.as_ptr(), &mut buf_ptr, &mut buf_size);
+            let bytes_read = __bsan_read_file(c_path.as_ptr(), &raw mut buf_ptr, &raw mut buf_size);
             if bytes_read == 0 {
                 return None;
             }
@@ -187,9 +187,6 @@ impl Bridge {
 }
 
 unsafe extern "C" {
-    #[thread_local]
-    pub unsafe static mut __bsan_had_error: usize;
-
     /// Tree-node visits accumulated on this thread since the last GC.
     #[thread_local]
     pub unsafe static mut __bsan_visits_since_gc: usize;
@@ -210,7 +207,7 @@ unsafe extern "C" {
         file_buf_size: *mut usize,
     ) -> usize;
 
-    /// Free the buffer allocated by __bsan_read_file
+    /// Free the buffer allocated by `__bsan_read_file``
     fn __bsan_free_buffer(buf: *mut c_char, size: usize);
     fn __bsan_abort() -> !;
 }

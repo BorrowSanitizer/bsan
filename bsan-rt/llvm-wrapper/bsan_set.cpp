@@ -61,9 +61,6 @@ void BorTagSet::EnsureCapacity(uptr req_size) {
       capacity = req_size;
 
     BorTag *p = (BorTag *)InternalAlloc(capacity * sizeof(BorTag));
-
-    // We only need to free and copy over if the set
-    // already contains elements.
     if (old_capacity && capacity) {
       internal_memcpy(p, begin_, old_size * sizeof(BorTag));
       InternalFree(begin_);
@@ -75,6 +72,12 @@ void BorTagSet::EnsureCapacity(uptr req_size) {
   end_ = begin_ + req_size;
 }
 
+void ConcreteProvenanceSet::insert(AllocInfo *info) {
+  if (info != nullptr && !set_.contains(info)) {
+    set_[info] = BorTagSet();
+  }
+}
+
 void ConcreteProvenanceSet::insert(Provenance prov) {
   if (prov.isConcrete()) {
     set_[prov.info].insert(prov.tag);
@@ -82,12 +85,9 @@ void ConcreteProvenanceSet::insert(Provenance prov) {
 }
 
 void ConcreteProvenanceSet::remove(Provenance prov) {
-  if (prov.isConcrete()) {
+  if (!prov.isConcrete()) {
     return;
   }
-  // Only erase the tag; leave the (possibly now-empty) tag set in place. erase
-  // shifts in place and never frees, so this takes no allocator lock and is
-  // safe to run while the world is stopped.
   if (auto *tags = find(prov.info)) {
     tags->erase(prov.tag);
   }
@@ -98,6 +98,10 @@ void ConcreteProvenanceSet::clear() {
     KV.second.clear();
     return true;
   });
+}
+
+bool ConcreteProvenanceSet::contains(AllocInfo *info) {
+  return find(info) != nullptr;
 }
 
 bool ConcreteProvenanceSet::contains(Provenance prov) {

@@ -42,11 +42,7 @@ struct AllocInfo;
 struct Provenance {
   BorTag tag;
   AllocInfo *info;
-  bool isConcrete() {
-    bool cond = tag > 2;
-    DCHECK(cond || info == nullptr);
-    return cond;
-  }
+  bool isConcrete() { return tag > 2; }
 };
 
 struct AtExitRecord {
@@ -62,8 +58,6 @@ static constexpr uptr kMinProvAlignment = 8;
 
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance
     *__bsan_shadow_stack;
-
-extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __bsan_had_error;
 
 extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uintptr_t __bsan_bor_tag_ctr;
 
@@ -142,8 +136,8 @@ namespace __bsan {
   GET_SPAN;                                                                    \
   GET_CURRENT_PC_BP;
 
-#define HANDLE_ERROR                                                           \
-  if (UNLIKELY(__bsan_had_error)) {                                            \
+#define HANDLE_ERROR(had_error)                                                \
+  if (UNLIKELY(had_error)) {                                                   \
     uptr pc = StackTrace::GetCurrentPc();                                      \
     uptr bp = GET_CURRENT_FRAME();                                             \
     ScopedErrorReportLock::Lock();                                             \
@@ -154,8 +148,8 @@ namespace __bsan {
     Die();                                                                     \
   }
 
-#define HANDLE_ERROR_PC_BP(pc, bp)                                             \
-  if (UNLIKELY(__bsan_had_error)) {                                            \
+#define HANDLE_ERROR_PC_BP(had_error, pc, bp)                                  \
+  if (UNLIKELY(had_error)) {                                                   \
     ScopedErrorReportLock::Lock();                                             \
     __bsan_format_pending_ub(__bsan::FindUserFramePc(pc, bp));                 \
     UNINITIALIZED BufferedStackTrace stack;                                    \

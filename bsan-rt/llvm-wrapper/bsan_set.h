@@ -13,8 +13,8 @@ namespace __bsan {
 // We need this representation because the contents of the
 // tag set are exposed to the Rust core. We provide a pointer
 // to the list and its length, which becomes a slice. Using a
-// `DenseMap`, or another C++ representation, could be more efficient
-// but it would make the API more cumbersome.
+// `DenseMap`, or another C++ representation, could be more
+// efficient but it would make the API more cumbersome.
 class BorTagSet {
 public:
   BorTagSet() : begin_(), end_(), last_() {}
@@ -90,10 +90,13 @@ public:
   ConcreteProvenanceSet &operator=(const ConcreteProvenanceSet &) = delete;
 
   void insert(Provenance Prov);
+  void insert(AllocInfo *Alloc);
+
   void remove(Provenance Prov);
 
   void clear();
   bool contains(Provenance prov);
+  bool contains(AllocInfo *info);
 
   void swap(ConcreteProvenanceSet &other) { set_.swap(other.set_); }
 
