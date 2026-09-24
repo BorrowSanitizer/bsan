@@ -13,49 +13,6 @@ using namespace __sanitizer;
 
 namespace __bsan {
 
-struct ZeroCountTable {
-  ~ZeroCountTable() {}
-
-private:
-  // A flag indicating that we are currently adding a value to the zero count
-  // table for this thread. If this flag is set when we stop the world, then we
-  // will skip merging its zero count table into the set of pending provenance
-  // values to garbage collect. We will still examine this thread's
-  // shadow stack to exclude reachable provenance values.
-  atomic_uint8_t busy_{};
-
-  // Whenever we modify this zero-count table, we need to
-  // ensure that we are only doing so from the context of another table.
-  struct GCBarrier {
-    ZeroCountTable &zct;
-    GCBarrier(ZeroCountTable &zct) : zct(zct) {
-      atomic_store(&zct.busy_, 1, memory_order_release);
-    }
-    ~GCBarrier() { atomic_store(&zct.busy_, 0, memory_order_release); }
-  };
-
-  ConcreteProvenanceSet zct_;
-
-public:
-  // Adds a provenance value with a zero reference count
-  // to this table.
-  void acquireProvenance(Provenance Prov) {
-    // We use a release order here so that each of these
-    // stores is ordered before the "acquire" load used
-    // to check the value in `IsBusy`.
-    GCBarrier barrier(*this);
-    zct_.insert(Prov);
-  }
-
-  void drainFrom(ZeroCountTable &other) {
-    GCBarrier other_barrier(other);
-    GCBarrier this_barrier(*this);
-    zct_.takeFrom(other.zct_);
-  }
-  template <typename Fn> void retainIf(Fn retain) { zct_.retainIf(retain); }
-  bool isBusy() { return atomic_load(&busy_, memory_order_acquire) == 1; }
-};
-
 class BsanThread;
 class BsanThreadContext final : public ThreadContextBase {
 public:
@@ -159,12 +116,11 @@ public:
   RustAllocatorCache *rust_allocator_cache() { return &rust_allocator_cache_; }
 
   uptr os_id;
-  void acquireProvenance(Provenance prov) { zct_.acquireProvenance(prov); }
+  void acquireProvenance(Provenance prov) { zct_.insert(prov); }
 
 private:
   friend struct BsanThreadContext;
   friend struct GlobalContext;
-  friend struct BsanThreadContext;
   static BsanThread *Create(const void *start_data, uptr data_size,
                             u32 parent_tid, bool detached);
 
@@ -172,7 +128,7 @@ private:
 
   BsanThreadContext *context_;
 
-  ZeroCountTable zct_;
+  ConcreteProvenanceSet zct_;
 
   // Executes the start routine.
   thread_return_t Start();
@@ -200,6 +156,20 @@ private:
   // (`__bsan_visits_since_gc`), so that the GC can reset it when it stops
   // the world.
   uptr *visits_ptr_;
+
+  // A thread-local variable capturing the
+  // stack offset visible to the garbage
+  // collector. When null, the thread is
+  // in a "gc-unsafe" state, meaning that
+  // we must wait for it to reach a
+  // safepoint before we can run the collector.
+  // When non-null, we are in a "gc-safe" state,
+  // meaning that the thread is executing code that
+  // is uninstrumented, and will not affect shadow
+  // memory. We can start collection whenever, and
+  // the next time that this thread enters instrumented
+  // code, it will be paused until the collection finishes.
+  atomic_uintptr_t gc_stack_offset_{0};
   char start_data_[];
 };
 

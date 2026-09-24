@@ -137,7 +137,7 @@ static void MaybeRequestGC() {
   // thread is already collecting or has just finished, and only a collection
   // that succeeds resets our counter.
   __bsan_visits_since_gc = 0;
-  global_ctx()->requestGC();
+  //global_ctx()->requestGC();
 }
 
 // Returns the desired length for the current stack trace.
@@ -595,14 +595,6 @@ AllocInfo *__bsan_reserve_stack_slot() {
 
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_destroy_stack_slot_impl(AllocInfo *slot);
-
-SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_destroy_stack_slot(AllocInfo *slot) {
-  if (__bsan_destroy_stack_slot_impl) {
-    InterceptorBarrier barrier;
-    __bsan_destroy_stack_slot_impl(slot);
-  }
-}
 
 SANITIZER_WEAK_ATTRIBUTE
 AllocInfo *__bsan_alloc_impl(void *base_addr, uptr size, BorTag bor_tag,

@@ -9,16 +9,12 @@
 namespace __bsan {
 
 struct ScopedStopTheWorldLock;
-
-typedef uptr Epoch;
-
 struct Snapshot {
 public:
   Snapshot() {};
   // The set of borrow tags that are currently
   // reachable from any of the shadow stacks.
   ConcreteProvenanceSet live;
-  uptr num_busy_threads = 0;
   ScopedStopTheWorldLock *lock;
 };
 
@@ -34,7 +30,7 @@ public:
   void requestGC();
 
   void acquireProvenance(Provenance prov);
-  void acquireProvenance(ZeroCountTable &source);
+  void acquireProvenance(ConcreteProvenanceSet &source);
 
 private:
   friend struct ScopedStopTheWorldLock;
@@ -42,7 +38,7 @@ private:
   // When a thread exits, its zero count table needs to be
   // retained, so that we can clean up any of the provenance
   // values that it acquired in a future garbage collection pass.
-  ZeroCountTable global_zct_;
+  ConcreteProvenanceSet global_zct_;
 
   // A lock held by the thread that succeeds at invoking
   // the garbage collector. While this lock is held, the
@@ -58,13 +54,16 @@ private:
   // the lock without running the GC.
   atomic_uintptr_t gc_gen{0};
 
+  // An atomic flag that is set when the garbage collector has been
+  // invoked, and we are waiting on each thread to reach a safepoint
+  // or enter a "gc-safe" state.
+  atomic_uintptr_t gc_pending_{0};
+
   // A set of provenance values with a zero reference count that are
   // ready to be garbage collected. These values are no longer reachable
   // in shadow memory, or within the zero count tables associated with
   // each thread.
   ConcreteProvenanceSet pending_;
-
-  Epoch epoch_ = 1;
 
   // A callback passed to `StopTheWorld`. Runs the garbage collector.
   static void GCCallback(const SuspendedThreadsList &, void *arg);
@@ -72,14 +71,11 @@ private:
   // the set of pending provenance values. We only add values to the pending set
   // if they are not present on any shadow stack. Values that we add to the
   // pending set are also removed from their thread's zero-count-table.
-  static void MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct);
+  static void MergeZeroCounts(Snapshot *snap, ConcreteProvenanceSet &zct);
   // Drains the contents of the pending provenance set, pruning the associated
   // state from the tree for each allocation. Ejects any retired allocation
   // objects that are confirmed to be unreachable.
   void CollectGarbage(Snapshot *snap);
-  void EjectGarbage(Snapshot &snap);
-
-  DenseMap<AllocInfo *, Epoch> quarantine_{};
 
   // Guards `at_exit_stack_`.
   Mutex at_exit_lock_;

@@ -13,22 +13,16 @@ namespace __bsan {
 
 void GlobalContext::acquireProvenance(Provenance prov) {
   Lock lock(&global_zct_lock_);
-  global_zct_.acquireProvenance(prov);
+  global_zct_.insert(prov);
 }
 
-void GlobalContext::acquireProvenance(ZeroCountTable &source) {
+void GlobalContext::acquireProvenance(ConcreteProvenanceSet &source) {
   Lock lock(&global_zct_lock_);
-  global_zct_.drainFrom(source);
+  global_zct_.takeFrom(source);
 }
 
-void GlobalContext::MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct) {
-  if (zct.isBusy()) {
-    snap->num_busy_threads++;
-    return;
-  }
-  // If the thread is not in the middle of updating its zero
-  // count table, then we can drain its contents for garbage
-  // collection.
+void GlobalContext::MergeZeroCounts(Snapshot *snap,
+                                    ConcreteProvenanceSet &zct) {
   zct.retainIf([&](AllocInfo *info, BorTag tag) -> bool {
     Provenance prov = {tag, info};
     if (snap->live.contains(prov)) {
@@ -91,9 +85,6 @@ void GlobalContext::GCCallback(const SuspendedThreadsList &, void *arg) {
 }
 
 void GlobalContext::CollectGarbage(Snapshot *snap) {
-  if (snap->num_busy_threads == 0) {
-    epoch_ += 1;
-  }
   ConcreteProvenanceSet still_pending;
   pending_.drain([&](AllocInfo *info, BorTagSet &tags) {
     tags.forEach([&](BorTag tag) {
@@ -111,20 +102,7 @@ void GlobalContext::CollectGarbage(Snapshot *snap) {
       if (!snap->live.contains(info)) {
         // The root is no longer present on any
         // of the shadow stacks. We can retire it.
-        if (snap->num_busy_threads == 0) {
-          // No threads were busy this time,
-          // so we can guarantee that there
-          // are no copies of this allocation
-          // still flowing through the ZCT.
-          quarantine_[info] = epoch_;
-        } else {
-          // One or more threads were busy this time,
-          // so we couldn't visit their ZCTs. We need
-          // to wait until the next time we have a
-          // clear picture of shadow memory to be able
-          // to prune this.
-          quarantine_[info] = epoch_ + 1;
-        }
+        __bsan_eject(info);
       } else {
         still_pending.insert(info);
       }
@@ -163,20 +141,6 @@ void GlobalContext::CollectGarbage(Snapshot *snap) {
   pending_.swap(still_pending);
 }
 
-void GlobalContext::EjectGarbage(Snapshot &snap) {
-  Vector<AllocInfo *> to_eject;
-  quarantine_.forEach([&](auto &KV) {
-    if (epoch_ >= KV.getSecond()) {
-      to_eject.PushBack(KV.getFirst());
-    }
-    return true;
-  });
-  for (unsigned ix = 0; ix < to_eject.Size(); ++ix) {
-    __bsan_eject(to_eject[ix]);
-    quarantine_.erase(to_eject[ix]);
-  }
-}
-
 void GlobalContext::requestGC() {
   // Get the current generation count
   uptr gen = atomic_load(&gc_gen, memory_order_acquire);
@@ -194,7 +158,6 @@ void GlobalContext::requestGC() {
         snap.lock = &stopped;
         StopTheWorld(GCCallback, &snap);
       }
-      EjectGarbage(snap);
       atomic_fetch_add(&gc_gen, 1, memory_order_relaxed);
     }
     // Release the lock, allowing the GC to run again.
