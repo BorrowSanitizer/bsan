@@ -292,7 +292,6 @@ static bool BsanInitInternal() {
   InitializeFlags(flags);
   new (global_ctx()) GlobalContext();
 
-  __bsan_internal_init(&flags);
   InitializePlatformEarly();
 
   if (!InitShadowWithReExec()) {
@@ -301,7 +300,10 @@ static bool BsanInitInternal() {
     Die();
   }
 
-  InitializeAllocator();
+  InitializeRustAllocator();
+  __bsan_internal_init(&flags);
+
+  InitializeShadowedAllocator();
   InitializeInterceptors();
   InstallDeadlySignalHandlers(BsanOnDeadlySignal);
   InitializeTSD(PlatformTSDDtor);

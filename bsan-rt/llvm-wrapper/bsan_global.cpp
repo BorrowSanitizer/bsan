@@ -77,10 +77,11 @@ void GlobalContext::MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct) {
 
 void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
   Snapshot *snap = static_cast<Snapshot *>(arg);
-  // We need access to the internal allocator so that we can add
-  // live provenance values to the set within the snapshot. Unlocking
-  // it here prevents us from unlocking it again once the closure returns.
-  snap->scope->UnlockInternalAllocator();
+  // We need access to the internal allocators used by the runtime, so
+  // that we can add live provenance values to the set within the snapshot.
+  // Unlocking these here prevents us from unlocking them again once the
+  // closure returns.
+  snap->scope->UnlockRuntimeAllocators();
   // For each thread, add all live provenance values to the snapshot.
   ForEachThread(CollectProvenance, arg);
   // For each thread, if a provenance value in the ZCT is not present

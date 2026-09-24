@@ -164,7 +164,9 @@ public:
   // stack has overflowed.
   void *altstack_base_ = nullptr;
 
-  BsanThreadLocalMallocStorage &malloc_storage() { return malloc_storage_; }
+  AllocatorCache *allocator_cache() { return &allocator_cache_; }
+
+  RustAllocatorCache *rust_allocator_cache() { return &rust_allocator_cache_; }
 
   ZeroCountTable zct;
   uptr os_id;
@@ -190,7 +192,10 @@ private:
   void *shadow_stack_bottom_;
   uptr shadow_stack_size_;
 
-  BsanThreadLocalMallocStorage malloc_storage_;
+  // Per-thread caches for each allocator. These are zero-initialized,
+  // since `BsanThread` is allocated via mmap().
+  AllocatorCache allocator_cache_;
+  RustAllocatorCache rust_allocator_cache_;
 
   // The address of this thread's thread-local allocation
   // containing the current value of its shadow stack

@@ -122,20 +122,23 @@ struct ScopedStopTheWorldLock {
     // these critical sections, then our state might be corrupted
     // once we resume.
     LockThreads();
-    LockAllocator();
+    LockShadowedAllocator();
+    LockRustAllocator();
     InternalAllocatorLock();
   }
 
-  void UnlockInternalAllocator() {
+  void UnlockRuntimeAllocators() {
     InternalAllocatorUnlock();
-    internal_is_locked_ = false;
+    UnlockRustAllocator();
+    runtime_alloc_locked_ = false;
   }
 
   ~ScopedStopTheWorldLock() {
-    if (internal_is_locked_) {
+    if (runtime_alloc_locked_) {
       InternalAllocatorUnlock();
+      UnlockRustAllocator();
     }
-    UnlockAllocator();
+    UnlockShadowedAllocator();
     UnlockThreads();
   }
 
@@ -143,7 +146,7 @@ struct ScopedStopTheWorldLock {
   ScopedStopTheWorldLock(const ScopedStopTheWorldLock &) = delete;
 
 private:
-  bool internal_is_locked_ = true;
+  bool runtime_alloc_locked_ = true;
 };
 
 } // namespace __bsan

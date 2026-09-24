@@ -148,14 +148,12 @@ impl GlobalCtx {
 
 /// We need to declare a global allocator to be able to use `alloc` in a `#[no_std]`
 /// crate. Anything other than the `GlobalCtx` object will clash with the interceptors,
-/// For now, this allocator will defer to libc malloc and free, but in the future, we can
-/// set its endpoints to immediately panic with an error message to help with debugging.
 mod global_alloc {
     use core::ffi::c_void;
 
     #[cfg(not(test))]
     unsafe extern "C" {
-        fn __bsan_crt_malloc(size: usize) -> *mut core::ffi::c_void;
+        fn __bsan_crt_malloc(size: usize, alignment: usize) -> *mut core::ffi::c_void;
         fn __bsan_crt_free(ptr: *mut core::ffi::c_void);
     }
 
@@ -172,7 +170,7 @@ mod global_alloc {
             }
             #[cfg(not(test))]
             unsafe {
-                __bsan_crt_malloc(layout.size()).cast::<u8>()
+                __bsan_crt_malloc(layout.size(), layout.align()).cast::<u8>()
             }
         }
         unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {

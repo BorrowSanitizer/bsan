@@ -11,46 +11,46 @@
 
 using namespace __bsan;
 
-namespace {
-
-struct Metadata {
-  uptr requested_size;
-};
-
-struct BsanMapUnmapCallback {
-  void OnMap(uptr p, uptr size) const {}
-  void OnMapSecondary(uptr p, uptr size, uptr user_begin,
-                      uptr user_size) const {
-    OnMap(p, size);
-  }
-  void OnUnmap(uptr p, uptr size) const {}
-};
-
+static uptr max_malloc_size;
 const uptr kMaxAllowedMallocSize = 1ULL << 40;
 
-struct AP64 { // Allocator64 parameters. Deliberately using a short name.
-  static const uptr kSpaceBeg = kAllocatorSpace;
-  static const uptr kSpaceSize = kAllocatorSpaceSize;
-  static const uptr kMetadataSize = sizeof(Metadata);
-  using SizeClassMap = DefaultSizeClassMap;
-  using MapUnmapCallback = BsanMapUnmapCallback;
-  static const uptr kFlags = 0;
-  using AddressSpaceView = LocalAddressSpaceView;
-};
-
-typedef SizeClassAllocator64<AP64> PrimaryAllocator;
-
-typedef CombinedAllocator<PrimaryAllocator> Allocator;
-typedef Allocator::AllocatorCache AllocatorCache;
-
+namespace {
 static Allocator allocator;
 static AllocatorCache fallback_allocator_cache;
 static StaticSpinMutex fallback_mutex;
-
-static uptr max_malloc_size;
 } // namespace
 
-void __bsan::InitializeAllocator() {
+namespace {
+static RustAllocator rust_allocator;
+static RustAllocatorCache fallback_rust_allocator_cache;
+static StaticSpinMutex fallback_rust_mutex;
+static uptr max_rust_malloc_size;
+} // namespace
+
+void __bsan::InitializeRustAllocator() {
+  rust_allocator.Init(common_flags()->allocator_release_to_os_interval_ms);
+  if (common_flags()->max_allocation_size_mb)
+    max_rust_malloc_size = Min(common_flags()->max_allocation_size_mb << 20,
+                               kMaxAllowedMallocSize);
+  else
+    max_rust_malloc_size = kMaxAllowedMallocSize;
+}
+
+void __bsan::LockRustAllocator() {
+  fallback_rust_mutex.Lock();
+  rust_allocator.ForceLock();
+}
+
+void __bsan::UnlockRustAllocator() {
+  rust_allocator.ForceUnlock();
+  fallback_rust_mutex.Unlock();
+}
+
+void __bsan::CommitBackRustCache(RustAllocatorCache *cache) {
+  rust_allocator.SwallowCache(cache);
+}
+
+void __bsan::InitializeShadowedAllocator() {
   SetAllocatorMayReturnNull(common_flags()->allocator_may_return_null);
   allocator.Init(common_flags()->allocator_release_to_os_interval_ms);
   if (common_flags()->max_allocation_size_mb)
@@ -60,18 +60,12 @@ void __bsan::InitializeAllocator() {
     max_malloc_size = kMaxAllowedMallocSize;
 }
 
-void __bsan::LockAllocator() { allocator.ForceLock(); }
+void __bsan::LockShadowedAllocator() { allocator.ForceLock(); }
 
-void __bsan::UnlockAllocator() { allocator.ForceUnlock(); }
+void __bsan::UnlockShadowedAllocator() { allocator.ForceUnlock(); }
 
-static AllocatorCache *GetAllocatorCache(BsanThreadLocalMallocStorage *ms) {
-  CHECK(ms);
-  CHECK_LE(sizeof(AllocatorCache), sizeof(ms->allocator_cache));
-  return reinterpret_cast<AllocatorCache *>(ms->allocator_cache);
-}
-
-void BsanThreadLocalMallocStorage::CommitBack() {
-  allocator.SwallowCache(GetAllocatorCache(this));
+void __bsan::CommitBackShadowedCache(AllocatorCache *cache) {
+  allocator.SwallowCache(cache);
 }
 
 static void *BsanAllocate(uptr size, uptr alignment, bool zeroise) {
@@ -92,7 +86,7 @@ static void *BsanAllocate(uptr size, uptr alignment, bool zeroise) {
   BsanThread *t = CurrentThread();
   void *allocated;
   if (t) {
-    AllocatorCache *cache = GetAllocatorCache(&t->malloc_storage());
+    AllocatorCache *cache = t->allocator_cache();
     allocated = allocator.Allocate(cache, size, alignment);
   } else {
     SpinMutexLock l(&fallback_mutex);
@@ -121,7 +115,7 @@ void __bsan::bsan_deallocate(void *p) {
   meta->requested_size = 0;
   BsanThread *t = CurrentThread();
   if (t) {
-    AllocatorCache *cache = GetAllocatorCache(&t->malloc_storage());
+    AllocatorCache *cache = t->allocator_cache();
     allocator.Deallocate(cache, p);
   } else {
     SpinMutexLock l(&fallback_mutex);
@@ -130,7 +124,59 @@ void __bsan::bsan_deallocate(void *p) {
   }
 }
 
-static uptr GetMallocUsableSize(const void *p) {
+void *__bsan::RustAlloc(uptr size, uptr alignment) {
+  if (UNLIKELY(size > max_rust_malloc_size)) {
+    if (AllocatorMayReturnNull()) {
+      Report("WARNING: BorrowSanitizer failed to allocate 0x%zx bytes\n", size);
+      return nullptr;
+    }
+    UNINITIALIZED BufferedStackTrace stack;
+    ReportAllocationSizeTooBig(size, max_rust_malloc_size, &stack);
+  }
+  if (UNLIKELY(!IsPowerOfTwo(alignment))) {
+    if (AllocatorMayReturnNull())
+      return nullptr;
+    UNINITIALIZED BufferedStackTrace stack;
+    ReportInvalidAllocationAlignment(alignment, &stack);
+  }
+  if (UNLIKELY(IsRssLimitExceeded())) {
+    if (AllocatorMayReturnNull())
+      return nullptr;
+    UNINITIALIZED BufferedStackTrace stack;
+    ReportRssLimitExceeded(&stack);
+  }
+  BsanThread *t = CurrentThread();
+  void *allocated;
+  if (t) {
+    allocated =
+        rust_allocator.Allocate(t->rust_allocator_cache(), size, alignment);
+  } else {
+    SpinMutexLock l(&fallback_rust_mutex);
+    allocated = rust_allocator.Allocate(&fallback_rust_allocator_cache, size,
+                                        alignment);
+  }
+  if (UNLIKELY(!allocated)) {
+    SetAllocatorOutOfMemory();
+    if (AllocatorMayReturnNull())
+      return nullptr;
+    UNINITIALIZED BufferedStackTrace stack;
+    ReportOutOfMemory(size, &stack);
+  }
+  return allocated;
+}
+
+void __bsan::RustDealloc(void *p) {
+  CHECK(p);
+  BsanThread *t = CurrentThread();
+  if (t) {
+    rust_allocator.Deallocate(t->rust_allocator_cache(), p);
+  } else {
+    SpinMutexLock l(&fallback_rust_mutex);
+    rust_allocator.Deallocate(&fallback_rust_allocator_cache, p);
+  }
+}
+
+uptr __bsan::bsan_mz_size(const void *p) {
   if (!p)
     return 0;
   Metadata *meta = reinterpret_cast<Metadata *>(allocator.GetMetaData(p));
@@ -138,8 +184,6 @@ static uptr GetMallocUsableSize(const void *p) {
     return 0;
   return meta->requested_size;
 }
-
-uptr __bsan::bsan_mz_size(const void *p) { return GetMallocUsableSize(p); }
 
 static void *BsanReallocate(void *old_p, uptr new_size, uptr alignment) {
   Metadata *meta = reinterpret_cast<Metadata *>(allocator.GetMetaData(old_p));

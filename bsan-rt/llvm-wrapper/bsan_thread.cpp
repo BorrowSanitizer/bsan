@@ -165,7 +165,8 @@ void BsanThread::Destroy() {
   if (was_running) {
     if (BsanThread *thread = CurrentThread())
       CHECK_EQ(this, thread);
-    this->malloc_storage().CommitBack();
+    CommitBackShadowedCache(this->allocator_cache());
+    CommitBackRustCache(this->rust_allocator_cache());
     if (common_flags()->use_sigaltstack)
       UnsetAlternateSignalStack(altstack_base_);
     zct.~ZeroCountTable();
