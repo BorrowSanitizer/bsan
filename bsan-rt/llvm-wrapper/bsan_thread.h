@@ -187,9 +187,21 @@ BsanThreadContext *GetThreadContextByTidLocked(u32 tid);
 void LockThreads() SANITIZER_NO_THREAD_SAFETY_ANALYSIS;
 void UnlockThreads() SANITIZER_NO_THREAD_SAFETY_ANALYSIS;
 
+struct ScopedThreadLock {
+  ScopedThreadLock() {
+    LockThreads();
+  }
+  ~ScopedThreadLock() {
+    UnlockThreads();
+  }
+  ScopedThreadLock &operator=(const ScopedThreadLock &) = delete;
+  ScopedThreadLock(const ScopedThreadLock &) = delete;
+};
+
+// To iterate over threads, you need to provide proof that the
+// thread registry has been locked.
 template <typename Fn, typename T>
-inline void ForEachThread(Fn callback, T *arg) {
-  GetThreadRegistry().CheckLocked();
+inline void ForEachThread(ScopedThreadLock &threads, Fn callback, T *arg) {
   // We need an intermediate struct here,
   // because `RunCallbackForEachThreadLocked`
   // requires a non-capturing lambda.

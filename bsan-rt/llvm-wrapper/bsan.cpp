@@ -137,7 +137,7 @@ static void MaybeRequestGC() {
   // thread is already collecting or has just finished, and only a collection
   // that succeeds resets our counter.
   __bsan_visits_since_gc = 0;
-  //global_ctx()->requestGC();
+  // global_ctx()->requestGC();
 }
 
 // Returns the desired length for the current stack trace.

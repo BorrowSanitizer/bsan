@@ -4,7 +4,6 @@
 #include "sanitizer_common/sanitizer_allocator_internal.h"
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_placement_new.h"
-#include "sanitizer_common/sanitizer_stoptheworld.h"
 #include "sanitizer_common/sanitizer_type_traits.h"
 
 using namespace __bsan;
@@ -33,20 +32,16 @@ void GlobalContext::MergeZeroCounts(Snapshot *snap,
   });
 }
 
-void GlobalContext::GCCallback(const SuspendedThreadsList &, void *arg) {
-  // We store all of the GC-relevant state in a "snapshot". This contains
-  // a set of all reachable provenance values, and the number of threads
-  // that were busy during this GC run.
-  Snapshot *snap = static_cast<Snapshot *>(arg);
+void GlobalContext::RunGarbageCollector(Snapshot &snap, ScopedAllocatorLock &alloc, ScopedThreadLock &threads) {
   // The data structures used by the GC require the internal allocator.
   // It's much faster than using the `InternalMmap` vector types
   // provided by `sanitizer_common`, since we have a lot of smaller, short
   // lived allocations. We lock the internal allocator prior to stopping
   // the world, so we need to unlock it here, and record that we have done
   // so, to avoid unlocking it again when we restart the world.
-  snap->lock->UnlockRuntimeAllocators();
+  alloc.UnlockRuntimeAllocators();
 
-  ForEachThread(
+  ForEachThread(threads,
       [](BsanThread *thread, Snapshot *snap) {
         // Collect all of the provenance values that are reachable from each
         // thread.
@@ -54,9 +49,9 @@ void GlobalContext::GCCallback(const SuspendedThreadsList &, void *arg) {
           snap->live.insert(prov);
         }
       },
-      snap);
+      &snap);
 
-  ForEachThread(
+  ForEachThread(threads, 
       [](BsanThread *thread, Snapshot *snap) {
         // Drain the zero-count tables for each thread, as well
         // as the global zero count table. This happens in a separate
@@ -65,13 +60,14 @@ void GlobalContext::GCCallback(const SuspendedThreadsList &, void *arg) {
         // it from a ZCT.
         MergeZeroCounts(snap, thread->zct_);
       },
-      snap);
+      &snap);
 
-  MergeZeroCounts(snap, global_ctx()->global_zct_);
+  MergeZeroCounts(&snap, global_ctx()->global_zct_);
   // Only one thread needs to reach `visits_per_gc` to get us here, so every
   // thread's counter starts over from the collection we are about to perform.
   ForEachThread(
-      [](BsanThread *thread, Snapshot *) { thread->ResetVisitCount(); }, snap);
+      threads,
+      [](BsanThread *thread, Snapshot *) { thread->ResetVisitCount(); }, &snap);
   // Prune all unreachable nodes, destroying
   // allocations that have had their trees fully pruned.
   // At the moment, we wait until after restarting the
@@ -81,7 +77,7 @@ void GlobalContext::GCCallback(const SuspendedThreadsList &, void *arg) {
   // bump allocator used to hand out allocation metadata,
   // so a thread might be in the middle of its critical
   // section during this point.
-  global_ctx()->CollectGarbage(snap);
+  global_ctx()->CollectGarbage(&snap);
 }
 
 void GlobalContext::CollectGarbage(Snapshot *snap) {
@@ -152,11 +148,13 @@ void GlobalContext::requestGC() {
     // then somebody else got here first and already ran the GC.
     uptr current_gen = atomic_load(&gc_gen, memory_order_acquire);
     if (gen == current_gen) {
-      Snapshot snap;
       {
-        ScopedStopTheWorldLock stopped;
-        snap.lock = &stopped;
-        StopTheWorld(GCCallback, &snap);
+        ScopedThreadLock threads;
+        Snapshot snap;
+        {
+          ScopedAllocatorLock allocs;
+          RunGarbageCollector(snap, allocs, threads);
+        }
       }
       atomic_fetch_add(&gc_gen, 1, memory_order_relaxed);
     }
