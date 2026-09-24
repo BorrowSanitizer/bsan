@@ -103,7 +103,6 @@ impl Bridge {
             }
             let ptr = Box::into_raw(Box::new((ub_info, pc)));
             *PENDING_ERROR.get() = ptr;
-            __bsan_had_error = 1;
         }
     }
 
@@ -188,9 +187,6 @@ impl Bridge {
 }
 
 unsafe extern "C" {
-    #[thread_local]
-    pub unsafe static mut __bsan_had_error: usize;
-
     /// Tree-node visits accumulated on this thread since the last GC.
     #[thread_local]
     pub unsafe static mut __bsan_visits_since_gc: usize;
