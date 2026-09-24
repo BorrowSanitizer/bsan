@@ -228,10 +228,7 @@ impl AllocInfo {
 
     /// Reinitializes the metadata for an existing allocation object in place,
     /// preserving its reference count. The previous state is dropped.
-    ///
-    /// # Safety
-    /// `dest` must point to a valid, initialized [`AllocInfo`].
-    unsafe fn new_in(
+    fn new_in(
         dest: NonNull<AllocInfo>,
         base_addr: Size,
         size: Size,
