@@ -23,6 +23,7 @@
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Transforms/Scalar/PlaceSafepoints.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/EscapeEnumerator.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
@@ -51,6 +52,16 @@ static const unsigned kVarArgTLSSizeBytes = 800;
 // The number of provenance values that can
 // be stored within a TLS array for fixed parameters.
 static const unsigned kParamTLSSizeProv = 100;
+
+// BorrowSanitizer's garbage collector requires a set of
+// "safepoints", where threads can be interrupted while the
+// runtime is in a consistent state. We reuse LLVM's existing
+// GC infrastructure to insert these, with the "statepoint-example"
+// safepoint mode. This inserts calls to "gc.safepoint_poll" at
+// function entry, exit, and in the backedges of loops. These
+// functions are replaced by our custom behavior.
+static const char *const kSafepointGCName = "statepoint-example";
+static const char *const kSafepointPollName = "gc.safepoint_poll";
 
 static cl::opt<bool> ClHandleAsmConservative(
     "bsan-asm-conservative",
@@ -276,6 +287,8 @@ public:
   bool instrumentModule(Module &M);
   bool instrumentFunction(Function &F, FunctionAnalysisManager &FAM,
                           const StackSafetyGlobalInfo &SSGI);
+  void enableSafepoints(Module &M);
+  void disableSafepoints(Module &M);
 
 private:
   friend struct VarArgHelperBase;
@@ -284,6 +297,8 @@ private:
   friend struct Provenance;
   friend struct ProvenanceMap;
   friend class BorrowSanitizerVisitor;
+
+  void placeSafepoints(Function &F, FunctionAnalysisManager &FAM);
 
   void initializeCallbacks(Module &M, const TargetLibraryInfo &TLI);
   struct GlobalDescription {
@@ -332,6 +347,10 @@ private:
 
   /// Are the instrumentation callbacks set up?
   bool CallbacksInitialized = false;
+
+  /// The default GC safepoint function (`gc.safepoint_poll`),
+  /// which is replaced by our instrumentation.
+  Function *SafepointPollFn = nullptr;
 
   /// Runtime function for performing a retag
   FunctionCallee BsanFuncRetag;
@@ -993,9 +1012,12 @@ PreservedAnalyses BorrowSanitizerPass::run(Module &M,
   const StackSafetyGlobalInfo &SSGI =
       MAM.getResult<StackSafetyGlobalAnalysis>(M);
 
+  ModuleSanitizer.enableSafepoints(M);
   for (Function &F : M) {
     Modified |= ModuleSanitizer.instrumentFunction(F, FAM, SSGI);
   }
+  ModuleSanitizer.disableSafepoints(M);
+
   if (!Modified)
     return PreservedAnalyses::all();
 
@@ -3260,6 +3282,10 @@ static VarArgHelper *createVarArgHelper(Function &Func, BorrowSanitizer &BS,
 bool BorrowSanitizer::instrumentFunction(Function &F,
                                          FunctionAnalysisManager &FAM,
                                          const StackSafetyGlobalInfo &SSGI) {
+  if (&F == SafepointPollFn) {
+    return false;
+  }
+
   if (F.empty()) {
     return false;
   }
@@ -3284,10 +3310,14 @@ bool BorrowSanitizer::instrumentFunction(Function &F,
     return false;
   }
 
+  // Do this early, to avoid invalidating analysis results.
+  placeSafepoints(F, FAM);
+
   const TargetLibraryInfo &TLI = FAM.getResult<TargetLibraryAnalysis>(F);
   DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
 
   initializeCallbacks(*F.getParent(), TLI);
+
   BorrowSanitizerVisitor Visitor(F, *this, TLI, DT, SSGI);
 
   AttributeMask B;
@@ -3298,4 +3328,30 @@ bool BorrowSanitizer::instrumentFunction(Function &F,
 
   F.addFnAttr(Attribute::DisableSanitizerInstrumentation);
   return true;
+}
+
+void BorrowSanitizer::enableSafepoints(Module &M) {
+  AttributeList AL;
+  AL = AL.addFnAttribute(*C, Attribute::NoUnwind);
+  SafepointPollFn =
+      Function::Create(FunctionType::get(Type::getVoidTy(*C), false),
+                       GlobalValue::InternalLinkage, kSafepointPollName, M);
+  SafepointPollFn->addFnAttr(Attribute::NoUnwind);
+}
+
+void BorrowSanitizer::disableSafepoints(Module &M) {
+  if (SafepointPollFn) {
+    SafepointPollFn->eraseFromParent();
+    SafepointPollFn = nullptr;
+  }
+}
+
+void BorrowSanitizer::placeSafepoints(Function &F,
+                                      FunctionAnalysisManager &FAM) {
+  assert(SafepointPollFn && "`enableSafepoints` has not been called");
+  assert(!F.hasGC() && "function already has a GC strategy");
+  F.setGC(kSafepointGCName);
+  PreservedAnalyses PA = PlaceSafepointsPass().run(F, FAM);
+  F.clearGC();
+  FAM.invalidate(F, PA);
 }
