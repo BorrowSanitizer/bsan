@@ -20,6 +20,7 @@ public:
 // Global state associated with the runtime.
 struct GlobalContext {
 public:
+  GlobalContext() { InitGC(); }
   Mutex &AtExitMutex() { return at_exit_lock_; }
   Vector<AtExitRecord *> &AtExitStack() { return at_exit_stack_; }
 
@@ -31,13 +32,28 @@ public:
   void acquireProvenance(Provenance prov);
   void acquireProvenance(ConcreteProvenanceSet &source);
 
+  void *getGCTriggerPage() { return gc_trigger_page_; }
+
 private:
   friend struct ScopedAllocatorLock;
   Mutex global_zct_lock_;
+
+  // Initializes state associated with the garbage collector.
+  // This includes the membarrier used to synchronize stopping
+  // the world, and the gc trigger page.
+  void InitGC();
+
   // When a thread exits, its zero count table needs to be
   // retained, so that we can clean up any of the provenance
   // values that it acquired in a future garbage collection pass.
   ConcreteProvenanceSet global_zct_;
+
+  // A page allocated at the beginning of the runtime. Each
+  // thread holds a pointer to this page. At every safepoint,
+  // threads will attempt to dereference this page. To start
+  // garbage collection, we protect the page, and then park
+  // each thread within the SIGSEV handler.
+  void *gc_trigger_page_ = nullptr;
 
   // A lock held by the thread that succeeds at invoking
   // the garbage collector. While this lock is held, the
@@ -64,7 +80,8 @@ private:
   // each thread.
   ConcreteProvenanceSet pending_;
 
-  void RunGarbageCollector(Snapshot &snap, ScopedAllocatorLock &alloc, ScopedThreadLock &threads);
+  void RunGarbageCollector(Snapshot &snap, ScopedAllocatorLock &alloc,
+                           ScopedThreadLock &threads);
   // Iterates over every thread's zero-count-table, merging its contents into
   // the set of pending provenance values. We only add values to the pending set
   // if they are not present on any shadow stack. Values that we add to the
@@ -117,8 +134,6 @@ struct ScopedAllocatorLock {
 private:
   bool runtime_alloc_locked_ = true;
 };
-
-
 
 } // namespace __bsan
 #endif

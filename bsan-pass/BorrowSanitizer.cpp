@@ -326,6 +326,9 @@ private:
   /// Thread-local array used to pass the provenance of parameters.
   Value *ParamTLS = nullptr;
 
+  ///  Thread-local pointer to a page used to trigger the garbage collector.
+  Value *GCTriggerTLS = nullptr;
+
   /// Thread-local variable containing the number of provenance values
   /// for variable arguments.
   Value *VAArgOverflowSizeTLS = nullptr;
@@ -725,6 +728,7 @@ void BorrowSanitizer::createUserspaceApi(Module &M,
   VAArgTagTLS = getOrInsertTLSGlobal(M, BSAN("var_arg_tag_tls"), PtrTy);
   VAArgInfoTLS = getOrInsertTLSGlobal(M, BSAN("var_arg_info_tls"), PtrTy);
   ParamTLS = getOrInsertTLSGlobal(M, BSAN("param_tls"), PtrTy);
+  GCTriggerTLS = getOrInsertTLSGlobal(M, BSAN("gc_trigger"), PtrTy);
 
   ProvStackTLS = getOrInsertTLSGlobal(M, BSAN("shadow_stack"), PtrTy);
   BorTagCounter = getOrInsertGlobal(M, BSAN("bor_tag_ctr"), IntptrTy);
@@ -3331,12 +3335,27 @@ bool BorrowSanitizer::instrumentFunction(Function &F,
 }
 
 void BorrowSanitizer::enableSafepoints(Module &M) {
+  GCTriggerTLS = getOrInsertTLSGlobal(M, BSAN("gc_trigger"), PtrTy);
+  // The safepoint function's body is inlined.
+  // everywhere that it is inserted.
   AttributeList AL;
   AL = AL.addFnAttribute(*C, Attribute::NoUnwind);
   SafepointPollFn =
       Function::Create(FunctionType::get(Type::getVoidTy(*C), false),
                        GlobalValue::InternalLinkage, kSafepointPollName, M);
   SafepointPollFn->addFnAttr(Attribute::NoUnwind);
+
+  BasicBlock *Entry = BasicBlock::Create(*C, "entry", SafepointPollFn);
+  IRBuilder<> IRB(Entry);
+  MDNode *NoSanitize = MDNode::get(*C, {});
+  // Every safepoint loads the pointer within the GC trigger TLS
+  // and dereferences it. The pointer's value stays the same, but
+  // the protection status of the pages does not.
+  LoadInst *TriggerPage = IRB.CreateLoad(PtrTy, GCTriggerTLS);
+  TriggerPage->setMetadata(LLVMContext::MD_nosanitize, NoSanitize);
+  LoadInst *Poll = IRB.CreateLoad(IRB.getInt8Ty(), TriggerPage, true);
+  Poll->setMetadata(LLVMContext::MD_nosanitize, NoSanitize);
+  IRB.CreateRetVoid();
 }
 
 void BorrowSanitizer::disableSafepoints(Module &M) {

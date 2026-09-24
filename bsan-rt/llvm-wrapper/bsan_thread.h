@@ -170,6 +170,12 @@ private:
   // the next time that this thread enters instrumented
   // code, it will be paused until the collection finishes.
   atomic_uintptr_t gc_stack_offset_{0};
+
+  // A flag set to indicate that the current thread
+  // has reached a safepoint and is waiting for the
+  // garbage collector to run.
+  atomic_uint32_t at_safepoint_{0};
+
   char start_data_[];
 };
 
@@ -188,12 +194,8 @@ void LockThreads() SANITIZER_NO_THREAD_SAFETY_ANALYSIS;
 void UnlockThreads() SANITIZER_NO_THREAD_SAFETY_ANALYSIS;
 
 struct ScopedThreadLock {
-  ScopedThreadLock() {
-    LockThreads();
-  }
-  ~ScopedThreadLock() {
-    UnlockThreads();
-  }
+  ScopedThreadLock() { LockThreads(); }
+  ~ScopedThreadLock() { UnlockThreads(); }
   ScopedThreadLock &operator=(const ScopedThreadLock &) = delete;
   ScopedThreadLock(const ScopedThreadLock &) = delete;
 };

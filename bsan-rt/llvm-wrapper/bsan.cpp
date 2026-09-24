@@ -77,6 +77,10 @@ THREADLOCAL Provenance __bsan_param_tls[kParamTLSSizeProv];
 SANITIZER_INTERFACE_ATTRIBUTE
 THREADLOCAL Provenance *__bsan_shadow_stack = nullptr;
 
+// A "trigger" for the garbage collector. At every safepoint,
+// a thread will load and dereference this pointer.
+SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__bsan_gc_trigger = nullptr;
+
 // A counter used to create globally-unique "borrow tags"
 // associated with permissions in the tree for an allocation.
 // The values 0-2 are reserved:

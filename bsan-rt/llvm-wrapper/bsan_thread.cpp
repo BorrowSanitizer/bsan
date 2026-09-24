@@ -142,6 +142,8 @@ void BsanThread::Init() {
   shadow_stack_bottom_ = MmapOrDie(shadow_stack_size_, __func__);
   __bsan_shadow_stack =
       (Provenance *)(((uptr)shadow_stack_bottom_) + shadow_stack_size_);
+  __bsan_gc_trigger = global_ctx()->getGCTriggerPage();
+
   // We record the address of the thread-local shadow stack pointer so
   // that the GC can accurately read the initialized contents of the
   // shadow stack when it stops the world.

@@ -10,6 +10,18 @@ using namespace __bsan;
 
 namespace __bsan {
 
+void GlobalContext::InitGC() {
+  auto size = GetPageSizeCached();
+  gc_trigger_page_ = MmapOrDie(size, "gc_trigger");
+}
+
+// A lock that asserts ownership over each
+// thread as the world is stopped.
+struct ScopedGCLock {
+  ScopedGCLock() {}
+  ~ScopedGCLock() {}
+};
+
 void GlobalContext::acquireProvenance(Provenance prov) {
   Lock lock(&global_zct_lock_);
   global_zct_.insert(prov);
@@ -32,7 +44,9 @@ void GlobalContext::MergeZeroCounts(Snapshot *snap,
   });
 }
 
-void GlobalContext::RunGarbageCollector(Snapshot &snap, ScopedAllocatorLock &alloc, ScopedThreadLock &threads) {
+void GlobalContext::RunGarbageCollector(Snapshot &snap,
+                                        ScopedAllocatorLock &alloc,
+                                        ScopedThreadLock &threads) {
   // The data structures used by the GC require the internal allocator.
   // It's much faster than using the `InternalMmap` vector types
   // provided by `sanitizer_common`, since we have a lot of smaller, short
@@ -41,7 +55,8 @@ void GlobalContext::RunGarbageCollector(Snapshot &snap, ScopedAllocatorLock &all
   // so, to avoid unlocking it again when we restart the world.
   alloc.UnlockRuntimeAllocators();
 
-  ForEachThread(threads,
+  ForEachThread(
+      threads,
       [](BsanThread *thread, Snapshot *snap) {
         // Collect all of the provenance values that are reachable from each
         // thread.
@@ -51,7 +66,8 @@ void GlobalContext::RunGarbageCollector(Snapshot &snap, ScopedAllocatorLock &all
       },
       &snap);
 
-  ForEachThread(threads, 
+  ForEachThread(
+      threads,
       [](BsanThread *thread, Snapshot *snap) {
         // Drain the zero-count tables for each thread, as well
         // as the global zero count table. This happens in a separate
