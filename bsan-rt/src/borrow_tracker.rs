@@ -14,7 +14,8 @@ use crate::tree_borrows::tree::LocationState;
 use crate::tree_borrows::{IdempotentForeignAccess, NewPermission, Tree, TreeImpl, VisitCounter};
 use crate::{AllocId, AllocInfo, BorTag, GlobalCtx, Provenance, RetagFlags, RetagInfo};
 
-// A reference to an instance of `AllocInfo`
+// A dereferenceable pointer to an instance of `AllocInfo`. This
+// is essentially a convenient wrapper for `NonNull<AllocInfo>`,
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[repr(transparent)]
 pub struct AllocInfoPtr(NonNull<AllocInfo>);
@@ -22,6 +23,8 @@ pub struct AllocInfoPtr(NonNull<AllocInfo>);
 // A pointer to an instance of `AllocInfo`.
 impl AllocInfoPtr {
     fn state<'b>(self) -> AllocStateGuard<'b> {
+        // The contents of `AllocInfo` are `Send`, `Sync`, and/or and
+        // interior mutable, such that it can always be borrowed here.
         let info: &'b AllocInfo = unsafe { self.0.as_ref() };
         AllocStateGuard(info.state.lock())
     }
@@ -41,10 +44,20 @@ impl From<NonNull<AllocInfo>> for AllocInfoPtr {
     }
 }
 
+/// The state associated with an allocation.
+/// This is specific to its lifetime. Deallocating
+/// an allocation clears its state, returning it to
+/// a default "invalid" value.
 #[derive(Debug)]
 pub struct AllocState {
+    /// A unique identifier for this allocation, or
+    /// zero if it has been deallocated.
     pub alloc_id: AllocId,
+    /// The base address of this allocation, or zero
+    /// if it has been deallocated.
     pub base_addr: Size,
+    /// The tree of permissions associated with this
+    /// allocation. This is set to `None` on deallocation.
     tree: Option<TreeImpl>,
 }
 
@@ -57,36 +70,55 @@ impl AllocState {
         }
     }
 
+    /// Returns an immutable reference to the allocation's tree
+    /// without checking to see if the tree still exists.
+    ///
+    /// # Safety
+    /// This can only be called when the `AllocState` is locked,
+    /// after having validated that the allocation's tree is
+    /// initialized.
     pub unsafe fn tree_unchecked(&self) -> &TreeImpl {
         debug_assert!(self.tree.is_some());
         unsafe { self.tree.as_ref().unwrap_unchecked() }
     }
 
+    /// Returns a mutable reference to the allocation's tree
+    /// without checking to see if the tree still exists.
+    ///
+    /// # Safety
+    /// This can only be called when the `AllocState` is locked,
+    /// after having validated that the allocation's tree is
+    /// initialized.
     pub unsafe fn tree_unchecked_mut(&mut self) -> &mut TreeImpl {
         debug_assert!(self.tree.is_some());
         unsafe { self.tree.as_mut().unwrap_unchecked() }
     }
 
+    /// Returns an immutable reference to the allocation's tree.
     pub fn tree_opt(&self) -> Option<&TreeImpl> {
         self.tree.as_ref()
     }
 
+    /// Returns a mutable reference to the allocation's tree.
     pub fn tree_opt_mut(&mut self) -> Option<&mut TreeImpl> {
         self.tree.as_mut()
     }
 
+    /// Removes the allocations tree, replacing it with `None` to
+    /// indicate deallocation.
     fn take_tree(&mut self) -> Option<TreeImpl> {
         self.tree.take()
     }
 }
 
+/// By default, an `AllocState` is invalid and will not permit any access.
 impl Default for AllocState {
     fn default() -> Self {
         Self { alloc_id: AllocId::ZERO, base_addr: Size::ZERO, tree: None }
     }
 }
 
-// A guard over the `Tree` for an allocation.
+// A guard over the `AllocState` for an allocation.
 #[derive(Debug)]
 struct AllocStateGuard<'b>(MutexGuard<'b, AllocState>);
 
@@ -103,20 +135,37 @@ impl DerefMut for AllocStateGuard<'_> {
     }
 }
 
+/// A validated "handle" for an allocation metadata object,
+/// which can perform the effects of an access for a particular
+/// range of memory.
 #[derive(Debug)]
 pub struct BorrowTracker<'a> {
+    /// The borrow tag of the permission used to validate the access.
     bor_tag: BorTag,
+    /// A pointer to the allocation metadata object associated with the
+    /// provenance used for this access.
     alloc_info: AllocInfoPtr,
+    /// The range of the access relative to the base of the allocation.
     range: AllocRange,
+    /// The state of the allocation, which must remain locked for the
+    /// duration of the access.
     state: AllocStateGuard<'a>,
 }
 
 impl<'b> BorrowTracker<'b> {
+    /// Returns an immutable reference to the tree for the allocation being accessed.
     fn tree(&self) -> &TreeImpl {
+        // Creating a `BorrowTracker` requires validating that the tree holds an
+        // initialized value. This allows us to skip checking for `None` on subsequent
+        // accesses.
         unsafe { self.state.tree_unchecked() }
     }
 
+    /// Returns a mutable reference to the tree for the allocation being accessed.
     fn tree_mut(&mut self) -> &mut TreeImpl {
+        // Creating a `BorrowTracker` requires validating that the tree holds an
+        // initialized value. This allows us to skip checking for `None` on subsequent
+        // accesses.
         unsafe { self.state.tree_unchecked_mut() }
     }
 
@@ -168,11 +217,7 @@ impl<'b> BorrowTracker<'b> {
         }
     }
 
-    /// # Safety
-    /// The caller must provide concrete provenance whose allocation metadata is
-    /// valid and live, and `start..start + access_size` must be in-bounds.
     pub unsafe fn for_access_unchecked<T, F>(
-        _: &GlobalCtx,
         prov: Provenance,
         start: Size,
         size: Size,
@@ -191,8 +236,6 @@ impl<'b> BorrowTracker<'b> {
         f(Self { bor_tag: prov.bor_tag, alloc_info, range, state })
     }
 
-    /// # Safety
-    /// Takes in provenance pointer that is checked via debug_asserts
     pub fn for_access<T, F>(
         global_ctx: &GlobalCtx,
         prov: Provenance,
