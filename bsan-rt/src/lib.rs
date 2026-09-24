@@ -93,12 +93,15 @@ macro_rules! debug_bsan {
     };
 }
 
+/// A global atomic counter used to generate unique allocation IDs.
+/// The count begins at 1, to reserve 0 as a default value for
+/// uninitialized allocations.
 #[unsafe(no_mangle)]
 pub static __BSAN_ALLOC_ID_CTR: AtomicUsize = AtomicUsize::new(1);
 
 /// Unique identifier for an allocation
 #[repr(transparent)]
-#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Copy, Clone, Hash, PartialEq, Eq)]
 pub struct AllocId(usize);
 
 impl AllocId {
@@ -131,27 +134,41 @@ impl fmt::Display for AllocId {
     }
 }
 
+// A global atomic counter for generating borrow tags, which
+// uniquely identify a node within a tree. This needs to be
+// defined within the LLVM core, because it is directly incremented
+// by the runtime to create new identifiers.
 unsafe extern "C" {
     #[link_name = "__bsan_bor_tag_ctr"]
-    unsafe static __BSAN_BOR_TAG_CTR: AtomicUsize;
+    unsafe static BOR_TAG_CTR: AtomicUsize;
 }
 
-/// Unique identifier for a node within the tree
+/// Globally unique identifier for a node within a tree.
 #[repr(transparent)]
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BorTag(usize);
 
 impl BorTag {
+    /// Permits any access.
     const OMNIVALID: BorTag = BorTag(0);
+    /// Does not permit any access.
     const INVALID: BorTag = BorTag(1);
+    /// Optimistically permits accesses through
+    /// allocations that have been "exposed" to
+    /// pointer to integer conversion.
     const WILDCARD: BorTag = BorTag(2);
 
+    /// Returns `true` if the borrow tag corresponds
+    /// to a node within a tree, and is not one of the
+    /// values dedicated to omnivalid, invalid, or
+    /// wildcard provenance.
     #[inline]
     #[must_use]
     pub fn is_concrete(self) -> bool {
         self > Self::WILDCARD
     }
 
+    /// Returns the integer value of the borrow tag.
     #[inline]
     #[must_use]
     pub fn get(&self) -> usize {
@@ -161,7 +178,7 @@ impl BorTag {
 
 impl Default for BorTag {
     fn default() -> Self {
-        BorTag(unsafe { __BSAN_BOR_TAG_CTR.fetch_add(1, Ordering::Relaxed) })
+        BorTag(unsafe { BOR_TAG_CTR.fetch_add(1, Ordering::Relaxed) })
     }
 }
 
@@ -171,24 +188,37 @@ impl fmt::Debug for BorTag {
     }
 }
 
+/// Metadata associated with a pointer.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Provenance {
+    /// An identifier for the node in the tree
+    /// containing the access permission for this pointer.
     bor_tag: BorTag,
+    /// The allocation that this pointer is permitted to access.
     alloc_info: *mut AllocInfo,
 }
 
+/// Metadata associated with an allocation.
 #[repr(C)]
 pub struct AllocInfo {
+    /// The number of provenance values stored within shadow
+    /// memory that have a reference to this allocation.
     rc: RefCount,
+    /// The state of this allocation: its tree, size, base
+    /// address, and other information specific to its lifetime.
     state: Mutex<AllocState>,
 }
 
 impl AllocInfo {
+    /// Returns invalid allocation metadata. Any attempt to validate
+    /// an access using this metadata will throw an error for undefined
+    /// behavior.
     fn invalid() -> Self {
         AllocInfo { rc: RefCount::new(), state: Mutex::default() }
     }
 
+    /// Returns a valid metadata for a new allocation.
     fn new(base_addr: Size, size: Size, root_tag: BorTag, span: Span) -> Self {
         AllocInfo {
             rc: RefCount::new(),
@@ -196,13 +226,9 @@ impl AllocInfo {
         }
     }
 
-    unsafe fn new_in(
-        dest: NonNull<AllocInfo>,
-        base_addr: Size,
-        size: Size,
-        root_tag: BorTag,
-        span: Span,
-    ) {
+    /// Initializes metadata for a new allocation within an existing object,
+    /// preserving the reference count.
+    fn new_in(dest: NonNull<AllocInfo>, base_addr: Size, size: Size, root_tag: BorTag, span: Span) {
         unsafe {
             let mut init = Self::new(base_addr, size, root_tag, span);
             init.rc = (*dest.as_ptr()).rc.clone();
@@ -231,10 +257,11 @@ pub(crate) enum AllocInfoSummary {
     Valid { alloc_id: AllocId, base_addr: Size, size: Size },
 }
 
-/// Initializes the global state of the runtime library.
-/// The safety of this library is entirely dependent on this
-/// function having been executed. We assume the global invariant that
-/// no other API functions will be called prior to that point.
+/// Initializes the global state of the runtime.
+///
+/// # Safety
+/// This function must be called once when the runtime is initialized.
+/// Every other API function depends on this function having been called.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_internal_init(flags: NonNull<SharedSanitizerFlags>) {
     unsafe {
@@ -242,17 +269,9 @@ unsafe extern "C" fn __bsan_internal_init(flags: NonNull<SharedSanitizerFlags>) 
     }
 }
 
-/// Deinitializes the global state of the runtime library.
-/// We assume the global invariant that no other API functions
-/// will be called after this function has executed.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_internal_deinit() {
-    unsafe {
-        deinit_global_ctx();
-    }
-}
-
 bitflags::bitflags! {
+    /// Flags that determine the kind of permission created by a retag.
+    /// This must be kept in sync with the definition in `rustc_codegen_ssa`.
     #[repr(C)]
     #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
     pub struct RetagFlags: u8 {
@@ -267,15 +286,29 @@ bitflags::bitflags! {
     }
 }
 
+/// The size and kind of permission created by a retag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RetagInfo<'a> {
+    /// The initial range of memory for the permission.
     pub size: Size,
+    /// The kind of permission.
     pub flags: RetagFlags,
+    /// The subranges that should be treated as interior mutable.
     pub im_layout: Option<&'a [[Size; 2]]>,
+    /// The subranges that should be treated as `UnsafePinned`
     pub pin_layout: Option<&'a [[Size; 2]]>,
 }
 
-/// Creates a new borrow tag for the given provenance object.
+/// Creates a new permission within a tree.
+/// Retagging is the central mechanism of Tree Borrows. Every
+/// operation that creates or moves a reference requires a retag
+/// to create a new permission. This function receives a provenance
+/// value and retags it to create a new provenance value with the
+/// same allocation metadata object, but a different borrow tag. The
+/// new value is written to the provided destination. If the provenance
+/// value is omnivalid, or the semantics of the retag are a no-op, then
+/// the input provenance will be written to the output destination,
+/// unchanged. Returns `true` if the call triggered undefined behavior.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_retag_impl(
     ptr: *mut c_void,
@@ -290,7 +323,7 @@ unsafe extern "C" fn __bsan_retag_impl(
     dest: NonNull<Provenance>,
     pc: Span,
     checked: bool,
-) {
+) -> bool {
     debug_bsan!("retag", object_addr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
@@ -306,7 +339,7 @@ unsafe extern "C" fn __bsan_retag_impl(
     };
 
     let offset = Size::from_addr(ptr);
-    let prov = if checked {
+    let retag_res = if checked {
         unsafe {
             BorrowTracker::for_access_unchecked(ctx, prov, offset, size, |mut bt| {
                 bt.retag(ctx, retag_info, pc).map(Some)
@@ -316,18 +349,26 @@ unsafe extern "C" fn __bsan_retag_impl(
         BorrowTracker::for_access(ctx, prov, offset, Some(size), |mut bt| {
             bt.retag(ctx, retag_info, pc).map(Some)
         })
-    }
-    .map_or_else(
-        |err| {
-            ctx.handle_error(err, pc);
-            prov
-        },
-        |opt| opt.unwrap_or(prov),
-    );
+    };
 
+    let prov = match retag_res {
+        // The retag succeeded, creating a new provenance value.
+        Ok(Some(prov)) => prov,
+        // The retag was a no-op, write the input provenance unchanged.
+        Ok(None) => prov,
+        // This retag was UB. Prepare the contents of the error message and
+        // return true, indicating to the caller that there was an error.
+        Err(err) => {
+            ctx.handle_error(err, pc);
+            return true;
+        }
+    };
     unsafe { dest.write(prov) };
+    false
 }
 
+/// Removes a protector for the permission specified by the provenance value. This will
+/// never trigger undefined behavior.
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_protector_end_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo, pc: Span) {
     let ctx = unsafe { global_ctx() };
@@ -337,6 +378,8 @@ extern "C" fn __bsan_protector_end_impl(bor_tag: BorTag, alloc_info: *mut AllocI
     });
 }
 
+/// Applies the effects of a read access for the given size, base address, and provenance.
+/// Returns `true` if the access was undefined behavior,
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_read_impl(
     ptr: *mut c_void,
@@ -345,11 +388,11 @@ unsafe extern "C" fn __bsan_read_impl(
     alloc_info: *mut AllocInfo,
     pc: Span,
     checked: bool,
-) {
+) -> bool {
     debug_bsan!("read", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-    if checked {
+    let acc_res = if checked {
         unsafe {
             BorrowTracker::for_access_unchecked(
                 ctx,
@@ -363,10 +406,17 @@ unsafe extern "C" fn __bsan_read_impl(
         BorrowTracker::for_access(ctx, prov, Size::from_addr(ptr), Some(access_size), |mut bt| {
             bt.access(ctx, AccessKind::Read, pc)
         })
+    };
+    if let Err(err) = acc_res {
+        ctx.handle_error(err, pc);
+        true
+    } else {
+        false
     }
-    .unwrap_or_else(|err| ctx.handle_error(err, pc));
 }
 
+/// Applies the effects of a read access for the given size, base address, and provenance.
+/// Returns `true` if the access was undefined behavior,
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_write_impl(
     ptr: *mut c_void,
@@ -375,12 +425,12 @@ unsafe extern "C" fn __bsan_write_impl(
     alloc_info: *mut AllocInfo,
     pc: Span,
     checked: bool,
-) {
+) -> bool {
     debug_bsan!("write", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let offset = Size::from_addr(ptr);
     let prov = Provenance { bor_tag, alloc_info };
-    if checked {
+    let acc_res = if checked {
         unsafe {
             BorrowTracker::for_access_unchecked(ctx, prov, offset, access_size, |mut bt| {
                 bt.access(ctx, AccessKind::Write, pc)
@@ -390,11 +440,16 @@ unsafe extern "C" fn __bsan_write_impl(
         BorrowTracker::for_access(ctx, prov, offset, Some(access_size), |mut bt| {
             bt.access(ctx, AccessKind::Write, pc)
         })
+    };
+    if let Err(err) = acc_res {
+        ctx.handle_error(err, pc);
+        true
+    } else {
+        false
     }
-    .unwrap_or_else(|err| ctx.handle_error(err, pc));
 }
 
-// Registers a heap allocation of size `size`, storing its provenance in the return pointer.
+// Creates a new metadata object for an allocation of the given size and base address.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_alloc_impl(
     base_addr: *mut c_void,
@@ -413,7 +468,8 @@ unsafe extern "C" fn __bsan_alloc_impl(
     })
 }
 
-/// Deregisters a heap allocation
+/// Applies the effects of a deallocation for the given base address and provenance.
+/// Returns `true` if the access was undefined behavior.
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_dealloc(
     ptr: *mut c_void,
@@ -421,31 +477,22 @@ extern "C" fn __bsan_dealloc(
     alloc_info: *mut AllocInfo,
     pc: Span,
     checked: bool,
-) {
+) -> bool {
     debug_bsan!("dealloc", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let offset = Size::from_addr(ptr);
     let prov: Provenance = Provenance { bor_tag, alloc_info };
-    if checked {
+    let acc_res = if checked {
         BorrowTracker::for_alloc(prov, |bt| bt.dealloc(ctx, pc))
     } else {
         BorrowTracker::for_access(ctx, prov, offset, None, |bt| bt.dealloc(ctx, pc))
+    };
+    if let Err(err) = acc_res {
+        ctx.handle_error(err, pc);
+        true
+    } else {
+        false
     }
-    .unwrap_or_else(|err| ctx.handle_error(err, pc));
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_dealloc_stack_impl(
-    bor_tag: BorTag,
-    alloc_info: *mut AllocInfo,
-    span: Span,
-) {
-    debug_bsan!("dealloc", ptr, bor_tag, alloc_info);
-    let ctx = unsafe { global_ctx() };
-    let prov: Provenance = Provenance { bor_tag, alloc_info };
-    BorrowTracker::for_alloc_weak(prov, |bt| {
-        let _ = bt.dealloc(ctx, span);
-    });
 }
 
 /// Increments the reference count associated with a provenance value,
@@ -470,7 +517,6 @@ unsafe extern "C" fn __bsan_rc_dec_impl(bor_tag: BorTag, alloc_info: *mut AllocI
     BorrowTracker::decrement(prov)
 }
 
-/// Reserves a stack slot for allocation metadata.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_reserve_stack_slot_impl() -> NonNull<AllocInfo> {
     unsafe { global_ctx().create_alloc_info(AllocInfo::invalid()) }
@@ -481,7 +527,8 @@ unsafe extern "C" fn __bsan_destroy_stack_slot_impl(slot: NonNull<AllocInfo>) {
     unsafe { global_ctx().destroy_alloc_info(slot) };
 }
 
-/// Initializes stack allocation metadata in-place.
+/// Initializes stack allocation metadata in-place, invalidating the
+/// provenance associated with this allocation in a previous lifetime.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_alloc_stack_impl(
     base_addr: *mut c_void,
@@ -494,8 +541,25 @@ unsafe extern "C" fn __bsan_alloc_stack_impl(
     let global_ctx = unsafe { global_ctx() };
     let start = Size::from_addr(base_addr);
     let range = AllocRange { start, size };
-    global_ctx.removing_exposed_provenance(range, false, || unsafe {
+    global_ctx.removing_exposed_provenance(range, false, || {
         AllocInfo::new_in(alloc_info, start, size, bor_tag, pc);
+    });
+}
+
+/// Applies the effects of a deallocation to the given base address and provenance.
+/// Used exclusively for stack allocations. If the allocation has already been
+/// deallocated then this is a no-op, following LLVM's lifetime.start semantics.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __bsan_dealloc_stack_impl(
+    bor_tag: BorTag,
+    alloc_info: *mut AllocInfo,
+    span: Span,
+) {
+    debug_bsan!("dealloc", ptr, bor_tag, alloc_info);
+    let ctx = unsafe { global_ctx() };
+    let prov: Provenance = Provenance { bor_tag, alloc_info };
+    BorrowTracker::for_alloc_weak(prov, |bt| {
+        let _ = bt.dealloc(ctx, span);
     });
 }
 

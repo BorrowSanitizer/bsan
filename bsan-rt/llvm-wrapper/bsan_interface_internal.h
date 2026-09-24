@@ -41,7 +41,7 @@ SANITIZER_WEAK_ATTRIBUTE
 AllocInfo *__bsan_alloc(void *base_addr, uptr size, BorTag bor_tag, Span pc);
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info, Span pc,
+bool __bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info, Span pc,
                     bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE

@@ -11,9 +11,7 @@ use crate::tree_borrows::data_structures::{AccessType, DedupRangeMap};
 use crate::tree_borrows::diagnostics::AccessCause;
 use crate::tree_borrows::perms::{AccessKind, Permission};
 use crate::tree_borrows::tree::LocationState;
-use crate::tree_borrows::{IdempotentForeignAccess, NewPermission, VisitCounter,
-};
-use crate::tree_borrows::{Tree, TreeImpl};
+use crate::tree_borrows::{IdempotentForeignAccess, NewPermission, Tree, TreeImpl, VisitCounter};
 use crate::{AllocId, AllocInfo, BorTag, GlobalCtx, Provenance, RetagFlags, RetagInfo};
 
 // A reference to an instance of `AllocInfo`
