@@ -156,7 +156,7 @@ void BsanThread::Init() {
 
 void BsanThread::enterSafeMode(uptr stack) {}
 
-uptr BsanThread::exitSafeMode() { return 0; }
+void BsanThread::exitSafeMode() {}
 
 bool BsanThread::isInSafeMode() { return true; }
 
