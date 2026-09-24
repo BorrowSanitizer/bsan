@@ -350,7 +350,7 @@ unsafe extern "C" fn __bsan_retag_impl(
     let offset = Size::from_addr(ptr);
     let retag_res = if checked {
         unsafe {
-            BorrowTracker::for_access_unchecked(ctx, prov, offset, size, |mut bt| {
+            BorrowTracker::for_access_unchecked(prov, offset, size, |mut bt| {
                 bt.retag(ctx, retag_info, pc).map(Some)
             })
         }
@@ -404,7 +404,6 @@ unsafe extern "C" fn __bsan_read_impl(
     let acc_res = if checked {
         unsafe {
             BorrowTracker::for_access_unchecked(
-                ctx,
                 prov,
                 Size::from_addr(ptr),
                 access_size,
@@ -441,7 +440,7 @@ unsafe extern "C" fn __bsan_write_impl(
     let prov = Provenance { bor_tag, alloc_info };
     let acc_res = if checked {
         unsafe {
-            BorrowTracker::for_access_unchecked(ctx, prov, offset, access_size, |mut bt| {
+            BorrowTracker::for_access_unchecked(prov, offset, access_size, |mut bt| {
                 bt.access(ctx, AccessKind::Write, pc)
             })
         }
