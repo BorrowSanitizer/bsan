@@ -15,13 +15,6 @@ void GlobalContext::InitGC() {
   gc_trigger_page_ = MmapOrDie(size, "gc_trigger");
 }
 
-// A lock that asserts ownership over each
-// thread as the world is stopped.
-struct ScopedGCLock {
-  ScopedGCLock() {}
-  ~ScopedGCLock() {}
-};
-
 void GlobalContext::acquireProvenance(Provenance prov) {
   Lock lock(&global_zct_lock_);
   global_zct_.insert(prov);
