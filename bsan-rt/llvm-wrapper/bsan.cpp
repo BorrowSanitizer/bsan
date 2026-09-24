@@ -77,11 +77,6 @@ THREADLOCAL Provenance __bsan_param_tls[kParamTLSSizeProv];
 SANITIZER_INTERFACE_ATTRIBUTE
 THREADLOCAL Provenance *__bsan_shadow_stack = nullptr;
 
-// A flag set by the Rust "core" runtime to indicate to the LLVM
-// wrapper that an error has occurred.
-SANITIZER_INTERFACE_ATTRIBUTE
-THREADLOCAL uptr __bsan_had_error = 0;
-
 // A counter used to create globally-unique "borrow tags"
 // associated with permissions in the tree for an allocation.
 // The values 0-2 are reserved:
@@ -503,7 +498,7 @@ void __bsan_free_buffer(char *buf, uptr size) {
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_retag_impl(void *object_addr, uptr access_size, u8 flags,
+bool __bsan_retag_impl(void *object_addr, uptr access_size, u8 flags,
                        const uptr im_data[2], uptr im_len,
                        const uptr pin_data[2], uptr pin_len, BorTag bor_tag,
                        Block *alloc_info, void *dest, Span pc, bool checked);
@@ -517,10 +512,10 @@ void __bsan_retag(void *object_addr, uptr access_size, u8 flags,
     GET_SPAN;
     InterceptorBarrier barrier;
     Provenance prov;
-    __bsan_retag_impl(object_addr, access_size, flags, im_data, im_len,
-                      pin_data, pin_len, bor_tag, alloc_info, &prov, span,
-                      checked);
-    HANDLE_ERROR;
+    bool had_error = __bsan_retag_impl(object_addr, access_size, flags, im_data,
+                                       im_len, pin_data, pin_len, bor_tag,
+                                       alloc_info, &prov, span, checked);
+    HANDLE_ERROR(had_error);
     *(Provenance *)(dest) = prov;
     // We can only acquire provenance *after* we have rooted it to the
     // shadow stack. Otherwise, the GC could clean it up before we have
@@ -531,7 +526,7 @@ void __bsan_retag(void *object_addr, uptr access_size, u8 flags,
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_read_impl(void *ptr, uptr access_size, BorTag bor_tag,
+bool __bsan_read_impl(void *ptr, uptr access_size, BorTag bor_tag,
                       Block *alloc_info, Span pc, bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE
@@ -540,13 +535,14 @@ void __bsan_read(void *ptr, uptr access_size, BorTag bor_tag, Block *alloc_info,
   if (__bsan_read_impl) {
     GET_SPAN;
     InterceptorBarrier barrier;
-    __bsan_read_impl(ptr, access_size, bor_tag, alloc_info, span, checked);
-    HANDLE_ERROR;
+    bool had_error =
+        __bsan_read_impl(ptr, access_size, bor_tag, alloc_info, span, checked);
+    HANDLE_ERROR(had_error);
   }
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_write_impl(void *ptr, uptr access_size, BorTag bor_tag,
+bool __bsan_write_impl(void *ptr, uptr access_size, BorTag bor_tag,
                        Block *alloc_info, Span pc, bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE
@@ -555,8 +551,9 @@ void __bsan_write(void *ptr, uptr access_size, BorTag bor_tag,
   if (__bsan_write_impl) {
     GET_SPAN;
     InterceptorBarrier barrier;
-    __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, span, checked);
-    HANDLE_ERROR;
+    bool had_error =
+        __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, span, checked);
+    HANDLE_ERROR(had_error);
   }
 }
 
@@ -600,9 +597,11 @@ Block *__bsan_reserve_stack_slot() {
   return BLOCK_PTR(CurrentThread()->AllocBlock());
 }
 
-SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE void
+SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE bool
 __bsan_dealloc(void *ptr, BorTag bor_tag, Block *alloc_info, Span pc,
-               bool checked) {}
+               bool checked) {
+                  return false;
+               }
 
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_alloc_stack_impl(void *base_addr, uptr size, BorTag bor_tag,
@@ -615,12 +614,11 @@ void __bsan_alloc_stack(void *base_addr, uptr size, BorTag bor_tag,
     GET_SPAN;
     InterceptorBarrier barrier;
     __bsan_alloc_stack_impl(base_addr, size, bor_tag, alloc_info, span);
-    HANDLE_ERROR;
   }
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_dealloc_stack_impl(BorTag bor_tag, Block *alloc_info, Span pc);
+bool __bsan_dealloc_stack_impl(BorTag bor_tag, Block *alloc_info, Span pc);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_dealloc_stack(void *ptr, BorTag bor_tag, Block *alloc_info) {
@@ -628,7 +626,6 @@ void __bsan_dealloc_stack(void *ptr, BorTag bor_tag, Block *alloc_info) {
     GET_SPAN;
     InterceptorBarrier barrier;
     __bsan_dealloc_stack_impl(bor_tag, alloc_info, span);
-    HANDLE_ERROR;
   }
 }
 

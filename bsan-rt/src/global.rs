@@ -205,6 +205,7 @@ pub unsafe fn init_global_ctx(flags: NonNull<SharedSanitizerFlags>) {
 /// It is marked as `unsafe`, since all other API functions except for `bsan_init` rely
 /// on the assumption that this function has not been called yet.
 #[inline]
+#[allow(unused)]
 pub unsafe fn deinit_global_ctx() {
     unsafe { drop(ptr::replace(GLOBAL_CTX.0.get(), MaybeUninit::uninit()).assume_init()) };
 }

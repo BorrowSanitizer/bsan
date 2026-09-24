@@ -38,7 +38,7 @@ SANITIZER_INTERFACE_ATTRIBUTE
 uptr __bsan_read_file(const char *path, char **file_buf, uptr *file_buf_len);
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_dealloc(void *ptr, BorTag bor_tag, Block *alloc_info, Span pc,
+bool __bsan_dealloc(void *ptr, BorTag bor_tag, Block *alloc_info, Span pc,
                     bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE
