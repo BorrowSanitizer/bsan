@@ -228,13 +228,7 @@ impl AllocInfo {
 
     /// Reinitializes the metadata for an existing allocation object in place,
     /// preserving its reference count. The previous state is dropped.
-    fn new_in(
-        dest: NonNull<AllocInfo>,
-        base_addr: Size,
-        size: Size,
-        root_tag: BorTag,
-        span: Span,
-    ) {
+    fn new_in(dest: NonNull<AllocInfo>, base_addr: Size, size: Size, root_tag: BorTag, span: Span) {
         let info = unsafe { dest.as_ref() };
         let new_state = AllocState::new(root_tag, base_addr, size, span);
         let old_state = mem::replace(&mut *info.state.lock(), new_state);
