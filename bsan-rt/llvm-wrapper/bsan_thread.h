@@ -118,6 +118,10 @@ public:
   uptr os_id;
   void acquireProvenance(Provenance prov) { zct_.insert(prov); }
 
+  void enterSafeMode(uptr stack);
+  void exitSafeMode();
+  bool isInSafeMode();
+
 private:
   friend struct BsanThreadContext;
   friend struct GlobalContext;
@@ -170,11 +174,6 @@ private:
   // the next time that this thread enters instrumented
   // code, it will be paused until the collection finishes.
   atomic_uintptr_t gc_stack_offset_{0};
-
-  // A flag set to indicate that the current thread
-  // has reached a safepoint and is waiting for the
-  // garbage collector to run.
-  atomic_uint32_t at_safepoint_{0};
 
   char start_data_[];
 };

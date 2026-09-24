@@ -355,6 +355,14 @@ private:
   /// which is replaced by our instrumentation.
   Function *SafepointPollFn = nullptr;
 
+  /// Runtime function to mark the current thread as "gc-safe"
+  /// before returning into uninstrumented code.
+  FunctionCallee BsanFuncEnterGCSafe;
+
+  /// Runtime function to mark the current thread as "gc-unsafe"
+  /// entering the current, instrumented function.
+  FunctionCallee BsanFuncEnterGCUnsafe;
+
   /// Runtime function for performing a retag
   FunctionCallee BsanFuncRetag;
 
@@ -383,8 +391,8 @@ private:
   /// the return value from a function call.
   FunctionCallee BsanFuncValidateRetval;
 
-  /// Runtime function for validating the section of the shadow stack containing
-  /// a function's arguments.
+  /// Runtime function for validating the parameter provenance array
+  /// on entry to a function that may be called from uninstrumented code.
   FunctionCallee BsanFuncValidateParams;
 
   /// Runtime replacement for `memset` that also clears shadow memory.
@@ -707,6 +715,12 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   BsanFuncExposeProv = M.getOrInsertFunction(BSAN("expose_prov"), AL,
                                              IRB.getVoidTy(), IntptrTy, PtrTy);
+
+  BsanFuncEnterGCUnsafe =
+      M.getOrInsertFunction(BSAN("enter_gc_unsafe"), AL, BoolTy);
+
+  BsanFuncEnterGCSafe =
+      M.getOrInsertFunction(BSAN("enter_gc_safe"), AL, IRB.getVoidTy(), BoolTy);
 
   EHPersonality Pers = getDefaultEHPersonality(TargetTriple);
   DefaultPersonalityFn =
@@ -1412,6 +1426,14 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // is the insertion point for the checks guarding its own access.
   SmallVector<MemIntrinsic *, 4> ReplacedMemIntrinsics;
 
+  // When we enter a function that may be called while the thread is
+  // "gc-safe", we need to tell the GC that we are now "gc-unsafe". We do this
+  // by calling `__bsan_exit_uninst` in the prologue, which returns a flag
+  // indicating whether the thread was "gc-safe". We pass this flag to
+  // `__bsan_enter_uninst` on every exit from the function, to restore the
+  // previous state.
+  Value *GCEnterUninstFlag = nullptr;
+
 public:
   BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
                          const TargetLibraryInfo &TLI, DominatorTree &DT,
@@ -1739,6 +1761,12 @@ private:
         TopIRB.CreateIntrinsic(Intrinsic::donothing, {}));
     IRBuilder<> EntryIRB(FnPrologueEnd);
 
+    bool MaybeCalledFromUninst = needsBoundaryValidation(&F);
+
+    if (MaybeCalledFromUninst) {
+      GCEnterUninstFlag = EntryIRB.CreateCall(BS.BsanFuncEnterGCUnsafe, {});
+    }
+
     // We need to compute the total number of provenance values that
     // we receive from the caller before we can load them, which is
     // necessary for boundary validation. We can only load a provenance
@@ -1746,7 +1774,6 @@ private:
     // if we had an uninstrumented caller.
     Value *NumParamProv = ConstantInt::get(BS.IntptrTy, 0);
 
-    bool Validation = needsBoundaryValidation(&F);
     // Iterate over each argument to compute how many provenance slots
     // we need.
     SmallVector<ByValArgInfo> ByValArgs;
@@ -1775,8 +1802,8 @@ private:
         MaybeAlign ParamAlign = Arg.getParamAlign();
         Info.Alignment = ParamAlign.value_or(BS.DL->getABITypeAlign(Ty));
 
-        for (auto &Desc :
-             BS.getProvenanceLayout(EntryIRB, Ty, /*ClearGaps=*/Validation)) {
+        for (auto &Desc : BS.getProvenanceLayout(
+                 EntryIRB, Ty, /*ClearGaps=*/MaybeCalledFromUninst)) {
           Info.Fields.push_back({NumParamProv, Desc});
           Value *NumProv = EntryIRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
           NumParamProv = EntryIRB.CreateAdd(NumParamProv, NumProv);
@@ -1784,7 +1811,7 @@ private:
         ByValArgs.push_back(Info);
       } else {
         SmallVector<ProvenanceField> ProvDesc = BS.getProvenanceLayout(
-            EntryIRB, Arg.getType(), /*ClearGaps=*/Validation);
+            EntryIRB, Arg.getType(), /*ClearGaps=*/MaybeCalledFromUninst);
         for (auto &Desc : ProvDesc) {
           ArgumentProvenance[&Arg].push_back({NumParamProv, Desc.Elems});
           Value *NumProv = EntryIRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
@@ -1803,7 +1830,7 @@ private:
     // our boundary marker matches the current function's address. If not,
     // we zero-out all of the parameter shadow stack slots, giving them
     // omnivalid provenance.
-    if (needsBoundaryValidation(&F)) {
+    if (MaybeCalledFromUninst) {
       if (!BS.shouldTrustFunction(TLI, &F)) {
         uint64_t VarArgBytes = 0;
         if (F.isVarArg()) {
@@ -1994,7 +2021,7 @@ private:
     // First, we calculate where each fixed parameter's provenance is stored.
     Value *NumParamProv = ConstantInt::get(BS.IntptrTy, 0);
 
-    bool Clear = needsBoundaryValidation(Callee);
+    bool MaybeUninstrumented = needsBoundaryValidation(Callee);
     SmallVector<std::pair<Value *, Provenance>> ParamOffsets;
     for (const auto &[i, Arg] : llvm::enumerate(CB.args())) {
       // Variadics have special handling.
@@ -2005,8 +2032,8 @@ private:
       bool IsByVal = CB.paramHasAttr(i, Attribute::ByVal);
       Type *ArgTy = IsByVal ? CB.getParamByValType(i) : Arg->getType();
 
-      SmallVector<ProvenanceField> ProvDesc =
-          BS.getProvenanceLayout(Before, ArgTy, /*ClearGaps=*/Clear);
+      SmallVector<ProvenanceField> ProvDesc = BS.getProvenanceLayout(
+          Before, ArgTy, /*ClearGaps=*/MaybeUninstrumented);
 
       for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
 
@@ -2041,6 +2068,9 @@ private:
       // the semantics of a tail call are equivalent
       // to a return and then another call.
       popFrame(Before, CB, nullptr);
+      if (GCEnterUninstFlag && needsBoundaryValidation(Callee)) {
+        Before.CreateCall(BS.BsanFuncEnterGCSafe, {GCEnterUninstFlag});
+      }
     }
 
     // If we have parameter provenance, then store it to the TLS array.
@@ -2113,10 +2143,15 @@ private:
       }
     }
 
-    // If we are returning from a possibly-uninstrumented function, then we need
-    // need to validate the space on the shadow stack where the return value's
-    // provenance is stored.
-    if (needsBoundaryValidation(Callee)) {
+    // If we are returning from a possibly-uninstrumented function,
+    // then we need need to validate the space on the shadow stack
+    // where the return value's provenance is stored.
+    if (MaybeUninstrumented) {
+      // If we are calling a maybe-uninstrumented function,
+      // then we also need to ensure that we have entered
+      // "gc-safe" mode before we proceed.
+      After.CreateCall(BS.BsanFuncEnterGCUnsafe, {});
+
       Value *Marker;
       Value *NullPtr = ConstantPointerNull::get(BS.PtrTy);
       // If this is a function that we can trust (e.g. an allocator)
@@ -2175,6 +2210,8 @@ private:
         Before.CreateStore(Marker, MarkerAlloca);
         BasicBlock *UnwindDest = II->getUnwindDest();
         IRBuilder<> UnwindIRB(UnwindDest, UnwindDest->getFirstInsertionPt());
+
+        UnwindIRB.CreateCall(BS.BsanFuncEnterGCUnsafe, {});
         Value *ToRestore = UnwindIRB.CreateLoad(BS.PtrTy, MarkerAlloca);
         UnwindIRB.CreateStore(ToRestore, BS.MarkerTLS);
       }
@@ -2685,11 +2722,17 @@ private:
         return;
     IRBuilder<> IRB(&I);
     popFrame(IRB, I, I.getReturnValue());
+    if (GCEnterUninstFlag) {
+      IRB.CreateCall(BS.BsanFuncEnterGCSafe, {GCEnterUninstFlag});
+    }
   }
 
   void visitResumeInst(ResumeInst &I) {
     IRBuilder<> IRB(&I);
     popFrame(IRB, I, I.getValue());
+    if (GCEnterUninstFlag) {
+      IRB.CreateCall(BS.BsanFuncEnterGCSafe, {GCEnterUninstFlag});
+    }
   }
 };
 

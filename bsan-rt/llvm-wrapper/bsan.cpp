@@ -417,6 +417,23 @@ void __bsan_validate_retval(void *prev_marker, Provenance *frame, uptr len) {
   __bsan_marker = prev_marker;
 }
 
+SANITIZER_INTERFACE_ATTRIBUTE
+bool __bsan_enter_gc_unsafe() {
+  BsanThread *thread = CurrentThread();
+  if (UNLIKELY(!thread))
+    return false;
+  return false;
+}
+
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_enter_gc_safe(bool should_enter) {
+  if (!should_enter)
+    return;
+  BsanThread *thread = CurrentThread();
+  if (UNLIKELY(!thread))
+    return;
+}
+
 // Symbolize a single PC into file:line:column, writing the file path into
 // the provided buffer. Returns 0 on failure, 1 when the frame resolves to
 // user code, and 2 when every candidate frame is internal library code

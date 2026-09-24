@@ -154,6 +154,12 @@ void BsanThread::Init() {
   visits_ptr_ = &__bsan_visits_since_gc;
 }
 
+void BsanThread::enterSafeMode(uptr stack) {}
+
+uptr BsanThread::exitSafeMode() { return 0; }
+
+bool BsanThread::isInSafeMode() { return true; }
+
 void BsanThread::TSDDtor(void *tsd) {
   BsanThreadContext *context = (BsanThreadContext *)tsd;
   if (context->thread)
