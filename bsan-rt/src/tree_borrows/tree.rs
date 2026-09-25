@@ -632,7 +632,7 @@ impl EagerTree {
         pending.sort_unstable();
         pending.dedup();
 
-        // Perform checks to
+        // Perform checks to skip tags that are already gone, live again, or exposed
         let mut survivors: SmallVec<[BorTag; 2]> = SmallVec::default();
         for &tag in pending.iter().rev() {
             // A missing entry means the node was already removed.
