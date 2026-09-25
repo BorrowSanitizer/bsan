@@ -367,14 +367,17 @@ void __bsan_init() { BsanInitFromRtl(); }
 
 /// When we call a possibly uninstrumented function, we store our frame
 /// pointer in a thread-local variable, marking the "boundary" between
-/// instrumented and uninstrumented code. Once we enter a function that may have
-/// been called from uninstrumented code, we check to see if our caller's frame
-/// pointer matches this boundary marker to determine whether we can trust our
-/// thread-local provenance arrays.
+/// instrumented and uninstrumented code. Once we enter a function that
+/// may have been called from uninstrumented code, we check to see if our
+/// caller's frame pointer matches this boundary marker to determine if
+/// we can trust our thread-local provenance arrays.
 SANITIZER_INTERFACE_ATTRIBUTE
 void *__bsan_mark(void *callee) {
   void *prev_marker = __bsan_marker;
   __bsan_marker = callee;
+  if(BsanThread *thread = CurrentThread()){
+    thread->exitUnsafeMode();
+  }
   return prev_marker;
 }
 
@@ -422,21 +425,27 @@ void __bsan_validate_retval(void *prev_marker, Provenance *frame, uptr len) {
   __bsan_marker = prev_marker;
 }
 
+// Enters a "gc-unsafe" mode, meaning that the GC needs to wait
+// until this thread hits a safepoint before we can collect its garbage.
+// Returns a boolean indicating whether this thread was previously within
+// an unsafe mode. If so, we do not need to return it to a safe mode.
 SANITIZER_INTERFACE_ATTRIBUTE
-bool __bsan_enter_gc_unsafe() {
+void __bsan_enter_gc_unsafe() {
   BsanThread *thread = CurrentThread();
   if (UNLIKELY(!thread))
-    return false;
-  return false;
+    return;
+  thread->enterUnsafeMode();
 }
 
+// Exits a GC unsafe context, setting the thread to a "gc-safe" mode.
+// This is called prior to returning into a maybe-uninstrumented caller 
+// of an instrumented function.
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_enter_gc_safe(bool should_enter) {
-  if (!should_enter)
-    return;
+void __bsan_exit_gc_unsafe() {
   BsanThread *thread = CurrentThread();
   if (UNLIKELY(!thread))
     return;
+  thread->exitUnsafeMode();
 }
 
 // Symbolize a single PC into file:line:column, writing the file path into

@@ -13,12 +13,12 @@ namespace __bsan {
 void GlobalContext::park() {
   BsanThread *thread = CurrentThread();
   GCState to_replace = GCState::kUnsafe;
-  if(thread) {
+  if (thread) {
     to_replace = thread->setGCState(GCState::kParked, memory_order_release);
   }
   // Even if there's no thread state (this was called during teardown),
   // we still want to wait for the GC to finish. Safepoints will still
-  // be enabled within instrumented destructors, so we'll just end up 
+  // be enabled within instrumented destructors, so we'll just end up
   // back here again.
   while (atomic_load(&gc_running_, memory_order_acquire))
     // This acquire load is paired with the release store below
@@ -27,13 +27,13 @@ void GlobalContext::park() {
     FutexWait(&gc_running_, 1);
   // Albeit unlikely, the GC could start again here before we restore
   // the thread to its original state. That's actually not a problem
-  // because this function is only ever called within the signal handler. 
-  // When a signal handler returns, "the thread recommences execution at the point
-  // where it was interrupted." It will immediately dereference the safepoint
-  // handler, triggering a SIGSEGV and returning here to become parked again.
-  // For all intents and purposes, it always *was* parked for the subsequent
-  // GC run.
-  if(thread) {
+  // because this function is only ever called within the signal handler.
+  // When a signal handler returns, "the thread recommences execution at the
+  // point where it was interrupted." It will immediately dereference the
+  // safepoint handler, triggering a SIGSEGV and returning here to become parked
+  // again. For all intents and purposes, it always *was* parked for the
+  // subsequent GC run.
+  if (thread) {
     thread->setGCState(to_replace, memory_order_release);
   }
 }

@@ -154,11 +154,24 @@ void BsanThread::Init() {
   visits_ptr_ = &__bsan_visits_since_gc;
 }
 
-void BsanThread::enterSafeMode(uptr stack) {}
+void BsanThread::exitUnsafeMode() {
+  setGCState(GCState::kSafe, memory_order_release);
+}
 
-void BsanThread::exitSafeMode() {}
-
-bool BsanThread::isInSafeMode() { return true; }
+bool BsanThread::enterUnsafeMode() {
+  GCState state = getGCState(memory_order_relaxed);
+  if (LIKELY(state == GCState::kUnsafe))
+    return false;
+  setGCState(GCState::kUnsafe, memory_order_relaxed);
+  atomic_signal_fence(memory_order_seq_cst);
+  if (UNLIKELY(global_ctx()->isGCRunning())) {
+    // We are entering an unsafe scope. The garbage collector
+    // might already be running. In that case, instead of
+    // proceeding, we should park and join the GC loop.
+    global_ctx()->park();
+  }
+  return true;
+}
 
 GCState BsanThread::getGCState(memory_order order) {
   return (GCState)atomic_load(&gc_state_, order);

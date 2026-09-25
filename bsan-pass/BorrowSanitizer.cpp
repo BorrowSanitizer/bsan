@@ -357,7 +357,7 @@ private:
 
   /// Runtime function to mark the current thread as "gc-safe"
   /// before returning into uninstrumented code.
-  FunctionCallee BsanFuncEnterGCSafe;
+  FunctionCallee BsanFuncExitGCUnsafe;
 
   /// Runtime function to mark the current thread as "gc-unsafe"
   /// entering the current, instrumented function.
@@ -716,11 +716,13 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncExposeProv = M.getOrInsertFunction(BSAN("expose_prov"), AL,
                                              IRB.getVoidTy(), IntptrTy, PtrTy);
 
-  BsanFuncEnterGCUnsafe =
-      M.getOrInsertFunction(BSAN("enter_gc_unsafe"), AL, BoolTy);
+  BsanFuncEnterGCUnsafe = M.getOrInsertFunction(
+      BSAN("enter_gc_unsafe"),
+      FunctionType::get(IRB.getVoidTy(), /*isVarArg=*/false), AL);
 
-  BsanFuncEnterGCSafe =
-      M.getOrInsertFunction(BSAN("enter_gc_safe"), AL, IRB.getVoidTy(), BoolTy);
+  BsanFuncExitGCUnsafe = M.getOrInsertFunction(
+      BSAN("exit_gc_unsafe"),
+      FunctionType::get(IRB.getVoidTy(), /*isVarArg=*/false), AL);
 
   EHPersonality Pers = getDefaultEHPersonality(TargetTriple);
   DefaultPersonalityFn =
@@ -1764,7 +1766,7 @@ private:
     bool MaybeCalledFromUninst = needsBoundaryValidation(&F);
 
     if (MaybeCalledFromUninst) {
-      GCEnterUninstFlag = EntryIRB.CreateCall(BS.BsanFuncEnterGCUnsafe, {});
+      EntryIRB.CreateCall(BS.BsanFuncEnterGCUnsafe, {});
     }
 
     // We need to compute the total number of provenance values that
@@ -2068,8 +2070,8 @@ private:
       // the semantics of a tail call are equivalent
       // to a return and then another call.
       popFrame(Before, CB, nullptr);
-      if (GCEnterUninstFlag && needsBoundaryValidation(Callee)) {
-        Before.CreateCall(BS.BsanFuncEnterGCSafe, {GCEnterUninstFlag});
+      if (needsBoundaryValidation(Callee)) {
+        Before.CreateCall(BS.BsanFuncExitGCUnsafe, {});
       }
     }
 
@@ -2722,16 +2724,16 @@ private:
         return;
     IRBuilder<> IRB(&I);
     popFrame(IRB, I, I.getReturnValue());
-    if (GCEnterUninstFlag) {
-      IRB.CreateCall(BS.BsanFuncEnterGCSafe, {GCEnterUninstFlag});
+    if (needsBoundaryValidation(&F)) {
+      IRB.CreateCall(BS.BsanFuncExitGCUnsafe, {});
     }
   }
 
   void visitResumeInst(ResumeInst &I) {
     IRBuilder<> IRB(&I);
     popFrame(IRB, I, I.getValue());
-    if (GCEnterUninstFlag) {
-      IRB.CreateCall(BS.BsanFuncEnterGCSafe, {GCEnterUninstFlag});
+    if (needsBoundaryValidation(&F)) {
+      IRB.CreateCall(BS.BsanFuncExitGCUnsafe, {});
     }
   }
 };

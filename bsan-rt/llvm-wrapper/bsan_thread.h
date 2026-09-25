@@ -118,9 +118,8 @@ public:
   uptr os_id;
   void acquireProvenance(Provenance prov) { zct_.insert(prov); }
 
-  void enterSafeMode(uptr stack);
-  void exitSafeMode();
-  bool isInSafeMode();
+  void exitUnsafeMode();
+  bool enterUnsafeMode();
 
   GCState getGCState(memory_order order);
   GCState setGCState(GCState state, memory_order order);
@@ -189,41 +188,24 @@ struct ScopedThreadLock {
   ScopedThreadLock(const ScopedThreadLock &) = delete;
 };
 
-// To iterate over threads, you need to provide proof that the
-// thread registry has been locked.
-template <typename Fn>
-inline void ForEachThread(ScopedThreadLock &threads, Fn callback) {
+struct GCUnsafeScope {
+  GCUnsafeScope() { CurrentThread()->enterUnsafeMode(); }
+  ~GCUnsafeScope() { CurrentThread()->exitUnsafeMode(); }
+};
+
+template <typename Fn, typename... Args>
+inline void ForEachThread(ScopedThreadLock &threads, Fn callback,
+                          Args... args) {
+  auto invoke = [&](auto &&thread) { callback(thread, args...); };
+  using Invoke = decltype(invoke);
   GetThreadRegistry().RunCallbackForEachThreadLocked(
       [](ThreadContextBase *tctx_base, void *arg) {
         if (tctx_base->status == ThreadStatusRunning) {
           BsanThreadContext *tctx = static_cast<BsanThreadContext *>(tctx_base);
-          Fn &cb = *static_cast<Fn *>(arg);
-          cb(tctx->thread);
+          (*static_cast<Invoke *>(arg))(tctx->thread);
         }
       },
-      &callback);
-}
-
-// To iterate over threads, you need to provide proof that the
-// thread registry has been locked.
-template <typename Fn, typename T>
-inline void ForEachThread(ScopedThreadLock &threads, Fn callback, T *arg) {
-  // We need an intermediate struct here,
-  // because `RunCallbackForEachThreadLocked`
-  // requires a non-capturing lambda.
-  struct CallbackArgs {
-    Fn callback;
-    T *arg;
-  } ctx{callback, arg};
-  GetThreadRegistry().RunCallbackForEachThreadLocked(
-      [](ThreadContextBase *tctx_base, void *raw_ctx) {
-        if (tctx_base->status == ThreadStatusRunning) {
-          CallbackArgs *ctx = static_cast<CallbackArgs *>(raw_ctx);
-          BsanThreadContext *tctx = static_cast<BsanThreadContext *>(tctx_base);
-          ctx->callback(tctx->thread, ctx->arg);
-        }
-      },
-      &ctx);
+      &invoke);
 }
 } // namespace __bsan
 #endif // BSAN_THREAD_H
