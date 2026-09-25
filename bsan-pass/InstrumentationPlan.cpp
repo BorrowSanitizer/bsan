@@ -6,6 +6,8 @@ namespace llvm {
 // We only instrument static allocas that have a non-zero size
 // and cannot be proven safe via LLVM's StackSafetyAnalysis.
 bool InstrumentationPlan::shouldInstrumentAlloca(const AllocaInst &AI) {
+  if (disableStackInstrumentation())
+    return false;
   // Although Rust emits retags for ZSTs, tracking these
   // allocations leads to false positive errors—probably
   // due to interactions with lowering.

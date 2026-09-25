@@ -74,6 +74,12 @@ BSAN_CONFIGS = [
         "name": "no-op",
         "cmd": ["cargo", "bsan", "test", "--nop", "--lib"],
         "env": {"RUSTFLAGS": "--cfg=miri"},
+    },
+    # Full checking, with stack instrumentation disabled.
+    {
+        "name": "no-stack",
+        "cmd": ["cargo", "bsan", "test", "--lib"],
+        "env": {"RUSTFLAGS": "--cfg=miri", "BSAN_DISABLE_STACK_INSTRUMENTATION": "1"},
     }
 ]
 
