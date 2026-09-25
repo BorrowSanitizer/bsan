@@ -274,6 +274,11 @@ static void OnStackUnwind(const SignalContext &sig, const void *,
 }
 
 static void BsanOnDeadlySignal(int signo, void *siginfo, void *context) {
+  SignalContext sig(siginfo, context);
+  if (sig.is_memory_access && sig.addr == global_ctx()->getGCTriggerPage()) {
+    global_ctx()->park();
+    return;
+  }
   HandleDeadlySignal(siginfo, context, GetTid(), &OnStackUnwind, nullptr);
 }
 

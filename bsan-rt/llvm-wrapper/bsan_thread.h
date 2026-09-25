@@ -122,6 +122,9 @@ public:
   void exitSafeMode();
   bool isInSafeMode();
 
+  GCState getGCState(memory_order order);
+  GCState setGCState(GCState state, memory_order order);
+
 private:
   friend struct BsanThreadContext;
   friend struct GlobalContext;
@@ -160,20 +163,7 @@ private:
   // (`__bsan_visits_since_gc`), so that the GC can reset it when it stops
   // the world.
   uptr *visits_ptr_;
-
-  // A thread-local variable capturing the
-  // stack offset visible to the garbage
-  // collector. When null, the thread is
-  // in a "gc-unsafe" state, meaning that
-  // we must wait for it to reach a
-  // safepoint before we can run the collector.
-  // When non-null, we are in a "gc-safe" state,
-  // meaning that the thread is executing code that
-  // is uninstrumented, and will not affect shadow
-  // memory. We can start collection whenever, and
-  // the next time that this thread enters instrumented
-  // code, it will be paused until the collection finishes.
-  atomic_uintptr_t gc_stack_offset_{0};
+  atomic_uint32_t gc_state_{kUnsafe};
 
   char start_data_[];
 };
@@ -198,6 +188,21 @@ struct ScopedThreadLock {
   ScopedThreadLock &operator=(const ScopedThreadLock &) = delete;
   ScopedThreadLock(const ScopedThreadLock &) = delete;
 };
+
+// To iterate over threads, you need to provide proof that the
+// thread registry has been locked.
+template <typename Fn>
+inline void ForEachThread(ScopedThreadLock &threads, Fn callback) {
+  GetThreadRegistry().RunCallbackForEachThreadLocked(
+      [](ThreadContextBase *tctx_base, void *arg) {
+        if (tctx_base->status == ThreadStatusRunning) {
+          BsanThreadContext *tctx = static_cast<BsanThreadContext *>(tctx_base);
+          Fn &cb = *static_cast<Fn *>(arg);
+          cb(tctx->thread);
+        }
+      },
+      &callback);
+}
 
 // To iterate over threads, you need to provide proof that the
 // thread registry has been locked.

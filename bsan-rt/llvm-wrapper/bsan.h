@@ -70,6 +70,7 @@ extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __bsan_visits_since_gc;
 namespace __bsan {
 
 typedef uptr ThreadId;
+enum GCState : u32 { kUnsafe = 0, kSafe = 1, kParked = 2 };
 
 // A flag that will block interceptors from being activated
 // for operations occuring in this thread.
@@ -120,6 +121,8 @@ void ClearRetValSlot(uptr Idx);
 
 bool CallerIsInstrumented(void *sym);
 
+void InitMembarrier();
+void Membarrier();
 } // namespace __bsan
 
 extern "C" {

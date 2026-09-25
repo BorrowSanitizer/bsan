@@ -3,7 +3,10 @@
 
 #include "bsan.h"
 #include "bsan_thread.h"
+#include <linux/membarrier.h>
 #include <pthread.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 namespace __bsan {
 
@@ -37,6 +40,20 @@ void InitializeTSD(void (*destructor)(void *tsd)) {
   CHECK(!TSD_KEY_INITED);
   TSD_KEY_INITED = true;
   CHECK_EQ(0, pthread_key_create(&TSD_KEY, destructor));
+}
+
+void InitMembarrier() {
+  // We're using the "private expedited" variant here, which effects
+  // only the threads spawned by this process. This needs to be
+  // preregistered: "A process must register its intent to use the private
+  // expedited command prior to using it."
+  syscall(SYS_membarrier, MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED, 0);
+}
+
+void Membarrier() {
+  // Within a given thread, every read or write that
+  // happens before this barrier will become globally visible.
+  syscall(SYS_membarrier, MEMBARRIER_CMD_PRIVATE_EXPEDITED, 0);
 }
 
 } // namespace __bsan

@@ -20,7 +20,7 @@ public:
 // Global state associated with the runtime.
 struct GlobalContext {
 public:
-  GlobalContext() { InitGC(); }
+  GlobalContext() { this->initGC(); }
   Mutex &AtExitMutex() { return at_exit_lock_; }
   Vector<AtExitRecord *> &AtExitStack() { return at_exit_stack_; }
 
@@ -32,16 +32,20 @@ public:
   void acquireProvenance(Provenance prov);
   void acquireProvenance(ConcreteProvenanceSet &source);
 
-  void *getGCTriggerPage() { return gc_trigger_page_; }
+  bool isGCRunning();
+
+  uptr getGCTriggerPage() { return (uptr)gc_trigger_page_; }
+  void park();
 
 private:
+  friend struct ScopedGCLock;
   friend struct ScopedAllocatorLock;
   Mutex global_zct_lock_;
 
   // Initializes state associated with the garbage collector.
   // This includes the membarrier used to synchronize stopping
   // the world, and the gc trigger page.
-  void InitGC();
+  void initGC();
 
   // When a thread exits, its zero count table needs to be
   // retained, so that we can clean up any of the provenance
@@ -54,6 +58,10 @@ private:
   // garbage collection, we protect the page, and then park
   // each thread within the SIGSEV handler.
   void *gc_trigger_page_ = nullptr;
+
+  // A flag indicating that the garbage collector is currently
+  // running. This is used by threads exiting native contexts.
+  atomic_uint32_t gc_running_{0};
 
   // A lock held by the thread that succeeds at invoking
   // the garbage collector. While this lock is held, the
