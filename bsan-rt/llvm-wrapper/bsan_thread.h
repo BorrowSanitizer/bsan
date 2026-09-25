@@ -118,7 +118,7 @@ public:
   uptr os_id;
   void acquireProvenance(Provenance prov) { zct_.insert(prov); }
 
-  void exitUnsafeMode();
+  bool enterSafeMode();
   bool enterUnsafeMode();
 
   GCState getGCState(memory_order order);
@@ -162,7 +162,7 @@ private:
   // (`__bsan_visits_since_gc`), so that the GC can reset it when it stops
   // the world.
   uptr *visits_ptr_;
-  atomic_uint32_t gc_state_{kUnsafe};
+  atomic_uint32_t gc_state_{kSafe};
 
   char start_data_[];
 };
@@ -176,8 +176,6 @@ void EnsureMainThreadIDIsCorrect();
 ThreadRegistry &GetThreadRegistry();
 ThreadArgRetval &GetThreadArgRetval();
 
-BsanThreadContext *GetThreadContextByTidLocked(u32 tid);
-
 void LockThreads() SANITIZER_NO_THREAD_SAFETY_ANALYSIS;
 void UnlockThreads() SANITIZER_NO_THREAD_SAFETY_ANALYSIS;
 
@@ -188,9 +186,37 @@ struct ScopedThreadLock {
   ScopedThreadLock(const ScopedThreadLock &) = delete;
 };
 
-struct GCUnsafeScope {
-  GCUnsafeScope() { CurrentThread()->enterUnsafeMode(); }
-  ~GCUnsafeScope() { CurrentThread()->exitUnsafeMode(); }
+// Ensures that the garbage collector is
+// blocked from running while the current thread
+// is within this scope. If the GC was already
+// blocked, then this is a no-op.
+struct BlockGC {
+  BlockGC() : thread_(CurrentThread()) {
+    entered_ = thread_ && thread_->enterUnsafeMode();
+  }
+  ~BlockGC() {
+    if (entered_)
+      thread_->enterSafeMode();
+  }
+private:
+  BsanThread *thread_;
+  bool entered_;
+};
+
+// Ensures that the garbage collector is allowed
+// to run within this scope. If the GC is already
+// allowed to run, then this is a no-op.
+struct AllowGC {
+  AllowGC() : thread_(CurrentThread()) {
+    entered_ = thread_ && thread_->enterSafeMode();
+  }
+  ~AllowGC() {
+    if (entered_)
+      thread_->enterUnsafeMode();
+  }
+private:
+  BsanThread *thread_;
+  bool entered_;
 };
 
 template <typename Fn, typename... Args>

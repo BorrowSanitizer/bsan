@@ -7,6 +7,9 @@
 using namespace __sanitizer;
 using namespace __bsan;
 
+// Threads have a particular lifecycle. First, we create a new
+// `BsanThread` object. Then, we register this object within the
+// `ThreadRegistry`.
 namespace __bsan {
 
 void BsanThreadContext::OnCreated(void *arg) {
@@ -68,11 +71,6 @@ ThreadRegistry &GetThreadRegistry() {
 ThreadArgRetval &GetThreadArgRetval() {
   InitThreads();
   return *thread_data;
-}
-
-BsanThreadContext *GetThreadContextByTidLocked(u32 tid) {
-  return static_cast<BsanThreadContext *>(
-      GetThreadRegistry().GetThreadLocked(tid));
 }
 
 BsanThread *CurrentThread() {
@@ -154,8 +152,8 @@ void BsanThread::Init() {
   visits_ptr_ = &__bsan_visits_since_gc;
 }
 
-void BsanThread::exitUnsafeMode() {
-  setGCState(GCState::kSafe, memory_order_release);
+bool BsanThread::enterSafeMode() {
+  return setGCState(GCState::kSafe, memory_order_release) == GCState::kUnsafe;
 }
 
 bool BsanThread::enterUnsafeMode() {
@@ -164,7 +162,10 @@ bool BsanThread::enterUnsafeMode() {
     return false;
   setGCState(GCState::kUnsafe, memory_order_relaxed);
   atomic_signal_fence(memory_order_seq_cst);
-  if (UNLIKELY(global_ctx()->isGCRunning())) {
+
+  // This is an acquire load of the GC status flag, paired
+  // with the release stores that occur within `ScopedGCLock`.
+  if (UNLIKELY(global_ctx()->isGCRunning(memory_order_acquire))) {
     // We are entering an unsafe scope. The garbage collector
     // might already be running. In that case, instead of
     // proceeding, we should park and join the GC loop.

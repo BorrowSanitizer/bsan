@@ -25,14 +25,13 @@ void GlobalContext::park() {
     // within `ScopedGCLock`. A thread can only be parked once
     // the gc trigger page has been protected,
     FutexWait(&gc_running_, 1);
-  // Albeit unlikely, the GC could start again here before we restore
-  // the thread to its original state. That's actually not a problem
-  // because this function is only ever called within the signal handler.
-  // When a signal handler returns, "the thread recommences execution at the
-  // point where it was interrupted." It will immediately dereference the
-  // safepoint handler, triggering a SIGSEGV and returning here to become parked
-  // again. For all intents and purposes, it always *was* parked for the
-  // subsequent GC run.
+  // The GC could start again before we restore the thread to its original
+  // state. That's actually not a problem because this function is only ever
+  // called within the signal handler. When a signal handler returns, "the
+  // thread recommences execution at the point where it was interrupted."
+  // It will immediately dereference the safepoint handler, triggering a
+  // SIGSEGV and returning here to become parked again. For all intents and
+  // purposes, it always *was* parked for the subsequent GC run.
   if (thread) {
     thread->setGCState(to_replace, memory_order_release);
   }
@@ -82,10 +81,8 @@ void GlobalContext::initGC() {
   InitMembarrier();
 }
 
-bool GlobalContext::isGCRunning() {
-  // This is always an acquire ordering, paired with the release
-  // stores above within ScopedGCLock.
-  return atomic_load(&gc_running_, memory_order_acquire) != 0;
+bool GlobalContext::isGCRunning(memory_order order) {
+  return atomic_load(&gc_running_, order) != 0;
 }
 
 void GlobalContext::acquireProvenance(Provenance prov) {
@@ -198,10 +195,6 @@ void GlobalContext::CollectGarbage(Snapshot *snap) {
       return;
     }
     CHECK(status == EjectStatus::RetainNonEmpty);
-    // The `RetainNonEmpty` status is also used
-    // to indicate that a thread was busy during collection,
-    // so it could indicate that a node was a singleton.
-    // We want to ensure that it gets added regardless.
     if (!tags.size())
       still_pending.insert(info);
     // Any leftover tags must be kept around

@@ -632,10 +632,7 @@ unsafe extern "C" fn __bsan_prune(
             EjectStatus::RetainNonEmpty
         }
     } else {
-        // The world was stopped in the middle of another thread
-        // accessing this tree. We cannot prune it yet, so we
-        // need to wait for the next GC pass.
-        EjectStatus::RetainNonEmpty
+        panic!("A thread had already locked this allocation!");
     }
 }
 

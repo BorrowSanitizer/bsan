@@ -487,7 +487,6 @@ INTERCEPTOR(int, pthread_create, void *thread, void *attr,
   ScopedBlockSignals block(&sigset);
 #endif
   BsanThread *t = BsanThread::Create(sigset, current_tid, detached);
-
   int result;
   {
     GetThreadArgRetval().Create(detached, {start_routine, arg}, [&]() -> uptr {

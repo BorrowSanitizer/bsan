@@ -32,8 +32,7 @@ public:
   void acquireProvenance(Provenance prov);
   void acquireProvenance(ConcreteProvenanceSet &source);
 
-  bool isGCRunning();
-
+  bool isGCRunning(memory_order order);
   uptr getGCTriggerPage() { return (uptr)gc_trigger_page_; }
   void park();
 

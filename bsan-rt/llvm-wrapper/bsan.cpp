@@ -375,8 +375,8 @@ SANITIZER_INTERFACE_ATTRIBUTE
 void *__bsan_mark(void *callee) {
   void *prev_marker = __bsan_marker;
   __bsan_marker = callee;
-  if(BsanThread *thread = CurrentThread()){
-    thread->exitUnsafeMode();
+  if (BsanThread *thread = CurrentThread()) {
+    thread->enterSafeMode();
   }
   return prev_marker;
 }
@@ -428,24 +428,31 @@ void __bsan_validate_retval(void *prev_marker, Provenance *frame, uptr len) {
 // Enters a "gc-unsafe" mode, meaning that the GC needs to wait
 // until this thread hits a safepoint before we can collect its garbage.
 // Returns a boolean indicating whether this thread was previously within
-// an unsafe mode. If so, we do not need to return it to a safe mode.
+// a safe mode. If so, we need to return it to a safe mode on exit. This is
+// not always the case. For example, an instrumented signal handler will be
+// called while a thread is still within an unsafe mode. We do not want to
+// return back into safe mode when the signal handler exits.
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_enter_gc_unsafe() {
+bool __bsan_enter_gc_unsafe() {
   BsanThread *thread = CurrentThread();
   if (UNLIKELY(!thread))
-    return;
-  thread->enterUnsafeMode();
+    return false;
+  return thread->enterUnsafeMode();
 }
 
-// Exits a GC unsafe context, setting the thread to a "gc-safe" mode.
-// This is called prior to returning into a maybe-uninstrumented caller 
-// of an instrumented function.
+// Exits a GC unsafe context, setting the thread to a "gc-safe" mode
+// if that's the mode that it was in before. This, paired with
+// `__bsan_enter_gc_unsafe`, marks an "unsafe" scope within which
+// the GC needs to wait until a thread reaches its safe point to
+// be able to stop the world.
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_exit_gc_unsafe() {
+void __bsan_exit_gc_unsafe(bool was_in_safe_mode_before) {
+  if (!was_in_safe_mode_before)
+    return;
   BsanThread *thread = CurrentThread();
   if (UNLIKELY(!thread))
     return;
-  thread->exitUnsafeMode();
+  thread->enterSafeMode();
 }
 
 // Symbolize a single PC into file:line:column, writing the file path into

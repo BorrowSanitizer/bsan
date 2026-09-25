@@ -716,13 +716,11 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncExposeProv = M.getOrInsertFunction(BSAN("expose_prov"), AL,
                                              IRB.getVoidTy(), IntptrTy, PtrTy);
 
-  BsanFuncEnterGCUnsafe = M.getOrInsertFunction(
-      BSAN("enter_gc_unsafe"),
-      FunctionType::get(IRB.getVoidTy(), /*isVarArg=*/false), AL);
+  BsanFuncEnterGCUnsafe =
+      M.getOrInsertFunction(BSAN("enter_gc_unsafe"), AL, BoolTy);
 
-  BsanFuncExitGCUnsafe = M.getOrInsertFunction(
-      BSAN("exit_gc_unsafe"),
-      FunctionType::get(IRB.getVoidTy(), /*isVarArg=*/false), AL);
+  BsanFuncExitGCUnsafe = M.getOrInsertFunction(BSAN("exit_gc_unsafe"), AL,
+                                               IRB.getVoidTy(), BoolTy);
 
   EHPersonality Pers = getDefaultEHPersonality(TargetTriple);
   DefaultPersonalityFn =
@@ -1430,9 +1428,9 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 
   // When we enter a function that may be called while the thread is
   // "gc-safe", we need to tell the GC that we are now "gc-unsafe". We do this
-  // by calling `__bsan_exit_uninst` in the prologue, which returns a flag
+  // by calling `__bsan_enter_gc_unsafe` in the prologue, which returns a flag
   // indicating whether the thread was "gc-safe". We pass this flag to
-  // `__bsan_enter_uninst` on every exit from the function, to restore the
+  // `__bsan_exit_gc_unsafe` on every exit from the function, to restore the
   // previous state.
   Value *GCEnterUninstFlag = nullptr;
 
@@ -1766,7 +1764,7 @@ private:
     bool MaybeCalledFromUninst = needsBoundaryValidation(&F);
 
     if (MaybeCalledFromUninst) {
-      EntryIRB.CreateCall(BS.BsanFuncEnterGCUnsafe, {});
+      GCEnterUninstFlag = EntryIRB.CreateCall(BS.BsanFuncEnterGCUnsafe, {});
     }
 
     // We need to compute the total number of provenance values that
@@ -2070,8 +2068,8 @@ private:
       // the semantics of a tail call are equivalent
       // to a return and then another call.
       popFrame(Before, CB, nullptr);
-      if (needsBoundaryValidation(Callee)) {
-        Before.CreateCall(BS.BsanFuncExitGCUnsafe, {});
+      if (GCEnterUninstFlag && needsBoundaryValidation(Callee)) {
+        Before.CreateCall(BS.BsanFuncExitGCUnsafe, {GCEnterUninstFlag});
       }
     }
 
@@ -2724,16 +2722,16 @@ private:
         return;
     IRBuilder<> IRB(&I);
     popFrame(IRB, I, I.getReturnValue());
-    if (needsBoundaryValidation(&F)) {
-      IRB.CreateCall(BS.BsanFuncExitGCUnsafe, {});
+    if (GCEnterUninstFlag) {
+      IRB.CreateCall(BS.BsanFuncExitGCUnsafe, {GCEnterUninstFlag});
     }
   }
 
   void visitResumeInst(ResumeInst &I) {
     IRBuilder<> IRB(&I);
     popFrame(IRB, I, I.getValue());
-    if (needsBoundaryValidation(&F)) {
-      IRB.CreateCall(BS.BsanFuncExitGCUnsafe, {});
+    if (GCEnterUninstFlag) {
+      IRB.CreateCall(BS.BsanFuncExitGCUnsafe, {GCEnterUninstFlag});
     }
   }
 };
