@@ -868,9 +868,9 @@ fn add_child_perm(tree: &mut EagerTree, parent: BorTag, child: BorTag, perm: Per
     assert!(result.is_ok());
 }
 
+/// Whether `tag` is a dead node that a pass could not prune.
 fn is_dead(tree: &EagerTree, tag: BorTag) -> bool {
-    let idx = tree.tag_mapping.get(&tag).unwrap();
-    tree.nodes.get(idx).unwrap().is_dead
+    tree.dead_unprunable.binary_search(&tag).is_ok()
 }
 
 #[test]
@@ -1011,6 +1011,71 @@ fn retained_tag_is_pruned_once_children_die() {
     assert!(!empty, "the root is still in the tree");
     assert_eq!(tree.node_count(), 1);
     assert!(tree.contains_tag(t(10)));
+}
+
+#[test]
+fn stale_dead_node_is_revisited_without_its_own_tag() {
+    // A node retained by one pass must still be reconsidered by a later one, even when its own
+    // tag is never handed over again and nothing in its subtree changes. That is the whole job
+    // of `EagerTree::dead_unprunable`: without it, the only way back to such a node would be a
+    // full scan of the tree.
+    let mut tree = new_tree(t(10));
+    add_child(&mut tree, t(10), t(11));
+    add_child(&mut tree, t(11), t(12));
+    // An unrelated branch, which supplies the only fresh tag of the second pass.
+    add_child(&mut tree, t(10), t(20));
+    tree.increment(t(12));
+    tree.increment(t(20));
+
+    // First pass: compaction is off for trees this small, so the dead interior node t(11) is
+    // retained even though its single child could otherwise replace it.
+    let no_compact = GlobalCtx::new(&SharedSanitizerFlags::default());
+    assert!(!tree.remove_dead_tags(&no_compact, &[t(11)]));
+    assert!(tree.contains_tag(t(11)));
+    assert!(is_dead(&tree, t(11)));
+
+    // Second pass: compaction is on, and the only tag passed belongs to the unrelated branch.
+    // t(11) is reachable only through `dead_unprunable`, and is compacted away.
+    let compact = GlobalCtx::new(&SharedSanitizerFlags {
+        max_compacted_children: usize::MAX,
+        tree_gc_min_nodes: 0,
+        ..Default::default()
+    });
+    tree.decrement(t(20));
+    assert!(!tree.remove_dead_tags(&compact, &[t(20)]));
+
+    assert!(!tree.contains_tag(t(11)), "the retained node should have been revisited");
+    assert!(tree.contains_tag(t(12)), "its child is reparented onto the root, not removed");
+    assert!(!tree.contains_tag(t(20)), "the unrelated dead leaf is removed as usual");
+    assert_eq!(tree.node_count(), 2);
+}
+
+#[test]
+fn retained_tag_that_becomes_live_again_is_not_pruned() {
+    // A retained tag is re-checked on every later pass, not just when it is first handed over,
+    // so a node that became reachable again is dropped from the list instead of pruned.
+    let ctx = GlobalCtx::new(&SharedSanitizerFlags::default());
+    let mut tree = new_tree(t(10));
+    add_child(&mut tree, t(10), t(11));
+    add_child(&mut tree, t(11), t(12));
+    tree.increment(t(12));
+
+    assert!(!tree.remove_dead_tags(&ctx, &[t(11)]));
+    assert!(is_dead(&tree, t(11)));
+
+    // t(11) is reachable again. The next pass must leave it alone, even though it is still
+    // listed and its own tag is not passed.
+    tree.increment(t(11));
+    assert!(!tree.remove_dead_tags(&ctx, &[]));
+
+    assert!(tree.contains_tag(t(11)), "a live node must never be pruned");
+    assert!(!is_dead(&tree, t(11)), "it should have been dropped from the list");
+    assert_eq!(tree.node_count(), 3);
+
+    // Once it dies again it re-enters a ZCT, and is tracked as before.
+    tree.decrement(t(11));
+    assert!(!tree.remove_dead_tags(&ctx, &[t(11)]));
+    assert!(is_dead(&tree, t(11)));
 }
 
 /// Maps `tree.roots` to their tags, in vec order.

@@ -120,6 +120,10 @@ pub struct EagerTree {
     ///
     /// Has array size 2 because that still ensures the minimum size for SmallVec.
     pub(super) roots: SmallVec<[UniIndex; 2]>,
+    /// Tags of dead nodes that were unpruned in an earlier GC pass, sorted ascending and free of
+    /// duplicates. Lets [`Self::remove_useless_children`] revisit them without scanning every
+    /// node.
+    pub(super) dead_unprunable: SmallVec<[BorTag; 2]>,
 }
 
 /// A tree that is lazily initialized: starts as `Uninit` (storing only the root tag, size, and
@@ -172,9 +176,6 @@ pub struct Node {
     default_initial_idempotent_foreign_access: IdempotentForeignAccess,
     /// Whether a wildcard access could happen through this node.
     pub is_exposed: bool,
-    /// Whether this node is still reachable in memory. Note that nodes with a zero reference
-    /// count may still be live on the (shadow) stack.
-    pub is_dead: bool,
     /// If the node is currently protected.
     pub protector_kind: Option<ProtectorKind>,
     /// Number of live references to this node. Always accessed under the
@@ -437,7 +438,6 @@ impl EagerTree {
                     // The root may never be skipped, all accesses will be local.
                     default_initial_idempotent_foreign_access: IdempotentForeignAccess::None,
                     is_exposed: false,
-                    is_dead: false,
                     protector_kind: None,
                     refcount: RefCount::new(),
                     debug_info,
@@ -461,7 +461,13 @@ impl EagerTree {
             let exposed_cache = ExposedCache::default();
             DedupRangeMap::new(size, LocationTree { perms, exposed_cache })
         };
-        Self { roots: SmallVec::from_slice(&[root_idx]), nodes, locations, tag_mapping }
+        Self {
+            roots: SmallVec::from_slice(&[root_idx]),
+            nodes,
+            locations,
+            tag_mapping,
+            dead_unprunable: SmallVec::default(),
+        }
     }
 
     /// Restores the SIFA "children are stronger"/"parents are weaker" invariant after a retag:
@@ -594,22 +600,18 @@ impl EagerTree {
     /// possible. See [`AllocState::remove_dead_tags`].
     ///
     /// This cleanup must be bottom-up; a dead node can only be deleted as a leaf once its
-    /// dead descendants are gone, so we must process a node before its parent. Since
-    /// borrow tags are distributed with a monotonic global counter, `dead_tags` is guaranteed
-    /// to be sorted in ascending order. Since a child must be allocated after its parent,
-    /// we maintain the following invariant: `child.tag > parent.tag`. Iterating through
-    /// `dead_tags` in reverse gives a valid reverse-topological (bottom-up) traversal.
+    /// dead descendants are gone, so we must process a node before its parent. Since a child
+    /// must be allocated after its parent, we maintain the following invariant:
+    /// `child.tag > parent.tag`. Visiting tags in descending order therefore gives a valid
+    /// reverse-topological (bottom-up) traversal.
     ///
-    /// Each entry in `dead_tags` is zeroed out (set to [`BorTag::omnivalid`]) once its tag
-    /// no longer needs to be tracked: either the node was removed, or it is guaranteed to
-    /// re-enter a zero-count table before it can next become prunable. Entries left nonzero
-    /// are dead nodes that could not be pruned yet
+    /// A tag that cannot be pruned now may become prunable later, so it is kept in
+    /// [`Self::dead_unprunable`] and merged with `dead_tags` on the next pass.
     ///
-    /// When `compact` is false, dead interior nodes are left in place (their entries stay
-    /// nonzero) instead of being coalesced into their parent. Dead *leaves* are still
-    /// removed unconditionally, so the pending set continues to drain and a tree that dies
-    /// entirely still empties out. This lets small trees skip the per-location permission
-    /// checks that compaction requires.
+    /// When `compact` is false, dead interior nodes are left in place instead of being
+    /// coalesced into their parent. Dead *leaves* are still removed unconditionally, so a tree
+    /// that dies entirely still empties out. This lets small trees skip the per-location
+    /// permission checks that compaction requires.
     ///
     /// Roots only ever leave the tree as leaves; a dead root with children is never
     /// replaced by them. Since a child's tag is always greater than its parent's,
@@ -623,40 +625,44 @@ impl EagerTree {
         dead_tags: &[BorTag],
         compact: bool,
     ) {
-        for &tag in dead_tags {
-            // A missing entry means the node was already removed
+        // `dead_tags` is ascending, since tags come from a monotonic counter, and so is the
+        // retained list; this is therefore a two-run merge.
+        let mut pending = mem::take(&mut self.dead_unprunable);
+        pending.extend_from_slice(dead_tags);
+        pending.sort_unstable();
+        pending.dedup();
+
+        // Perform checks to
+        let mut survivors: SmallVec<[BorTag; 2]> = SmallVec::default();
+        for &tag in pending.iter().rev() {
+            // A missing entry means the node was already removed.
             let Some(idx) = self.tag_mapping.get(&tag) else {
                 continue;
             };
-            let node = self.nodes.get_mut(idx).unwrap();
-
-            if node.refcount.get() != 0 {
+            let node = self.nodes.get(idx).unwrap();
+            // A nonzero refcount means the tag is reachable again and will re-enter a zero-count
+            // table once it drops back to zero; an exposed node can never be pruned.
+            if node.refcount.get() != 0 || node.is_exposed {
                 continue;
             }
-
-            if node.is_exposed {
-                continue;
+            if !self.try_remove_node(global_ctx, idx, compact) {
+                survivors.push(tag);
             }
-
-            node.is_dead = true;
         }
 
-        // Visit every dead node bottom-up (descending tags), including ones marked by earlier passes
-        let mut dead_nodes: SmallVec<[(BorTag, UniIndex); 8]> = self
-            .nodes
-            .iter()
-            .filter(|(_, node)| node.is_dead)
-            .map(|(idx, node)| (node.tag, idx))
-            .collect();
-        dead_nodes.sort_unstable_by_key(|&(tag, _)| cmp::Reverse(tag));
-        for (_, idx) in dead_nodes {
-            self.try_remove_node(global_ctx, idx, compact);
-        }
+        survivors.reverse();
+        self.dead_unprunable = survivors;
+        debug_assert!(
+            self.dead_unprunable.windows(2).all(|w| w[0] < w[1]),
+            "`dead_unprunable` must stay sorted and free of duplicates"
+        );
     }
 
-    fn try_remove_node(&mut self, ctx: &GlobalCtx, idx: UniIndex, compact: bool) {
+    /// Attempts to remove a single dead node, returning whether it was removed. A `false` return
+    /// means it is still in the tree and must be revisited; see [`Self::dead_unprunable`].
+    fn try_remove_node(&mut self, ctx: &GlobalCtx, idx: UniIndex, compact: bool) -> bool {
         let node = self.nodes.get(idx).unwrap();
-        debug_assert!(node.is_dead && node.refcount.get() == 0 && !node.is_exposed);
+        debug_assert!(node.refcount.get() == 0 && !node.is_exposed);
         let parent = node.parent;
         // Branches are mutually exclusive on child count: `can_be_replaced_by_single_child`
         // only yields `Some` for exactly one child, and `can_be_replaced_by_children` only
@@ -678,6 +684,7 @@ impl EagerTree {
                     }
                 }
                 self.remove_useless_node(idx);
+                true
             }
             // Node has exactly one child (and, per the guard above, a parent)
             1 if compact && self.can_be_replaced_by_single_child(idx) => {
@@ -689,7 +696,7 @@ impl EagerTree {
                 siblings[pos] = child_idx;
                 self.nodes.get_mut(child_idx).unwrap().parent = parent;
                 self.remove_useless_node(idx);
-                // Otherwise, the dead node could not be pruned this pass.
+                true
             }
             // Node has more than one child. If every child can soundly replace it, compact it
             // by reparenting all of its children onto its parent.
@@ -709,12 +716,12 @@ impl EagerTree {
                     siblings.push(children[i]);
                 }
                 self.remove_useless_node(idx);
-                // Otherwise, the dead node could not be pruned this pass.
+                true
             }
-            // A dead interior node on a tree too small to be worth compacting. Leave its
-            // entry nonzero so the caller keeps it pending; it is removed as a leaf once
-            // its subtree dies.
-            _ => {}
+            // A dead interior node that cannot be replaced by its children, or one on a tree
+            // too small to be worth compacting. It stays in the tree and is recorded in
+            // `dead_unprunable`; it is removed as a leaf once its subtree dies.
+            _ => false,
         }
     }
 }
@@ -1274,7 +1281,6 @@ impl AllocState for EagerTree {
                 default_initial_perm: outside_perm,
                 default_initial_idempotent_foreign_access: default_strongest_idempotent,
                 is_exposed: false,
-                is_dead: false,
                 protector_kind: protector,
                 refcount: RefCount::new(),
                 debug_info: NodeDebugInfo::new(new_tag, outside_perm, span),
