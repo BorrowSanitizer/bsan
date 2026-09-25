@@ -13,6 +13,9 @@ using namespace __sanitizer;
 
 namespace __bsan {
 
+struct BlockGC;
+struct AllowGC;
+
 class BsanThread;
 class BsanThreadContext final : public ThreadContextBase {
 public:
@@ -116,6 +119,7 @@ public:
   RustAllocatorCache *rust_allocator_cache() { return &rust_allocator_cache_; }
 
   uptr os_id;
+
   void acquireProvenance(Provenance prov) { zct_.insert(prov); }
 
   bool enterSafeMode();
@@ -198,6 +202,7 @@ struct BlockGC {
     if (entered_)
       thread_->enterSafeMode();
   }
+
 private:
   BsanThread *thread_;
   bool entered_;
@@ -214,6 +219,7 @@ struct AllowGC {
     if (entered_)
       thread_->enterUnsafeMode();
   }
+
 private:
   BsanThread *thread_;
   bool entered_;

@@ -28,10 +28,8 @@ public:
   // a thread safe operation; any series of threads can simultaneously
   // try to start the GC, and only one will succeed.
   void requestGC();
-
   void acquireProvenance(Provenance prov);
   void acquireProvenance(ConcreteProvenanceSet &source);
-
   bool isGCRunning(memory_order order);
   uptr getGCTriggerPage() { return (uptr)gc_trigger_page_; }
   void park();

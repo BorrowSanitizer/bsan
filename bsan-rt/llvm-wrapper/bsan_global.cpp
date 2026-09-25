@@ -38,7 +38,10 @@ void GlobalContext::park() {
 }
 
 struct ScopedGCLock {
-  ScopedGCLock(ScopedThreadLock &threads) {
+  Lock lock;
+  ScopedGCLock(ScopedThreadLock &threads)
+      : lock(Lock(&global_ctx()->global_zct_lock_)) {
+
     // We need to lock the global thread state to prevent new threads
     // from entering the garbage collector.
     atomic_store(&global_ctx()->gc_running_, true, memory_order_release);

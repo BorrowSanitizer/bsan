@@ -162,7 +162,6 @@ bool BsanThread::enterUnsafeMode() {
     return false;
   setGCState(GCState::kUnsafe, memory_order_relaxed);
   atomic_signal_fence(memory_order_seq_cst);
-
   // This is an acquire load of the GC status flag, paired
   // with the release stores that occur within `ScopedGCLock`.
   if (UNLIKELY(global_ctx()->isGCRunning(memory_order_acquire))) {
