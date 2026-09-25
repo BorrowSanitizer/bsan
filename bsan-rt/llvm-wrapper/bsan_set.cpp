@@ -77,38 +77,26 @@ void BorTagSet::EnsureCapacity(uptr req_size) {
 
 void ConcreteProvenanceSet::insert(Provenance prov) {
   if (prov.isConcrete()) {
-    set_[prov.info].insert(prov.tag);
-  }
-}
-
-void ConcreteProvenanceSet::remove(Provenance prov) {
-  if (prov.isConcrete()) {
-    return;
-  }
-  // Only erase the tag; leave the (possibly now-empty) tag set in place. erase
-  // shifts in place and never frees, so this takes no allocator lock and is
-  // safe to run while the world is stopped.
-  if (auto *tags = find(prov.info)) {
-    tags->erase(prov.tag);
+    set_[BLOCK_IDX(prov.block)].insert(prov.tag);
   }
 }
 
 void ConcreteProvenanceSet::clear() {
-  set_.forEach([](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
+  set_.forEach([](DenseMap<BlockIndex, BorTagSet>::value_type &KV) {
     KV.second.clear();
     return true;
   });
 }
 
 bool ConcreteProvenanceSet::contains(Provenance prov) {
-  if (auto *tags = find(prov.info)) {
+  if (auto *tags = find(BLOCK_IDX(prov.block))) {
     return tags->contains(prov.tag);
   }
   return false;
 }
 
 ConcreteProvenanceSet::~ConcreteProvenanceSet() {
-  set_.forEach([](DenseMap<AllocInfo *, BorTagSet>::value_type &KV) {
+  set_.forEach([](DenseMap<BlockIndex, BorTagSet>::value_type &KV) {
     KV.second.reset();
     return true;
   });

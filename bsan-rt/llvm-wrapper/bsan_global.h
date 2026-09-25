@@ -43,6 +43,12 @@ public:
   void acquireProvenance(Provenance prov);
   void acquireProvenance(ZeroCountTable &source);
 
+  BlockIndex AllocBlock() { return block_allocator.Alloc(&this->block_cache_); }
+
+  void FreeBlock(BlockIndex idx) {
+    block_allocator.Free(&this->block_cache_, idx);
+  }
+
 private:
   friend struct ScopedStopTheWorldLock;
   Mutex global_zct_lock_;
@@ -70,6 +76,11 @@ private:
   // in shadow memory, or within the zero count tables associated with
   // each thread.
   ConcreteProvenanceSet pending_;
+
+  // We use a shared, global cache of blocks to handle allocation
+  // and deallocation in contexts where a thread has yet to be
+  // initialized.
+  BlockAllocator::Cache block_cache_;
 
   // A callback passed to `StopTheWorld` that takes a "snapshot" of the state
   // associated with each thread and uses it to populate the set of pending
@@ -102,7 +113,7 @@ private:
   // but that cannot be ejected yet, because they might still be stored within a
   // thread's zero count table. Maps each allocation to the generation when it
   // was retired.
-  DenseMap<AllocInfo *, uptr> quarantine_{};
+  DenseMap<Block *, uptr> quarantine_{};
 
   // Guards `at_exit_stack_`.
   Mutex at_exit_lock_;

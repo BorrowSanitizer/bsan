@@ -46,13 +46,6 @@ struct LocalInterceptorContext {
   bool block_interception;
 };
 
-static Provenance BsanAllocateMeta(void *ptr, SIZE_T size, uptr span) {
-  BorTag tag = NewBorTag();
-  AllocInfo *info = __bsan_alloc(ptr, size, tag, span);
-  Provenance prov = {tag, info};
-  return prov;
-}
-
 static void *BsanAllocateMetaIntoStack(void *ptr, SIZE_T size, bool is_inst,
                                        uptr span, uptr slot_idx) {
   if (is_inst) {
@@ -108,7 +101,7 @@ INTERCEPTOR(void, free, void *ptr) {
   InterceptorBarrier barrier;
   if (!already_in_scope && INST_CALLER(free)) {
     Provenance *slot = GetParamSlot(0);
-    __bsan_dealloc(ptr, slot->tag, slot->info, span, false);
+    __bsan_dealloc(ptr, slot->tag, slot->block, span, false);
     HANDLE_ERROR_PC_BP(pc, bp);
   }
   return bsan_deallocate(ptr);
@@ -137,7 +130,7 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
   // so we can skip instrumenting the deallocation.
   if (is_inst && ptr != nullptr) {
     Provenance *slot = GetParamSlot(0);
-    __bsan_dealloc(ptr, slot->tag, slot->info, span, false);
+    __bsan_dealloc(ptr, slot->tag, slot->block, span, false);
     HANDLE_ERROR_PC_BP(pc, bp);
   }
   void *nptr = bsan_realloc(ptr, size);

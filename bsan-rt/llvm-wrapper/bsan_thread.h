@@ -168,6 +168,12 @@ public:
 
   RustAllocatorCache *rust_allocator_cache() { return &rust_allocator_cache_; }
 
+  BlockIndex AllocBlock() { return block_allocator.Alloc(&this->block_cache_); }
+
+  void FreeBlock(BlockIndex idx) {
+    block_allocator.Free(&this->block_cache_, idx);
+  }
+
   ZeroCountTable zct;
   uptr os_id;
 
@@ -196,7 +202,8 @@ private:
   // since `BsanThread` is allocated via mmap().
   AllocatorCache allocator_cache_;
   RustAllocatorCache rust_allocator_cache_;
-
+  // This thread's block-index cache for the `Block` metadata slab.
+  BlockAllocator::Cache block_cache_;
   // The address of this thread's thread-local allocation
   // containing the current value of its shadow stack
   // pointer (`__bsan_shadow_stack`).

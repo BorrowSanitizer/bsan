@@ -167,6 +167,7 @@ void BsanThread::Destroy() {
       CHECK_EQ(this, thread);
     CommitBackShadowedCache(this->allocator_cache());
     CommitBackRustCache(this->rust_allocator_cache());
+    block_allocator.FlushCache(&this->block_cache_);
     if (common_flags()->use_sigaltstack)
       UnsetAlternateSignalStack(altstack_base_);
     zct.~ZeroCountTable();
