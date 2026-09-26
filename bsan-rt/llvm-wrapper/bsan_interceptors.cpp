@@ -373,18 +373,20 @@ static int setup_at_exit_wrapper(void (*f)(), void *arg, void *dso) {
 
 // Miri-specific interceptors
 
-INTERCEPTOR(void, miri_promise_symbolic_alignment, void *ptr, SIZE_T align) {
-  uptr remainder = ((uptr)ptr % align) != 0;
-  if(remainder) {
-    uptr pc = StackTrace::GetCurrentPc();                                  
-    uptr bp = GET_CURRENT_FRAME();                                         
-    ScopedErrorReportLock::Lock();                                            
-    UNINITIALIZED BufferedStackTrace stack;                                  
+INTERCEPTOR(void, miri_promise_symbolic_alignment, void *ptr,
+            SIZE_T promised_align) {
+  uptr remainder = ((uptr)ptr % promised_align);
+  if (UNLIKELY(remainder != 0)) {
+    uptr pc = StackTrace::GetCurrentPc();
+    uptr bp = GET_CURRENT_FRAME();
+    ScopedErrorReportLock::Lock();
+    UNINITIALIZED BufferedStackTrace stack;
     stack.Unwind(pc, bp, nullptr, true, __bsan::GetStackTraceLen());
-    Report("error: misaligned access. promised " \
-    "alignment %zd but actually had alignment %zd\n",
-    align, (align + remainder) % sizeof(SIZE_T));
-    PrintStackTrace(stack);                                      
+    uptr actual_align = (promised_align + remainder) % sizeof(SIZE_T);
+    Report("error: misaligned access. promised "
+           "alignment %zd but actually had alignment %zd\n\n",
+           promised_align, actual_align);
+    PrintStackTrace(stack);
     Die();
   }
 }
