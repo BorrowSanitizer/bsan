@@ -42,5 +42,19 @@ void InitializeTSD(void (*destructor)(void *tsd)) {
   CHECK_EQ(0, pthread_key_create(&TSD_KEY, destructor));
 }
 
+void InitMembarrier() {
+  // We're using the "private expedited" variant here, which effects
+  // only the threads spawned by this process. This needs to be
+  // preregistered: "A process must register its intent to use the private
+  // expedited command prior to using it."
+  CHECK_EQ(0, syscall(SYS_membarrier, MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED, 0));
+}
+
+void Membarrier() {
+  // Within a given thread, every read or write that
+  // happens before this barrier will become globally visible.
+  CHECK_EQ(0, syscall(SYS_membarrier, MEMBARRIER_CMD_PRIVATE_EXPEDITED, 0));
+}
+
 } // namespace __bsan
 #endif // SANITIZER_LINUX

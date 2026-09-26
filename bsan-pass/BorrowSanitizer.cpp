@@ -736,6 +736,9 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
                             FunctionType::get(Type::getInt32Ty(*C), true));
 
   createUserspaceApi(M, TLI);
+  // This depends on `BsanFuncSafepointPoll` and `GCTrigger`,
+  // so it must come after they have been initialized.
+  enableSafepoints(M);
   CallbacksInitialized = true;
 }
 
@@ -1038,7 +1041,6 @@ PreservedAnalyses BorrowSanitizerPass::run(Module &M,
   const StackSafetyGlobalInfo &SSGI =
       MAM.getResult<StackSafetyGlobalAnalysis>(M);
 
-  ModuleSanitizer.enableSafepoints(M);
   for (Function &F : M) {
     Modified |= ModuleSanitizer.instrumentFunction(F, FAM, SSGI);
   }
@@ -3365,13 +3367,13 @@ bool BorrowSanitizer::instrumentFunction(Function &F,
     return false;
   }
 
+  const TargetLibraryInfo &TLI = FAM.getResult<TargetLibraryAnalysis>(F);
+  initializeCallbacks(*F.getParent(), TLI);
+
   // Do this early, to avoid invalidating analysis results.
   placeSafepoints(F, FAM);
 
-  const TargetLibraryInfo &TLI = FAM.getResult<TargetLibraryAnalysis>(F);
   DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
-
-  initializeCallbacks(*F.getParent(), TLI);
 
   BorrowSanitizerVisitor Visitor(F, *this, TLI, DT, SSGI);
 

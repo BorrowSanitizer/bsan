@@ -10,6 +10,43 @@ using namespace __bsan;
 
 namespace __bsan {
 
+void GlobalContext::initGC() {
+  InitMembarrier();
+}
+
+struct ScopedStopTheWorldLock {
+  Lock lock;
+  ScopedThreadLock &threads;
+  ScopedStopTheWorldLock(ScopedThreadLock &threads)
+      : lock(Lock(&global_ctx()->global_zct_lock_)), threads(threads) {
+    atomic_store(&__bsan_gc_trigger, 1, memory_order_relaxed);
+    Membarrier();
+    for (;;) {
+      bool all_stopped = true;
+      ForEachThread(threads, [&](BsanThread *thread) {
+        if (thread != CurrentThread()) {
+          if (thread->getGCState(memory_order_acquire) == GCState::kUnsafe) {
+            all_stopped = false;
+          }
+        }
+      });
+      if (all_stopped)
+        break;
+      // Yield so that other threads can make progress before
+      // we check their status again. Otherwise, we might loop
+      // and get the same result as before.
+      internal_sched_yield();
+    }
+  }
+  ~ScopedStopTheWorldLock() {
+    atomic_store(&__bsan_gc_trigger, 0, memory_order_relaxed);
+    ForEachThread(threads, [&](BsanThread *thread) {
+      if (thread != CurrentThread())
+        thread->resume();
+    });
+  }
+};
+
 void GlobalContext::acquireProvenance(Provenance prov) {
   Lock lock(&global_zct_lock_);
   global_zct_.insert(prov);
@@ -151,10 +188,13 @@ void GlobalContext::requestGC() {
       {
         ScopedThreadLock threads;
         {
-          Snapshot snap;
+          ScopedStopTheWorldLock world(threads);
           {
-            ScopedAllocatorLock allocs;
-            RunGarbageCollector(snap, allocs, threads);
+            Snapshot snap;
+            {
+              ScopedAllocatorLock allocs;
+              RunGarbageCollector(snap, allocs, threads);
+            }
           }
         }
       }

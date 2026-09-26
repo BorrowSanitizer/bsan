@@ -42,7 +42,7 @@ SANITIZER_INTERFACE_ATTRIBUTE
 THREADLOCAL void *__bsan_marker = nullptr;
 
 SANITIZER_INTERFACE_ATTRIBUTE
-uptr __bsan_gc_trigger{0};
+atomic_uint8_t __bsan_gc_trigger{0};
 
 // When we call one of Rust's allocator shims, we need to
 // mark the underlying function as being trusted by our runtime,

@@ -20,7 +20,9 @@ public:
 // Global state associated with the runtime.
 struct GlobalContext {
 public:
-  GlobalContext() {}
+  GlobalContext() {
+    initGC();
+  }
   Mutex &AtExitMutex() { return at_exit_lock_; }
   Vector<AtExitRecord *> &AtExitStack() { return at_exit_stack_; }
 
@@ -33,13 +35,10 @@ public:
   void park();
 
 private:
-  friend struct ScopedGCLock;
+  friend struct ScopedStopTheWorldLock;
   friend struct ScopedAllocatorLock;
   Mutex global_zct_lock_;
 
-  // Initializes state associated with the garbage collector.
-  // This includes the membarrier used to synchronize stopping
-  // the world, and the gc trigger page.
   void initGC();
 
   // When a thread exits, its zero count table needs to be

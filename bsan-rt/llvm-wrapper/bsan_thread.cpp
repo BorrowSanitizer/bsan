@@ -152,16 +152,35 @@ void BsanThread::Init() {
 }
 
 void BsanThread::poll() {
-  setGCState(GCState::kParked, memory_order_release);
-  while (getGCState(memory_order_acquire) == GCState::kParked)
-    FutexWait(&gc_state_, GCState::kParked);
+  // Release ordering ensures that this is visible 
+  // within the loop of ScopedStopTheWorldLock.
+  setGCState(GCState::kWaiting, memory_order_release);
+  // As we loop, we do an acquire load. 
+  while (getGCState(memory_order_acquire) == GCState::kWaiting) {
+    FutexWait(&gc_state_, GCState::kWaiting);
+  }
+}
+
+void BsanThread::resume() {
+  auto state = getGCState(memory_order_acquire);
+  if (state == kWaiting) {
+    setGCState(kUnsafe, memory_order_release);
+    FutexWake(&gc_state_, 1);
+  }
 }
 
 bool BsanThread::enterSafeMode() {
   return setGCState(GCState::kSafe, memory_order_release) == GCState::kUnsafe;
 }
 
-bool BsanThread::enterUnsafeMode() {
+bool BsanThread::enterUnsafeMode() { 
+  auto state = getGCState(memory_order_relaxed);
+  if(LIKELY(state == kUnsafe))
+    return false; 
+  setGCState(kUnsafe, memory_order_relaxed);
+  atomic_signal_fence(memory_order_seq_cst);
+  if (UNLIKELY(atomic_load(&__bsan_gc_trigger, memory_order_relaxed)))
+    poll();
   return true;
 };
 

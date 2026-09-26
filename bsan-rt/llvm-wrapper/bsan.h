@@ -59,7 +59,7 @@ static constexpr uptr kMinProvAlignment = 8;
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance
     *__bsan_shadow_stack;
 
-extern SANITIZER_INTERFACE_ATTRIBUTE uptr __bsan_gc_trigger;
+extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uint8_t __bsan_gc_trigger;
 
 extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uintptr_t __bsan_bor_tag_ctr;
 
@@ -82,7 +82,7 @@ enum GCState : u32 {
   kUnsafe = 1,
   // This thread is currently waiting for the GC
   // to finish.
-  kParked = 2
+  kWaiting = 2
 };
 
 // A flag that will block interceptors from being activated
@@ -133,6 +133,10 @@ void ClearParamSlot(uptr Idx);
 void ClearRetValSlot(uptr Idx);
 
 bool CallerIsInstrumented(void *sym);
+
+
+void InitMembarrier();
+void Membarrier();
 
 } // namespace __bsan
 
