@@ -52,11 +52,6 @@ SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_write(void *ptr, uptr access_size, BorTag bor_tag,
                   AllocInfo *alloc_info, bool checked);
 
-// Records a zero-count (alloc_info, bor_tag) pair in the zero-count table.
-// Called by the Rust core when a node's reference count reaches zero.
-SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_release(BorTag bor_tag, AllocInfo *alloc_info);
-
 // Requests a garbage collection. Any thread may call this.
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_request_gc();

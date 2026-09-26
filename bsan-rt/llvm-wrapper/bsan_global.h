@@ -30,7 +30,6 @@ public:
   void requestGC();
   void acquireProvenance(Provenance prov);
   void acquireProvenance(ConcreteProvenanceSet &source);
-  void park();
 
 private:
   friend struct ScopedStopTheWorldLock;
@@ -40,13 +39,9 @@ private:
   void initGC();
 
   // When a thread exits, its zero count table needs to be
-  // retained, so that we can clean up any of the provenance
+  // retained so that we can clean up any of the provenance
   // values that it acquired in a future garbage collection pass.
   ConcreteProvenanceSet global_zct_;
-
-  // A flag indicating that the garbage collector is currently
-  // running. This is used by threads exiting native contexts.
-  atomic_uint32_t gc_running_{0};
 
   // A lock held by the thread that succeeds at invoking
   // the garbage collector. While this lock is held, the

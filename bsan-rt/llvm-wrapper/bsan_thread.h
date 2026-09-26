@@ -20,10 +20,9 @@ class BsanThread;
 class BsanThreadContext final : public ThreadContextBase {
 public:
   explicit BsanThreadContext(int tid)
-      : ThreadContextBase(tid), announced(false),
+      : ThreadContextBase(tid),
         destructor_iterations(GetPthreadDestructorIterations()),
         thread(nullptr) {}
-  bool announced;
   u8 destructor_iterations;
   BsanThread *thread;
   void OnCreated(void *arg) override;
@@ -65,6 +64,7 @@ public:
   template <typename T> void GetStartData(T &data) const {
     GetStartData(&data, sizeof(data));
   }
+  uptr os_id;
 
   u32 tid() { return context_->tid; }
   BsanThreadContext *context() { return context_; }
@@ -106,19 +106,9 @@ public:
       *visits_ptr_ = 0;
   }
 
-  // Signal handler settings.
-  __sanitizer_sigset_t starting_sigset_;
-
-  // The base of this thread's alternate signal stack.
-  // This is needed when deadly signal handlers run on a thread whose
-  // stack has overflowed.
-  void *altstack_base_ = nullptr;
-
   AllocatorCache *allocator_cache() { return &allocator_cache_; }
 
   RustAllocatorCache *rust_allocator_cache() { return &rust_allocator_cache_; }
-
-  uptr os_id;
 
   void acquireProvenance(Provenance prov) { zct_.insert(prov); }
 
@@ -138,6 +128,14 @@ private:
                             u32 parent_tid, bool detached);
 
   void GetStartData(void *out, uptr out_size) const;
+
+  // Signal handler settings.
+  __sanitizer_sigset_t starting_sigset_;
+
+  // The base of this thread's alternate signal stack.
+  // This is needed when deadly signal handlers run on a thread whose
+  // stack has overflowed.
+  void *altstack_base_ = nullptr;
 
   BsanThreadContext *context_;
 
