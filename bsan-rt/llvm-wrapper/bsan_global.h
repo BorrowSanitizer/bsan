@@ -20,7 +20,7 @@ public:
 // Global state associated with the runtime.
 struct GlobalContext {
 public:
-  GlobalContext() { }
+  GlobalContext() {}
   Mutex &AtExitMutex() { return at_exit_lock_; }
   Vector<AtExitRecord *> &AtExitStack() { return at_exit_stack_; }
 
@@ -30,7 +30,6 @@ public:
   void requestGC();
   void acquireProvenance(Provenance prov);
   void acquireProvenance(ConcreteProvenanceSet &source);
-  bool isGCRunning(memory_order order);
   void park();
 
 private:
@@ -65,11 +64,6 @@ private:
   // moment that we acquired the lock. In that case, we can release
   // the lock without running the GC.
   atomic_uintptr_t gc_gen{0};
-
-  // An atomic flag that is set when the garbage collector has been
-  // invoked, and we are waiting on each thread to reach a safepoint
-  // or enter a "gc-safe" state.
-  atomic_uintptr_t gc_pending_{0};
 
   // A set of provenance values with a zero reference count that are
   // ready to be garbage collected. These values are no longer reachable

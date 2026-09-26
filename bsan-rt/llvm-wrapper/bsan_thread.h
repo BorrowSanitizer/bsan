@@ -125,6 +125,7 @@ public:
   bool enterSafeMode();
   bool enterUnsafeMode();
 
+  void poll();
   GCState getGCState(memory_order order);
   GCState setGCState(GCState state, memory_order order);
 

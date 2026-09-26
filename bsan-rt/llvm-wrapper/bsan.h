@@ -70,19 +70,19 @@ extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __bsan_visits_since_gc;
 namespace __bsan {
 
 typedef uptr ThreadId;
-enum GCState : u32 { 
+enum GCState : u32 {
   // This thread is executing uninstrumented
   // code. The garbage collector can ignore it.
   // It will be paused at the boundary if it
   // reaches instrumented code again.
-  kSafe = 0, 
+  kSafe = 0,
   // This thread is executing instrumented code
   // We need to wait until it reaches a safepoint
   // before we can pause its execution.
   kUnsafe = 1,
   // This thread is currently waiting for the GC
   // to finish.
-  kParked = 2 
+  kParked = 2
 };
 
 // A flag that will block interceptors from being activated

@@ -10,10 +10,6 @@ using namespace __bsan;
 
 namespace __bsan {
 
-bool GlobalContext::isGCRunning(memory_order order) {
-  return atomic_load(&gc_running_, order) != 0;
-}
-
 void GlobalContext::acquireProvenance(Provenance prov) {
   Lock lock(&global_zct_lock_);
   global_zct_.insert(prov);

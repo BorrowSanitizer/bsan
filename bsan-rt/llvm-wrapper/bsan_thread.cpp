@@ -151,23 +151,19 @@ void BsanThread::Init() {
   visits_ptr_ = &__bsan_visits_since_gc;
 }
 
+void BsanThread::poll() {
+  setGCState(GCState::kParked, memory_order_release);
+  while (getGCState(memory_order_acquire) == GCState::kParked)
+    FutexWait(&gc_state_, GCState::kParked);
+}
+
 bool BsanThread::enterSafeMode() {
   return setGCState(GCState::kSafe, memory_order_release) == GCState::kUnsafe;
 }
 
 bool BsanThread::enterUnsafeMode() {
-  GCState state = getGCState(memory_order_relaxed);
-  if (LIKELY(state == GCState::kUnsafe))
-    return false;
-  setGCState(GCState::kUnsafe, memory_order_relaxed);
-  atomic_signal_fence(memory_order_seq_cst);
-  // This is an acquire load of the GC status flag, paired
-  // with the release stores that occur within `ScopedGCLock`.
-  if (UNLIKELY(global_ctx()->isGCRunning(memory_order_acquire))) {
-
-  }
   return true;
-}
+};
 
 GCState BsanThread::getGCState(memory_order order) {
   return (GCState)atomic_load(&gc_state_, order);
