@@ -152,10 +152,16 @@ void BsanThread::Init() {
 }
 
 void BsanThread::poll() {
+  // We use a relaxed load at safepoints. If a poll gets triggered,
+  // we need to check again using a stronger ordering, in case we
+  // saw a stale value out in LLVM-world. 
+  if(!atomic_load(&__bsan_gc_trigger, memory_order_acquire))
+    return;
   // Release ordering ensures that this is visible 
   // within the loop of ScopedStopTheWorldLock.
   setGCState(GCState::kWaiting, memory_order_release);
-  // As we loop, we do an acquire load. 
+  // As we loop, we do an acquire load to ensure that we receive
+  // updates from the global, stop the world thread.
   while (getGCState(memory_order_acquire) == GCState::kWaiting) {
     FutexWait(&gc_state_, GCState::kWaiting);
   }
@@ -167,6 +173,8 @@ void BsanThread::resume() {
     setGCState(kUnsafe, memory_order_release);
     FutexWake(&gc_state_, 1);
   }
+  // Otherwise, the thread is currently in safe mode,
+  // and can be ignored. 
 }
 
 bool BsanThread::enterSafeMode() {

@@ -39,7 +39,7 @@ struct ScopedStopTheWorldLock {
     }
   }
   ~ScopedStopTheWorldLock() {
-    atomic_store(&__bsan_gc_trigger, 0, memory_order_relaxed);
+    atomic_store(&__bsan_gc_trigger, 0, memory_order_release);
     ForEachThread(threads, [&](BsanThread *thread) {
       if (thread != CurrentThread())
         thread->resume();
