@@ -13,67 +13,16 @@ using namespace __sanitizer;
 
 namespace __bsan {
 
-struct ZeroCountTable {
-  typedef uptr Generation;
-  ~ZeroCountTable() {}
-
-private:
-  // A flag indicating that we are currently adding a value to the zero count
-  // table for this thread. If this flag is set when we stop the world, then we
-  // will skip merging its zero count table into the set of pending provenance
-  // values to garbage collect. We will still examine this thread's
-  // shadow stack to exclude reachable provenance values.
-  atomic_uint8_t busy_{};
-
-  Generation drained_gen_ = 0;
-
-  // Whenever we modify this zero-count table, we need to
-  // ensure that we are only doing so from the context of another table.
-  struct GCBarrier {
-    ZeroCountTable &zct;
-    GCBarrier(ZeroCountTable &zct) : zct(zct) {
-      atomic_store(&zct.busy_, 1, memory_order_release);
-    }
-    ~GCBarrier() { atomic_store(&zct.busy_, 0, memory_order_release); }
-  };
-
-  ConcreteProvenanceSet zct_;
-
-  // Adds a provenance value with a zero reference count
-  // to this table.
-public:
-  void acquireProvenance(Provenance Prov) {
-    // We use a release order here so that each of these
-    // stores is ordered before the "acquire" load used
-    // to check the value in `IsBusy`.
-    GCBarrier barrier(*this);
-    zct_.insert(Prov);
-  }
-
-  void drainFrom(ZeroCountTable &other) {
-    GCBarrier other_barrier(other);
-    GCBarrier this_barrier(*this);
-    zct_.takeFrom(other.zct_);
-  }
-
-  template <typename Fn> void retainIf(Generation gen, Fn retain) {
-    drained_gen_ = gen;
-    zct_.retainIf(retain);
-  }
-
-  Generation lastDrained() { return drained_gen_; }
-
-  bool isBusy() { return atomic_load(&busy_, memory_order_acquire) == 1; }
-};
+struct BlockGC;
+struct AllowGC;
 
 class BsanThread;
 class BsanThreadContext final : public ThreadContextBase {
 public:
   explicit BsanThreadContext(int tid)
-      : ThreadContextBase(tid), announced(false),
+      : ThreadContextBase(tid),
         destructor_iterations(GetPthreadDestructorIterations()),
         thread(nullptr) {}
-  bool announced;
   u8 destructor_iterations;
   BsanThread *thread;
   void OnCreated(void *arg) override;
@@ -106,15 +55,12 @@ public:
   // executes its start routine.
   void Init();
 
-  // This function is passed as the argument to `pthread_create`.
-  // It configures signal handling and then executes the start routine.
-  static void *StartCallback(void *arg);
-
   void ThreadStart(ThreadID os_id);
 
   template <typename T> void GetStartData(T &data) const {
     GetStartData(&data, sizeof(data));
   }
+  uptr os_id;
 
   u32 tid() { return context_->tid; }
   BsanThreadContext *context() { return context_; }
@@ -156,6 +102,33 @@ public:
       *visits_ptr_ = 0;
   }
 
+  AllocatorCache *allocator_cache() { return &allocator_cache_; }
+
+  RustAllocatorCache *rust_allocator_cache() { return &rust_allocator_cache_; }
+
+  void acquireProvenance(Provenance prov) { zct_.insert(prov); }
+
+  bool enterSafeMode();
+  bool enterUnsafeMode();
+
+  void poll();
+  GCState getGCState(memory_order order);
+  GCState setGCState(GCState state, memory_order order);
+
+  BlockIndex AllocBlock() { return block_allocator.Alloc(&this->block_cache_); }
+
+  void FreeBlock(BlockIndex idx) {
+    block_allocator.Free(&this->block_cache_, idx);
+  }
+
+private:
+  friend struct BsanThreadContext;
+  friend struct GlobalContext;
+  static BsanThread *Create(const void *start_data, uptr data_size,
+                            u32 parent_tid, bool detached);
+
+  void GetStartData(void *out, uptr out_size) const;
+
   // Signal handler settings.
   __sanitizer_sigset_t starting_sigset_;
 
@@ -164,27 +137,9 @@ public:
   // stack has overflowed.
   void *altstack_base_ = nullptr;
 
-  AllocatorCache *allocator_cache() { return &allocator_cache_; }
-
-  RustAllocatorCache *rust_allocator_cache() { return &rust_allocator_cache_; }
-
-  BlockIndex AllocBlock() { return block_allocator.Alloc(&this->block_cache_); }
-
-  void FreeBlock(BlockIndex idx) {
-    block_allocator.Free(&this->block_cache_, idx);
-  }
-
-  ZeroCountTable zct;
-  uptr os_id;
-
-private:
-  friend struct BsanThreadContext;
-  static BsanThread *Create(const void *start_data, uptr data_size,
-                            u32 parent_tid, bool detached);
-
-  void GetStartData(void *out, uptr out_size) const;
-
   BsanThreadContext *context_;
+
+  ConcreteProvenanceSet zct_;
 
   // Executes the start routine.
   thread_return_t Start();
@@ -213,6 +168,8 @@ private:
   // (`__bsan_visits_since_gc`), so that the GC can reset it when it stops
   // the world.
   uptr *visits_ptr_;
+  atomic_uint32_t gc_state_{kSafe};
+
   char start_data_[];
 };
 
@@ -225,29 +182,64 @@ void EnsureMainThreadIDIsCorrect();
 ThreadRegistry &GetThreadRegistry();
 ThreadArgRetval &GetThreadArgRetval();
 
-BsanThreadContext *GetThreadContextByTidLocked(u32 tid);
-
 void LockThreads() SANITIZER_NO_THREAD_SAFETY_ANALYSIS;
 void UnlockThreads() SANITIZER_NO_THREAD_SAFETY_ANALYSIS;
 
-template <typename Fn> inline void ForEachThread(Fn callback, void *arg) {
-  GetThreadRegistry().CheckLocked();
-  // We need an intermediate struct here,
-  // because `RunCallbackForEachThreadLocked`
-  // requires a non-capturing lambda.
-  struct CallbackArgs {
-    Fn callback;
-    void *arg;
-  } ctx{callback, arg};
+struct ScopedThreadLock {
+  ScopedThreadLock() { LockThreads(); }
+  ~ScopedThreadLock() { UnlockThreads(); }
+  ScopedThreadLock &operator=(const ScopedThreadLock &) = delete;
+  ScopedThreadLock(const ScopedThreadLock &) = delete;
+};
+
+// Ensures that the garbage collector is
+// blocked from running while the current thread
+// is within this scope. If the GC was already
+// blocked, then this is a no-op.
+struct BlockGC {
+  BlockGC() : thread_(CurrentThread()) {
+    entered_ = thread_ && thread_->enterUnsafeMode();
+  }
+  ~BlockGC() {
+    if (entered_)
+      thread_->enterSafeMode();
+  }
+
+private:
+  BsanThread *thread_;
+  bool entered_;
+};
+
+// Ensures that the garbage collector is allowed
+// to run within this scope. If the GC is already
+// allowed to run, then this is a no-op.
+struct AllowGC {
+  AllowGC() : thread_(CurrentThread()) {
+    entered_ = thread_ && thread_->enterSafeMode();
+  }
+  ~AllowGC() {
+    if (entered_)
+      thread_->enterUnsafeMode();
+  }
+
+private:
+  BsanThread *thread_;
+  bool entered_;
+};
+
+template <typename Fn, typename... Args>
+inline void ForEachThread(ScopedThreadLock &threads, Fn callback,
+                          Args... args) {
+  auto invoke = [&](auto &&thread) { callback(thread, args...); };
+  using Invoke = decltype(invoke);
   GetThreadRegistry().RunCallbackForEachThreadLocked(
-      [](ThreadContextBase *tctx_base, void *raw_ctx) {
+      [](ThreadContextBase *tctx_base, void *arg) {
         if (tctx_base->status == ThreadStatusRunning) {
-          CallbackArgs *ctx = static_cast<CallbackArgs *>(raw_ctx);
           BsanThreadContext *tctx = static_cast<BsanThreadContext *>(tctx_base);
-          ctx->callback(tctx->thread, ctx->arg);
+          (*static_cast<Invoke *>(arg))(tctx->thread);
         }
       },
-      &ctx);
+      &invoke);
 }
 } // namespace __bsan
 #endif // BSAN_THREAD_H

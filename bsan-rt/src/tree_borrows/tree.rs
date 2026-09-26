@@ -1097,7 +1097,6 @@ pub trait Tree: Clone {
     fn dealloc(
         &mut self,
         global_ctx: &GlobalCtx,
-
         tag: BorTag,
         access_range: AllocRange,
         alloc_id: AllocId,
@@ -1113,7 +1112,6 @@ pub trait Tree: Clone {
         visits_since_gc: &Cell<u32>,
     ) -> UBResult<()>;
     fn expose_tag(&mut self, tag: BorTag, protected: bool);
-    #[allow(dead_code)]
     fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_tags: &mut [BorTag]) -> bool;
 }
 
@@ -1226,12 +1224,14 @@ impl Tree for LazyTree {
                 tree.roots.is_empty()
             }
             LazyTree::Uninit { root_tag, refcount, .. } => {
-                // A tree in the Uninit state only has a single node (the root). If
-                // this node is in the dead list with a zero reference count, then the
-                // tree is dead and the associated AllocInfo metadata can be freed.
-                let root_is_dead = refcount.get() == 0 && dead_tags.contains(root_tag);
-                dead_tags.fill(BorTag::OMNIVALID);
-                root_is_dead
+                let mut root_is_dead = dead_tags.is_empty();
+                for entry in dead_tags.iter_mut() {
+                    if *entry == *root_tag {
+                        root_is_dead = true;
+                    }
+                    *entry = BorTag::OMNIVALID;
+                }
+                root_is_dead && refcount.get() == 0
             }
         }
     }

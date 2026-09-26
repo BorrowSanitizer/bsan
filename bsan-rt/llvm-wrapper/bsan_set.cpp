@@ -75,6 +75,12 @@ void BorTagSet::EnsureCapacity(uptr req_size) {
   end_ = begin_ + req_size;
 }
 
+void ConcreteProvenanceSet::insert(BlockIndex idx) {
+  if (!set_.contains(idx)) {
+    set_[idx] = BorTagSet();
+  }
+}
+
 void ConcreteProvenanceSet::insert(Provenance prov) {
   if (prov.isConcrete()) {
     set_[BLOCK_IDX(prov.block)].insert(prov.tag);
@@ -86,6 +92,10 @@ void ConcreteProvenanceSet::clear() {
     KV.second.clear();
     return true;
   });
+}
+
+bool ConcreteProvenanceSet::contains(BlockIndex idx) {
+  return find(idx) != nullptr;
 }
 
 bool ConcreteProvenanceSet::contains(Provenance prov) {
