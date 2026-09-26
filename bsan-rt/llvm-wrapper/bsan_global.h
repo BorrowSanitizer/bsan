@@ -4,34 +4,21 @@
 #include "bsan.h"
 #include "bsan_set.h"
 #include "bsan_thread.h"
-#include "sanitizer_common/sanitizer_stoptheworld.h"
 
 namespace __bsan {
 
-struct ScopedStopTheWorldLock;
-
 struct Snapshot {
 public:
-  Snapshot(ConcreteProvenanceSet *live, uptr gen)
-      : live(live), gen(gen), min_drained(gen) {};
+  Snapshot() {};
   // The set of borrow tags that are currently
   // reachable from any of the shadow stacks.
-  ConcreteProvenanceSet *live;
-  // The current generation
-  uptr gen;
-  // The minimum generation recorded by any live thread.
-  uptr min_drained;
-  // The scope holding the lock for global state. We need
-  // access to this within the closure that executes when
-  // the world is stopped, so that we can selectively
-  // unlock the internal allocator. We only want to unlock
-  // this once, so we need to update the state of the scope.
-  ScopedStopTheWorldLock *scope = nullptr;
+  ConcreteProvenanceSet live;
 };
 
 // Global state associated with the runtime.
 struct GlobalContext {
 public:
+  GlobalContext() { initGC(); }
   Mutex &AtExitMutex() { return at_exit_lock_; }
   Vector<AtExitRecord *> &AtExitStack() { return at_exit_stack_; }
 
@@ -39,23 +26,22 @@ public:
   // a thread safe operation; any series of threads can simultaneously
   // try to start the GC, and only one will succeed.
   void requestGC();
-
   void acquireProvenance(Provenance prov);
-  void acquireProvenance(ZeroCountTable &source);
-
-  BlockIndex AllocBlock() { return block_allocator.Alloc(&this->block_cache_); }
+  void acquireProvenance(ConcreteProvenanceSet &source);
 
   void FreeBlock(BlockIndex idx) {
     block_allocator.Free(&this->block_cache_, idx);
   }
 
 private:
-  friend struct ScopedStopTheWorldLock;
   Mutex global_zct_lock_;
+
+  void initGC();
+
   // When a thread exits, its zero count table needs to be
-  // retained, so that we can clean up any of the provenance
+  // retained so that we can clean up any of the provenance
   // values that it acquired in a future garbage collection pass.
-  ZeroCountTable global_zct_;
+  ConcreteProvenanceSet global_zct_;
 
   // A lock held by the thread that succeeds at invoking
   // the garbage collector. While this lock is held, the
@@ -81,39 +67,16 @@ private:
   // and deallocation in contexts where a thread has yet to be
   // initialized.
   BlockAllocator::Cache block_cache_;
-
-  // A callback passed to `StopTheWorld` that takes a "snapshot" of the state
-  // associated with each thread and uses it to populate the set of pending
-  // provenance values.
-  static void SnapshotCallback(const SuspendedThreadsList &, void *arg);
-
-  // Iterates over every thread's shadow stack, creating a set of all reachable
-  // provenance values. The last argument is a pointer to the
-  // `ConcreteProvenanceSet` being populated.
-  static void CollectProvenance(BsanThread *const &thread, void *arg);
-
+  void RunGarbageCollector(Snapshot &snap, ScopedThreadLock &threads);
   // Iterates over every thread's zero-count-table, merging its contents into
   // the set of pending provenance values. We only add values to the pending set
   // if they are not present on any shadow stack. Values that we add to the
   // pending set are also removed from their thread's zero-count-table.
-  static void MergeZeroCountsCallback(BsanThread *const &thread, void *arg);
-  static void MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct);
-
-  // Zeroes every thread's tree-node visit counter, restarting the interval
-  // until the next collection for all of them.
-  static void ResetVisitCounts(BsanThread *const &thread, void *arg);
-
+  static void MergeZeroCounts(Snapshot *snap, ConcreteProvenanceSet &zct);
   // Drains the contents of the pending provenance set, pruning the associated
   // state from the tree for each allocation. Ejects any retired allocation
-  // objects that are confirmed to be unreachable. This happens after the world
-  // has restarted.
-  void CollectGarbage(Snapshot &snap);
-
-  // Allocations that are unreachable and have had all of their nodes pruned,
-  // but that cannot be ejected yet, because they might still be stored within a
-  // thread's zero count table. Maps each allocation to the generation when it
-  // was retired.
-  DenseMap<Block *, uptr> quarantine_{};
+  // objects that are confirmed to be unreachable.
+  void CollectGarbage(Snapshot *snap);
 
   // Guards `at_exit_stack_`.
   Mutex at_exit_lock_;
@@ -123,42 +86,6 @@ private:
 
 /// Returns a pointer to the singleton `GlobalContext` object.
 GlobalContext *global_ctx();
-
-struct ScopedStopTheWorldLock {
-  ScopedStopTheWorldLock() {
-    // We need to ensure that every existing thread is blocked
-    // from the allocator, and that every new thread is blocked
-    // from registering its shadow stack in the global state.
-    // If we stop the world when a thread is within either of
-    // these critical sections, then our state might be corrupted
-    // once we resume.
-    LockThreads();
-    LockShadowedAllocator();
-    LockRustAllocator();
-    InternalAllocatorLock();
-  }
-
-  void UnlockRuntimeAllocators() {
-    InternalAllocatorUnlock();
-    UnlockRustAllocator();
-    runtime_alloc_locked_ = false;
-  }
-
-  ~ScopedStopTheWorldLock() {
-    if (runtime_alloc_locked_) {
-      InternalAllocatorUnlock();
-      UnlockRustAllocator();
-    }
-    UnlockShadowedAllocator();
-    UnlockThreads();
-  }
-
-  ScopedStopTheWorldLock &operator=(const ScopedStopTheWorldLock &) = delete;
-  ScopedStopTheWorldLock(const ScopedStopTheWorldLock &) = delete;
-
-private:
-  bool runtime_alloc_locked_ = true;
-};
 
 } // namespace __bsan
 #endif

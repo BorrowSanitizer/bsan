@@ -1118,7 +1118,6 @@ pub trait Tree: Clone {
     fn dealloc(
         &mut self,
         global_ctx: &GlobalCtx,
-
         tag: BorTag,
         access_range: AllocRange,
         alloc_id: AllocId,

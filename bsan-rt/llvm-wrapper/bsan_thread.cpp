@@ -7,6 +7,9 @@
 using namespace __sanitizer;
 using namespace __bsan;
 
+// Threads have a particular lifecycle. First, we create a new
+// `BsanThread` object. Then, we register this object within the
+// `ThreadRegistry`.
 namespace __bsan {
 
 void BsanThreadContext::OnCreated(void *arg) {
@@ -20,7 +23,7 @@ void BsanThreadContext::OnFinished() {
   // Any thread-local state that involves the GC must be handled
   // within this function.
   if (thread) {
-    global_ctx()->acquireProvenance(thread->zct);
+    global_ctx()->acquireProvenance(thread->zct_);
   }
   thread = nullptr;
 }
@@ -68,11 +71,6 @@ ThreadRegistry &GetThreadRegistry() {
 ThreadArgRetval &GetThreadArgRetval() {
   InitThreads();
   return *thread_data;
-}
-
-BsanThreadContext *GetThreadContextByTidLocked(u32 tid) {
-  return static_cast<BsanThreadContext *>(
-      GetThreadRegistry().GetThreadLocked(tid));
 }
 
 BsanThread *CurrentThread() {
@@ -142,6 +140,7 @@ void BsanThread::Init() {
   shadow_stack_bottom_ = MmapOrDie(shadow_stack_size_, __func__);
   __bsan_shadow_stack =
       (Provenance *)(((uptr)shadow_stack_bottom_) + shadow_stack_size_);
+
   // We record the address of the thread-local shadow stack pointer so
   // that the GC can accurately read the initialized contents of the
   // shadow stack when it stops the world.
@@ -150,6 +149,55 @@ void BsanThread::Init() {
   // the GC can zero it for every thread once any one of them has reached the
   // collection threshold.
   visits_ptr_ = &__bsan_visits_since_gc;
+}
+
+void BsanThread::poll() {
+  // We need to block asynchronous signals during polling.
+  // Otherwise, if the user's code has an instrumented asynchronous
+  // signal handler, then we'll be kicked out of the waiting state
+  // back into the unsafe state, which is an invalid transition.
+  // Only the GC is allowed to move threads out of waiting.
+  for (;;) {
+    // Release ordering ensures that this is visible
+    // within the loop of ScopedStopTheWorldLock.
+    setGCState(GCState::kWaiting, memory_order_release);
+    // As we loop, we do an acquire load to ensure that we receive
+    // updates from the stop-the-world thread.
+    while (atomic_load(&__bsan_gc_trigger, memory_order_acquire)) {
+      FutexWait(&__bsan_gc_trigger, 1);
+    }
+    setGCState(GCState::kUnsafe, memory_order_relaxed);
+    atomic_signal_fence(memory_order_seq_cst);
+    if (!atomic_load(&__bsan_gc_trigger, memory_order_relaxed))
+      return;
+  }
+}
+
+bool BsanThread::enterSafeMode() {
+  return setGCState(GCState::kSafe, memory_order_release) == GCState::kUnsafe;
+}
+
+bool BsanThread::enterUnsafeMode() {
+  auto state = getGCState(memory_order_relaxed);
+  if (LIKELY(state == kUnsafe))
+    return false;
+  setGCState(kUnsafe, memory_order_relaxed);
+  // we have an inverse dependency here. We are writing to our state,
+  // and then reading from trigger. Meanwhile, the GC is setting the trigger,
+  // and then reading from our state.
+  atomic_signal_fence(memory_order_seq_cst);
+  bool gc_enabled = atomic_load(&__bsan_gc_trigger, memory_order_relaxed);
+  if (gc_enabled)
+    poll();
+  return true;
+};
+
+GCState BsanThread::getGCState(memory_order order) {
+  return (GCState)atomic_load(&gc_state_, order);
+}
+
+GCState BsanThread::setGCState(GCState state, memory_order order) {
+  return (GCState)atomic_exchange(&gc_state_, state, order);
 }
 
 void BsanThread::TSDDtor(void *tsd) {
@@ -170,7 +218,7 @@ void BsanThread::Destroy() {
     block_allocator.FlushCache(&this->block_cache_);
     if (common_flags()->use_sigaltstack)
       UnsetAlternateSignalStack(altstack_base_);
-    zct.~ZeroCountTable();
+    zct_.~ConcreteProvenanceSet();
     UnmapOrDie(shadow_stack_bottom_, shadow_stack_size_);
   } else {
     CHECK_NE(this, CurrentThread());

@@ -1,129 +1,194 @@
 #include "bsan_global.h"
 #include "bsan.h"
+#include "bsan_flags.h"
+#include "bsan_interceptors.h"
 #include "bsan_interface_internal.h"
 #include "sanitizer_common/sanitizer_allocator_internal.h"
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_placement_new.h"
-#include "sanitizer_common/sanitizer_stoptheworld.h"
 #include "sanitizer_common/sanitizer_type_traits.h"
 
 using namespace __bsan;
-
 namespace __bsan {
+
+static const uptr kNumIterationsBeforeCheck = 100;
+static const uptr kNanoToMS = 1000000;
+
+void GlobalContext::initGC() { InitMembarrier(); }
+
+struct ScopedStopTheWorldLock {
+  ScopedThreadLock &threads;
+  ScopedStopTheWorldLock(ScopedThreadLock &threads) : threads(threads) {
+    atomic_store(&__bsan_gc_trigger, 1, memory_order_relaxed);
+    Membarrier();
+    uptr visit_counter = 0;
+    u64 start = MonotonicNanoTime();
+    u64 threshold_ms = flags()->gc_hang_threshold_ms;
+    for (;;) {
+      if (threshold_ms && visit_counter &&
+          visit_counter % kNumIterationsBeforeCheck == 0) {
+        u64 elapsed_ms = (MonotonicNanoTime() - start) / kNanoToMS;
+        if (elapsed_ms > threshold_ms) {
+          Printf("ERROR: BorrowSanitizer: garbage collection has been waiting "
+                 "%llu ms for threads to reach a safepoint "
+                 "(gc_hang_threshold_ms=%zu).\n",
+                 elapsed_ms, flags()->gc_hang_threshold_ms);
+          ForEachThread(threads, [&](BsanThread *thread) {
+            if (thread != CurrentThread() &&
+                thread->getGCState(memory_order_acquire) == GCState::kUnsafe) {
+              Printf("  Thread T%u (os_id %zu) has not reached a safepoint.\n",
+                     thread->tid(), thread->os_id);
+            }
+          });
+          Die();
+        }
+      }
+      visit_counter++;
+
+      bool all_stopped = true;
+      ForEachThread(threads, [&](BsanThread *thread) {
+        if (thread != CurrentThread()) {
+          if (thread->getGCState(memory_order_acquire) == GCState::kUnsafe) {
+            all_stopped = false;
+          }
+        }
+      });
+      if (all_stopped)
+        break;
+      // Yield so that other threads can make progress before
+      // we check their status again. Otherwise, we might loop
+      // and get the same result as before.
+      internal_sched_yield();
+    }
+  }
+
+  ~ScopedStopTheWorldLock() {
+    atomic_store(&__bsan_gc_trigger, 0, memory_order_release);
+    FutexWake(&__bsan_gc_trigger, INT32_MAX);
+  }
+};
 
 void GlobalContext::acquireProvenance(Provenance prov) {
   Lock lock(&global_zct_lock_);
-  global_zct_.acquireProvenance(prov);
+  global_zct_.insert(prov);
 }
 
-void GlobalContext::acquireProvenance(ZeroCountTable &source) {
+void GlobalContext::acquireProvenance(ConcreteProvenanceSet &source) {
   Lock lock(&global_zct_lock_);
-  global_zct_.drainFrom(source);
+  global_zct_.takeFrom(source);
 }
 
-void GlobalContext::CollectProvenance(BsanThread *const &thread, void *arg) {
-  // Iterate over the shadow stacks for each thread,
-  // collecting all provenance values into the snapshot.
-  auto *state = static_cast<Snapshot *>(arg);
-  if (thread) {
-    for (auto prov : thread->shadow_stack()) {
-      state->live->insert(prov);
+void GlobalContext::MergeZeroCounts(Snapshot *snap,
+                                    ConcreteProvenanceSet &zct) {
+  zct.retainIf([&](BlockIndex idx, BorTag tag) -> bool {
+    Provenance prov = {tag, BLOCK_PTR(idx)};
+    if (snap->live.contains(prov)) {
+      return true;
     }
-  }
+    global_ctx()->pending_.insert(prov);
+    return false;
+  });
 }
 
-void GlobalContext::MergeZeroCountsCallback(BsanThread *const &thread,
-                                            void *arg) {
-  auto *snap = static_cast<Snapshot *>(arg);
-  if (!thread) {
-    return;
-  }
-  MergeZeroCounts(snap, thread->zct);
-}
+void GlobalContext::RunGarbageCollector(Snapshot &snap,
+                                        ScopedThreadLock &threads) {
+  ForEachThread(
+      threads,
+      [](BsanThread *thread, Snapshot *snap) {
+        // Collect all of the provenance values that are reachable from each
+        // thread.
+        for (auto prov : thread->shadow_stack()) {
+          snap->live.insert(prov);
+        }
+      },
+      &snap);
 
-void GlobalContext::ResetVisitCounts(BsanThread *const &thread, void *arg) {
-  if (thread) {
-    thread->ResetVisitCount();
-  }
-}
+  ForEachThread(
+      threads,
+      [](BsanThread *thread, Snapshot *snap) {
+        // Drain the zero-count tables for each thread, as well
+        // as the global zero count table. This happens in a separate
+        // step from scanning the stacks, since we need to know if a
+        // provenance value is reachable, globally, before we can remove
+        // it from a ZCT.
+        MergeZeroCounts(snap, thread->zct_);
+      },
+      &snap);
 
-void GlobalContext::MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct) {
-  // If the thread is not in the middle of updating its zero
-  // count table, then we can drain its contents for garbage collection.
-  if (!zct.isBusy()) {
-    // Move every unreachable value into the pending set, keeping the reachable
-    // ones in this thread's zero count table for a future collection. Record
-    // the current generation as the last one when this thread's zero count
-    // table was drained.
-    zct.retainIf(snap->gen, [&](BlockIndex idx, BorTag tag) -> bool {
-      Provenance prov = {tag, BLOCK_PTR(idx)};
-      if (snap->live->contains(prov)) {
-        return true;
-      }
-      global_ctx()->pending_.insert(prov);
-      return false;
-    });
-  }
-
-  // The default value of `min_drained` is the current
-  // generation. Its final value will be equal to the
-  // minimum generation for any thread, after updating
-  // the ZCT (if we were able to access it this time).
-  ZeroCountTable::Generation last_drained = zct.lastDrained();
-  if (last_drained < snap->min_drained) {
-    snap->min_drained = last_drained;
-  }
-}
-
-void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
-  Snapshot *snap = static_cast<Snapshot *>(arg);
-  // We need access to the internal allocators used by the runtime, so
-  // that we can add live provenance values to the set within the snapshot.
-  // Unlocking these here prevents us from unlocking them again once the
-  // closure returns.
-  snap->scope->UnlockRuntimeAllocators();
-  // For each thread, add all live provenance values to the snapshot.
-  ForEachThread(CollectProvenance, arg);
-  // For each thread, if a provenance value in the ZCT is not present
-  // in the set of live provenance values in the `SnapShot`, then remove
-  // it from the ZCT and add it to the global "pending" set of provenance
-  // values that need pruning.
-  ForEachThread(MergeZeroCountsCallback, arg);
-  // We also need to visit the global ZCT, which contains garbage from threads
-  // that have exited since the last collection run.
-  MergeZeroCounts(snap, global_ctx()->global_zct_);
+  MergeZeroCounts(&snap, global_ctx()->global_zct_);
   // Only one thread needs to reach `visits_per_gc` to get us here, so every
   // thread's counter starts over from the collection we are about to perform.
-  ForEachThread(ResetVisitCounts, nullptr);
+  ForEachThread(
+      threads,
+      [](BsanThread *thread, Snapshot *) { thread->ResetVisitCount(); }, &snap);
+  // Prune all unreachable nodes, destroying
+  // allocations that have had their trees fully pruned.
+  // At the moment, we wait until after restarting the
+  // world to actually "eject" allocations that have had
+  // all of their nodes pruned. This is because we
+  // do not have a dedicated lock for the concurrent
+  // bump allocator used to hand out allocation metadata,
+  // so a thread might be in the middle of its critical
+  // section during this point.
+  global_ctx()->CollectGarbage(&snap);
 }
 
-void GlobalContext::CollectGarbage(Snapshot &snap) {
+void GlobalContext::CollectGarbage(Snapshot *snap) {
   ConcreteProvenanceSet still_pending;
   pending_.drain([&](BlockIndex idx, BorTagSet &tags) {
     Block *info = BLOCK_PTR(idx);
-    // If `__bsan_prune` returns true, then the allocation's tree is empty;
-    // every single tag was pruned.
-    if (__bsan_prune(info, tags.data(), tags.size())) {
-      // Insert the allocation into the quarantine.
-      // It might already be present. If so, its generation is
-      // updated. It is crucial for this to be a hashmap. Otherwise,
-      // we will end up double-freeing allocation metadata.
-      quarantine_[info] = snap.gen;
+    tags.forEach([&](BorTag tag) {
+      // None of the borrow tags in the pending set
+      // are live on the stack at this point.
+      // They might be live on the heap, with a nonzero
+      // reference count, or their underlying allocation
+      // could be live on the shadow stack under a different tag,
+      DCHECK(!snap->live.contains({tag, info}));
+    });
+    auto status = __bsan_prune(info, tags.data(), tags.size());
+    if (status == EjectStatus::Ejectable) {
+      // Every tag has been removed from the tree.
+      // The reference count for this allocation is zero.
+      if (!snap->live.contains(idx)) {
+        // The root is no longer present on any
+        // of the shadow stacks. We can retire it.
+        {
+          InterceptorBarrier barrier;
+          __bsan_eject(info);
+        }
+        FreeBlock(idx);
+      } else {
+        still_pending.insert(idx);
+      }
+      return;
     }
+    if (status == EjectStatus::RetainEmpty) {
+      // It is possible for an allocation to have been
+      // fully pruned but for it to still be alive
+      // on the shadow stack. For example, this will
+      // happen if an allocation is freed while one
+      // of its aliases is within a ZCT. We need to
+      // insert the allocation into the pending set,
+      // without providing any tags for it.
+      still_pending.insert(idx);
+      return;
+    }
+    CHECK(status == EjectStatus::RetainNonEmpty);
+    if (!tags.size())
+      still_pending.insert(idx);
+    // Any leftover tags must be kept around
+    // for the next cycle.
+    tags.forEach([&](BorTag tag) {
+      // When we prune a tag, we write
+      // zero into the list of tags. This
+      // is treated as a special "omnivalid"
+      // provenance value, which is filtered
+      // out when we try to insert it into
+      // the pending set.
+      still_pending.insert({tag, info});
+    });
   });
   pending_.swap(still_pending);
-
-  DenseMap<Block *, uptr> quarantined;
-  quarantine_.forEach([&](const DenseMap<Block *, uptr>::value_type &KV) {
-    if (KV.second <= snap.min_drained) {
-      __bsan_eject(KV.first);
-      global_ctx()->FreeBlock(BLOCK_IDX(KV.first));
-    } else {
-      quarantined.try_emplace(KV.first, KV.second);
-    }
-    return true;
-  });
-  quarantine_.swap(quarantined);
   block_allocator.FlushCache(&block_cache_);
 }
 
@@ -138,14 +203,24 @@ void GlobalContext::requestGC() {
     // then somebody else got here first and already ran the GC.
     uptr current_gen = atomic_load(&gc_gen, memory_order_acquire);
     if (gen == current_gen) {
-      ConcreteProvenanceSet live;
-      Snapshot state(&live, gen);
       {
-        ScopedStopTheWorldLock stopped;
-        state.scope = &stopped;
-        StopTheWorld(SnapshotCallback, &state);
+        // No new threads are created
+        ScopedThreadLock threads;
+        // Every thread has reached a safepoint,
+        // or is executing uninstrumented code,
+        // and will reach a safepoint when it enters
+        // back into instrumented code.
+        ScopedStopTheWorldLock world(threads);
+        // Nothing can add to the global
+        // zero count table.
+        Lock zct_lock(&global_ctx()->global_zct_lock_);
+        {
+          {
+            Snapshot snap;
+            RunGarbageCollector(snap, threads);
+          }
+        }
       }
-      CollectGarbage(state);
       atomic_fetch_add(&gc_gen, 1, memory_order_relaxed);
     }
     // Release the lock, allowing the GC to run again.

@@ -90,10 +90,11 @@ public:
   ConcreteProvenanceSet &operator=(const ConcreteProvenanceSet &) = delete;
 
   void insert(Provenance Prov);
-  void remove(Provenance Prov);
+  void insert(BlockIndex idx);
 
   void clear();
   bool contains(Provenance prov);
+  bool contains(BlockIndex idx);
 
   void swap(ConcreteProvenanceSet &other) { set_.swap(other.set_); }
 

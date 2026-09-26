@@ -19,4 +19,7 @@ BSAN_FLAG(uptr, tree_gc_min_nodes, 64,
           "0 makes every initialized tree prunable.")
 BSAN_FLAG(uptr, max_compacted_children, 16,
           "Only compact away a dead node by reparenting its children onto its"
-          "parent if doing so leaves the parent with at most this many children.")
+          "parent if doing so leaves the parent with at most this many children.")BSAN_FLAG(uptr, gc_hang_threshold_ms, 10000,
+          "Report an error and die if the garbage collector waits longer than"
+          "this many milliseconds for every thread to reach a safepoint."
+          "0 disables the check.")
