@@ -59,7 +59,7 @@ static constexpr uptr kMinProvAlignment = 8;
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance
     *__bsan_shadow_stack;
 
-extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uint8_t __bsan_gc_trigger;
+extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uint32_t __bsan_gc_trigger;
 
 extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uintptr_t __bsan_bor_tag_ctr;
 
@@ -133,7 +133,6 @@ void ClearParamSlot(uptr Idx);
 void ClearRetValSlot(uptr Idx);
 
 bool CallerIsInstrumented(void *sym);
-
 
 void InitMembarrier();
 void Membarrier();

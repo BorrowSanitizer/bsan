@@ -154,40 +154,34 @@ void BsanThread::Init() {
 void BsanThread::poll() {
   // We use a relaxed load at safepoints. If a poll gets triggered,
   // we need to check again using a stronger ordering, in case we
-  // saw a stale value out in LLVM-world. 
-  if(!atomic_load(&__bsan_gc_trigger, memory_order_acquire))
+  // saw a stale value out in LLVM-world.
+  if (!atomic_load(&__bsan_gc_trigger, memory_order_acquire))
     return;
-  // Release ordering ensures that this is visible 
+  // Release ordering ensures that this is visible
   // within the loop of ScopedStopTheWorldLock.
   setGCState(GCState::kWaiting, memory_order_release);
   // As we loop, we do an acquire load to ensure that we receive
   // updates from the global, stop the world thread.
-  while (getGCState(memory_order_acquire) == GCState::kWaiting) {
-    FutexWait(&gc_state_, GCState::kWaiting);
+  while (atomic_load(&__bsan_gc_trigger, memory_order_relaxed) ||
+         atomic_load(&__bsan_gc_trigger, memory_order_acquire)) {
+    FutexWait(&__bsan_gc_trigger, 1);
   }
-}
-
-void BsanThread::resume() {
-  auto state = getGCState(memory_order_acquire);
-  if (state == kWaiting) {
-    setGCState(kUnsafe, memory_order_release);
-    FutexWake(&gc_state_, 1);
-  }
-  // Otherwise, the thread is currently in safe mode,
-  // and can be ignored. 
 }
 
 bool BsanThread::enterSafeMode() {
   return setGCState(GCState::kSafe, memory_order_release) == GCState::kUnsafe;
 }
 
-bool BsanThread::enterUnsafeMode() { 
+bool BsanThread::enterUnsafeMode() {
   auto state = getGCState(memory_order_relaxed);
-  if(LIKELY(state == kUnsafe))
-    return false; 
+  if (LIKELY(state == kUnsafe))
+    return false;
   setGCState(kUnsafe, memory_order_relaxed);
+  // we have an inverse dependency here. We are writing to our state,
+  // and then reading from trigger. Meanwhile, the GC is setting the trigger,
+  // and then reading from our state.
   atomic_signal_fence(memory_order_seq_cst);
-  if (UNLIKELY(atomic_load(&__bsan_gc_trigger, memory_order_relaxed)))
+  if (UNLIKELY(atomic_load(&__bsan_gc_trigger, memory_order_acquire)))
     poll();
   return true;
 };

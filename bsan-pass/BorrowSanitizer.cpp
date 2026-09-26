@@ -756,7 +756,7 @@ void BorrowSanitizer::createUserspaceApi(Module &M,
 
   ProvStackTLS = getOrInsertTLSGlobal(M, BSAN("shadow_stack"), PtrTy);
   BorTagCounter = getOrInsertGlobal(M, BSAN("bor_tag_ctr"), IntptrTy);
-  GCTrigger = getOrInsertGlobal(M, BSAN("gc_trigger"), PtrTy);
+  GCTrigger = getOrInsertGlobal(M, BSAN("gc_trigger"), IRB.getInt32Ty());
 }
 
 namespace {
@@ -3408,18 +3408,24 @@ void BorrowSanitizer::enableSafepoints(Module &M) {
   // not used for synchronizing the state of each thread, so it's fine if
   // we see a stale value. We'll reach it on the next safepoint.
   LoadInst *Pending =
-      IRB.CreateAlignedLoad(IRB.getInt8Ty(), GCTrigger, Align(1));
+      IRB.CreateAlignedLoad(IRB.getInt32Ty(), GCTrigger, Align(4));
   Pending->setAtomic(AtomicOrdering::Monotonic);
 
   // Check if the value is equal to one, which indicates that we
   // should try to poll
-  Value *IsPending = IRB.CreateICmpNE(Pending, IRB.getInt8(0));
+  Value *IsPending = IRB.CreateICmpNE(Pending, IRB.getInt32(0));
   // The true path, where the GC is enabled, is unlikely.
   auto *Unlikely = MDBuilder(*C).createUnlikelyBranchWeights();
   IRB.CreateCondBr(IsPending, Slow, Exit, Unlikely);
 
   IRB.SetInsertPoint(Slow);
   CallInst *SlowCall = IRB.CreateCall(BsanFuncSafepointPoll, {});
+
+  // The poll is inlined into instrumented functions, so we need to
+  // prevent the visitor from instrumenting it.
+  MDNode *NoSanitize = MDNode::get(*C, {});
+  Pending->setMetadata(LLVMContext::MD_nosanitize, NoSanitize);
+  SlowCall->setMetadata(LLVMContext::MD_nosanitize, NoSanitize);
   IRB.CreateBr(Exit);
   IRB.SetInsertPoint(Exit);
   IRB.CreateRetVoid();

@@ -47,7 +47,8 @@ void InitMembarrier() {
   // only the threads spawned by this process. This needs to be
   // preregistered: "A process must register its intent to use the private
   // expedited command prior to using it."
-  CHECK_EQ(0, syscall(SYS_membarrier, MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED, 0));
+  CHECK_EQ(
+      0, syscall(SYS_membarrier, MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED, 0));
 }
 
 void Membarrier() {

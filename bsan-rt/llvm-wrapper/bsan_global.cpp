@@ -10,9 +10,7 @@ using namespace __bsan;
 
 namespace __bsan {
 
-void GlobalContext::initGC() {
-  InitMembarrier();
-}
+void GlobalContext::initGC() { InitMembarrier(); }
 
 struct ScopedStopTheWorldLock {
   Lock lock;
@@ -41,9 +39,12 @@ struct ScopedStopTheWorldLock {
   ~ScopedStopTheWorldLock() {
     atomic_store(&__bsan_gc_trigger, 0, memory_order_release);
     ForEachThread(threads, [&](BsanThread *thread) {
-      if (thread != CurrentThread())
-        thread->resume();
+      if (thread != CurrentThread() &&
+          thread->getGCState(memory_order_acquire) == kWaiting)
+        thread->setGCState(kUnsafe, memory_order_release);
     });
+    // Wake all threads available.
+    FutexWake(&__bsan_gc_trigger, UINT32_MAX);
   }
 };
 

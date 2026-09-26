@@ -20,9 +20,7 @@ public:
 // Global state associated with the runtime.
 struct GlobalContext {
 public:
-  GlobalContext() {
-    initGC();
-  }
+  GlobalContext() { initGC(); }
   Mutex &AtExitMutex() { return at_exit_lock_; }
   Vector<AtExitRecord *> &AtExitStack() { return at_exit_stack_; }
 
