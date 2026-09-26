@@ -20,7 +20,7 @@ public:
 // Global state associated with the runtime.
 struct GlobalContext {
 public:
-  GlobalContext() { this->initGC(); }
+  GlobalContext() { }
   Mutex &AtExitMutex() { return at_exit_lock_; }
   Vector<AtExitRecord *> &AtExitStack() { return at_exit_stack_; }
 
@@ -31,7 +31,6 @@ public:
   void acquireProvenance(Provenance prov);
   void acquireProvenance(ConcreteProvenanceSet &source);
   bool isGCRunning(memory_order order);
-  uptr getGCTriggerPage() { return (uptr)gc_trigger_page_; }
   void park();
 
 private:
@@ -48,13 +47,6 @@ private:
   // retained, so that we can clean up any of the provenance
   // values that it acquired in a future garbage collection pass.
   ConcreteProvenanceSet global_zct_;
-
-  // A page allocated at the beginning of the runtime. Each
-  // thread holds a pointer to this page. At every safepoint,
-  // threads will attempt to dereference this page. To start
-  // garbage collection, we protect the page, and then park
-  // each thread within the SIGSEV handler.
-  void *gc_trigger_page_ = nullptr;
 
   // A flag indicating that the garbage collector is currently
   // running. This is used by threads exiting native contexts.

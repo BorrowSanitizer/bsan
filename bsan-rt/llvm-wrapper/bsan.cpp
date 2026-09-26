@@ -41,6 +41,11 @@ USED static void (*const bsan_rust_runtime_anchor)(void) =
 SANITIZER_INTERFACE_ATTRIBUTE
 THREADLOCAL void *__bsan_marker = nullptr;
 
+
+SANITIZER_INTERFACE_ATTRIBUTE
+uptr __bsan_gc_trigger{0};
+
+
 // When we call one of Rust's allocator shims, we need to
 // mark the underlying function as being trusted by our runtime,
 // so that the return provenace does not get clobbered by boundary
@@ -79,7 +84,7 @@ THREADLOCAL Provenance *__bsan_shadow_stack = nullptr;
 
 // A "trigger" for the garbage collector. At every safepoint,
 // a thread will load and dereference this pointer.
-SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL void *__bsan_gc_trigger = nullptr;
+SANITIZER_INTERFACE_ATTRIBUTE  uptr _bsan_gc_trigger = 0;
 
 // A counter used to create globally-unique "borrow tags"
 // associated with permissions in the tree for an allocation.
@@ -274,11 +279,6 @@ static void OnStackUnwind(const SignalContext &sig, const void *,
 }
 
 static void BsanOnDeadlySignal(int signo, void *siginfo, void *context) {
-  SignalContext sig(siginfo, context);
-  if (sig.is_memory_access && sig.addr == global_ctx()->getGCTriggerPage()) {
-    global_ctx()->park();
-    return;
-  }
   HandleDeadlySignal(siginfo, context, GetTid(), &OnStackUnwind, nullptr);
 }
 
@@ -439,6 +439,12 @@ bool __bsan_enter_gc_unsafe() {
     return false;
   return thread->enterUnsafeMode();
 }
+
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_safepoint_poll() {
+
+}
+
 
 // Exits a GC unsafe context, setting the thread to a "gc-safe" mode
 // if that's the mode that it was in before. This, paired with

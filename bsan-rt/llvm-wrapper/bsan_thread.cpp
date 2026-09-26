@@ -140,7 +140,6 @@ void BsanThread::Init() {
   shadow_stack_bottom_ = MmapOrDie(shadow_stack_size_, __func__);
   __bsan_shadow_stack =
       (Provenance *)(((uptr)shadow_stack_bottom_) + shadow_stack_size_);
-  __bsan_gc_trigger = (void *)global_ctx()->getGCTriggerPage();
 
   // We record the address of the thread-local shadow stack pointer so
   // that the GC can accurately read the initialized contents of the
@@ -165,10 +164,7 @@ bool BsanThread::enterUnsafeMode() {
   // This is an acquire load of the GC status flag, paired
   // with the release stores that occur within `ScopedGCLock`.
   if (UNLIKELY(global_ctx()->isGCRunning(memory_order_acquire))) {
-    // We are entering an unsafe scope. The garbage collector
-    // might already be running. In that case, instead of
-    // proceeding, we should park and join the GC loop.
-    global_ctx()->park();
+
   }
   return true;
 }

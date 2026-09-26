@@ -10,80 +10,6 @@ using namespace __bsan;
 
 namespace __bsan {
 
-void GlobalContext::park() {
-  BsanThread *thread = CurrentThread();
-  GCState to_replace = GCState::kUnsafe;
-  if (thread) {
-    to_replace = thread->setGCState(GCState::kParked, memory_order_release);
-  }
-  // Even if there's no thread state (this was called during teardown),
-  // we still want to wait for the GC to finish. Safepoints will still
-  // be enabled within instrumented destructors, so we'll just end up
-  // back here again.
-  while (atomic_load(&gc_running_, memory_order_acquire))
-    // This acquire load is paired with the release store below
-    // within `ScopedGCLock`. A thread can only be parked once
-    // the gc trigger page has been protected,
-    FutexWait(&gc_running_, 1);
-  // The GC could start again before we restore the thread to its original
-  // state. That's actually not a problem because this function is only ever
-  // called within the signal handler. When a signal handler returns, "the
-  // thread recommences execution at the point where it was interrupted."
-  // It will immediately dereference the safepoint handler, triggering a
-  // SIGSEGV and returning here to become parked again. For all intents and
-  // purposes, it always *was* parked for the subsequent GC run.
-  if (thread) {
-    thread->setGCState(to_replace, memory_order_release);
-  }
-}
-
-struct ScopedGCLock {
-  Lock lock;
-  ScopedGCLock(ScopedThreadLock &threads)
-      : lock(Lock(&global_ctx()->global_zct_lock_)) {
-
-    // We need to lock the global thread state to prevent new threads
-    // from entering the garbage collector.
-    atomic_store(&global_ctx()->gc_running_, true, memory_order_release);
-    MprotectNoAccess((uptr)global_ctx()->gc_trigger_page_, GetPageSizeCached());
-    Membarrier();
-    for (;;) {
-      bool all_stopped = true;
-      ForEachThread(threads, [&](BsanThread *thread) {
-        if (thread != CurrentThread()) {
-          // Read the GC state with an acquire ordering, matching the release
-          // ordering that we use when transitioning to parked or to safe mode.
-          if (thread->getGCState(memory_order_acquire) == GCState::kUnsafe) {
-            // The thread is still trying to reach a safepoint.
-            // We need to continue waiting.
-            all_stopped = false;
-          }
-          // The thread has reached a safepoint or it's in safe mode,
-        }
-      });
-      if (all_stopped)
-        break;
-      // Yield so that other threads can make progress before
-      // we check their status again. Otherwise, we might loop
-      // and get the same result as before.
-      internal_sched_yield();
-    }
-  }
-  ~ScopedGCLock() {
-    MprotectReadWrite((uptr)global_ctx()->gc_trigger_page_,
-                      GetPageSizeCached());
-    atomic_store(&global_ctx()->gc_running_, false, memory_order_release);
-    // Wake all threads that have been "parked" by the GC.
-    FutexWake(&global_ctx()->gc_running_, UINT32_MAX);
-  }
-};
-
-void GlobalContext::initGC() {
-  auto size = GetPageSizeCached();
-  gc_trigger_page_ = MmapOrDie(size, "gc_trigger");
-  InitMembarrier();
-}
-
 bool GlobalContext::isGCRunning(memory_order order) {
   return atomic_load(&gc_running_, order) != 0;
 }
@@ -229,7 +155,6 @@ void GlobalContext::requestGC() {
       {
         ScopedThreadLock threads;
         {
-          ScopedGCLock gc_lock(threads);
           Snapshot snap;
           {
             ScopedAllocatorLock allocs;

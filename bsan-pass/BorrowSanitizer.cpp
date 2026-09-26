@@ -17,6 +17,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -326,8 +327,8 @@ private:
   /// Thread-local array used to pass the provenance of parameters.
   Value *ParamTLS = nullptr;
 
-  ///  Thread-local pointer to a page used to trigger the garbage collector.
-  Value *GCTriggerTLS = nullptr;
+  /// Global flag that is set to activate safepoints.
+  Value *GCTrigger = nullptr;
 
   /// Thread-local variable containing the number of provenance values
   /// for variable arguments.
@@ -354,6 +355,9 @@ private:
   /// The default GC safepoint function (`gc.safepoint_poll`),
   /// which is replaced by our instrumentation.
   Function *SafepointPollFn = nullptr;
+
+  // Runtime function to pause this thread until the GC is finished running.
+  FunctionCallee BsanFuncSafepointPoll;
 
   /// Runtime function to mark the current thread as "gc-safe"
   /// before returning into uninstrumented code.
@@ -722,6 +726,10 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncExitGCUnsafe = M.getOrInsertFunction(BSAN("exit_gc_unsafe"), AL,
                                                IRB.getVoidTy(), BoolTy);
 
+  BsanFuncSafepointPoll = M.getOrInsertFunction(
+      BSAN("safepoint_poll"),
+      FunctionType::get(IRB.getVoidTy(), /*isVarArg=*/false), AL);
+
   EHPersonality Pers = getDefaultEHPersonality(TargetTriple);
   DefaultPersonalityFn =
       M.getOrInsertFunction(getEHPersonalityName(Pers),
@@ -742,10 +750,10 @@ void BorrowSanitizer::createUserspaceApi(Module &M,
   VAArgTagTLS = getOrInsertTLSGlobal(M, BSAN("var_arg_tag_tls"), PtrTy);
   VAArgInfoTLS = getOrInsertTLSGlobal(M, BSAN("var_arg_info_tls"), PtrTy);
   ParamTLS = getOrInsertTLSGlobal(M, BSAN("param_tls"), PtrTy);
-  GCTriggerTLS = getOrInsertTLSGlobal(M, BSAN("gc_trigger"), PtrTy);
 
   ProvStackTLS = getOrInsertTLSGlobal(M, BSAN("shadow_stack"), PtrTy);
   BorTagCounter = getOrInsertGlobal(M, BSAN("bor_tag_ctr"), IntptrTy);
+  GCTrigger = getOrInsertGlobal(M, BSAN("gc_trigger"), PtrTy);
 }
 
 namespace {
@@ -3378,9 +3386,7 @@ bool BorrowSanitizer::instrumentFunction(Function &F,
 }
 
 void BorrowSanitizer::enableSafepoints(Module &M) {
-  GCTriggerTLS = getOrInsertTLSGlobal(M, BSAN("gc_trigger"), PtrTy);
-  // The safepoint function's body is inlined.
-  // everywhere that it is inserted.
+  assert(BsanFuncSafepointPoll && GCTrigger);
   AttributeList AL;
   AL = AL.addFnAttribute(*C, Attribute::NoUnwind);
   SafepointPollFn =
@@ -3389,15 +3395,31 @@ void BorrowSanitizer::enableSafepoints(Module &M) {
   SafepointPollFn->addFnAttr(Attribute::NoUnwind);
 
   BasicBlock *Entry = BasicBlock::Create(*C, "entry", SafepointPollFn);
+  BasicBlock *Slow = BasicBlock::Create(*C, "slow", SafepointPollFn);
+  BasicBlock *Exit = BasicBlock::Create(*C, "exit", SafepointPollFn);
   IRBuilder<> IRB(Entry);
-  MDNode *NoSanitize = MDNode::get(*C, {});
-  // Every safepoint loads the pointer within the GC trigger TLS
-  // and dereferences it. The pointer's value stays the same, but
-  // the protection status of the pages does not.
-  LoadInst *TriggerPage = IRB.CreateLoad(PtrTy, GCTriggerTLS);
-  TriggerPage->setMetadata(LLVMContext::MD_nosanitize, NoSanitize);
-  LoadInst *Poll = IRB.CreateLoad(IRB.getInt8Ty(), TriggerPage, true);
-  Poll->setMetadata(LLVMContext::MD_nosanitize, NoSanitize);
+  // Load the global "gc trigger" flag. If true, then another thread has
+  // requested for the GC to run, so we need to halt until it completes.
+
+  // We use a monotonic load. We need there to be some global consistent
+  // order of operations, but we do not need anything stronger. This is
+  // not used for synchronizing the state of each thread, so it's fine if
+  // we see a stale value. We'll reach it on the next safepoint.
+  LoadInst *Pending =
+      IRB.CreateAlignedLoad(IRB.getInt8Ty(), GCTrigger, Align(1));
+  Pending->setAtomic(AtomicOrdering::Monotonic);
+
+  // Check if the value is equal to one, which indicates that we
+  // should try to poll
+  Value *IsPending = IRB.CreateICmpNE(Pending, IRB.getInt8(0));
+  // The true path, where the GC is enabled, is unlikely.
+  auto *Unlikely = MDBuilder(*C).createUnlikelyBranchWeights();
+  IRB.CreateCondBr(IsPending, Slow, Exit, Unlikely);
+
+  IRB.SetInsertPoint(Slow);
+  CallInst *SlowCall = IRB.CreateCall(BsanFuncSafepointPoll, {});
+  IRB.CreateBr(Exit);
+  IRB.SetInsertPoint(Exit);
   IRB.CreateRetVoid();
 }
 
