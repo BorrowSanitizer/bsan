@@ -600,8 +600,8 @@ Block *__bsan_reserve_stack_slot() {
 SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE bool
 __bsan_dealloc(void *ptr, BorTag bor_tag, Block *alloc_info, Span pc,
                bool checked) {
-                  return false;
-               }
+  return false;
+}
 
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_alloc_stack_impl(void *base_addr, uptr size, BorTag bor_tag,
