@@ -9,12 +9,12 @@ use crate::errors::UBInfo;
 use crate::helpers::FxHashMap;
 use crate::sanitizer_common::{Bridge, SharedSanitizerFlags};
 use crate::tree_borrows::data_structures::{AccessType, RangeObjectMap};
-use crate::tree_borrows::AllocStateImpl;
+use crate::tree_borrows::TreeImpl;
 use crate::*;
 
 pub struct ExposedProvenance<'a>(RwLockWriteGuard<'a, RangeObjectMap<AllocInfoPtr>>);
 
-impl<'a> Deref for ExposedProvenance<'a> {
+impl Deref for ExposedProvenance<'_> {
     type Target = RangeObjectMap<AllocInfoPtr>;
 
     fn deref(&self) -> &Self::Target {
@@ -22,7 +22,7 @@ impl<'a> Deref for ExposedProvenance<'a> {
     }
 }
 
-impl<'a> DerefMut for ExposedProvenance<'a> {
+impl DerefMut for ExposedProvenance<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
@@ -39,7 +39,7 @@ impl<'a> DerefMut for ExposedProvenance<'a> {
 /// it prevents us from relying on implicit global state and limits the spread
 /// of unsafety throughout the library.
 pub struct GlobalCtx {
-    snapshots: RwLock<FxHashMap<AllocId, AllocStateImpl>>,
+    snapshots: RwLock<FxHashMap<AllocId, TreeImpl>>,
     exposed_provenance: RwLock<RangeObjectMap<AllocInfoPtr>>,
     pub flags: SharedSanitizerFlags,
 }
@@ -53,7 +53,7 @@ impl GlobalCtx {
         }
     }
 
-    pub fn exposed_provenance<'a>(&'a self) -> ExposedProvenance<'a> {
+    pub fn exposed_provenance(&self) -> ExposedProvenance<'_> {
         ExposedProvenance(self.exposed_provenance.write())
     }
 
@@ -123,13 +123,13 @@ impl GlobalCtx {
         Bridge::prepare_error(ub_info, pc);
     }
 
-    pub fn take_snapshot(&self, alloc_id: AllocId, tree: AllocStateImpl) {
+    pub fn take_snapshot(&self, alloc_id: AllocId, tree: TreeImpl) {
         self.snapshots.write().insert(alloc_id, tree);
     }
 
     pub fn with_snapshot<F>(&self, alloc_id: AllocId, f: F)
     where
-        F: FnOnce(&AllocStateImpl),
+        F: FnOnce(&TreeImpl),
     {
         self.snapshots.read().get(&alloc_id).map(f);
     }
@@ -205,6 +205,7 @@ pub unsafe fn init_global_ctx(flags: NonNull<SharedSanitizerFlags>) {
 /// It is marked as `unsafe`, since all other API functions except for `bsan_init` rely
 /// on the assumption that this function has not been called yet.
 #[inline]
+#[allow(unused)]
 pub unsafe fn deinit_global_ctx() {
     unsafe { drop(ptr::replace(GLOBAL_CTX.0.get(), MaybeUninit::uninit()).assume_init()) };
 }

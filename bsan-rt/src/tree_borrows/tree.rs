@@ -36,16 +36,14 @@ use crate::sanitizer_common::Span;
 use crate::tree_borrows::ProtectorKind;
 use crate::*;
 
-// Features in ./bsan-rt/Cargo.toml
-
 #[cfg(all(feature = "lazy", feature = "eager"))] // Ensure one selection
 compile_error!("Only one of the following features can be selected: 'lazy', 'eager'");
 
 #[cfg(feature = "lazy")]
-pub type AllocStateImpl = LazyTree;
+pub type TreeImpl = LazyTree;
 
 #[cfg(feature = "eager")]
-pub type AllocStateImpl = EagerTree;
+pub type TreeImpl = EagerTree;
 
 mod tests;
 
@@ -653,7 +651,7 @@ impl EagerTree {
             let tag = *entry;
             // A missing entry means the node was already removed; zero out the entry
             let Some(idx) = self.tag_mapping.get(&tag) else {
-                *entry = BorTag::omnivalid();
+                *entry = BorTag::OMNIVALID;
                 continue;
             };
             let node = self.nodes.get(idx).unwrap();
@@ -661,14 +659,14 @@ impl EagerTree {
             // The ZCT may contain tags with a non-zero reference count. These must be
             // dropped; the tag will re-enter the ZCT when it drops back to zero.
             if node.refcount.get() != 0 {
-                *entry = BorTag::omnivalid();
+                *entry = BorTag::OMNIVALID;
                 continue;
             }
 
             // Do not remove exposed nodes. They could be used for future accesses via
             // wildcard pointers.
             if node.is_exposed {
-                *entry = BorTag::omnivalid();
+                *entry = BorTag::OMNIVALID;
                 continue;
             }
 
@@ -695,22 +693,20 @@ impl EagerTree {
                         }
                     }
                     self.remove_useless_node(idx);
-                    *entry = BorTag::omnivalid();
+                    *entry = BorTag::OMNIVALID;
                 }
                 // Node has exactly one child (and, per the guard above, a parent)
-                1 => {
-                    if compact && self.can_be_replaced_by_single_child(idx) {
-                        // Replace the node with its only child.
-                        let child_idx = node.children[0];
-                        let parent_idx = parent.unwrap();
-                        let siblings = &mut self.nodes.get_mut(parent_idx).unwrap().children;
-                        let pos = siblings.iter().position(|&c| c == idx).unwrap();
-                        siblings[pos] = child_idx;
-                        self.nodes.get_mut(child_idx).unwrap().parent = parent;
-                        self.remove_useless_node(idx);
-                        *entry = BorTag::omnivalid();
-                        // Otherwise, the dead node could not be pruned this pass.
-                    }
+                1 if compact && self.can_be_replaced_by_single_child(idx) => {
+                    // Replace the node with its only child.
+                    let child_idx = node.children[0];
+                    let parent_idx = parent.unwrap();
+                    let siblings = &mut self.nodes.get_mut(parent_idx).unwrap().children;
+                    let pos = siblings.iter().position(|&c| c == idx).unwrap();
+                    siblings[pos] = child_idx;
+                    self.nodes.get_mut(child_idx).unwrap().parent = parent;
+                    self.remove_useless_node(idx);
+                    *entry = BorTag::OMNIVALID;
+                    // Otherwise, the dead node could not be pruned this pass.
                 }
                 // Node has more than one child. If every child can soundly replace it, compact it
                 // by reparenting all of its children onto its parent.
@@ -730,7 +726,7 @@ impl EagerTree {
                         siblings.push(children[i]);
                     }
                     self.remove_useless_node(idx);
-                    *entry = BorTag::omnivalid();
+                    *entry = BorTag::OMNIVALID;
                     // Otherwise, the dead node could not be pruned this pass.
                 }
                 // A dead interior node on a tree too small to be worth compacting. Leave its
@@ -1070,12 +1066,13 @@ impl LocationTree {
 /// Consumers outside this module interact with the tree exclusively
 /// through this trait; the underlying implementations are
 /// module-private.
-pub trait AllocState: Clone {
+pub trait Tree: Clone {
     fn get_protector_kind(&self, tag: BorTag) -> Option<ProtectorKind>;
     fn contains_tag(&self, tag: BorTag) -> bool;
     fn node_count(&self) -> usize;
     fn increment(&self, tag: BorTag) -> bool;
     fn decrement(&self, tag: BorTag) -> bool;
+    fn size(&self) -> Size;
     fn new_child(
         &mut self,
         base_offset: Size,
@@ -1120,7 +1117,7 @@ pub trait AllocState: Clone {
     fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_tags: &mut [BorTag]) -> bool;
 }
 
-impl AllocState for LazyTree {
+impl Tree for LazyTree {
     fn contains_tag(&self, tag: BorTag) -> bool {
         match self {
             LazyTree::Uninit { root_tag, .. } => *root_tag == tag,
@@ -1233,7 +1230,7 @@ impl AllocState for LazyTree {
                 // this node is in the dead list with a zero reference count, then the
                 // tree is dead and the associated AllocInfo metadata can be freed.
                 let root_is_dead = refcount.get() == 0 && dead_tags.contains(root_tag);
-                dead_tags.fill(BorTag::omnivalid());
+                dead_tags.fill(BorTag::OMNIVALID);
                 root_is_dead
             }
         }
@@ -1242,7 +1239,8 @@ impl AllocState for LazyTree {
         match self {
             LazyTree::Uninit { root_tag, refcount, .. } => {
                 if *root_tag == tag {
-                    refcount.increment_nonatomic()
+                    // Safety: the tree is locked when this operation occurs.
+                    unsafe { refcount.increment_nonatomic() }
                 } else {
                     false
                 }
@@ -1269,9 +1267,16 @@ impl AllocState for LazyTree {
             LazyTree::Init(tree) => tree.get_protector_kind(tag),
         }
     }
+
+    fn size(&self) -> Size {
+        match self {
+            LazyTree::Uninit { size, .. } => *size,
+            LazyTree::Init(eager_tree) => eager_tree.size(),
+        }
+    }
 }
 
-impl AllocState for EagerTree {
+impl Tree for EagerTree {
     fn contains_tag(&self, tag: BorTag) -> bool {
         self.tag_mapping.contains_key(&tag)
     }
@@ -1290,7 +1295,7 @@ impl AllocState for EagerTree {
     ) -> UBResult<()> {
         let protected = protector.is_some();
         let idx = self.tag_mapping.insert(new_tag);
-        let parent_idx = if parent_tag.is_wildcard() {
+        let parent_idx = if parent_tag == BorTag::WILDCARD {
             None
         } else {
             Some(self.tag_mapping.get(&parent_tag).unwrap())
@@ -1362,7 +1367,7 @@ impl AllocState for EagerTree {
         }
 
         let source_idx =
-            if tag.is_wildcard() { None } else { Some(self.tag_mapping.get(&tag).unwrap()) };
+            if tag == BorTag::WILDCARD { None } else { Some(self.tag_mapping.get(&tag).unwrap()) };
 
         // `visits_since_gc` is only written once per access.
         let mut visits: u32 = 0;
@@ -1411,7 +1416,7 @@ impl AllocState for EagerTree {
         )?;
 
         let start_idx =
-            if tag.is_wildcard() { None } else { Some(self.tag_mapping.get(&tag).unwrap()) };
+            if tag == BorTag::WILDCARD { None } else { Some(self.tag_mapping.get(&tag).unwrap()) };
 
         for (loc_range, loc) in self.locations.iter_mut(access_range.start, access_range.size) {
             let diagnostics = DiagnosticInfo {
@@ -1558,13 +1563,15 @@ impl AllocState for EagerTree {
         self.tag_mapping
             .get(&tag)
             .and_then(|idx| self.nodes.get(idx))
-            .map(|node| node.refcount.increment_nonatomic())
+            // Safety: the tree is locked when this operation occurs.
+            .map(|node| unsafe { node.refcount.increment_nonatomic() })
             .unwrap_or(false)
     }
     fn decrement(&self, tag: BorTag) -> bool {
         self.tag_mapping
             .get(&tag)
             .and_then(|idx| self.nodes.get(idx))
+            // Safety: the tree is locked when this operation occurs.
             .map(|node| node.refcount.decrement_nonatomic())
             .unwrap_or(false)
     }
@@ -1574,5 +1581,9 @@ impl AllocState for EagerTree {
             .get(&tag)
             .and_then(|idx| self.nodes.get(idx))
             .and_then(|node| node.protector_kind)
+    }
+
+    fn size(&self) -> Size {
+        self.locations.size()
     }
 }
