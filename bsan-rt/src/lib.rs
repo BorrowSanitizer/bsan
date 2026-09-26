@@ -571,21 +571,66 @@ unsafe extern "C" fn __bsan_expose_prov_impl(bor_tag: BorTag, alloc_info: *mut A
     });
 }
 
+#[repr(C)]
+pub enum EjectStatus {
+    /// The allocation can be "ejected" from the GC,
+    /// as long as it is no longer alive on any of the
+    /// shadow stacks. All of its nodes are gone.
+    Ejectable = 0,
+    // All of the nodes in this allocation have been
+    // removed by deallocation, but the allocation
+    // itself is still somewhere in shadow memory
+    // with a nonzero reference count. It needs to
+    // be kept around.
+    RetainEmpty = 1,
+    // Some of the nodes in this allocation are still
+    // alive, or the allocation is being accessed by another
+    // thread. It could not be pruned, and needs to be visited
+    // again the next time that the world is stopped.
+    RetainNonEmpty = 2,
+}
+
 /// Prunes a series of nodes that are identified by the list of borrow tags.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_prune(
     alloc_info: NonNull<AllocInfo>,
     bor_tags: *const BorTag,
     len: usize,
-) -> bool {
+) -> EjectStatus {
     let global_ctx = unsafe { global_ctx() };
     let alloc: AllocInfoPtr = alloc_info.into();
-    let dead_tags: &[BorTag] = unsafe { slice::from_raw_parts(bor_tags, len) };
-    if let Some(tree) = alloc.state.lock().tree_opt_mut() {
-        tree.remove_dead_tags(global_ctx, dead_tags)
+    let dead_tags = if len > 0 {
+        unsafe { slice::from_raw_parts(bor_tags, len) }
     } else {
-        // The tree is already deallocated, so we can zero out dead_tags
-        false
+        // We pass a null pointer for `bor_tags` when the list is empty.
+        // The function `slice::from_raw_parts` requires a nonnull
+        // pointer, even for an empty slice.
+        &[]
+    };
+    if let Some(mut state) = alloc.state.try_lock() {
+        let absent_from_heap = alloc.rc.get() == 0;
+        let tree_is_empty = if let Some(tree) = state.tree_opt_mut() {
+            tree.remove_dead_tags(global_ctx, dead_tags)
+        } else {
+            true
+        };
+        // Even if we have removed every tag, this does
+        // not imply that the tree's reference count is
+        // also zero. We reuse allocation metadata objects
+        // for different lifetimes of stack allocations. If
+        // a stack allocation was stored into the heap during a
+        // previous lifetime, then its allocation-level
+        // reference count may be greater than the sum of its
+        // node level reference counts.
+        if tree_is_empty && absent_from_heap {
+            EjectStatus::Ejectable
+        } else if tree_is_empty {
+            EjectStatus::RetainEmpty
+        } else {
+            EjectStatus::RetainNonEmpty
+        }
+    } else {
+        panic!("A thread had already locked this allocation!");
     }
 }
 

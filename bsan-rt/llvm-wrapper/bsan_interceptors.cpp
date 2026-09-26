@@ -22,6 +22,20 @@
 
 using namespace __sanitizer;
 using namespace __bsan;
+// Interception is particularly tricky for BorrowSanitizer,
+// because we need to coordinate with the garbage collector.
+// An intercepted function will begin in "gc-safe" mode,
+// because it will be recognized by the instrumentation
+// pass as an external, maybe-uninstrumented function.
+// If an interceptor requires an operation that touches the
+// state of our runtime or shadow memory, then we need to
+// enter into "gc-unsafe" mode. This requires inserting a
+// `BlockGC` scoped object. On creation, this object will
+// check to see if the GC is already running, and park
+// the thread. Then, it will switch the thread's state over
+// into a "gc-unsafe" mode until it exits the scope. We cannot
+// do this for every single interceptor, or else we risk
+// introducing deadlocks.
 
 namespace __bsan {
 THREADLOCAL int block_interception;
@@ -46,8 +60,10 @@ struct LocalInterceptorContext {
   bool block_interception;
 };
 
-static void *BsanAllocateMetaIntoStack(void *ptr, SIZE_T size, bool is_inst,
-                                       uptr span, uptr slot_idx) {
+// This variant helps for realloc, where we have a dealloc followed by an alloc.
+// We can use the same gc-blocking scope for both functions.
+static void *BsanAllocateMetaIntoStack(BlockGC &gc, void *ptr, SIZE_T size,
+                                       bool is_inst, uptr span, uptr slot_idx) {
   if (is_inst) {
     Provenance *slot = GetRetValSlot(slot_idx);
     Provenance prov = BsanAllocateMeta(ptr, size, span);
@@ -57,9 +73,16 @@ static void *BsanAllocateMetaIntoStack(void *ptr, SIZE_T size, bool is_inst,
   return ptr;
 }
 
+static void *BsanAllocateMetaIntoStack(void *ptr, SIZE_T size, bool is_inst,
+                                       uptr span, uptr slot_idx) {
+  BlockGC gc;
+  return BsanAllocateMetaIntoStack(gc, ptr, size, is_inst, span, slot_idx);
+}
+
 static void *BsanAllocateMetaIntoHeap(void *ptr, SIZE_T size, bool is_inst,
                                       uptr span, void *dest) {
   if (is_inst) {
+    BlockGC blocked;
     Provenance prov = BsanAllocateMeta(ptr, size, span);
     WriteShadow(dest, prov);
     AcquireProvenance(prov);
@@ -100,6 +123,7 @@ INTERCEPTOR(void, free, void *ptr) {
   bool already_in_scope = BlockInterception();
   InterceptorBarrier barrier;
   if (!already_in_scope && INST_CALLER(free)) {
+    BlockGC blocked;
     Provenance *slot = GetParamSlot(0);
     bool had_error = __bsan_dealloc(ptr, slot->tag, slot->block, span, false);
     HANDLE_ERROR_PC_BP(had_error, pc, bp);
@@ -128,16 +152,19 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
   bool is_inst = !already_in_scope && INST_CALLER(realloc);
   // If the pointer is null, then realloc behaves like malloc,
   // so we can skip instrumenting the deallocation.
-  if (is_inst && ptr != nullptr) {
-    Provenance *slot = GetParamSlot(0);
-    bool had_error = __bsan_dealloc(ptr, slot->tag, slot->block, span, false);
-    HANDLE_ERROR_PC_BP(had_error, pc, bp);
+  {
+    BlockGC gc;
+    if (is_inst && ptr != nullptr) {
+      Provenance *slot = GetParamSlot(0);
+      bool had_error = __bsan_dealloc(ptr, slot->tag, slot->block, span, false);
+      HANDLE_ERROR_PC_BP(had_error, pc, bp);
+    }
+    void *nptr = bsan_realloc(ptr, size);
+    if (is_inst) {
+      BsanAllocateMetaIntoStack(gc, nptr, size, is_inst, span, 0);
+    }
+    return nptr;
   }
-  void *nptr = bsan_realloc(ptr, size);
-  if (is_inst) {
-    BsanAllocateMetaIntoStack(nptr, size, is_inst, span, 0);
-  }
-  return nptr;
 }
 
 INTERCEPTOR(void *, aligned_alloc, SIZE_T alignment, SIZE_T size) {
@@ -366,7 +393,10 @@ INTERCEPTOR(void, miri_promise_symbolic_alignment, void *ptr,
   } while (false)
 
 #define COMMON_INTERCEPTOR_WRITE_RANGE(ctx, ptr, size)                         \
-  __bsan_shadow_clear(ptr, size)
+  do {                                                                         \
+    BlockGC blocked;                                                           \
+    __bsan_shadow_clear(ptr, size);                                            \
+  } while (false)
 
 #define COMMON_INTERCEPTOR_READ_RANGE(ctx, ptr, size)                          \
   do {                                                                         \
@@ -415,18 +445,21 @@ INTERCEPTOR(void, miri_promise_symbolic_alignment, void *ptr,
 #define COMMON_INTERCEPTOR_MEMSET_IMPL(ctx, block, c, size)                    \
   {                                                                            \
     (void)ctx;                                                                 \
+    BlockGC gc;                                                                \
     __bsan_memset(block, c, size);                                             \
     return block;                                                              \
   }
 #define COMMON_INTERCEPTOR_MEMMOVE_IMPL(ctx, to, from, size)                   \
   {                                                                            \
     (void)ctx;                                                                 \
+    BlockGC gc;                                                                \
     __bsan_memmove(to, from, size);                                            \
     return to;                                                                 \
   }
 #define COMMON_INTERCEPTOR_MEMCPY_IMPL(ctx, to, from, size)                    \
   {                                                                            \
     (void)ctx;                                                                 \
+    BlockGC gc;                                                                \
     __bsan_memcpy(to, from, size);                                             \
     return to;                                                                 \
   }
@@ -459,7 +492,11 @@ INTERCEPTOR(void, miri_promise_symbolic_alignment, void *ptr,
 #define COMMON_SYSCALL_POST_READ_RANGE(p, s)                                   \
   do {                                                                         \
   } while (false)
-#define COMMON_SYSCALL_POST_WRITE_RANGE(p, s) __bsan_shadow_clear(p, s)
+#define COMMON_SYSCALL_POST_WRITE_RANGE(p, s)                                  \
+  do {                                                                         \
+    BlockGC gc;                                                                \
+    __bsan_shadow_clear(p, s);                                                 \
+  } while (false)
 
 // clang-format off
 #include "sanitizer_common/sanitizer_common_syscalls.inc"
@@ -497,10 +534,17 @@ INTERCEPTOR(int, pthread_create, void *thread, void *attr,
   u32 current_tid = GetCurrentTidOrInvalid();
   __sanitizer_sigset_t sigset = {};
 #if SANITIZER_LINUX
+  // We need to block signals here. Otherwise,
+  // if the user has an intercepted asynchronous signal
+  // handler, then we could end up within an instrumented
+  // function without the current thread registered. This wouldn't
+  // necessarily be a problem — we already need to account for the
+  // current thread being null if a thread exits and an instrumented
+  // TLS destructor fires afterward — but we want to avoid this situation
+  // whenever possible.
   ScopedBlockSignals block(&sigset);
 #endif
   BsanThread *t = BsanThread::Create(sigset, current_tid, detached);
-
   int result;
   {
     GetThreadArgRetval().Create(detached, {start_routine, arg}, [&]() -> uptr {
