@@ -1408,17 +1408,18 @@ public:
     initStack(EntryIRB);
 
     for (Instruction *I : Plan.instructions()) {
-      InstVisitor<BorrowSanitizerVisitor>::visit(*I);
-    }
-
-    for (const CheckInfo &CI : Plan.checks()) {
-      Value *AccessSize = CI.getAccessSize(BS.IntptrTy);
-      IRBuilder<> IRB(CI.InsertPt);
-      if (CI.AccessKind == CheckInfo::Read) {
-        insertReadCheck(IRB, CI.Target, AccessSize);
-      } else {
-        insertWriteCheck(IRB, CI.Target, AccessSize);
+      if (auto Checks = Plan.hasChecks(I)) {
+        IRBuilder<> IRB(I);
+        for (const CheckInfo &CI : *Checks) {
+          Value *AccessSize = CI.getAccessSize(IRB, BS.IntptrTy);
+          if (CI.AccessKind == CheckInfo::Read) {
+            insertReadCheck(IRB, CI.Target, AccessSize);
+          } else {
+            insertWriteCheck(IRB, CI.Target, AccessSize);
+          }
+        }
       }
+      InstVisitor<BorrowSanitizerVisitor>::visit(*I);
     }
 
     VAHelper->finalizeInstrumentation();
