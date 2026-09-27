@@ -40,6 +40,10 @@ USED static void (*const bsan_rust_runtime_anchor)(void) =
 SANITIZER_INTERFACE_ATTRIBUTE
 THREADLOCAL void *__bsan_marker = nullptr;
 
+// The trigger for the garbage collector. When this
+// flag is set, threads that hit a safepoint or
+// an instrumented boundary will poll, and wait
+// for the garbage collector to complete.
 SANITIZER_INTERFACE_ATTRIBUTE
 atomic_uint32_t __bsan_gc_trigger{0};
 
@@ -109,6 +113,14 @@ static void SetBsanInited() {
 
 bool BsanInited() {
   return atomic_load(&bsan_inited, memory_order_acquire) == 1;
+}
+
+bool getGCTrigger(memory_order order) {
+  return atomic_load(&__bsan_gc_trigger, order) != 0;
+}
+
+void setGCTrigger(bool state, memory_order order) {
+  atomic_store(&__bsan_gc_trigger, state, order);
 }
 
 extern "C" SANITIZER_WEAK_ATTRIBUTE void

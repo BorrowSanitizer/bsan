@@ -3,6 +3,7 @@
 #include "bsan_global.h"
 #include "bsan_interface_internal.h"
 #include "sanitizer_common/sanitizer_atomic.h"
+#include "sanitizer_common/sanitizer_linux.h"
 
 using namespace __sanitizer;
 using namespace __bsan;
@@ -157,20 +158,29 @@ void BsanThread::poll() {
   // signal handler, then we'll be kicked out of the waiting state
   // back into the unsafe state, which is an invalid transition.
   // Only the GC is allowed to move threads out of waiting.
-  for (;;) {
-    // Release ordering ensures that this is visible
-    // within the loop of ScopedStopTheWorldLock.
+#if SANITIZER_LINUX
+  ScopedBlockSignals block(nullptr);
+#endif
+  do {
     setGCState(GCState::kWaiting, memory_order_release);
-    // As we loop, we do an acquire load to ensure that we receive
-    // updates from the stop-the-world thread.
-    while (atomic_load(&__bsan_gc_trigger, memory_order_acquire)) {
+    // This is a compiler fence. All it does is
+    // prevents the read within `getGCTrigger` from
+    // being moved before the write in `setGCState`.
+    atomic_signal_fence(memory_order_seq_cst);
+    while (getGCTrigger(memory_order_acquire)) {
       FutexWait(&__bsan_gc_trigger, 1);
     }
+    // It's possible that another GC run will start
+    // here, and see that were in waiting, before
+    // we get a chance to move into unsafe mode.
+    // However, that's not an issue, since we'll
+    // just end up back in safe mode due to the
+    // acquire check at the end of this while loop.
     setGCState(GCState::kUnsafe, memory_order_relaxed);
+    // We need another barrier to prevent reordering,
+    // like above.
     atomic_signal_fence(memory_order_seq_cst);
-    if (!atomic_load(&__bsan_gc_trigger, memory_order_relaxed))
-      return;
-  }
+  } while (getGCTrigger(memory_order_acquire));
 }
 
 bool BsanThread::enterSafeMode() {

@@ -89,6 +89,14 @@ enum GCState : u32 {
   kWaiting = 2
 };
 
+// Read the value of the gc trigger with the
+// specified ordering.
+bool getGCTrigger(memory_order order);
+
+// Write the value of the GC trigger using the
+// specified ordering.
+void setGCTrigger(bool state, memory_order order);
+
 // A flag that will block interceptors from being activated
 // for operations occuring in this thread.
 extern THREADLOCAL int block_interception;
