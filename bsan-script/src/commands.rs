@@ -462,6 +462,9 @@ impl CompilerRt {
         cfg.define("LLVM_COMMON_CMAKE_UTILS", cmake_common);
         cfg.define("LLVM_CMAKE_DIR", llvm_cmake);
         cfg.define("BSAN_CLANG_FORMAT", env.sysroot_binary("clang-format"));
+        if env.mode() == Mode::Debug {
+            cfg.define("COMPILER_RT_DEBUG", "ON");
+        }
 
         cfg.build_target(&CompilerRt.artifact(env));
         Ok(cfg)
