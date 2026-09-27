@@ -1,23 +1,38 @@
-FROM ubuntu:25.04 AS base
+FROM ubuntu:24.04 AS base
 ENV DEBIAN_FRONTEND=noninteractive
+
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
     clang \
     clang-tidy \
     clang-format \
-    ninja-build \ 
-    curl \ 
+    ninja-build \
+    curl \
     vim \
-    pkg-config \ 
-    libssl-dev \ 
+    wget \
+    ca-certificates \
+    pkg-config \
+    libssl-dev \
     libunwind-dev \
-    sudo \    
+    sudo \
     git \
     gdb \
     && rm -rf /var/lib/apt/lists/*
+
+# Install GitHub CLI
+RUN mkdir -p -m 755 /etc/apt/keyrings \
+    && wget -nv -O /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+       https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+       > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y gh \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN update-alternatives --install /usr/bin/cc cc /usr/bin/clang 100 \
     && update-alternatives --install /usr/bin/c++ c++ /usr/bin/clang++ 100
+    
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain nightly -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 

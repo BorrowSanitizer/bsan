@@ -70,25 +70,20 @@ struct AccessRange {
 // Everything needed to emit a runtime check validating read or write access for
 // a given pointer, across a particular range.
 struct CheckInfo {
-  // The location where the check needs to be inserted.
-  Instruction *InsertPt;
   enum Kind { Read, Write };
   Kind AccessKind;
   // The pointer being dereferenced.
   Value *Target;
   AccessRange Range;
-  CheckInfo(Instruction *InsertPt, Kind AccessKind, Value *Target,
-            AccessRange Range)
-      : InsertPt(InsertPt), AccessKind(AccessKind), Target(Target),
-        Range(Range) {}
+  CheckInfo(Kind AccessKind, Value *Target, AccessRange Range)
+      : AccessKind(AccessKind), Target(Target), Range(Range) {}
 
   // Materializes the number of bytes that this check needs to validate, as a
   // value of type `Ty`, immediately before `InsertPt`. A runtime length takes
   // precedence; otherwise the count follows from the accessed type, which
   // `CreateTypeSize` expands into a `vscale` multiply when that type is
   // scalable.
-  Value *getAccessSize(Type *Ty) const {
-    IRBuilder<> IRB(InsertPt);
+  Value *getAccessSize(IRBuilder<> &IRB, Type *Ty) const {
     return Range.DynValue ? IRB.CreateIntCast(Range.DynValue, Ty, false)
                           : IRB.CreateTypeSize(Ty, Range.Size);
   }
@@ -130,14 +125,19 @@ private:
 
   // The locations where a runtime access check is required, in the order
   // that they are encountered while walking the function.
-  SmallVector<CheckInfo, 32> Checks;
+  DenseMap<Instruction *, SmallVector<CheckInfo, 2>> Checks;
 
 public:
   unsigned getNumFnEntryRetags() { return NumFnEntryRetags; }
 
   SmallVector<Instruction *, 64> &instructions() { return Instructions; }
 
-  SmallVector<CheckInfo, 32> &checks() { return Checks; }
+  std::optional<SmallVector<CheckInfo, 2>> hasChecks(Instruction *I) {
+    auto CheckInfoIt = Checks.find(I);
+    if (CheckInfoIt == Checks.end())
+      return std::nullopt;
+    return CheckInfoIt->second;
+  }
 
   SmallVector<AllocaInst *, 8> &allocas() { return StaticAllocaVec; }
 

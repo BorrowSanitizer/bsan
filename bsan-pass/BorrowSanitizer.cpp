@@ -1124,9 +1124,6 @@ private:
 // The shadow stack has multiple regions, and each has a different purpose.
 //
 // |-----------------------|  <-- FrameHeaderTop
-// | parameter provenance  |
-// |_______________________|
-// |                       |
 // | static/byval allocas  |
 // |_______________________|
 // |                       |  <-- FnEntryTop
@@ -1353,14 +1350,9 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // A map from values to their provenance.
   ProvenanceMap ProvMap;
 
-  // For each alloca that has an explicit `lifetime.start` (and so gets a
-  // fresh borrow tag minted on every entry into its scope), this records
-  // where its provenance lives in this frame's shadow-stack header. At
-  // function exit, `popFrame` reads directly out of that header to pop/
-  // deallocate every slot in it -- so every time a fresh tag is minted, we
-  // must also refresh the copy stored here, or `popFrame` will act on
-  // whatever stale (tag, info) pair was written at function entry instead
-  // of the alloca's current one.
+  // Every alloca has a shadow stack slot where we "root" its provenance,
+  // so that it can be found by the GC. We update the contents of this
+  // slot every time we start a new lifetime for an alloca.
   DenseMap<AllocaInst *, ProvenanceDest> AllocaFrameSlots;
 
   // Information needed to reconstruct the shadow memory of a `byval` argument
@@ -1416,17 +1408,18 @@ public:
     initStack(EntryIRB);
 
     for (Instruction *I : Plan.instructions()) {
-      InstVisitor<BorrowSanitizerVisitor>::visit(*I);
-    }
-
-    for (const CheckInfo &CI : Plan.checks()) {
-      Value *AccessSize = CI.getAccessSize(BS.IntptrTy);
-      IRBuilder<> IRB(CI.InsertPt);
-      if (CI.AccessKind == CheckInfo::Read) {
-        insertReadCheck(IRB, CI.Target, AccessSize);
-      } else {
-        insertWriteCheck(IRB, CI.Target, AccessSize);
+      if (auto Checks = Plan.hasChecks(I)) {
+        IRBuilder<> IRB(I);
+        for (const CheckInfo &CI : *Checks) {
+          Value *AccessSize = CI.getAccessSize(IRB, BS.IntptrTy);
+          if (CI.AccessKind == CheckInfo::Read) {
+            insertReadCheck(IRB, CI.Target, AccessSize);
+          } else {
+            insertWriteCheck(IRB, CI.Target, AccessSize);
+          }
+        }
       }
+      InstVisitor<BorrowSanitizerVisitor>::visit(*I);
     }
 
     VAHelper->finalizeInstrumentation();
@@ -1694,9 +1687,9 @@ private:
       if (Prov != Provenance::omnivalid(BS)) {
         IRB.CreateCall(BS.BsanFuncRcInc, {Prov.Tag, Prov.Info});
       }
-      // We only decrement on nonatomic store. This leaks provenance values that
-      // are exposed to atomic operations, which is necessary to support atomics
-      // without locking.
+      // We only decrement on nonatomic stores. This leaks provenance
+      // values that are exposed to atomic operations, which is necessary
+      // to support atomics without locking.
       if (Ordering == AtomicOrdering::NotAtomic) {
         Provenance Old = loadProvenanceAlignedPairwise(IRB, Dest, Ordering);
         IRB.CreateCall(BS.BsanFuncRcDec, {Old.Tag, Old.Info});
@@ -2644,13 +2637,13 @@ private:
           Value *ByteWidth = IRB.CreateMul(NumReturnProv, BS.ProvenanceSize);
           ReturnProvPtrs.push_back(ptrsub(IRB, FrameTop, ByteWidth));
         }
-        IRB.CreateStore(ReturnProvPtrs.back(), BS.ProvStackTLS);
         for (const auto &[Idx, Ptr] : llvm::enumerate(ReturnProvPtrs)) {
           auto MainPtr = getMainProvenancePtr(IRB, Ptr);
           Provenance Prov =
               assertProvenance(IRB, ProvDesc[Idx].Elems, {RetVal, Idx});
           storeProvenance(IRB, MainPtr, Prov);
         }
+        IRB.CreateStore(ReturnProvPtrs.back(), BS.ProvStackTLS);
         return;
       }
     }

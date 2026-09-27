@@ -11,7 +11,9 @@ use crate::tree_borrows::data_structures::{AccessType, DedupRangeMap};
 use crate::tree_borrows::diagnostics::AccessCause;
 use crate::tree_borrows::perms::{AccessKind, Permission};
 use crate::tree_borrows::tree::LocationState;
-use crate::tree_borrows::{AllocState, AllocStateImpl, IdempotentForeignAccess, NewPermission};
+use crate::tree_borrows::{
+    AllocState, AllocStateImpl, IdempotentForeignAccess, NewPermission, VisitCounter,
+};
 use crate::{AllocInfo, BorTag, GlobalCtx, Provenance, RetagFlags, RetagInfo};
 
 // A reference to an instance of `AllocInfo`
@@ -26,15 +28,7 @@ impl AllocInfoPtr {
     /// Otherwise, the contents of its base address will be initialized with the next
     /// pointer in a free list.
     pub unsafe fn range(&self) -> AllocRange {
-        AllocRange { start: unsafe { self.base_addr() }, size: self.size.get() }
-    }
-
-    /// # Safety
-    /// This instance of `AllocInfo` must represent a valid, non-freed allocation.
-    /// Otherwise, the contents of its base address will be initialized with the next
-    /// pointer in a free list.
-    pub unsafe fn base_addr(&self) -> Size {
-        unsafe { self.free_or_addr.get().base_addr }
+        AllocRange { start: self.base_addr.get(), size: self.size.get() }
     }
 
     fn tree<'b>(self) -> UBResult<TreeGuard<'b>> {
@@ -189,7 +183,7 @@ impl<'b> BorrowTracker<'b> {
     {
         let alloc_info: AllocInfoPtr = unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
         let alloc_size = alloc_info.size.get();
-        let base_addr = unsafe { alloc_info.base_addr() };
+        let base_addr = alloc_info.base_addr.get();
         let offset = Size::from_bytes(start.bytes().wrapping_sub(base_addr.bytes()));
         let tree = alloc_info.tree()?;
 
@@ -239,7 +233,7 @@ impl<'b> BorrowTracker<'b> {
 
             let alloc_id = alloc_info.alloc_id.get();
             let alloc_size = alloc_info.size.get();
-            let base_addr = unsafe { alloc_info.base_addr() };
+            let base_addr = alloc_info.base_addr.get();
             let access_size = access_size.unwrap_or(alloc_size);
             let is_sized_access = access_size != Size::ZERO;
 
@@ -336,6 +330,7 @@ impl<'b> BorrowTracker<'b> {
         }
 
         let base_offset = self.range.start;
+        let visits = VisitCounter::new();
         for (perm_range, loc_state) in inside_perms.iter_all() {
             if let Some(access_kind) = loc_state.permission().associated_access() {
                 // Some reborrows incur a read access to the parent.
@@ -354,6 +349,7 @@ impl<'b> BorrowTracker<'b> {
                     AccessCause::Reborrow,
                     alloc_id,
                     span,
+                    visits.cell(),
                 )?;
             }
         }
@@ -373,11 +369,13 @@ impl<'b> BorrowTracker<'b> {
     }
 
     pub fn protector_end(&mut self, global_ctx: &GlobalCtx, span: Span) -> UBResult<()> {
+        let visits = VisitCounter::new();
         self.tree.perform_protector_end_access(
             global_ctx,
             self.bor_tag,
             self.alloc_info.alloc_id.get(),
             span,
+            visits.cell(),
         )
     }
 
@@ -399,6 +397,7 @@ impl<'b> BorrowTracker<'b> {
         access_kind: AccessKind,
         span: Span,
     ) -> UBResult<()> {
+        let visits = VisitCounter::new();
         self.tree.perform_access(
             global_ctx,
             self.bor_tag,
@@ -407,16 +406,19 @@ impl<'b> BorrowTracker<'b> {
             AccessCause::Explicit(access_kind),
             self.alloc_info.alloc_id.get(),
             span,
+            visits.cell(),
         )
     }
 
     pub fn dealloc(mut self, global_ctx: &GlobalCtx, span: Span) -> UBResult<()> {
+        let visits = VisitCounter::new();
         self.tree.take().dealloc(
             global_ctx,
             self.bor_tag,
             self.range,
             self.alloc_info.alloc_id.get(),
             span,
+            visits.cell(),
         )?;
         let range = unsafe { self.alloc_info.range() };
         global_ctx.remove_exposed_provenance(range, true);

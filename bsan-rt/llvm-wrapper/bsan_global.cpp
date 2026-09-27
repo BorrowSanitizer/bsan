@@ -11,8 +11,17 @@ using namespace __bsan;
 
 namespace __bsan {
 
-void GlobalContext::CollectProvenance(const ThreadId id,
-                                      BsanThread *const &thread, void *arg) {
+void GlobalContext::acquireProvenance(Provenance prov) {
+  Lock lock(&global_zct_lock_);
+  global_zct_.acquireProvenance(prov);
+}
+
+void GlobalContext::acquireProvenance(ZeroCountTable &source) {
+  Lock lock(&global_zct_lock_);
+  global_zct_.drainFrom(source);
+}
+
+void GlobalContext::CollectProvenance(BsanThread *const &thread, void *arg) {
   // Iterate over the shadow stacks for each thread,
   // collecting all provenance values into the snapshot.
   auto *state = static_cast<Snapshot *>(arg);
@@ -23,14 +32,19 @@ void GlobalContext::CollectProvenance(const ThreadId id,
   }
 }
 
-void GlobalContext::MergeZeroCountsCallback(const ThreadId id,
-                                            BsanThread *const &thread,
+void GlobalContext::MergeZeroCountsCallback(BsanThread *const &thread,
                                             void *arg) {
   auto *snap = static_cast<Snapshot *>(arg);
   if (!thread) {
     return;
   }
   MergeZeroCounts(snap, thread->zct);
+}
+
+void GlobalContext::ResetVisitCounts(BsanThread *const &thread, void *arg) {
+  if (thread) {
+    thread->ResetVisitCount();
+  }
 }
 
 void GlobalContext::MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct) {
@@ -41,8 +55,8 @@ void GlobalContext::MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct) {
     // ones in this thread's zero count table for a future collection. Record
     // the current generation as the last one when this thread's zero count
     // table was drained.
-    zct.retainIf(snap->gen, [&](AllocInfo *info, BorTag tag) -> bool {
-      Provenance prov = {tag, info};
+    zct.retainIf(snap->gen, [&](BlockIndex idx, BorTag tag) -> bool {
+      Provenance prov = {tag, BLOCK_PTR(idx)};
       if (snap->live->contains(prov)) {
         return true;
       }
@@ -63,25 +77,30 @@ void GlobalContext::MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct) {
 
 void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
   Snapshot *snap = static_cast<Snapshot *>(arg);
-  // We need access to the internal allocator so that we can add
-  // live provenance values to the set within the snapshot. Unlocking
-  // it here prevents us from unlocking it again once the closure returns.
-  snap->scope->UnlockInternalAllocator();
-  ThreadManager &threads = global_ctx()->Threads();
+  // We need access to the internal allocators used by the runtime, so
+  // that we can add live provenance values to the set within the snapshot.
+  // Unlocking these here prevents us from unlocking them again once the
+  // closure returns.
+  snap->scope->UnlockRuntimeAllocators();
   // For each thread, add all live provenance values to the snapshot.
-  threads.ForEachThread(CollectProvenance, arg);
+  ForEachThread(CollectProvenance, arg);
   // For each thread, if a provenance value in the ZCT is not present
   // in the set of live provenance values in the `SnapShot`, then remove
   // it from the ZCT and add it to the global "pending" set of provenance
   // values that need pruning.
-  threads.ForEachThread(MergeZeroCountsCallback, arg);
+  ForEachThread(MergeZeroCountsCallback, arg);
   // We also need to visit the global ZCT, which contains garbage from threads
   // that have exited since the last collection run.
-  MergeZeroCounts(snap, threads.global_zct);
+  MergeZeroCounts(snap, global_ctx()->global_zct_);
+  // Only one thread needs to reach `visits_per_gc` to get us here, so every
+  // thread's counter starts over from the collection we are about to perform.
+  ForEachThread(ResetVisitCounts, nullptr);
 }
 
 void GlobalContext::CollectGarbage(Snapshot &snap) {
-  pending_.drain([&](AllocInfo *info, BorTagSet &tags) {
+  ConcreteProvenanceSet still_pending;
+  pending_.drain([&](BlockIndex idx, BorTagSet &tags) {
+    Block *info = BLOCK_PTR(idx);
     // If `__bsan_prune` returns true, then the allocation's tree is empty;
     // every single tag was pruned.
     if (__bsan_prune(info, tags.data(), tags.size())) {
@@ -92,19 +111,23 @@ void GlobalContext::CollectGarbage(Snapshot &snap) {
       quarantine_[info] = snap.gen;
     }
   });
-  DenseMap<AllocInfo *, uptr> quarantined;
-  quarantine_.forEach([&](const DenseMap<AllocInfo *, uptr>::value_type &KV) {
+  pending_.swap(still_pending);
+
+  DenseMap<Block *, uptr> quarantined;
+  quarantine_.forEach([&](const DenseMap<Block *, uptr>::value_type &KV) {
     if (KV.second <= snap.min_drained) {
       __bsan_eject(KV.first);
+      global_ctx()->FreeBlock(BLOCK_IDX(KV.first));
     } else {
       quarantined.try_emplace(KV.first, KV.second);
     }
     return true;
   });
   quarantine_.swap(quarantined);
+  block_allocator.FlushCache(&block_cache_);
 }
 
-void GlobalContext::RequestGC() {
+void GlobalContext::requestGC() {
   // Get the current generation count
   uptr gen = atomic_load(&gc_gen, memory_order_acquire);
   // Try and lock the garbage collector

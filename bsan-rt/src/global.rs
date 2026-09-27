@@ -7,7 +7,6 @@ use spin::{RwLock, RwLockWriteGuard};
 
 use crate::errors::UBInfo;
 use crate::helpers::FxHashMap;
-use crate::memory::Heap;
 use crate::sanitizer_common::{Bridge, SharedSanitizerFlags};
 use crate::tree_borrows::data_structures::{AccessType, RangeObjectMap};
 use crate::tree_borrows::AllocStateImpl;
@@ -40,7 +39,6 @@ impl<'a> DerefMut for ExposedProvenance<'a> {
 /// it prevents us from relying on implicit global state and limits the spread
 /// of unsafety throughout the library.
 pub struct GlobalCtx {
-    alloc_metadata_map: Heap<AllocInfo>,
     snapshots: RwLock<FxHashMap<AllocId, AllocStateImpl>>,
     exposed_provenance: RwLock<RangeObjectMap<AllocInfoPtr>>,
     pub flags: SharedSanitizerFlags,
@@ -49,19 +47,10 @@ pub struct GlobalCtx {
 impl GlobalCtx {
     pub(crate) fn new(flags: &SharedSanitizerFlags) -> Self {
         Self {
-            alloc_metadata_map: Heap::new(),
             snapshots: RwLock::new(FxHashMap::default()),
             exposed_provenance: RwLock::new(RangeObjectMap::new()),
             flags: flags.clone(),
         }
-    }
-
-    pub(crate) fn create_alloc_info(&self, info: AllocInfo) -> NonNull<AllocInfo> {
-        self.alloc_metadata_map.alloc(info)
-    }
-
-    pub(crate) unsafe fn destroy_alloc_info(&self, ptr: NonNull<AllocInfo>) {
-        unsafe { self.alloc_metadata_map.dealloc(ptr) }
     }
 
     pub fn exposed_provenance<'a>(&'a self) -> ExposedProvenance<'a> {
@@ -148,14 +137,12 @@ impl GlobalCtx {
 
 /// We need to declare a global allocator to be able to use `alloc` in a `#[no_std]`
 /// crate. Anything other than the `GlobalCtx` object will clash with the interceptors,
-/// For now, this allocator will defer to libc malloc and free, but in the future, we can
-/// set its endpoints to immediately panic with an error message to help with debugging.
 mod global_alloc {
     use core::ffi::c_void;
 
     #[cfg(not(test))]
     unsafe extern "C" {
-        fn __bsan_crt_malloc(size: usize) -> *mut core::ffi::c_void;
+        fn __bsan_crt_malloc(size: usize, alignment: usize) -> *mut core::ffi::c_void;
         fn __bsan_crt_free(ptr: *mut core::ffi::c_void);
     }
 
@@ -172,7 +159,7 @@ mod global_alloc {
             }
             #[cfg(not(test))]
             unsafe {
-                __bsan_crt_malloc(layout.size()).cast::<u8>()
+                __bsan_crt_malloc(layout.size(), layout.align()).cast::<u8>()
             }
         }
         unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {

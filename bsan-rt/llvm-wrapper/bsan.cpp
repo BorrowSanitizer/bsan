@@ -92,15 +92,16 @@ SANITIZER_INTERFACE_ATTRIBUTE
 atomic_uintptr_t __bsan_bor_tag_ctr{3};
 
 // Accumulates the number of tree-node visits performed by the Rust runtime
-// since the last garbage collection request
+// on this thread since the last garbage collection.
 SANITIZER_INTERFACE_ATTRIBUTE
-atomic_uintptr_t __bsan_visits_since_gc{0};
+THREADLOCAL uptr __bsan_visits_since_gc = 0;
 
 // Path substrings that identify a file as belonging to a dependency/toolchain
 static const char *const kLibraryPathMarkers[] = {".cargo/", ".rustup/",
                                                   "cargo/", "rustup/"};
 
 namespace __bsan {
+BlockAllocator block_allocator(LINKER_INITIALIZED, "blocks");
 
 static StaticSpinMutex bsan_inited_mutex;
 static atomic_uint8_t bsan_inited = {0};
@@ -113,26 +114,47 @@ bool BsanInited() {
   return atomic_load(&bsan_inited, memory_order_acquire) == 1;
 }
 
-// Allocates a new borrow tag.
-BorTag NewBorTag() {
-  return atomic_fetch_add(&__bsan_bor_tag_ctr, 1, memory_order_relaxed);
+extern "C" SANITIZER_WEAK_ATTRIBUTE void
+__bsan_alloc_impl(void *base_addr, uptr size, BorTag bor_tag, Block *block,
+                  Span pc);
+
+Provenance BsanAllocateMeta(void *ptr, uptr size, uptr span) {
+  if (LIKELY(__bsan_alloc_impl)) {
+    BorTag tag = atomic_fetch_add(&__bsan_bor_tag_ctr, 1, memory_order_relaxed);
+    Block *block = BLOCK_PTR(CurrentThread()->AllocBlock());
+    __bsan_alloc_impl(ptr, size, tag, block, span);
+    Provenance prov = {tag, block};
+    return prov;
+  } else {
+    return OMNIVALID;
+  }
 }
 
-// Asks the global context to run the garbage collector once the Rust runtime
-// has reported at least `visits_per_gc` tree-node visits since the last
-// request, then resets the counter. Concurrent requests across threads are
-// coalesced by `RequestGC`.
+void AcquireProvenance(Provenance prov) {
+  BsanThread *thread = CurrentThread();
+  if (LIKELY(thread != nullptr)) {
+    thread->zct.acquireProvenance(prov);
+  } else {
+    global_ctx()->acquireProvenance(prov);
+  }
+}
+
+// Asks the global context to run the garbage collector once this thread has
+// reported at least `visits_per_gc` tree-node visits since the last
+// collection. The first thread to reach the threshold restarts the interval
+// for all of them. Concurrent requests across threads are coalesced by
+// `RequestGC`.
 static void MaybeRequestGC() {
   uptr interval = flags()->visits_per_gc;
   if (interval == 0)
     return;
-  uptr visits = atomic_load(&__bsan_visits_since_gc, memory_order_acquire);
-  if (visits < interval)
+  if (__bsan_visits_since_gc < interval)
     return;
-  // Multiple threads can reach this store, but that's okay, because
-  // our GC allows for multiple simultaneous requests
-  atomic_store(&__bsan_visits_since_gc, 0, memory_order_release);
-  global_ctx()->RequestGC();
+  // Clear our own counter up front. `RequestGC` does nothing if another
+  // thread is already collecting or has just finished, and only a collection
+  // that succeeds resets our counter.
+  __bsan_visits_since_gc = 0;
+  global_ctx()->requestGC();
 }
 
 // Returns the desired length for the current stack trace.
@@ -282,7 +304,6 @@ static bool BsanInitInternal() {
   InitializeFlags(flags);
   new (global_ctx()) GlobalContext();
 
-  __bsan_internal_init(&flags);
   InitializePlatformEarly();
 
   if (!InitShadowWithReExec()) {
@@ -291,14 +312,15 @@ static bool BsanInitInternal() {
     Die();
   }
 
-  InitializeAllocator();
+  InitializeRustAllocator();
+  __bsan_internal_init(&flags);
+
+  InitializeShadowedAllocator();
   InitializeInterceptors();
   InstallDeadlySignalHandlers(BsanOnDeadlySignal);
   InitializeTSD(PlatformTSDDtor);
 
-  BsanThread *main_thread = BsanThread::Create(nullptr, nullptr);
-  SetCurrentThread(main_thread);
-  main_thread->Init();
+  CreateMainThread();
 
   SetBsanInited();
   return true;
@@ -484,14 +506,13 @@ SANITIZER_WEAK_ATTRIBUTE
 void __bsan_retag_impl(void *object_addr, uptr access_size, u8 flags,
                        const uptr im_data[2], uptr im_len,
                        const uptr pin_data[2], uptr pin_len, BorTag bor_tag,
-                       AllocInfo *alloc_info, void *dest, Span pc,
-                       bool checked);
+                       Block *alloc_info, void *dest, Span pc, bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_retag(void *object_addr, uptr access_size, u8 flags,
                   const uptr im_data[2], uptr im_len, const uptr pin_data[2],
-                  uptr pin_len, BorTag bor_tag, AllocInfo *alloc_info,
-                  void *dest, bool checked) {
+                  uptr pin_len, BorTag bor_tag, Block *alloc_info, void *dest,
+                  bool checked) {
   if (__bsan_retag_impl) {
     GET_SPAN;
     InterceptorBarrier barrier;
@@ -501,20 +522,21 @@ void __bsan_retag(void *object_addr, uptr access_size, u8 flags,
                       checked);
     HANDLE_ERROR;
     *(Provenance *)(dest) = prov;
-    // A retag mints a fresh provenance value with no references yet; record it
-    // in this thread's zero-count set as a collection candidate.
-    CurrentThread()->zct.acquireProvenance(prov);
+    // We can only acquire provenance *after* we have rooted it to the
+    // shadow stack. Otherwise, the GC could clean it up before we have
+    // even started using it!
+    AcquireProvenance(prov);
     MaybeRequestGC();
   }
 }
 
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_read_impl(void *ptr, uptr access_size, BorTag bor_tag,
-                      AllocInfo *alloc_info, Span pc, bool checked);
+                      Block *alloc_info, Span pc, bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_read(void *ptr, uptr access_size, BorTag bor_tag,
-                 AllocInfo *alloc_info, bool checked) {
+void __bsan_read(void *ptr, uptr access_size, BorTag bor_tag, Block *alloc_info,
+                 bool checked) {
   if (__bsan_read_impl) {
     GET_SPAN;
     InterceptorBarrier barrier;
@@ -525,11 +547,11 @@ void __bsan_read(void *ptr, uptr access_size, BorTag bor_tag,
 
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_write_impl(void *ptr, uptr access_size, BorTag bor_tag,
-                       AllocInfo *alloc_info, Span pc, bool checked);
+                       Block *alloc_info, Span pc, bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_write(void *ptr, uptr access_size, BorTag bor_tag,
-                  AllocInfo *alloc_info, bool checked) {
+                  Block *alloc_info, bool checked) {
   if (__bsan_write_impl) {
     GET_SPAN;
     InterceptorBarrier barrier;
@@ -539,10 +561,10 @@ void __bsan_write(void *ptr, uptr access_size, BorTag bor_tag,
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-bool __bsan_rc_inc_impl(BorTag Tag, AllocInfo *Info);
+bool __bsan_rc_inc_impl(BorTag Tag, Block *Info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_rc_inc(BorTag Tag, AllocInfo *Info) {
+void __bsan_rc_inc(BorTag Tag, Block *Info) {
   if (__bsan_rc_inc_impl) {
     InterceptorBarrier barrier;
     __bsan_rc_inc_impl(Tag, Info);
@@ -550,14 +572,14 @@ void __bsan_rc_inc(BorTag Tag, AllocInfo *Info) {
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-bool __bsan_rc_dec_impl(BorTag Tag, AllocInfo *Info);
+bool __bsan_rc_dec_impl(BorTag tag, Block *info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_rc_dec(BorTag Tag, AllocInfo *Info) {
+void __bsan_rc_dec(BorTag tag, Block *info) {
   if (__bsan_rc_dec_impl) {
     InterceptorBarrier barrier;
-    if (__bsan_rc_dec_impl(Tag, Info)) {
-      CurrentThread()->zct.acquireProvenance({Tag, Info});
+    if (__bsan_rc_dec_impl(tag, info)) {
+      AcquireProvenance({tag, info});
     }
   }
 }
@@ -573,56 +595,22 @@ void __bsan_shadow_clear_aligned(void *dest_shadow, void *dest_origin,
   ClearShadowAligned((uptr)dest_shadow, (uptr)dest_origin, size);
 }
 
-SANITIZER_WEAK_ATTRIBUTE
-AllocInfo *__bsan_reserve_stack_slot_impl();
-
 SANITIZER_INTERFACE_ATTRIBUTE
-AllocInfo *__bsan_reserve_stack_slot() {
-  if (__bsan_reserve_stack_slot_impl) {
-    InterceptorBarrier barrier;
-    return __bsan_reserve_stack_slot_impl();
-  }
-  return nullptr;
-}
-
-SANITIZER_WEAK_ATTRIBUTE
-void __bsan_destroy_stack_slot_impl(AllocInfo *slot);
-
-SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_destroy_stack_slot(AllocInfo *slot) {
-  if (__bsan_destroy_stack_slot_impl) {
-    InterceptorBarrier barrier;
-    __bsan_destroy_stack_slot_impl(slot);
-  }
-}
-
-SANITIZER_WEAK_ATTRIBUTE
-AllocInfo *__bsan_alloc_impl(void *base_addr, uptr size, BorTag bor_tag,
-                             Span pc);
-
-SANITIZER_INTERFACE_ATTRIBUTE
-AllocInfo *__bsan_alloc(void *base_addr, uptr size, BorTag bor_tag, Span pc) {
-  if (__bsan_alloc_impl) {
-    InterceptorBarrier barrier;
-    AllocInfo *info = __bsan_alloc_impl(base_addr, size, bor_tag, pc);
-    CurrentThread()->zct.acquireProvenance({bor_tag, info});
-    return info;
-  } else {
-    return nullptr;
-  }
+Block *__bsan_reserve_stack_slot() {
+  return BLOCK_PTR(CurrentThread()->AllocBlock());
 }
 
 SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE void
-__bsan_dealloc(void *ptr, BorTag bor_tag, AllocInfo *alloc_info, Span pc,
+__bsan_dealloc(void *ptr, BorTag bor_tag, Block *alloc_info, Span pc,
                bool checked) {}
 
 SANITIZER_WEAK_ATTRIBUTE
 void __bsan_alloc_stack_impl(void *base_addr, uptr size, BorTag bor_tag,
-                             AllocInfo *alloc_info, Span pc);
+                             Block *alloc_info, Span pc);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_alloc_stack(void *base_addr, uptr size, BorTag bor_tag,
-                        AllocInfo *alloc_info) {
+                        Block *alloc_info) {
   if (__bsan_alloc_stack_impl) {
     GET_SPAN;
     InterceptorBarrier barrier;
@@ -632,10 +620,10 @@ void __bsan_alloc_stack(void *base_addr, uptr size, BorTag bor_tag,
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_dealloc_stack_impl(BorTag bor_tag, AllocInfo *alloc_info, Span pc);
+void __bsan_dealloc_stack_impl(BorTag bor_tag, Block *alloc_info, Span pc);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_dealloc_stack(void *ptr, BorTag bor_tag, AllocInfo *alloc_info) {
+void __bsan_dealloc_stack(void *ptr, BorTag bor_tag, Block *alloc_info) {
   if (__bsan_dealloc_stack_impl) {
     GET_SPAN;
     InterceptorBarrier barrier;
@@ -645,10 +633,10 @@ void __bsan_dealloc_stack(void *ptr, BorTag bor_tag, AllocInfo *alloc_info) {
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_expose_prov_impl(BorTag bor_tag, AllocInfo *alloc_info);
+void __bsan_expose_prov_impl(BorTag bor_tag, Block *alloc_info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_expose_prov(BorTag bor_tag, AllocInfo *alloc_info) {
+void __bsan_expose_prov(BorTag bor_tag, Block *alloc_info) {
   if (__bsan_expose_prov_impl) {
     InterceptorBarrier barrier;
     __bsan_expose_prov_impl(bor_tag, alloc_info);
@@ -656,80 +644,79 @@ void __bsan_expose_prov(BorTag bor_tag, AllocInfo *alloc_info) {
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_protector_end_impl(BorTag bor_tag, AllocInfo *alloc_info, Span pc);
+void __bsan_protector_end_impl(BorTag bor_tag, Block *alloc_info, Span pc);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_pop_frame(const Provenance *frame_start, uptr prot,
                       uptr alloca_vec_size) {
-  if (__bsan_protector_end_impl && __bsan_destroy_stack_slot_impl &&
-      __bsan_dealloc_stack_impl) {
+  if (__bsan_protector_end_impl && __bsan_dealloc_stack_impl) {
     GET_SPAN;
     InterceptorBarrier barrier;
     for (uptr i = 0; i < prot + alloca_vec_size; i++) {
       const Provenance prov = frame_start[i];
       if (i < prot) {
-        __bsan_protector_end_impl(prov.tag, prov.info, span);
+        __bsan_protector_end_impl(prov.tag, prov.block, span);
       } else {
-        __bsan_dealloc_stack_impl(prov.tag, prov.info, span);
-        __bsan_destroy_stack_slot_impl(prov.info);
+        __bsan_dealloc_stack_impl(prov.tag, prov.block, span);
+        CurrentThread()->FreeBlock(BLOCK_IDX(prov.block));
       }
     }
   }
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_print(BorTag bor_tag, AllocInfo *alloc_info) {}
+void __bsan_print(BorTag bor_tag, Block *alloc_info) {}
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_print(void *ptr) {
   Provenance *slot = GetParamSlot(0);
   InterceptorBarrier barrier;
-  __bsan_print(slot->tag, slot->info);
+  __bsan_print(slot->tag, slot->block);
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_print_borrow_state(BorTag bor_tag, AllocInfo *alloc_info) {}
+void __bsan_print_borrow_state(BorTag bor_tag, Block *alloc_info) {}
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_debug_print_borrow_state(void *ptr) {
   Provenance *slot = GetParamSlot(0);
   InterceptorBarrier barrier;
-  __bsan_print_borrow_state(slot->tag, slot->info);
+  __bsan_print_borrow_state(slot->tag, slot->block);
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_tree_size(BorTag bor_tag, AllocInfo *alloc_info) {}
+void __bsan_tree_size(BorTag bor_tag, Block *alloc_info) {}
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_debug_tree_size(void *ptr) {
   Provenance *slot = GetParamSlot(0);
   InterceptorBarrier barrier;
-  __bsan_tree_size(slot->tag, slot->info);
+  __bsan_tree_size(slot->tag, slot->block);
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_snapshot(BorTag bor_tag, AllocInfo *alloc_info) {}
+void __bsan_snapshot(BorTag bor_tag, Block *alloc_info) {}
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_debug_snapshot(void *ptr) {
   Provenance *slot = GetParamSlot(0);
   InterceptorBarrier barrier;
-  __bsan_snapshot(slot->tag, slot->info);
+  __bsan_snapshot(slot->tag, slot->block);
 }
 
 SANITIZER_WEAK_ATTRIBUTE void __bsan_print_diff(BorTag bor_tag,
-                                                AllocInfo *alloc_info) {}
+                                                Block *alloc_info) {}
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_debug_print_diff(void *ptr) {
   Provenance *slot = GetParamSlot(0);
   InterceptorBarrier barrier;
-  __bsan_print_diff(slot->tag, slot->info);
+  __bsan_print_diff(slot->tag, slot->block);
 }
 
 // Asks the global state to run the garbage collector. Any thread may call this;
 // concurrent requests are coalesced into a single collection.
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_request_gc() { global_ctx()->RequestGC(); }
+void __bsan_request_gc() { global_ctx()->requestGC(); }
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_abort() { Die(); }

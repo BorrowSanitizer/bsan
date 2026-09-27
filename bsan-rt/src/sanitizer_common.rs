@@ -190,8 +190,9 @@ unsafe extern "C" {
     #[thread_local]
     pub unsafe static mut __bsan_had_error: usize;
 
-    /// Tree-node visits accumulated since the last GC request.
-    pub unsafe static __bsan_visits_since_gc: core::sync::atomic::AtomicUsize;
+    /// Tree-node visits accumulated on this thread since the last GC.
+    #[thread_local]
+    pub unsafe static mut __bsan_visits_since_gc: usize;
 
     /// Symbolize a single PC into "file:line:column" and returns 1 on success.
     fn __bsan_symbolize_pc(

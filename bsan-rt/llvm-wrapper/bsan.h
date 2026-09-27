@@ -1,6 +1,8 @@
 #ifndef BSAN_H
 #define BSAN_H
+
 #include "bsan_allocator.h"
+#include "bsan_dense_slab.h"
 #include "bsan_shadow.h"
 #include "sanitizer_common/sanitizer_addrhashmap.h"
 #include "sanitizer_common/sanitizer_atomic.h"
@@ -30,18 +32,20 @@ using __sanitizer::u64;
 using __sanitizer::u8;
 using __sanitizer::uptr;
 using __sanitizer::Vector;
-
 // The immediate caller PC of a runtime hook, captured at the retag/access
 // site. Symbolized lazily at display time as the error's origin note; the
 // primary error location comes from the live unwind in `HANDLE_ERROR`.
 typedef uptr Span;
 typedef uptr BorTag;
 
-struct AllocInfo;
-
 struct Provenance {
   BorTag tag;
-  AllocInfo *info;
+  Block *block;
+  bool isConcrete() {
+    bool cond = tag > 2;
+    DCHECK(cond || block == nullptr);
+    return cond;
+  }
 };
 
 struct AtExitRecord {
@@ -62,10 +66,16 @@ extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __bsan_had_error;
 
 extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uintptr_t __bsan_bor_tag_ctr;
 
-// Tree-node visits accumulated by the Rust runtime since the last GC request.
-extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uintptr_t __bsan_visits_since_gc;
+// Tree-node visits accumulated by the Rust runtime on this thread since the
+// last GC.
+extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __bsan_visits_since_gc;
 
 namespace __bsan {
+typedef DenseSlabAlloc<kMetadataSpace> BlockAllocator;
+extern BlockAllocator block_allocator;
+
+#define BLOCK_IDX(ptr) (block_allocator.InvMap(ptr))
+#define BLOCK_PTR(idx) (block_allocator.Map(idx))
 
 typedef uptr ThreadId;
 
@@ -97,8 +107,12 @@ void *TSDGet();
 void TSDSet(void *tsd);
 void PlatformTSDDtor(void *tsd);
 
-/// Creates a new borrow tag.
-BorTag NewBorTag();
+/// Creates metadata for a new allocation;
+Provenance BsanAllocateMeta(void *ptr, uptr size, uptr span);
+
+/// Marks a provenance value as potentially
+/// viable for garbage collection.
+void AcquireProvenance(Provenance prov);
 
 /// Enables interception.
 void InitializeInterceptors();
@@ -136,6 +150,7 @@ namespace __bsan {
   if (UNLIKELY(__bsan_had_error)) {                                            \
     uptr pc = StackTrace::GetCurrentPc();                                      \
     uptr bp = GET_CURRENT_FRAME();                                             \
+    ScopedErrorReportLock::Lock();                                             \
     __bsan_format_pending_ub(__bsan::FindUserFramePc(pc, bp));                 \
     UNINITIALIZED BufferedStackTrace stack;                                    \
     stack.Unwind(pc, bp, nullptr, true, __bsan::GetStackTraceLen());           \
@@ -145,6 +160,7 @@ namespace __bsan {
 
 #define HANDLE_ERROR_PC_BP(pc, bp)                                             \
   if (UNLIKELY(__bsan_had_error)) {                                            \
+    ScopedErrorReportLock::Lock();                                             \
     __bsan_format_pending_ub(__bsan::FindUserFramePc(pc, bp));                 \
     UNINITIALIZED BufferedStackTrace stack;                                    \
     stack.Unwind(pc, bp, nullptr, true, __bsan::GetStackTraceLen());           \

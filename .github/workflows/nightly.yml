@@ -97,7 +97,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
             sparse-checkout: bsan-script/etc/build-clang.sh
             sparse-checkout-cone-mode: false
@@ -114,7 +114,7 @@ jobs:
             ${{ needs.init.outputs.tag }}
 
       - name: Upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ needs.init.outputs.tag }}-${{ matrix.config.target }}
           path: ${{ needs.init.outputs.tag }}-${{ matrix.config.target }}.tar.xz
@@ -130,7 +130,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: ${{ needs.init.outputs.tag }}-*
           merge-multiple: true
@@ -182,7 +182,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Update config.toml
         run: |
           set -euo pipefail

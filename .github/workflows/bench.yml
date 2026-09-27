@@ -26,7 +26,7 @@ jobs:
     outputs:
       crates: ${{ steps.crates.outputs.crates }}
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Read crate list from crates.json
       id: crates
       run: echo "crates=$(jq -c '[.[].name]' tests/benches/crates.json)" >> "$GITHUB_OUTPUT"
@@ -49,7 +49,7 @@ jobs:
         password: ${{ secrets.github_token }}
     name: ${{ matrix.crate }} (${{ matrix.config.target }})
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Setup dependencies
       run: |
         ln -s /root/.rustup/ $HOME/.rustup
@@ -75,7 +75,7 @@ jobs:
         "$RESULTS.json" \
         "$RESULTS.csv"
     - name: Upload results
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ steps.filename.outputs.results }}
         path: |
@@ -87,9 +87,9 @@ jobs:
     needs: bench
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Download artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         pattern: results_*
         merge-multiple: true
@@ -100,7 +100,7 @@ jobs:
     - name: Merge JSON files
       run: jq -s 'add' results/*.json > ${{ steps.merged_filename.outputs.name }}.json
     - name: Upload merged results
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ steps.merged_filename.outputs.name }}
         path: ${{ steps.merged_filename.outputs.name }}.json

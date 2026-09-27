@@ -14,6 +14,7 @@
 //! - idempotency properties asserted in `perms.rs` (for optimizations)
 
 // use alloc::boxed::Box;
+use core::cell::Cell;
 use core::ops::Range;
 use core::{cmp, fmt, mem};
 
@@ -196,6 +197,34 @@ impl Node {
     /// How this node should be referred to by an error message.
     fn error_node(&self) -> ErrorNode<'_> {
         ErrorNode { info: &self.debug_info, protector: self.protector_kind }
+    }
+}
+
+/// Counts the tree nodes visited during a single access. When dropped,
+/// the total is added to this thread's `__bsan_visits_since_gc`, which
+/// the llvm-wrapper runtime uses to decide when to request a GC.
+#[derive(Debug, Default)]
+pub struct VisitCounter(Cell<u32>);
+
+impl VisitCounter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn cell(&self) -> &Cell<u32> {
+        &self.0
+    }
+}
+
+/// Automatically sync when the counter is dropped
+impl Drop for VisitCounter {
+    fn drop(&mut self) {
+        let visits = self.0.get();
+        if visits != 0 {
+            unsafe {
+                crate::sanitizer_common::__bsan_visits_since_gc =
+                    crate::sanitizer_common::__bsan_visits_since_gc.saturating_add(visits as usize);
+            }
+        }
     }
 }
 
@@ -645,6 +674,7 @@ impl EagerTree {
             if node.refcount.get() != 0 || node.is_exposed {
                 continue;
             }
+
             if !self.try_remove_node(global_ctx, idx, compact) {
                 survivors.push(tag);
             }
@@ -687,7 +717,8 @@ impl EagerTree {
                 true
             }
             // Node has exactly one child (and, per the guard above, a parent)
-            1 if compact && self.can_be_replaced_by_single_child(idx) => {
+            1 => {
+                if compact && self.can_be_replaced_by_single_child(idx) {
                 // Replace the node with its only child.
                 let child_idx = node.children[0];
                 let parent_idx = parent.unwrap();
@@ -697,6 +728,9 @@ impl EagerTree {
                 self.nodes.get_mut(child_idx).unwrap().parent = parent;
                 self.remove_useless_node(idx);
                 true
+                } else {
+                    false
+                }
             }
             // Node has more than one child. If every child can soundly replace it, compact it
             // by reparenting all of its children onto its parent.
@@ -767,6 +801,7 @@ impl LocationTree {
         visit_children: ChildrenVisitMode,
         diagnostics: &DiagnosticInfo,
         min_exposed_child: Option<BorTag>,
+        visits: &mut u32,
     ) -> UBResult<()> {
         let accessed_root = if let Some(idx) = access_source {
             Some(self.perform_normal_access(
@@ -776,6 +811,7 @@ impl LocationTree {
                 access_kind,
                 visit_children,
                 diagnostics,
+                visits,
             )?)
         } else {
             // `SkipChildrenOfAccessed` only gets set on protector release, which only
@@ -824,6 +860,7 @@ impl LocationTree {
                 access_kind,
                 diagnostics,
                 /*is_wildcard_tree*/ i != 0,
+                visits,
             )?;
         }
         Ok(())
@@ -843,6 +880,7 @@ impl LocationTree {
         access_kind: AccessKind,
         visit_children: ChildrenVisitMode,
         diagnostics: &DiagnosticInfo,
+        visits: &mut u32,
     ) -> UBResult<UniIndex> {
         // Performs the per-node work:
         // - insert the permission if it does not exist
@@ -861,7 +899,7 @@ impl LocationTree {
             let old_state = perm.copied().unwrap_or_else(|| node.default_location_state());
             old_state.skip_if_known_noop(access_kind, args.rel_pos)
         };
-        let mut visit_count: usize = 0;
+        let mut visit_count: u32 = 0;
         let node_app = |args: NodeAppArgs<'_, LocationTree>| {
             visit_count += 1;
             let node = args.nodes.get_mut(args.idx).unwrap();
@@ -903,10 +941,7 @@ impl LocationTree {
                 .traverse_nonchildren(access_source, node_skipper, node_app)
                 .map_err(|e| e.into()),
         };
-        unsafe {
-            crate::sanitizer_common::__bsan_visits_since_gc
-                .fetch_add(visit_count, core::sync::atomic::Ordering::Relaxed);
-        }
+        *visits = visits.saturating_add(visit_count);
         result
     }
 
@@ -927,6 +962,7 @@ impl LocationTree {
         access_kind: AccessKind,
         diagnostics: &DiagnosticInfo,
         is_wildcard_tree: bool,
+        visits: &mut u32,
     ) -> UBResult<()> {
         let get_relatedness = |idx: UniIndex, node: &Node, loc: &LocationTree| {
             // If the tag is larger than `max_local_tag` then the access can only be foreign.
@@ -942,7 +978,7 @@ impl LocationTree {
 
         // Whether there is an exposed node in this tree that allows this access.
         let mut has_valid_exposed = false;
-        let mut visit_count: usize = 0;
+        let mut visit_count: u32 = 0;
 
         // This does a traversal across the tree updating children before their parents. The
         // difference to `perform_normal_access` is that we take the access relatedness from
@@ -1036,10 +1072,7 @@ impl LocationTree {
                 })
             },
         )?;
-        unsafe {
-            crate::sanitizer_common::__bsan_visits_since_gc
-                .fetch_add(visit_count, core::sync::atomic::Ordering::Relaxed);
-        }
+        *visits = visits.saturating_add(visit_count);
         // If there is no exposed node in this tree that allows this access, then the access *must*
         // be foreign to the entire subtree. Foreign accesses are only possible on wildcard subtrees
         // as there are no ancestors to the main root. So if we do not find a valid exposed node in
@@ -1050,6 +1083,7 @@ impl LocationTree {
         Ok(())
     }
 }
+
 /// The public interface shared by all tree implementations.
 /// Consumers outside this module interact with the tree exclusively
 /// through this trait; the underlying implementations are
@@ -1079,6 +1113,7 @@ pub trait AllocState: Clone {
         access_cause: AccessCause,
         alloc_id: AllocId,
         span: Span,
+        visits_since_gc: &Cell<u32>,
     ) -> UBResult<()>;
     fn dealloc(
         &mut self,
@@ -1088,6 +1123,7 @@ pub trait AllocState: Clone {
         access_range: AllocRange,
         alloc_id: AllocId,
         span: Span,
+        visits_since_gc: &Cell<u32>,
     ) -> UBResult<()>;
     fn perform_protector_end_access(
         &mut self,
@@ -1095,6 +1131,7 @@ pub trait AllocState: Clone {
         tag: BorTag,
         alloc_id: AllocId,
         span: Span,
+        visits_since_gc: &Cell<u32>,
     ) -> UBResult<()>;
     fn expose_tag(&mut self, tag: BorTag, protected: bool);
 
@@ -1146,6 +1183,7 @@ impl AllocState for LazyTree {
         access_cause: AccessCause,
         alloc_id: AllocId,
         span: Span,
+        visits_since_gc: &Cell<u32>,
     ) -> UBResult<()> {
         match self {
             LazyTree::Uninit { .. } => Ok(()),
@@ -1157,6 +1195,7 @@ impl AllocState for LazyTree {
                 access_cause,
                 alloc_id,
                 span,
+                visits_since_gc,
             ),
         }
     }
@@ -1167,10 +1206,13 @@ impl AllocState for LazyTree {
         access_range: AllocRange,
         alloc_id: AllocId,
         span: Span,
+        visits_since_gc: &Cell<u32>,
     ) -> UBResult<()> {
         match self {
             LazyTree::Uninit { .. } => Ok(()),
-            LazyTree::Init(tree) => tree.dealloc(global_ctx, tag, access_range, alloc_id, span),
+            LazyTree::Init(tree) => {
+                tree.dealloc(global_ctx, tag, access_range, alloc_id, span, visits_since_gc)
+            }
         }
     }
     fn perform_protector_end_access(
@@ -1180,11 +1222,12 @@ impl AllocState for LazyTree {
         tag: BorTag,
         alloc_id: AllocId,
         span: Span,
+        visits_since_gc: &Cell<u32>,
     ) -> UBResult<()> {
         match self {
             LazyTree::Uninit { .. } => Ok(()),
             LazyTree::Init(tree) => {
-                tree.perform_protector_end_access(global_ctx, tag, alloc_id, span)
+                tree.perform_protector_end_access(global_ctx, tag, alloc_id, span, visits_since_gc)
             }
         }
     }
@@ -1327,6 +1370,7 @@ impl AllocState for EagerTree {
         access_cause: AccessCause,
         alloc_id: AllocId,
         span: Span,
+        visits_since_gc: &Cell<u32>,
     ) -> UBResult<()> {
         #[cfg(feature = "expensive-consistency-checks")]
         if self.roots.len() > 1 || matches!(prov, ProvenanceExtra::Wildcard) {
@@ -1335,6 +1379,9 @@ impl AllocState for EagerTree {
 
         let source_idx =
             if tag.is_wildcard() { None } else { Some(self.tag_mapping.get(&tag).unwrap()) };
+
+        // `visits_since_gc` is only written once per access.
+        let mut visits: u32 = 0;
 
         for (loc_range, loc) in self.locations.iter_mut(access_range.start, access_range.size) {
             let diagnostics = DiagnosticInfo {
@@ -1353,8 +1400,10 @@ impl AllocState for EagerTree {
                 ChildrenVisitMode::VisitChildrenOfAccessed,
                 &diagnostics,
                 /* min_exposed_child */ None,
+                &mut visits,
             )?;
         }
+        visits_since_gc.set(visits_since_gc.get().saturating_add(visits));
         Ok(())
     }
     fn dealloc(
@@ -1364,6 +1413,7 @@ impl AllocState for EagerTree {
         access_range: AllocRange,
         alloc_id: AllocId,
         span: Span,
+        visits_since_gc: &Cell<u32>,
     ) -> UBResult<()> {
         self.perform_access(
             global_ctx,
@@ -1373,6 +1423,7 @@ impl AllocState for EagerTree {
             AccessCause::Dealloc,
             alloc_id,
             span,
+            visits_since_gc,
         )?;
 
         let start_idx =
@@ -1434,6 +1485,7 @@ impl AllocState for EagerTree {
         tag: BorTag,
         alloc_id: AllocId,
         span: Span,
+        visits_since_gc: &Cell<u32>,
     ) -> UBResult<()> {
         #[cfg(feature = "expensive-consistency-checks")]
         if self.roots.len() > 1 {
@@ -1447,7 +1499,7 @@ impl AllocState for EagerTree {
         } else {
             None
         };
-
+        let mut visits: u32 = 0;
         for (loc_range, loc) in self.locations.iter_mut_all() {
             if let Some(p) = loc.perms.get(source_idx)
                 && let Some(access_kind) = p.permission.protector_end_access()
@@ -1469,10 +1521,11 @@ impl AllocState for EagerTree {
                     ChildrenVisitMode::SkipChildrenOfAccessed,
                     &diagnostics,
                     min_exposed_child,
+                    &mut visits,
                 )?;
             }
         }
-
+        visits_since_gc.set(visits_since_gc.get().saturating_add(visits));
         // If the tag is exposed, then the wildcard tracking state needs to
         // reflect that it is no longer protected: accesses that were UB while
         // the protector was active may be permitted again.

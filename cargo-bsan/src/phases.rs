@@ -153,7 +153,7 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
         Some(dir) => PathBuf::from(dir),
         None => Cargo::get_target_dir(),
     };
-    cmd.arg("--target-dir").arg(target_dir);
+    cmd.arg("--target-dir").arg(&target_dir);
 
     // *After* we set all the flags that need setting, forward everything else. Make sure to skip
     // `--target-dir` (which would otherwise be set twice).
@@ -177,6 +177,10 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     cmd.env("CC", &cc_wrapper);
     cmd.env("CXX", &cc_wrapper);
     cmd.env("BSAN_CC_WRAPPER", &cc_wrapper);
+
+    let mut target_out_dir = target_dir;
+    target_out_dir.push(&rustc_version.host);
+    cmd.env("BSAN_TARGET_OUT_DIR", target_out_dir);
 
     // If both RUSTC_WORKSPACE_WRAPPER and RUSTC_WRAPPER are set,
     // then both are executed in succession. Providing an independent
@@ -223,29 +227,44 @@ pub fn phase_cc(args: impl Iterator<Item = String>) {
     for arg in args {
         // Unused linker arguments are treated as warnings.
         // Instead of manually determining when clang is being invoked
-        // as a linker, which is flaky, we allow warnings.
+        // as a linker, which would require implementing some additional,
+        // possibly flaky heuristics, we allow warnings. However, we
+        // silence them.
         if arg == "-Werror" {
             continue;
         }
         cmd.arg(arg);
     }
 
-    // The sanitizer runtime requires a set of default system libraries
-    // to always be linked. Here, we pass them with `--no-as-needed` to
-    // ensure that these libraries are never excluded due to other linker
-    // configurations.
-    //
-    // (see llvm-project/clang/lib/Driver/ToolChains/CommonArgs.cpp#L1590)
-    cmd.arg("-Wl,--push-state,--no-as-needed");
-    for arg in BSAN_SYSTEM_LIBS {
-        cmd.arg(format!("-l{arg}"));
+    // For rustc invocations, the flag `--target` is *not* provided, then we do not
+    // configure rustc to instrument its output. This lets us ignore nything for the
+    // host (e.g. procedural macros and build scripts). For clang, there isn't a
+    // similar heuristic, and our host and target are always going to be the same
+    // (unless we end up supporting cross compilation).
+    // Instead, we detect this by comparing the current value of `OUT_DIR`, set
+    // by Cargo, against the expected target output directory for instrumented
+    // artifacts (e.g. ./target/bsan/<target-triple>/ ) If `OUT_DIR` is within
+    // this directory, then we enable instrumentation. Otherwise, we skip it.
+    let build_output_root = expect_env("BSAN_TARGET_OUT_DIR");
+    let build_output_root = PathBuf::from(build_output_root);
+    let out_dir = PathBuf::from(expect_env("OUT_DIR"));
+
+    if out_dir.starts_with(build_output_root) {
+        // The sanitizer runtime requires a set of default system libraries
+        // to always be linked. Here, we pass them with `--no-as-needed` to
+        // ensure that these libraries are never excluded due to other linker
+        // configurations.
+        // (see llvm-project/clang/lib/Driver/ToolChains/CommonArgs.cpp#L1590)
+        cmd.arg("-Wl,--push-state,--no-as-needed");
+        for arg in BSAN_SYSTEM_LIBS {
+            cmd.arg(format!("-l{arg}"));
+        }
+        cmd.arg("-Wl,--pop-state");
+
+        let cflags = bsan_cflags(&env, &deps, &llvm_tools);
+        cmd.args(cflags);
     }
-    cmd.arg("-Wl,--pop-state");
 
-    let cflags = bsan_cflags(&env, &deps, &llvm_tools);
-    cmd.args(cflags);
-
-    // Run clang.
     debug_cmd("[clang]", env.verbose, &cmd);
     exec(cmd)
 }
@@ -280,24 +299,23 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
     // instrumented by BorrowSanitizer or if it's for a build script / proc macro.
     if target_crate {
         if phase == RustcPhase::Build {
-            // We only set the sysroot during an explicit build step.
-            // During setup, where we don't have an existing sysroot yet
-            // and the bootstrap wrapper adds its own `--sysroot` flag, so we can't set ours.
-            // Rustdoc already receives the sysroot via its dedicated phase, so we do not want
-            // to set it twice.
+            // We only provide the sysroot when we are building an instrumented binary.
+            // We don't have an existing sysroot during setup. The Rustdoc phase configures
+            // its sysroot manually.
             cmd.arg("--sysroot").arg(expect_env("BSAN_SYSROOT"));
         }
         // During setup, configure libtest as if we were Miri. It has Miri-specific
         // configuration options.
-        if phase == RustcPhase::Setup
-            && get_arg_flag_value("--crate-name").as_deref() == Some("test")
-        {
-            cmd.arg("--cfg=miri");
-        }
-        if phase == RustcPhase::Setup
-            && get_arg_flag_value("--crate-name").as_deref() == Some("panic_abort")
-        {
-            cmd.arg("-C").arg("panic=abort");
+        if phase == RustcPhase::Setup {
+            if get_arg_flag_value("--crate-name").as_deref() == Some("test") {
+                // We patch in `--cfg=miri` for libtest to prevent it from parsing
+                // terminfo, which is slow. Miri does this using a confitional compilation
+                // directive.
+                cmd.arg("--cfg=miri");
+            }
+            if get_arg_flag_value("--crate-name").as_deref() == Some("panic_abort") {
+                cmd.arg("-C").arg("panic=abort");
+            }
         }
     }
 

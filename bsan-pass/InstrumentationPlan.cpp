@@ -30,9 +30,10 @@ void InstrumentationPlan::collectChecks(Instruction *Inst) {
     AccessRange Range(DL, MI->getLength());
 
     if (auto *MTI = dyn_cast<MemTransferInst>(MI)) {
-      Checks.emplace_back(Inst, CheckInfo::Read, MTI->getSource(), Range);
+      Checks[Inst].push_back(
+          CheckInfo(CheckInfo::Read, MTI->getSource(), Range));
     }
-    Checks.emplace_back(Inst, CheckInfo::Write, MI->getDest(), Range);
+    Checks[Inst].push_back(CheckInfo(CheckInfo::Write, MI->getDest(), Range));
     return;
   }
 
@@ -56,7 +57,8 @@ void InstrumentationPlan::collectChecks(Instruction *Inst) {
   if (AccessSize.isZero())
     return;
 
-  Checks.emplace_back(Inst, AccessKind, Ptr, AccessRange(DL, AccessSize));
+  Checks[Inst].push_back(
+      CheckInfo(AccessKind, Ptr, AccessRange(DL, AccessSize)));
 }
 
 void InstrumentationPlan::build(CycleInfo &CI) {

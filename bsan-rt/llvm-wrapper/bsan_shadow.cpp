@@ -109,7 +109,7 @@ static bool InitShadow(bool init_origins, bool dry_run) {
     if (start >= maxVirtualAddress)
       continue;
 
-    bool map = type == MappingDesc::SHADOW ||
+    bool map = type == MappingDesc::SHADOW || type == MappingDesc::METADATA ||
                (init_origins && type == MappingDesc::ORIGIN);
     bool protect = type == MappingDesc::INVALID ||
                    (!init_origins && type == MappingDesc::ORIGIN);
@@ -159,7 +159,7 @@ static void ReportUnavailableMemoryRegions(bool init_origins) {
     if (start >= maxVirtualAddress)
       continue;
 
-    bool map = type == MappingDesc::SHADOW ||
+    bool map = type == MappingDesc::SHADOW || type == MappingDesc::METADATA ||
                (init_origins && type == MappingDesc::ORIGIN);
     bool protect = type == MappingDesc::INVALID ||
                    (!init_origins && type == MappingDesc::ORIGIN);
@@ -233,9 +233,8 @@ void CopyAligned(void *dest, const void *src, uptr size) {
 ALWAYS_INLINE static void UpdateShadowSlot(uptr d_shadow, uptr d_origin,
                                            uptr s_shadow, uptr s_origin,
                                            uptr offset) {
-  AllocInfo **dest_info_ptr = reinterpret_cast<AllocInfo **>(d_origin + offset);
-  AllocInfo **source_info_ptr =
-      reinterpret_cast<AllocInfo **>(s_origin + offset);
+  Block **dest_block_ptr = reinterpret_cast<Block **>(d_origin + offset);
+  Block **source_block_ptr = reinterpret_cast<Block **>(s_origin + offset);
 
   BorTag *dest_tag_ptr = reinterpret_cast<BorTag *>(d_shadow + offset);
   BorTag *source_tag_ptr = reinterpret_cast<BorTag *>(s_shadow + offset);
@@ -244,14 +243,14 @@ ALWAYS_INLINE static void UpdateShadowSlot(uptr d_shadow, uptr d_origin,
   BorTag source_tag = *source_tag_ptr;
 
   if (source_tag != 0)
-    __bsan_rc_inc(source_tag, *source_info_ptr);
+    __bsan_rc_inc(source_tag, *source_block_ptr);
   if (dest_tag != 0)
-    __bsan_rc_dec(dest_tag, *dest_info_ptr);
+    __bsan_rc_dec(dest_tag, *dest_block_ptr);
 
   *dest_tag_ptr = source_tag;
 
   if (source_tag != 0)
-    *dest_info_ptr = *source_info_ptr;
+    *dest_block_ptr = *source_block_ptr;
 }
 
 void CopyShadow(void *dest, const void *src, uptr size) {
@@ -352,13 +351,12 @@ void ClearShadowAligned(uptr shadow_start, uptr origin_start,
 
   for (uptr offset = 0; offset < size_aligned; offset += step) {
     BorTag *tag_ptr = reinterpret_cast<BorTag *>(shadow_start + offset);
-    AllocInfo **info_ptr =
-        reinterpret_cast<AllocInfo **>(origin_start + offset);
+    Block **block_ptr = reinterpret_cast<Block **>(origin_start + offset);
 
     // We use the borrow tag as a proxy for the initialization of the
     // `AllocInfo` component of provenance metadata.
     if (*tag_ptr != 0) {
-      __bsan_rc_dec(*tag_ptr, *info_ptr);
+      __bsan_rc_dec(*tag_ptr, *block_ptr);
       *tag_ptr = 0;
     }
   }
@@ -373,14 +371,14 @@ void WriteShadow(void *dest, Provenance prov) {
   uptr origin_start = MEM_TO_ORIGIN(d_aligned);
 
   BorTag *tag_ptr = reinterpret_cast<BorTag *>(shadow_start);
-  AllocInfo **info_ptr = reinterpret_cast<AllocInfo **>(origin_start);
+  Block **block_ptr = reinterpret_cast<Block **>(origin_start);
 
-  if (prov.info != nullptr)
-    __bsan_rc_inc(prov.tag, prov.info);
+  if (prov.block != nullptr)
+    __bsan_rc_inc(prov.tag, prov.block);
   if (*tag_ptr != 0)
-    __bsan_rc_dec(*tag_ptr, *info_ptr);
+    __bsan_rc_dec(*tag_ptr, *block_ptr);
 
-  *info_ptr = prov.info;
+  *block_ptr = prov.block;
   *tag_ptr = prov.tag;
 }
 } // namespace __bsan

@@ -4,18 +4,18 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0.103"
-cc = "1.2.65"
-clap = { version = "4.6.1", features = ["derive"] }
+anyhow = "1.0.104"
+cc = "1.4.7"
+clap = { version = "4.6.7", features = ["derive"] }
 cmake = "0.1.58"
 path_macro = "1.0.0"
 rustc_version = "0.4.1"
 semver = "1.0.28"
-serde = { version = "1.0.228", features = ["derive"] }
-strum = "0.27.2"
-strum_macros = "0.27.2"
+serde = { version = "1.0.229", features = ["derive"] }
+strum = "0.28.0"
+strum_macros = "0.28.0"
 tar = "0.4.46"
-toml = "0.8.23"
-which = "7.0.3"
+toml = "1.1.6"
+which = "8.0.6"
 xshell = "0.2.7"
 xz2 = "0.1.7"
