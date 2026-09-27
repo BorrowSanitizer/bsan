@@ -655,7 +655,7 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
       BSAN("validate_params"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, IntptrTy);
 
   BsanFuncValidateRetval = M.getOrInsertFunction(
-      BSAN("validate_retval"), AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
+      BSAN("validate_retval"), AL, IRB.getVoidTy(), PtrTy, IntptrTy);
 
   BsanFuncRcInc = M.getOrInsertFunction(BSAN("rc_inc"), AL, IRB.getVoidTy(),
                                         IntptrTy, PtrTy);
@@ -2093,13 +2093,12 @@ private:
 
     // Only sized return types have provenance
     if (CB.getType()->isSized()) {
-      // The callee stores return provenance above the frame pointer.
-      // so that it remains in view of the garbage collector. We need to
-      // bump our "view" of the stack pointer forward so that it matches
-      // what was set by the callee.
+      // Iterate through the provenance description of the return type,
+      // using the number of provenance values to compute the offset into
+      // the return value's TLS array.
       for (const auto &[Idx, Desc] : llvm::enumerate(ReturnDesc)) {
-        Value *Slot = bumpStackSlot(After, false, Desc.Elems);
-        ReturnProvPtrs.push_back(Slot);
+        Value *ByteWidth = After.CreateMul(NumReturnProv, BS.ProvenanceSize);
+        ReturnProvPtrs.push_back(ptradd(After, BS.RetvalTLS, ByteWidth));
         Value *NumProv = After.CreateElementCount(BS.IntptrTy, Desc.Elems);
         NumReturnProv = After.CreateAdd(NumReturnProv, NumProv);
       }
@@ -2136,8 +2135,7 @@ private:
         // on return.
         Value *Slot = getStackOffset(After, false);
         if (!ReturnProvPtrs.empty()) {
-          After.CreateCall(BS.BsanFuncValidateRetval,
-                           {Marker, Slot, NumReturnProv});
+          After.CreateCall(BS.BsanFuncValidateRetval, {Marker, NumReturnProv});
         }
         // We always need to store the expected value of our stack pointer,
         // which should sit below the return provenance. If our caller is
@@ -2172,10 +2170,14 @@ private:
       }
     }
 
-    // Finally, load the return value's provenance from the shadow stack.
+    // Finally, load the return value's provenance from the TLS array,
+    // and root them onto the shadow stack.
     for (const auto &[Idx, Ptr] : llvm::enumerate(ReturnProvPtrs)) {
       ElementCount Elems = ReturnDesc[Idx].Elems;
       Provenance Prov = loadProvenanceAligned(After, Ptr, Elems);
+      Value *Slot = allocStackSlot(After, false);
+      ProvenanceDest SlotPtr = getMainProvenancePtr(After, Slot);
+      storeProvenance(After, SlotPtr, Prov);
       ProvMap.setProvenance({&CB, Idx}, Prov);
     }
   }
@@ -2671,13 +2673,12 @@ private:
       SmallVector<ProvenanceField> ProvDesc =
           BS.getProvenanceLayout(IRB, RetVal->getType());
       if (!ProvDesc.empty()) {
-        Value *FrameTop = ShadowStack.getOrInitFrameHeaderTop(IRB);
         Value *NumReturnProv = ConstantInt::get(BS.IntptrTy, 0);
         for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
+          Value *ByteWidth = IRB.CreateMul(NumReturnProv, BS.ProvenanceSize);
+          ReturnProvPtrs.push_back(ptradd(IRB, BS.RetvalTLS, ByteWidth));
           NumReturnProv = IRB.CreateAdd(
               NumReturnProv, IRB.CreateElementCount(BS.IntptrTy, Desc.Elems));
-          Value *ByteWidth = IRB.CreateMul(NumReturnProv, BS.ProvenanceSize);
-          ReturnProvPtrs.push_back(ptrsub(IRB, FrameTop, ByteWidth));
         }
         for (const auto &[Idx, Ptr] : llvm::enumerate(ReturnProvPtrs)) {
           auto MainPtr = getMainProvenancePtr(IRB, Ptr);
@@ -2685,8 +2686,6 @@ private:
               assertProvenance(IRB, ProvDesc[Idx].Elems, {RetVal, Idx});
           storeProvenance(IRB, MainPtr, Prov);
         }
-        IRB.CreateStore(ReturnProvPtrs.back(), BS.ProvStackTLS);
-        return;
       }
     }
 

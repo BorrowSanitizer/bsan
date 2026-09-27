@@ -177,9 +177,7 @@ Provenance *GetParamSlot(uptr idx) { return &__bsan_param_tls[idx]; }
 // The shadow stack grows downward, so we subtract by the given index
 // plus one to adjust the for the the zero-th slot.
 Provenance *GetRetValSlot(uptr idx) {
-  Provenance *slot = __bsan_shadow_stack - (idx + 1);
-  __bsan_shadow_stack = slot;
-  return slot;
+  return &__bsan_retval_tls[idx];
 }
 
 // Clears the provenance from the given stack slot.
@@ -425,10 +423,10 @@ void __bsan_validate_params(void *current_fn, uptr len, uptr var_arg_bytes) {
 /// also need to restore the boundary marker to the value it had before the
 /// function that was called.
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_validate_retval(void *prev_marker, Provenance *frame, uptr len) {
+void __bsan_validate_retval(void *prev_marker, uptr len) {
   if (__bsan_marker) {
     for (uptr i = 0; i < len; ++i) {
-      frame[i] = OMNIVALID;
+      __bsan_retval_tls[i] = OMNIVALID;
     }
   }
   __bsan_marker = prev_marker;
