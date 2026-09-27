@@ -623,15 +623,17 @@ unsafe extern "C" fn __bsan_prune(
         // previous lifetime, then its allocation-level
         // reference count may be greater than the sum of its
         // node level reference counts.
-        if tree_is_empty && absent_from_heap {
-            PruneResult::Eject
-        } else if !absent_from_heap {
-            // The tree only has one node left,
-            // but the node is on the heap somewhere,
-            // so we can remove it from the pending set
-            // and wait for it to be requeued.
-            PruneResult::Remove
-        } else {
+        if tree_is_empty {
+            if absent_from_heap {
+                PruneResult::Eject
+            }else{
+                // The tree only has one node left,
+                // but the node is on the heap somewhere,
+                // so we can remove it from the pending set
+                // and wait for it to be requeued.
+                PruneResult::Remove
+            }
+        }else{
             // One or more nodes are dead but could not
             // be pruned, due to live nodes with blocking
             // permissions. Keep this allocation and any
