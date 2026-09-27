@@ -15,7 +15,7 @@ public:
   Snapshot(ConcreteProvenanceSet *live, uptr gen)
       : live(live), gen(gen), min_drained(gen) {};
   // The set of borrow tags that are currently
-  // reachable from any of the shadow stacks.
+  // reachable from the shadow of any thread's stack.
   ConcreteProvenanceSet *live;
   // The current generation
   uptr gen;
@@ -27,6 +27,9 @@ public:
   // unlock the internal allocator. We only want to unlock
   // this once, so we need to update the state of the scope.
   ScopedStopTheWorldLock *scope = nullptr;
+  // The threads suspended by `StopTheWorld`, which we use
+  // to find the stack pointer of each thread.
+  const SuspendedThreadsList *suspended = nullptr;
 };
 
 // Global state associated with the runtime.
@@ -87,14 +90,14 @@ private:
   // provenance values.
   static void SnapshotCallback(const SuspendedThreadsList &, void *arg);
 
-  // Iterates over every thread's shadow stack, creating a set of all reachable
-  // provenance values. The last argument is a pointer to the
-  // `ConcreteProvenanceSet` being populated.
+  // Iterates over the shadow of the live portion of every thread's stack,
+  // creating a set of all reachable provenance values. The last argument is a
+  // pointer to the `Snapshot` being populated.
   static void CollectProvenance(BsanThread *const &thread, void *arg);
 
   // Iterates over every thread's zero-count-table, merging its contents into
   // the set of pending provenance values. We only add values to the pending set
-  // if they are not present on any shadow stack. Values that we add to the
+  // if they are not present on any thread's stack. Values that we add to the
   // pending set are also removed from their thread's zero-count-table.
   static void MergeZeroCountsCallback(BsanThread *const &thread, void *arg);
   static void MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct);
@@ -128,7 +131,7 @@ struct ScopedStopTheWorldLock {
   ScopedStopTheWorldLock() {
     // We need to ensure that every existing thread is blocked
     // from the allocator, and that every new thread is blocked
-    // from registering its shadow stack in the global state.
+    // from registering its stack in the global state.
     // If we stop the world when a thread is within either of
     // these critical sections, then our state might be corrupted
     // once we resume.

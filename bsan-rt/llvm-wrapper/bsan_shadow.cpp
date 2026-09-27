@@ -10,6 +10,7 @@
 // Consider refactoring these into a shared implementation.
 static void CheckMemoryLayout() {
   uptr prev_end = 0;
+  uptr shadow_end = 0;
   for (unsigned i = 0; i < kMemoryLayoutSize; ++i) {
     uptr start = kMemoryLayout[i].start;
     uptr end = kMemoryLayout[i].end;
@@ -35,8 +36,16 @@ static void CheckMemoryLayout() {
       CHECK(MEM_IS_ORIGIN(MEM_TO_ORIGIN(addr)));
       CHECK_EQ(MEM_TO_ORIGIN(addr), SHADOW_TO_ORIGIN(MEM_TO_SHADOW(addr)));
     }
+    if (type == MappingDesc::SHADOW)
+      shadow_end = Max(shadow_end, end);
+    if (type == MappingDesc::STACK_MAP) {
+      CHECK_EQ(start, kStackMapSpace);
+      CHECK_EQ(end - start, kStackMapSpaceSize);
+    }
     prev_end = end;
   }
+  // The stack map needs an entry for every page of shadow memory.
+  CHECK_LE(shadow_end >> kStackMapPageShift, kStackMapSpaceSize);
 }
 
 // TODO: CheckMemoryRangeAvailability is based on msan.
@@ -110,6 +119,7 @@ static bool InitShadow(bool init_origins, bool dry_run) {
       continue;
 
     bool map = type == MappingDesc::SHADOW || type == MappingDesc::METADATA ||
+               type == MappingDesc::STACK_MAP ||
                (init_origins && type == MappingDesc::ORIGIN);
     bool protect = type == MappingDesc::INVALID ||
                    (!init_origins && type == MappingDesc::ORIGIN);
@@ -160,6 +170,7 @@ static void ReportUnavailableMemoryRegions(bool init_origins) {
       continue;
 
     bool map = type == MappingDesc::SHADOW || type == MappingDesc::METADATA ||
+               type == MappingDesc::STACK_MAP ||
                (init_origins && type == MappingDesc::ORIGIN);
     bool protect = type == MappingDesc::INVALID ||
                    (!init_origins && type == MappingDesc::ORIGIN);
@@ -243,9 +254,9 @@ ALWAYS_INLINE static void UpdateShadowSlot(uptr d_shadow, uptr d_origin,
   BorTag source_tag = *source_tag_ptr;
 
   if (source_tag != 0)
-    __bsan_rc_inc(source_tag, *source_block_ptr);
+    __bsan_rc_inc(source_tag, *source_block_ptr, dest_tag_ptr);
   if (dest_tag != 0)
-    __bsan_rc_dec(dest_tag, *dest_block_ptr);
+    __bsan_rc_dec(dest_tag, *dest_block_ptr, dest_tag_ptr);
 
   *dest_tag_ptr = source_tag;
 
@@ -356,10 +367,37 @@ void ClearShadowAligned(uptr shadow_start, uptr origin_start,
     // We use the borrow tag as a proxy for the initialization of the
     // `AllocInfo` component of provenance metadata.
     if (*tag_ptr != 0) {
-      __bsan_rc_dec(*tag_ptr, *block_ptr);
+      __bsan_rc_dec(*tag_ptr, *block_ptr, tag_ptr);
       *tag_ptr = 0;
     }
   }
+}
+
+void SetStackMapRange(uptr beg, uptr end, bool is_stack) {
+  CHECK(IsAligned(beg, kStackMapPageSize));
+  CHECK(IsAligned(end, kStackMapPageSize));
+  u8 *map = reinterpret_cast<u8 *>(kStackMapSpace);
+  for (uptr page = beg; page < end; page += kStackMapPageSize)
+    map[MEM_TO_SHADOW(page) >> kStackMapPageShift] = is_stack;
+}
+
+void RootShadow(void *dest, Provenance prov) {
+  if (!MEM_IS_APP(dest))
+    return;
+  uptr d_aligned;
+  AlignPtr8((uptr)dest, d_aligned);
+  *reinterpret_cast<Block **>(MEM_TO_ORIGIN(d_aligned)) = prov.block;
+  *reinterpret_cast<BorTag *>(MEM_TO_SHADOW(d_aligned)) = prov.tag;
+}
+
+Provenance ReadShadow(const void *src) {
+  if (!MEM_IS_APP(src))
+    return OMNIVALID;
+  uptr s_aligned;
+  AlignPtr8((uptr)src, s_aligned);
+  BorTag tag = *reinterpret_cast<BorTag *>(MEM_TO_SHADOW(s_aligned));
+  Block *block = *reinterpret_cast<Block **>(MEM_TO_ORIGIN(s_aligned));
+  return {tag, block};
 }
 
 void WriteShadow(void *dest, Provenance prov) {
@@ -374,9 +412,9 @@ void WriteShadow(void *dest, Provenance prov) {
   Block **block_ptr = reinterpret_cast<Block **>(origin_start);
 
   if (prov.block != nullptr)
-    __bsan_rc_inc(prov.tag, prov.block);
+    __bsan_rc_inc(prov.tag, prov.block, tag_ptr);
   if (*tag_ptr != 0)
-    __bsan_rc_dec(*tag_ptr, *block_ptr);
+    __bsan_rc_dec(*tag_ptr, *block_ptr, tag_ptr);
 
   *block_ptr = prov.block;
   *tag_ptr = prov.tag;

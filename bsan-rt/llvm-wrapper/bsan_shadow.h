@@ -25,6 +25,7 @@ struct MappingDesc {
     SHADOW = 8,
     ORIGIN = 16,
     METADATA = 32,
+    STACK_MAP = 64,
   } type;
   const char *name;
 };
@@ -43,7 +44,8 @@ const MappingDesc kMemoryLayout[] = {
     {0X0000000000000, 0X0100000000000, MappingDesc::APP, "app-10-13"},
     {0X0100000000000, 0X0200000000000, MappingDesc::SHADOW, "shadow-14"},
     {0X0200000000000, 0X0210000000000, MappingDesc::METADATA, "metadata"},
-    {0X0210000000000, 0X0300000000000, MappingDesc::INVALID, "invalid"},
+    {0X0210000000000, 0X0211000000000, MappingDesc::STACK_MAP, "stack-map"},
+    {0X0211000000000, 0X0300000000000, MappingDesc::INVALID, "invalid"},
     {0X0300000000000, 0X0400000000000, MappingDesc::ORIGIN, "origin-14"},
     {0X0400000000000, 0X0600000000000, MappingDesc::SHADOW, "shadow-15"},
     {0X0600000000000, 0X0800000000000, MappingDesc::ORIGIN, "origin-15"},
@@ -63,6 +65,9 @@ const uptr kAllocatorSpaceSize = 0x40000000000ULL; // 4T.
 
 const uptr kMetadataSpace = 0X0200000000000ULL;
 
+const uptr kStackMapSpace = 0X0210000000000ULL;
+const uptr kStackMapSpaceSize = 0x1000000000ULL; // 64G.
+
 #elif (SANITIZER_LINUX && defined(__x86_64__))
 // All of the following configurations are supported.
 // ASLR disabled: main executable and DSOs at 0x555550000000
@@ -81,7 +86,8 @@ const MappingDesc kMemoryLayout[] = {
     {0x510000000000ULL, 0x600000000000ULL, MappingDesc::APP, "app-2"},
     {0x600000000000ULL, 0x610000000000ULL, MappingDesc::ORIGIN, "origin-1"},
     {0x610000000000ULL, 0x620000000000ULL, MappingDesc::METADATA, "metadata"},
-    {0x620000000000ULL, 0x700000000000ULL, MappingDesc::INVALID, "invalid"},
+    {0x620000000000ULL, 0x621000000000ULL, MappingDesc::STACK_MAP, "stack-map"},
+    {0x621000000000ULL, 0x700000000000ULL, MappingDesc::INVALID, "invalid"},
     {0x700000000000ULL, 0x740000000000ULL, MappingDesc::ALLOCATOR, "allocator"},
     {0x740000000000ULL, 0x800000000000ULL, MappingDesc::APP, "app-3"}};
 
@@ -92,6 +98,9 @@ const uptr kAllocatorSpace = 0x700000000000ULL;
 const uptr kAllocatorSpaceSize = 0x40000000000ULL; // 4T.
 
 const uptr kMetadataSpace = 0x610000000000ULL;
+
+const uptr kStackMapSpace = 0x620000000000ULL;
+const uptr kStackMapSpaceSize = 0x1000000000ULL; // 64G.
 #else
 #error "BorrowSanitizer: unsupported platform."
 #endif
@@ -121,6 +130,23 @@ inline bool addr_is_type(uptr addr, int mapping_types) {
 #define MEM_IS_SHADOW(mem) addr_is_type((uptr)(mem), MappingDesc::SHADOW)
 #define MEM_IS_ORIGIN(mem) addr_is_type((uptr)(mem), MappingDesc::ORIGIN)
 
+// The stack map is a bytemap with one entry for each page of shadow memory.
+// An entry is nonzero if the page shadows memory within the stack of a live
+// thread. The GC scans the shadow of each thread's stack for roots, so stores
+// to these pages do not update reference counts. Every thread needs to agree
+// on this, since a thread can store into another thread's stack. The map is
+// keyed by shadow addresses, since the mapping from application memory to
+// shadow memory preserves offsets within a page.
+static constexpr uptr kStackMapPageShift = 12;
+static constexpr uptr kStackMapPageSize = 1ULL << kStackMapPageShift;
+
+// Returns true if the given shadow address corresponds
+// to memory within the stack of a live thread.
+inline bool ShadowIsStack(uptr shadow) {
+  const u8 *map = reinterpret_cast<const u8 *>(kStackMapSpace);
+  return map[shadow >> kStackMapPageShift] != 0;
+}
+
 namespace __bsan {
 bool InitShadowWithReExec();
 void CopyShadow(void *dest, const void *src, uptr size);
@@ -132,6 +158,18 @@ void ClearShadow(void *dest, uptr size);
 void ClearShadowAligned(uptr shadow_start, uptr origin_start,
                         uptr size_aligned);
 void WriteShadow(void *dest, Provenance prov);
+
+// Writes provenance into the shadow of `dest` without updating reference
+// counts. This is used for slots within a shadow frame, which the GC scans.
+void RootShadow(void *dest, Provenance prov);
+
+// Reads the provenance stored in the shadow of the
+// 8-byte-aligned granule containing `src`.
+Provenance ReadShadow(const void *src);
+
+// Marks or unmarks the application memory in the range [beg, end) as
+// belonging to a thread's stack. Both bounds must be page-aligned.
+void SetStackMapRange(uptr beg, uptr end, bool is_stack);
 } // namespace __bsan
 
 #endif

@@ -138,15 +138,15 @@ BsanThread *CreateMainThread() {
 void BsanThread::Init() {
   bool is_main_thread = this->tid() == kMainTid;
   GetThreadStackTopAndBottom(is_main_thread, &stack_top_, &stack_bottom_);
-  shadow_stack_size_ = stack_top_ - stack_bottom_;
-  shadow_stack_bottom_ = MmapOrDie(shadow_stack_size_, __func__);
-  __bsan_shadow_stack =
-      (Provenance *)(((uptr)shadow_stack_bottom_) + shadow_stack_size_);
-  // We record the address of the thread-local shadow stack pointer so
-  // that the GC can accurately read the initialized contents of the
-  // shadow stack when it stops the world.
-  shadow_stack_ptr_ = &__bsan_shadow_stack;
-  // Likewise, we record the address of the thread-local visit counter so that
+  // Stores into the shadow of this thread's stack do not update reference
+  // counts, since the GC scans it for roots. We round inward so that we never
+  // mark memory outside of the stack.
+  stack_map_beg_ = RoundUpTo(stack_bottom_, kStackMapPageSize);
+  stack_map_end_ = RoundDownTo(stack_top_, kStackMapPageSize);
+  if (stack_map_beg_ >= stack_map_end_)
+    stack_map_beg_ = stack_map_end_ = 0;
+  SetStackMapRange(stack_map_beg_, stack_map_end_, true);
+  // We record the address of the thread-local visit counter so that
   // the GC can zero it for every thread once any one of them has reached the
   // collection threshold.
   visits_ptr_ = &__bsan_visits_since_gc;
@@ -171,7 +171,15 @@ void BsanThread::Destroy() {
     if (common_flags()->use_sigaltstack)
       UnsetAlternateSignalStack(altstack_base_);
     zct.~ZeroCountTable();
-    UnmapOrDie(shadow_stack_bottom_, shadow_stack_size_);
+    // The provenance values in the shadow of this stack were never counted.
+    // If this memory is reused for something other than a stack, then
+    // overwriting them would decrement counts that were never incremented,
+    // so we need to clear them once they are no longer roots.
+    SetStackMapRange(stack_map_beg_, stack_map_end_, false);
+    for (uptr page = stack_map_beg_; page < stack_map_end_;
+         page += kStackMapPageSize) {
+      internal_memset((void *)MEM_TO_SHADOW(page), 0, kStackMapPageSize);
+    }
   } else {
     CHECK_NE(this, CurrentThread());
   }

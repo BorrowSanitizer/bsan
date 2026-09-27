@@ -59,9 +59,6 @@ static constexpr uptr kParamTLSSizeProv = 100;
 static constexpr uptr kVarArgTLSSizeBytes = 800;
 static constexpr uptr kMinProvAlignment = 8;
 
-extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance
-    *__bsan_shadow_stack;
-
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL uptr __bsan_had_error;
 
 extern SANITIZER_INTERFACE_ATTRIBUTE atomic_uintptr_t __bsan_bor_tag_ctr;

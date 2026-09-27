@@ -21,8 +21,8 @@ private:
   // A flag indicating that we are currently adding a value to the zero count
   // table for this thread. If this flag is set when we stop the world, then we
   // will skip merging its zero count table into the set of pending provenance
-  // values to garbage collect. We will still examine this thread's
-  // shadow stack to exclude reachable provenance values.
+  // values to garbage collect. We will still scan the shadow of this
+  // thread's stack to exclude reachable provenance values.
   atomic_uint8_t busy_{};
 
   Generation drained_gen_ = 0;
@@ -101,7 +101,7 @@ public:
   // which is a thread-local allocation.
   void Destroy();
 
-  // Initializes the object, allocating its shadow stack.
+  // Initializes the object, marking its stack in the stack map.
   // This must be called from the thread itself, before it
   // executes its start routine.
   void Init();
@@ -125,28 +125,6 @@ public:
 
   // Returns the bottom of the "real" stack associated with this thread.
   uptr stack_bottom() const { return stack_bottom_; }
-
-  // Returns the bottom of the "shadow" stack associated with this thread.
-  uptr shadow_stack_bottom() const { return (uptr)shadow_stack_bottom_; }
-
-  // Returns the top of the "shadow" stack associated with this thread.
-  uptr shadow_stack_top() const {
-    return (uptr)shadow_stack_bottom_ + shadow_stack_size_;
-  }
-
-  ArrayRef<Provenance> shadow_stack() const {
-    Provenance *cursor = shadow_stack_cursor();
-    Provenance *top = (Provenance *)(shadow_stack_top());
-    if (cursor == nullptr || cursor > top) {
-      return {};
-    }
-    return ArrayRef<Provenance>(cursor, top - cursor);
-  }
-
-  // Returns the current value of this thread's shadow stack pointer.
-  Provenance *shadow_stack_cursor() const {
-    return shadow_stack_ptr_ ? *shadow_stack_ptr_ : nullptr;
-  }
 
   // Zeroes this thread's tree-node visit counter. This writes to another
   // thread's thread-local storage, so it can only be called when the world
@@ -195,8 +173,10 @@ private:
   uptr stack_top_;
   uptr stack_bottom_;
 
-  void *shadow_stack_bottom_;
-  uptr shadow_stack_size_;
+  // The page-aligned subrange of [stack_bottom_, stack_top_)
+  // that is marked as part of a stack in the stack map.
+  uptr stack_map_beg_;
+  uptr stack_map_end_;
 
   // Per-thread caches for each allocator. These are zero-initialized,
   // since `BsanThread` is allocated via mmap().
@@ -204,11 +184,6 @@ private:
   RustAllocatorCache rust_allocator_cache_;
   // This thread's block-index cache for the `Block` metadata slab.
   BlockAllocator::Cache block_cache_;
-  // The address of this thread's thread-local allocation
-  // containing the current value of its shadow stack
-  // pointer (`__bsan_shadow_stack`).
-  Provenance **shadow_stack_ptr_;
-
   // The address of this thread's thread-local visit counter
   // (`__bsan_visits_since_gc`), so that the GC can reset it when it stops
   // the world.
@@ -217,6 +192,7 @@ private:
 };
 
 BsanThread *CurrentThread();
+
 void SetCurrentThread(BsanThread *t);
 u32 GetCurrentTidOrInvalid();
 BsanThread *CreateMainThread();

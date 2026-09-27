@@ -102,10 +102,6 @@ static Value *ptradd(IRBuilder<> &IRB, Value *Pointer, Value *Offset) {
   return IRB.CreateGEP(IRB.getInt8Ty(), Pointer, Offset);
 }
 
-static Value *ptrsub(IRBuilder<> &IRB, Value *Pointer, Value *Offset) {
-  return ptradd(IRB, Pointer, IRB.CreateNeg(Offset));
-}
-
 static Constant *getOrInsertTLSGlobal(Module &M, StringRef Name, Type *Ty) {
   return M.getOrInsertGlobal(Name, Ty, [&] {
     return new GlobalVariable(
@@ -283,6 +279,7 @@ private:
   friend struct VarArgAArch64Helper;
   friend struct Provenance;
   friend struct ProvenanceMap;
+  friend class ShadowStackAllocator;
   friend class BorrowSanitizerVisitor;
 
   void initializeCallbacks(Module &M, const TargetLibraryInfo &TLI);
@@ -323,9 +320,6 @@ private:
 
   /// Thread-local array containing the info of variadic arguments.
   Value *VAArgInfoTLS = nullptr;
-
-  /// Thread-local variable containing the shadow stack pointer.
-  Value *ProvStackTLS = nullptr;
 
   /// Thread local variable containing the boundary marker.
   Value *MarkerTLS = nullptr;
@@ -658,10 +652,10 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
       BSAN("validate_retval"), AL, IRB.getVoidTy(), PtrTy, IntptrTy);
 
   BsanFuncRcInc = M.getOrInsertFunction(BSAN("rc_inc"), AL, IRB.getVoidTy(),
-                                        IntptrTy, PtrTy);
+                                        IntptrTy, PtrTy, PtrTy);
 
   BsanFuncRcDec = M.getOrInsertFunction(BSAN("rc_dec"), AL, IRB.getVoidTy(),
-                                        IntptrTy, PtrTy);
+                                        IntptrTy, PtrTy, PtrTy);
 
   BsanFuncMemCpy = M.getOrInsertFunction(BSAN("memcpy"), AL, IRB.getVoidTy(),
                                          PtrTy, PtrTy, IntptrTy);
@@ -710,8 +704,6 @@ void BorrowSanitizer::createUserspaceApi(Module &M,
   VAArgInfoTLS = getOrInsertTLSGlobal(M, BSAN("var_arg_info_tls"), PtrTy);
   ParamTLS = getOrInsertTLSGlobal(M, BSAN("param_tls"), PtrTy);
   RetvalTLS = getOrInsertTLSGlobal(M, BSAN("retval_tls"), PtrTy);
-
-  ProvStackTLS = getOrInsertTLSGlobal(M, BSAN("shadow_stack"), PtrTy);
   BorTagCounter = getOrInsertGlobal(M, BSAN("bor_tag_ctr"), IntptrTy);
 }
 
@@ -1022,7 +1014,7 @@ class SlotAllocator {
   SlotAllocator(Type *Ty) : Ty(Ty) {}
 
 private:
-  friend struct ShadowStackAllocator;
+  friend class ShadowStackAllocator;
   // The integer type used to track the number of slots.
   Type *Ty = nullptr;
   // We track the total number of stack slots used by this
@@ -1123,191 +1115,148 @@ private:
   }
 };
 
-// BorrowSanitizer uses a shadow stack to track the provenance values
-// that are accessible in memory and to pass provenance between functions.
-// The shadow stack has multiple regions, and each has a different purpose.
-//
-// |-----------------------|  <-- FrameHeaderTop
-// | static/byval allocas  |
-// |_______________________|
-// |                       |  <-- FnEntryTop
-// | function entry retags |
-// |_______________________|  <-- FrameHeaderBottom
-// |                       |
-// | all other slots       |
-// |_______________________|
-//
-// When we enter a function, we load the value of the shadow frame
-// pointer from a TLS variable (`__bsan_shadow_stack`). It points immediately
-// above the first provenance value associated with a parameter. We bump this
-// pointer down for each provenance value that we expect to receive, based on
-// the type signature of the function. Then, we bump it further to create slots
-// for each static allocation that we need to instrument. Function entry retags
-// receive a dedicated, fixed region on the stack, because the number of
-// protected tags is variable depending on the function (retagging can branch).
-// The end of this region is the end of the "frame header". All other kind of
-// shadow stack slots lie below this region.
 class ShadowStackAllocator {
-  // The size of a slot within the shadow stack.
-  Value *SlotSize;
+  BorrowSanitizer &BS;
+  // We use the shadow of an `alloca` to store
+  // protected provenance values, the root provenance
+  // of main memory `allocas`, and all other operations
+  // that load provenance values from memory. This is necessary
+  // to handle Tree Borrows semantics surrounding pushing and
+  // popping a stack frame. It also makes these values accessible
+  // to our garbage collector when we stop the world. We scan the
+  // shadow of every thread's stack to identify nodes and trees
+  // that can be pruned.
 
-  // The number of stack slots allocated to store the provenance
-  // of allocations that live for the duration of the stack frame,
-  // and will be deallocated before the function returns.
+  // The "_bsan_frame" alloca.
+  AllocaInst *Frame = nullptr;
+
+  // Our shadow stack has three regions. The first region stores
+  // the provenance values created by function entry retags. The
+  // next region stores provenance of allocas. The last region
+  // is used for everything else.
+  //
+  // |-----------------------| <-- index 0
+  // | function entry retags |
+  // |-----------------------| <-- NumFnEntrySlots
+  // | static/byval allocas  |
+  // |-----------------------| <-- NumFnEntrySlots + NumStackAllocSlots
+  // | all other slots       |
+  // |-----------------------|
+  //
+  unsigned NumFnEntrySlots = 0;
   unsigned NumStackAllocSlots = 0;
+  uint64_t MaxRegularSlots = 0;
 
-  // A pointer to where the frame pointer is stored.
-  Value *FramePtrSrc;
+  // The number of protected provenance values that we need to
+  // store within the function-entry region is dynamic, because
+  // retags can occur within different branches. So, we allocate
+  // a fixed-sized region with the maximum possible number of slots.
+  // We use the same trick for the tail end of the shadow stack,
+  // reserving a slot for each operation that needs one.
+  // TODO: this last part is inefficient.
 
-  // The top of the frame header.
-  Value *FrameHeaderTop = nullptr;
-
-  // Within the frame header, the start of the section containing
-  // the permissions associated with function-entry retags.
-  Value *FnEntryTop = nullptr;
-
-  // The bottom of the frame header (after params,
-  // static allocas, and function-entry retags).
-  Value *FrameHeaderBottom = nullptr;
-
-  // A helper struct, tracking the number of "regular" shadow
-  // stack slots that have been allocated.
   SlotAllocator RegularSlots;
-
-  // A helper struct, tracking the number of "protected" shadow
-  // stack slots that have been allocated.
   SlotAllocator FnEntrySlots;
 
-  // Returns the specified slot allocator.
   SlotAllocator &slotsFor(bool IsFnEntry) {
     return IsFnEntry ? FnEntrySlots : RegularSlots;
   }
 
+  // Returns a pointer to a slot within main memory, inside the
+  // array used for the shadow stack.
+  Value *getSlotPtr(IRBuilder<> &IRB, Value *Idx) {
+    return IRB.CreateGEP(BS.ProvenanceTy, Frame, Idx);
+  }
+
+  // Returns a pointer to a slot within main memory, inside the
+  // array used for the shadow stack.
+  Value *getSlotPtr(IRBuilder<> &IRB, uint64_t Idx) {
+    return getSlotPtr(IRB, ConstantInt::get(BS.IntptrTy, Idx));
+  }
+
+  // Returns the total number of slots within the frame header. This
+  // is used to determine the range of slots to visit when popping the
+  // state of the current stack frame.
+  unsigned getFrameHeaderSize() { return NumFnEntrySlots + NumStackAllocSlots; }
+
 public:
-  ShadowStackAllocator(Value *SlotSize, Value *FramePtrSrc)
-      : SlotSize(SlotSize), FramePtrSrc(FramePtrSrc),
-        RegularSlots(SlotSize->getType()), FnEntrySlots(SlotSize->getType()) {}
+  ShadowStackAllocator(BorrowSanitizer &BS)
+      : BS(BS), RegularSlots(BS.IntptrTy), FnEntrySlots(BS.IntptrTy) {}
 
-  bool wasUsed() {
-    return FrameHeaderBottom && (FrameHeaderBottom != FrameHeaderTop);
+  void init(IRBuilder<> &IRB, unsigned NumFnEntryRetags) {
+    NumFnEntrySlots = NumFnEntryRetags;
+    Frame = IRB.CreateAlloca(BS.ProvenanceTy, ConstantInt::get(BS.IntptrTy, 0),
+                             "_bsan_frame");
   }
 
-  void allocateFnEntryRegion(IRBuilder<> &IRB, unsigned NumFnEntryRetags) {
-    FnEntryTop = getOrInitFrameHeaderBottom(IRB);
-    Value *Slots = ConstantInt::get(SlotSize->getType(), NumFnEntryRetags);
-    Value *Bytes = IRB.CreateMul(Slots, SlotSize);
-    FrameHeaderBottom = ptrsub(IRB, FnEntryTop, Bytes);
-  }
+  // Whether this function has any function-entry retags or
+  // static allocas with provenance that needs to be tracked. This
+  // is used to determine whether we need to "pop" the state of the
+  // current frame.
+  bool hasFrameHeader() { return getFrameHeaderSize() != 0; }
 
-  void initFrameHeader(IRBuilder<> &IRB) {
-    BasicBlock *EntryBlock =
-        &IRB.GetInsertBlock()->getParent()->getEntryBlock();
-    IRBuilder<> EntryIRB(EntryBlock, EntryBlock->getFirstNonPHIIt());
-    FrameHeaderTop = EntryIRB.CreateLoad(EntryIRB.getPtrTy(), FramePtrSrc);
-    FrameHeaderBottom = FrameHeaderTop;
-  }
-
-  std::optional<Value *> getFrameHeaderTop() {
-    if (FrameHeaderTop) {
-      return FrameHeaderTop;
-    }
-    return std::nullopt;
-  }
-
-  Value *getOrInitFrameHeaderTop(IRBuilder<> &IRB) {
-    if (!FrameHeaderTop) {
-      initFrameHeader(IRB);
-    }
-    return FrameHeaderTop;
-  }
-
-  std::optional<Value *> getFrameHeaderBottom() {
-    if (FrameHeaderBottom) {
-      return FrameHeaderBottom;
-    }
-    return std::nullopt;
-  }
-
-  std::optional<Value *> getFnEntryTop(IRBuilder<> &IRB) {
-    if (FnEntryTop) {
-      return FnEntryTop;
-    }
-    return std::nullopt;
-  }
-
-  Value *getOrInitFrameHeaderBottom(IRBuilder<> &IRB) {
-    if (!FrameHeaderBottom) {
-      initFrameHeader(IRB);
-    }
-    return FrameHeaderBottom;
-  }
-
-  // Extends the frame header down by one provenance slot to store the
-  // provenance associated with a stack allocation. This includes allocas and
-  // byval arguments.
-  Value *getStackAllocSlot(IRBuilder<> &IRB) {
-    FrameHeaderBottom = ptrsub(IRB, getOrInitFrameHeaderBottom(IRB), SlotSize);
-    NumStackAllocSlots += 1;
-    return FrameHeaderBottom;
-  }
-
-  Value *getNumStackAllocSlots(IRBuilder<> &IRB, Type *Ty) {
+  // Returns the number of stack slots within the region
+  // dedicated to storing the provenance of stack allocas.
+  // This is always an exact count, we never overallocate
+  // this region because we do not instrument dynamic allocas.
+  Value *getNumStackAllocSlots(Type *Ty) {
     return ConstantInt::get(Ty, NumStackAllocSlots);
   }
 
-  // Allocates one or more shadow stack slots from the requested section.
-  Value *bumpStackSlot(CycleInfo &CI, IRBuilder<> &IRB, bool IsFnEntry,
-                       ElementCount Elems = ElementCount::getFixed(1)) {
-    Value *SlotOffset = slotsFor(IsFnEntry).alloc(
-        CI, IRB, Elems, SlotSize->getType(), IsFnEntry);
-    Value *ProvOffset = IRB.CreateMul(SlotOffset, SlotSize);
+  // Adds an additional slot to the frame header for storing
+  // the provenance of an alloca.
+  Value *createAllocaSlot(IRBuilder<> &IRB) {
+    Value *SlotPtr = getSlotPtr(IRB, NumFnEntrySlots + NumStackAllocSlots);
+    NumStackAllocSlots += 1;
+    return SlotPtr;
+  }
+
+  Value *createSlot(CycleInfo &CI, IRBuilder<> &IRB, bool IsFnEntry,
+                    ElementCount Elems = ElementCount::getFixed(1)) {
+    if (Elems.isScalable()) {
+      report_fatal_error("Scalable vectors are not supported.");
+    }
+    // Allocates a new slot within the specified region.
+    Value *EndOffset =
+        slotsFor(IsFnEntry).alloc(CI, IRB, Elems, BS.IntptrTy, IsFnEntry);
+
     if (IsFnEntry) {
-      assert(FnEntryTop && "No function-entry slots available");
-      return ptrsub(IRB, FnEntryTop, ProvOffset);
+      Value *Top = ConstantInt::get(BS.IntptrTy, NumFnEntrySlots);
+      return getSlotPtr(IRB, IRB.CreateSub(Top, EndOffset));
     }
-    Value *Header = getOrInitFrameHeaderBottom(IRB);
-    return ptrsub(IRB, Header, ProvOffset);
+
+    // Increase the total number of stack slots needed.
+    uint64_t NumElems = Elems.getFixedValue();
+    MaxRegularSlots += NumElems;
+
+    Value *Base =
+        ConstantInt::get(BS.IntptrTy, getFrameHeaderSize() - NumElems);
+    return getSlotPtr(IRB, IRB.CreateAdd(Base, EndOffset));
   }
 
-  // Allocates one or more shadow stack slots from the requested section.
-  Value *allocStackSlot(CycleInfo &CI, IRBuilder<> &IRB, bool IsFnEntry,
-                        ElementCount Elems = ElementCount::getFixed(1)) {
-
-    Value *Slot = bumpStackSlot(CI, IRB, IsFnEntry, Elems);
-    if (!IsFnEntry) {
-      // We need to update the bottom of the frame every time we allocate a
-      // slot, because arbitrary instructions can be lowered into calls to
-      // instrumented compiler-rt runtimes (e.g. __multi3, __udivti3,
-      // __floatuntidf) that will use the shadow stack. We do not do this for
-      // function-entry retags because they are a part of the frame header,
-      // which is eagerly initialized on function entry.
-      IRB.CreateStore(Slot, FramePtrSrc);
+  std::pair<Value *, Value *> getFrameHeader(CycleInfo &CI, IRBuilder<> &IRB) {
+    Value *NumProtectors = ConstantInt::get(BS.IntptrTy, 0);
+    if (NumFnEntrySlots) {
+      NumProtectors = FnEntrySlots.getCurrentOffset(CI, IRB, BS.IntptrTy);
     }
-    return Slot;
+    Value *Top = ConstantInt::get(BS.IntptrTy, NumFnEntrySlots);
+    Value *Start = getSlotPtr(IRB, IRB.CreateSub(Top, NumProtectors));
+    return {Start, NumProtectors};
   }
 
-  // Returns a pointer to the bottom of the specified section of the
-  // shadow frame.
-  Value *getStackPtr(CycleInfo &CI, IRBuilder<> &IRB, bool IsFnEntry) {
-    Value *CurrOffset =
-        getOutgoingOffset(CI, IRB, SlotSize->getType(), IsFnEntry);
-    Value *ProvOffset = IRB.CreateMul(CurrOffset, SlotSize);
-    Value *Base = IsFnEntry ? FnEntryTop : getOrInitFrameHeaderBottom(IRB);
-    return ptrsub(IRB, Base, ProvOffset);
-  }
-
-  // Returns the current offset from the top of the relevant section. This is
-  // used to update the stack pointer before calling functions and to get the
-  // total number of function-entry retags before popping a stack frame.
-  Value *getOutgoingOffset(CycleInfo &CI, IRBuilder<> &IRB, Type *Ty,
-                           bool IsFnEntry) {
-    return slotsFor(IsFnEntry).getCurrentOffset(CI, IRB, Ty);
-  }
-
-  // Patches both section counters and promotes their tracking allocas.
-  void patchStackSlots(DominatorTree &DT) {
+  void patch(DominatorTree &DT) {
     RegularSlots.patch(DT);
     FnEntrySlots.patch(DT);
+    if (!Frame)
+      return;
+    uint64_t NumSlots = getFrameHeaderSize() + MaxRegularSlots;
+    if (NumSlots == 0) {
+      assert(Frame->use_empty() && "Empty shadow frame has users");
+      Frame->eraseFromParent();
+      Frame = nullptr;
+      return;
+    }
+    Frame->setOperand(0, ConstantInt::get(BS.IntptrTy, NumSlots));
   }
 };
 } // end anonymous namespace
@@ -1357,7 +1306,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // Every alloca has a shadow stack slot where we "root" its provenance,
   // so that it can be found by the GC. We update the contents of this
   // slot every time we start a new lifetime for an alloca.
-  DenseMap<AllocaInst *, ProvenanceDest> AllocaFrameSlots;
+  DenseMap<AllocaInst *, Value *> AllocaFrameSlots;
 
   // Information needed to reconstruct the shadow memory of a `byval` argument
   // once the frame header has been initialized and validated.
@@ -1409,7 +1358,7 @@ public:
                          const StackSafetyGlobalInfo &SSGI)
       : F(F), BS(BS), C(BS.C), TLI(&TLI), DT(DT), Plan(F, BS.DL, DT, SSGI),
         ProvMap(BS), VAHelper(createVarArgHelper(F, BS, *this)),
-        ShadowStack(BS.ProvenanceSize, BS.ProvStackTLS) {}
+        ShadowStack(BS) {}
   bool run() {
     DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Lazy);
     EscapeEnumerator EE(F, "bsan_cleanup", true, &DTU);
@@ -1447,7 +1396,7 @@ public:
 
     patchShadowPHINodes();
     ProvMap.patch(DT);
-    ShadowStack.patchStackSlots(DT);
+    ShadowStack.patch(DT);
     return true;
   }
 
@@ -1563,15 +1512,13 @@ private:
   // Loads a provenance value from shadow memory, storing it into a
   // new slot on the shadow stack.
   Provenance loadProvenanceFromShadow(
-      IRBuilder<> &IRB, Value *Base, Align Alignment,
+      IRBuilder<> &IRB, Value *Base, Align Alignment = kMinProvAlignment,
       ElementCount Elems = ElementCount::getFixed(1),
       AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
     if (Elems.isScalar()) {
       auto ShadowPtr = getShadowProvenancePtr(IRB, Base, Alignment);
       Provenance Prov = loadProvenanceAlignedPairwise(IRB, ShadowPtr, Ordering);
-      Value *Slot = allocStackSlot(IRB, false);
-      ProvenanceDest SlotPtr = getMainProvenancePtr(IRB, Slot);
-      storeProvenance(IRB, SlotPtr, Prov);
+      rootProvenance(IRB, Prov);
       return Prov;
     }
     report_fatal_error("Vectors are not supported.");
@@ -1690,26 +1637,40 @@ private:
     return Provenance(Tag, Info);
   }
 
+  void rootProvenance(IRBuilder<> &IRB, Provenance Prov) {
+    Value *Slot = allocStackSlot(IRB, false);
+    rootProvenance(IRB, Slot, Prov);
+  }
+
+  void rootProvenance(IRBuilder<> &IRB, Value *Slot, Provenance Prov) {
+    ProvenanceDest SlotPtr = getShadowProvenancePtr(IRB, Slot);
+    // We scan the shadow stack. No need to adjust a refcount.
+    SlotPtr.UpdateRefCt = false;
+    storeProvenance(IRB, SlotPtr, Prov);
+  }
+
   void storeProvenance(IRBuilder<> &IRB, ProvenanceDest Dest, Provenance Prov,
                        AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
     if (Prov.Elems.isVector()) {
       report_fatal_error("Vector provenance is not supported yet");
     }
     if (Dest.UpdateRefCt) {
+      // The runtime skips these updates if the destination is on the
+      // current thread's stack, since the GC scans it for roots.
       // We always need to increment first, in case both the source and
       // destination are the same provenance value. If we decrement the
       // provenance in the destination first, then the garbage collector
       // may see a zero reference count and deinitialize the provenance
       // that we are about to store.
       if (Prov != Provenance::omnivalid(BS)) {
-        IRB.CreateCall(BS.BsanFuncRcInc, {Prov.Tag, Prov.Info});
+        IRB.CreateCall(BS.BsanFuncRcInc, {Prov.Tag, Prov.Info, Dest.ShadowPtr});
       }
       // We only decrement on nonatomic stores. This leaks provenance
       // values that are exposed to atomic operations, which is necessary
       // to support atomics without locking.
       if (Ordering == AtomicOrdering::NotAtomic) {
         Provenance Old = loadProvenanceAlignedPairwise(IRB, Dest, Ordering);
-        IRB.CreateCall(BS.BsanFuncRcDec, {Old.Tag, Old.Info});
+        IRB.CreateCall(BS.BsanFuncRcDec, {Old.Tag, Old.Info, Dest.ShadowPtr});
       }
     }
 
@@ -1729,7 +1690,14 @@ private:
     // need to create values that dominate the body of the function.
     FnPrologueEnd = static_cast<Instruction *>(
         TopIRB.CreateIntrinsic(Intrinsic::donothing, {}));
+
     IRBuilder<> EntryIRB(FnPrologueEnd);
+
+    // We need a dedicated region of the shadow frame for function-entry
+    // retags. The total number of function entry retags is variable, because
+    // they can happen across different branches. This is Rust-specific
+    // behavior.
+    ShadowStack.init(EntryIRB, Plan.getNumFnEntryRetags());
 
     // We need to compute the total number of provenance values that
     // we receive from the caller before we can load them, which is
@@ -1787,8 +1755,6 @@ private:
       }
     }
 
-    Value *HeaderBottom = ShadowStack.getOrInitFrameHeaderBottom(EntryIRB);
-
     // We have computed the total number of shadow stack slots that
     // are associated with parameters. Now, if this function could be
     // called from an uninstrumented context, we need to check to see if
@@ -1824,16 +1790,15 @@ private:
       copyProvenance(EntryIRB, ShadowPtr, Fields, Info.Size,
                      AtomicOrdering::NotAtomic);
 
-      Value *Slot = ShadowStack.getStackAllocSlot(EntryIRB);
-      auto SlotPtr = getMainProvenancePtr(EntryIRB, Slot);
-      storeProvenance(EntryIRB, SlotPtr, Info.AllocProv);
+      Value *Slot = ShadowStack.createAllocaSlot(EntryIRB);
+      rootProvenance(EntryIRB, Slot, Info.AllocProv);
     }
 
     // We push additional slots into the frame header for
     // static allocas.
     for (auto [Idx, AI] : llvm::enumerate(Plan.allocas())) {
       NextNodeIRBuilder IRB(AI);
-      Value *Slot = ShadowStack.getStackAllocSlot(EntryIRB);
+      Value *Slot = ShadowStack.createAllocaSlot(EntryIRB);
       Provenance Prov;
       if (!Plan.hasLifetimeStart(AI)) {
         Prov = createAllocaMetadata(EntryIRB);
@@ -1845,23 +1810,10 @@ private:
         Prov = Provenance(InitialTag, Info);
         ProvMap.cacheAllocaProvenance(EntryIRB, AI, Prov);
       }
-      auto SlotPtr = getMainProvenancePtr(EntryIRB, Slot);
-      storeProvenance(EntryIRB, SlotPtr, Prov);
+      rootProvenance(EntryIRB, Slot, Prov);
       if (Plan.hasLifetimeStart(AI)) {
-        AllocaFrameSlots[AI] = SlotPtr;
+        AllocaFrameSlots[AI] = Slot;
       }
-    }
-
-    // We also need a dedicated region of the shadow stack
-    // for function-entry retags. The total number of function
-    // entry retags is variable, because they can happen across
-    // different branches. This is Rust-specific behavior.
-    ShadowStack.allocateFnEntryRegion(EntryIRB, Plan.getNumFnEntryRetags());
-
-    // We have initialized the frame header, but we have not updated
-    // the frame pointer to reflect it.
-    if (std::optional<Value *> FHB = ShadowStack.getFrameHeaderBottom()) {
-      EntryIRB.CreateStore(*FHB, BS.ProvStackTLS);
     }
   }
 
@@ -1900,13 +1852,17 @@ private:
     RetagInfo RI(&CB);
     Value *ImArrayLen = getLayoutArrayLength(RI.ImArray);
     Value *PinArrayLen = getLayoutArrayLength(RI.PinArray);
+
     Value *Slot = allocStackSlot(IRB, RI.isProtected());
+
     IRB.CreateCall(BS.BsanFuncRetag,
                    {SrcAddr, RI.Size, RI.Perms, RI.ImArray, ImArrayLen,
                     RI.PinArray, PinArrayLen, SrcProv.Tag, SrcProv.Info, Slot,
                     IRB.getInt1(false)});
-    Provenance RetaggedProv = loadProvenanceAligned(IRB, Slot);
 
+    auto DestShadowPtr = getShadowProvenancePtr(IRB, Slot, kMinProvAlignment);
+    Provenance RetaggedProv = loadProvenanceAlignedPairwise(
+        IRB, DestShadowPtr, AtomicOrdering::NotAtomic);
     auto ShadowPtr = getShadowProvenancePtr(IRB, Operand, OperandAlign);
     storeProvenance(IRB, ShadowPtr, RetaggedProv);
   }
@@ -1923,22 +1879,17 @@ private:
                      {Ptr, RI.Size, RI.Perms, RI.ImArray, ImArrayLen,
                       RI.PinArray, PinArrayLen, Prov->Tag, Prov->Info, Dest,
                       IRB.getInt1(false)});
-      ProvMap.setProvenance(&CB, loadProvenanceAligned(IRB, Dest));
+      // The runtime roots the retagged provenance in the shadow of `Dest`.
+      auto DestShadowPtr = getShadowProvenancePtr(IRB, Dest, kMinProvAlignment);
+      ProvMap.setProvenance(
+          &CB, loadProvenanceAlignedPairwise(IRB, DestShadowPtr,
+                                             AtomicOrdering::NotAtomic));
     }
-  }
-
-  Value *bumpStackSlot(IRBuilder<> &IRB, bool IsFnEntry,
-                       ElementCount Elems = ElementCount::getFixed(1)) {
-    return ShadowStack.bumpStackSlot(Cycles, IRB, IsFnEntry, Elems);
   }
 
   Value *allocStackSlot(IRBuilder<> &IRB, bool IsFnEntry,
                         ElementCount Elems = ElementCount::getFixed(1)) {
-    return ShadowStack.allocStackSlot(Cycles, IRB, IsFnEntry, Elems);
-  }
-
-  Value *getStackOffset(IRBuilder<> &IRB, bool IsFnEntry) {
-    return ShadowStack.getStackPtr(Cycles, IRB, IsFnEntry);
+    return ShadowStack.createSlot(Cycles, IRB, IsFnEntry, Elems);
   }
 
   using InstVisitor<BorrowSanitizerVisitor>::visit;
@@ -2035,22 +1986,6 @@ private:
       popFrame(Before, CB, nullptr);
     }
 
-    // If we have parameter provenance, then store it to the TLS array.
-    if (ShadowStack.getFrameHeaderTop().has_value()) {
-      Value *StackOffset;
-      if (CB.isMustTailCall()) {
-        // Now that we've popped the frame, we
-        // can clobber the current frame header.
-        StackOffset = ShadowStack.getOrInitFrameHeaderTop(Before);
-      } else {
-        // Always update the provenance stack before any non-musttail call,
-        // so the callee loads a valid frame top, even when there are
-        // no pointer args.
-        StackOffset = getStackOffset(Before, false);
-      }
-      Before.CreateStore(StackOffset, BS.ProvStackTLS);
-    }
-
     for (auto [ByteOffset, Prov] : ParamOffsets) {
       Value *Slot = ptradd(Before, BS.ParamTLS, ByteOffset);
       auto SlotPtr = getMainProvenancePtr(Before, Slot);
@@ -2070,7 +2005,7 @@ private:
     Instruction *NextInst;
     if (auto *II = dyn_cast<InvokeInst>(&CB)) {
       if (II->getNormalDest()->getSinglePredecessor()) {
-        NextInst = &II->getNormalDest()->front();
+        NextInst = &*II->getNormalDest()->getFirstInsertionPt();
       } else {
         BasicBlock *Src = II->getParent();
         BasicBlock *Dst = II->getNormalDest();
@@ -2130,20 +2065,10 @@ private:
         // pointer that we are calling, so that the callee can check
         // against it.
         Marker = Before.CreateCall(BS.BsanFuncMark, {CB.getCalledOperand()});
-        // If we do not have any return provenance, then
-        // we do not need to validate any part of the shadow stack
-        // on return.
-        Value *Slot = getStackOffset(After, false);
+
         if (!ReturnProvPtrs.empty()) {
           After.CreateCall(BS.BsanFuncValidateRetval, {Marker, NumReturnProv});
         }
-        // We always need to store the expected value of our stack pointer,
-        // which should sit below the return provenance. If our caller is
-        // instrumented, then we can guarantee that the stack pointer is in the
-        // correct spot, but if it is uninstrumented, then the stack pointer
-        // might be far below where we expect it to be, if we crossed back into
-        // instrumented code at some point.
-        After.CreateStore(Slot, BS.ProvStackTLS);
       }
       // We always need to restore our boundary
       // marker to the value that it had before.
@@ -2175,9 +2100,7 @@ private:
     for (const auto &[Idx, Ptr] : llvm::enumerate(ReturnProvPtrs)) {
       ElementCount Elems = ReturnDesc[Idx].Elems;
       Provenance Prov = loadProvenanceAligned(After, Ptr, Elems);
-      Value *Slot = allocStackSlot(After, false);
-      ProvenanceDest SlotPtr = getMainProvenancePtr(After, Slot);
-      storeProvenance(After, SlotPtr, Prov);
+      rootProvenance(After, Prov);
       ProvMap.setProvenance({&CB, Idx}, Prov);
     }
   }
@@ -2265,11 +2188,8 @@ private:
           createProvenancePHI(IRB, Comp, predecessors(PN.getParent()));
       ProvMap.setProvenance({&PN, Idx}, Prov);
 
-      // TODO: does every PHI node need to be
-      // rooted in this way?
-      Value *Slot = allocStackSlot(AfterPHI, false);
-      ProvenanceDest SlotPtr = getMainProvenancePtr(AfterPHI, Slot);
-      storeProvenance(AfterPHI, SlotPtr, Prov);
+      // TODO: does every PHI node need to be rooted?
+      rootProvenance(AfterPHI, Prov);
 
       ProvPHINodes.push_back({{&PN, Idx}, Prov});
     }
@@ -2310,7 +2230,7 @@ private:
       initAllocaMetadata(IRB, AI, StartProv);
       auto SlotIt = AllocaFrameSlots.find(AI);
       if (SlotIt != AllocaFrameSlots.end()) {
-        storeProvenance(IRB, SlotIt->second, StartProv);
+        rootProvenance(IRB, SlotIt->second, StartProv);
       }
     }
   }
@@ -2651,19 +2571,9 @@ private:
 
   void popFrame(IRBuilder<> &IRB, Instruction &I, Value *RetVal) {
     BasicBlock *BB = IRB.GetInsertBlock();
-    if (ShadowStack.wasUsed()) {
-      Value *NumStackAllocs =
-          ShadowStack.getNumStackAllocSlots(IRB, BS.IntptrTy);
-      Value *NumProtectors =
-          ShadowStack.getOutgoingOffset(Cycles, IRB, BS.IntptrTy, true);
-      Value *MaxNumProtectors =
-          ConstantInt::get(BS.IntptrTy, Plan.getNumFnEntryRetags());
-
-      Value *FrameHeaderBottom = ShadowStack.getOrInitFrameHeaderBottom(IRB);
-      Value *OffsetSlots = IRB.CreateSub(MaxNumProtectors, NumProtectors);
-      Value *OffsetBytes = IRB.CreateMul(OffsetSlots, BS.ProvenanceSize);
-      Value *Start = ptradd(IRB, FrameHeaderBottom, OffsetBytes);
-
+    if (ShadowStack.hasFrameHeader()) {
+      Value *NumStackAllocs = ShadowStack.getNumStackAllocSlots(BS.IntptrTy);
+      auto [Start, NumProtectors] = ShadowStack.getFrameHeader(Cycles, IRB);
       IRB.CreateCall(BS.BsanFuncPopFrame,
                      {Start, NumProtectors, NumStackAllocs});
     }
@@ -2687,10 +2597,6 @@ private:
           storeProvenance(IRB, MainPtr, Prov);
         }
       }
-    }
-
-    if (auto FrameTop = ShadowStack.getFrameHeaderTop()) {
-      IRB.CreateStore(FrameTop.value(), BS.ProvStackTLS);
     }
   }
 

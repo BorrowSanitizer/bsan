@@ -73,14 +73,6 @@ THREADLOCAL Provenance __bsan_param_tls[kParamTLSSizeProv];
 SANITIZER_INTERFACE_ATTRIBUTE
 THREADLOCAL Provenance __bsan_retval_tls[kParamTLSSizeProv];
 
-// Pointer to the start of the current frame within the shadow
-// stack, which stores the provenance of pointers that are on
-// the stack or in registers. The shadow stack is always a fully
-// initialized and contiguous from the top of the stack to the
-// current value of the stack pointer.
-SANITIZER_INTERFACE_ATTRIBUTE
-THREADLOCAL Provenance *__bsan_shadow_stack = nullptr;
-
 // A flag set by the Rust "core" runtime to indicate to the LLVM
 // wrapper that an error has occurred.
 SANITIZER_INTERFACE_ATTRIBUTE
@@ -168,17 +160,11 @@ u32 GetStackTraceLen() {
   return static_cast<u32>(stacktrace_max_len) + 1;
 }
 
-// Returns a pointer to the slot on the shadow stack at the given index.
-// The shadow stack grows downward, so we subtract by the given index
-// plus one to adjust the for the the zero-th slot.
+// Returns a pointer to the parameter slot at the given index.
 Provenance *GetParamSlot(uptr idx) { return &__bsan_param_tls[idx]; }
 
-// Returns a pointer to the slot on the shadow stack at the given index.
-// The shadow stack grows downward, so we subtract by the given index
-// plus one to adjust the for the the zero-th slot.
-Provenance *GetRetValSlot(uptr idx) {
-  return &__bsan_retval_tls[idx];
-}
+// Returns a pointer to the return value slot at the given index.
+Provenance *GetRetValSlot(uptr idx) { return &__bsan_retval_tls[idx]; }
 
 // Clears the provenance from the given stack slot.
 void ClearParamSlot(uptr Idx) { *GetParamSlot(Idx) = OMNIVALID; }
@@ -270,7 +256,9 @@ uptr FindUserFramePc(uptr pc, uptr bp) {
 }
 
 bool CallerIsInstrumented(void *sym) {
-  if (__bsan_shadow_stack == nullptr) {
+  // A thread that has not been registered cannot have an instrumented caller,
+  // since nothing has set up its provenance state yet.
+  if (CurrentThread() == nullptr) {
     return false;
   }
   bool matches = (__bsan_marker &&
@@ -523,9 +511,12 @@ void __bsan_retag(void *object_addr, uptr access_size, u8 flags,
                       pin_data, pin_len, bor_tag, alloc_info, &prov, span,
                       checked);
     HANDLE_ERROR;
-    *(Provenance *)(dest) = prov;
+    // `dest` is a slot within the caller's shadow frame, which is an alloca.
+    // We root the provenance in the shadow of that slot, which the GC scans.
+    // Like the instrumentation, we do not update reference counts for it.
+    RootShadow(dest, prov);
     // We can only acquire provenance *after* we have rooted it to the
-    // shadow stack. Otherwise, the GC could clean it up before we have
+    // shadow frame. Otherwise, the GC could clean it up before we have
     // even started using it!
     AcquireProvenance(prov);
     MaybeRequestGC();
@@ -566,7 +557,11 @@ SANITIZER_WEAK_ATTRIBUTE
 bool __bsan_rc_inc_impl(BorTag Tag, Block *Info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_rc_inc(BorTag Tag, Block *Info) {
+void __bsan_rc_inc(BorTag Tag, Block *Info, void *DestShadow) {
+  // Provenance values stored on the stack are roots for
+  // the GC, so they do not contribute to reference counts.
+  if (ShadowIsStack((uptr)DestShadow))
+    return;
   if (__bsan_rc_inc_impl) {
     InterceptorBarrier barrier;
     __bsan_rc_inc_impl(Tag, Info);
@@ -577,7 +572,9 @@ SANITIZER_WEAK_ATTRIBUTE
 bool __bsan_rc_dec_impl(BorTag tag, Block *info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_rc_dec(BorTag tag, Block *info) {
+void __bsan_rc_dec(BorTag tag, Block *info, void *dest_shadow) {
+  if (ShadowIsStack((uptr)dest_shadow))
+    return;
   if (__bsan_rc_dec_impl) {
     InterceptorBarrier barrier;
     if (__bsan_rc_dec_impl(tag, info)) {
@@ -649,13 +646,21 @@ SANITIZER_WEAK_ATTRIBUTE
 void __bsan_protector_end_impl(BorTag bor_tag, Block *alloc_info, Span pc);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_pop_frame(const Provenance *frame_start, uptr prot,
+// `frame_start` points to the frame header within the caller's shadow frame,
+// an alloca whose *shadow* holds the provenance of the `prot` protectors
+// installed on this path, followed by the frame's `alloca_vec_size` stack
+// allocations.
+void __bsan_pop_frame(const void *frame_start, uptr prot,
                       uptr alloca_vec_size) {
   if (__bsan_protector_end_impl && __bsan_dealloc_stack_impl) {
     GET_SPAN;
     InterceptorBarrier barrier;
-    for (uptr i = 0; i < prot + alloca_vec_size; i++) {
-      const Provenance prov = frame_start[i];
+    // Each slot of the shadow frame is the size of a provenance value, but
+    // only the shadow of its first word is used.
+    uptr addr = reinterpret_cast<uptr>(frame_start);
+    for (uptr i = 0; i < prot + alloca_vec_size;
+         i++, addr += sizeof(Provenance)) {
+      const Provenance prov = ReadShadow(reinterpret_cast<const void *>(addr));
       if (i < prot) {
         __bsan_protector_end_impl(prov.tag, prov.block, span);
       } else {

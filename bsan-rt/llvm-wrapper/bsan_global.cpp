@@ -21,14 +21,55 @@ void GlobalContext::acquireProvenance(ZeroCountTable &source) {
   global_zct_.drainFrom(source);
 }
 
+// The number of bytes below the stack pointer that
+// a leaf function may use without adjusting it.
+#if defined(__x86_64__)
+static constexpr uptr kStackRedZoneSize = 128;
+#else
+static constexpr uptr kStackRedZoneSize = 0;
+#endif
+
+// Returns the stack pointer of a suspended thread, or zero if it is unknown.
+static uptr GetSuspendedThreadSP(const SuspendedThreadsList *suspended,
+                                 ThreadID os_id) {
+  if (!suspended)
+    return 0;
+  for (uptr i = 0; i < suspended->ThreadCount(); ++i) {
+    if (suspended->GetThreadID(i) != os_id)
+      continue;
+    InternalMmapVector<uptr> registers;
+    uptr sp = 0;
+    if (suspended->GetRegistersAndSP(i, &registers, &sp) != REGISTERS_AVAILABLE)
+      return 0;
+    return sp;
+  }
+  return 0;
+}
+
 void GlobalContext::CollectProvenance(BsanThread *const &thread, void *arg) {
-  // Iterate over the shadow stacks for each thread,
-  // collecting all provenance values into the snapshot.
   auto *state = static_cast<Snapshot *>(arg);
-  if (thread) {
-    for (auto prov : thread->shadow_stack()) {
-      state->live->insert(prov);
-    }
+  if (!thread) {
+    return;
+  }
+  // Each instrumented function roots provenance in the shadow of its frame,
+  // and stores into the shadow of the stack do not update reference counts,
+  // so every provenance value within it is a root. We only need to scan the
+  // portion of the stack above the stack pointer. If we cannot find the stack
+  // pointer, or if the thread is running on a different stack (e.g. a signal
+  // stack), then we scan the entire stack.
+  uptr beg = RoundUpTo(thread->stack_bottom(), kMinProvAlignment);
+  uptr end = RoundDownTo(thread->stack_top(), kMinProvAlignment);
+  uptr sp = GetSuspendedThreadSP(state->suspended, thread->context()->os_id);
+  if (sp > beg && sp <= end) {
+    beg = Max(beg, RoundDownTo(sp - kStackRedZoneSize, kMinProvAlignment));
+  }
+  for (uptr addr = beg; addr < end; addr += kMinProvAlignment) {
+    BorTag tag = *reinterpret_cast<BorTag *>(MEM_TO_SHADOW(addr));
+    if (tag == 0)
+      continue;
+    Block *block = *reinterpret_cast<Block **>(MEM_TO_ORIGIN(addr));
+    if (block != nullptr)
+      state->live->insert({tag, block});
   }
 }
 
@@ -75,8 +116,10 @@ void GlobalContext::MergeZeroCounts(Snapshot *snap, ZeroCountTable &zct) {
   }
 }
 
-void GlobalContext::SnapshotCallback(const SuspendedThreadsList &, void *arg) {
+void GlobalContext::SnapshotCallback(const SuspendedThreadsList &suspended,
+                                     void *arg) {
   Snapshot *snap = static_cast<Snapshot *>(arg);
+  snap->suspended = &suspended;
   // We need access to the internal allocators used by the runtime, so
   // that we can add live provenance values to the set within the snapshot.
   // Unlocking these here prevents us from unlocking them again once the
