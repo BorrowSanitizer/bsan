@@ -122,7 +122,7 @@ public:
   }
 
 private:
-  friend struct BsanThreadContext;
+  friend class BsanThreadContext;
   friend struct GlobalContext;
   static BsanThread *Create(const void *start_data, uptr data_size,
                             u32 parent_tid, bool detached);

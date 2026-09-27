@@ -173,17 +173,6 @@ void GlobalContext::CollectGarbage(Snapshot *snap) {
       // insert the allocation into the pending set,
       // without providing any tags for it.
       still_pending.insert(idx);
-      // Any leftover tags must be kept around
-      // for the next cycle.
-      tags.forEach([&](BorTag tag) {
-        // When we prune a tag, we write
-        // zero into the list of tags. This
-        // is treated as a special "omnivalid"
-        // provenance value, which is filtered
-        // out when we try to insert it into
-        // the pending set.
-        still_pending.insert({tag, info});
-      });
     }
   });
   pending_.swap(still_pending);
