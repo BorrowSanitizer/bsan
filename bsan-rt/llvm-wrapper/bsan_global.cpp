@@ -19,8 +19,20 @@ void GlobalContext::initGC() { InitMembarrier(); }
 struct ScopedStopTheWorldLock {
   ScopedThreadLock &threads;
   ScopedStopTheWorldLock(ScopedThreadLock &threads) : threads(threads) {
-    atomic_store(&__bsan_gc_trigger, 1, memory_order_relaxed);
+    // Announce to the world that we would like every thread to stop.
+    // This uses a relaxed ordering, which is fine, because we're about
+    // to issue a membarrier.
+    setGCTrigger(true, memory_order_relaxed);
+
+    // Here, we write to the GC trigger and then read each thread's state.
+    // Elsewhere, each thread is setting its state and then reading
+    // the trigger. We need these operations to have a global, sequentially
+    // consistent order. It's cheaper to use an expensive memory barrier
+    // here in the GC, which fires rarely, than to make every read and write
+    // to these values into an atomic operation with a sequentially consistent
+    // order.
     Membarrier();
+
     uptr visit_counter = 0;
     u64 start = MonotonicNanoTime();
     u64 threshold_ms = flags()->gc_hang_threshold_ms;
@@ -63,7 +75,10 @@ struct ScopedStopTheWorldLock {
   }
 
   ~ScopedStopTheWorldLock() {
-    atomic_store(&__bsan_gc_trigger, 0, memory_order_release);
+    // We want a release ordering here, paired
+    // with the acquire ordering within the
+    // while loop of `BsanThread::poll`.
+    setGCTrigger(false, memory_order_release);
     FutexWake(&__bsan_gc_trigger, INT32_MAX);
   }
 };
