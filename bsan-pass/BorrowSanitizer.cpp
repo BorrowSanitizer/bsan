@@ -311,6 +311,9 @@ private:
   /// Thread-local array used to pass the provenance of parameters.
   Value *ParamTLS = nullptr;
 
+  /// Thread-local array used to pass the provenance of return values.
+  Value *RetvalTLS = nullptr;
+
   /// Thread-local variable containing the number of provenance values
   /// for variable arguments.
   Value *VAArgOverflowSizeTLS = nullptr;
@@ -706,6 +709,7 @@ void BorrowSanitizer::createUserspaceApi(Module &M,
   VAArgTagTLS = getOrInsertTLSGlobal(M, BSAN("var_arg_tag_tls"), PtrTy);
   VAArgInfoTLS = getOrInsertTLSGlobal(M, BSAN("var_arg_info_tls"), PtrTy);
   ParamTLS = getOrInsertTLSGlobal(M, BSAN("param_tls"), PtrTy);
+  RetvalTLS = getOrInsertTLSGlobal(M, BSAN("retval_tls"), PtrTy);
 
   ProvStackTLS = getOrInsertTLSGlobal(M, BSAN("shadow_stack"), PtrTy);
   BorTagCounter = getOrInsertGlobal(M, BSAN("bor_tag_ctr"), IntptrTy);

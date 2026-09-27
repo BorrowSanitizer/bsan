@@ -69,6 +69,10 @@ THREADLOCAL u8 __bsan_var_arg_info_tls[kVarArgTLSSizeBytes];
 SANITIZER_INTERFACE_ATTRIBUTE
 THREADLOCAL Provenance __bsan_param_tls[kParamTLSSizeProv];
 
+// A thread-local array used to store return provenance values.
+SANITIZER_INTERFACE_ATTRIBUTE
+THREADLOCAL Provenance __bsan_retval_tls[kParamTLSSizeProv];
+
 // Pointer to the start of the current frame within the shadow
 // stack, which stores the provenance of pointers that are on
 // the stack or in registers. The shadow stack is always a fully
