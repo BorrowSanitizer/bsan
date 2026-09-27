@@ -146,7 +146,9 @@ void GlobalContext::CollectGarbage(Snapshot *snap) {
       DCHECK(!snap->live.contains({tag, info}));
     });
     auto status = __bsan_prune(info, tags.data(), tags.size());
-    if (status == EjectStatus::Ejectable) {
+    if (status == PruneResult::Remove)
+      return;
+    if (status == PruneResult::Eject) {
       // Every tag has been removed from the tree.
       // The reference count for this allocation is zero.
       if (!snap->live.contains(idx)) {
@@ -162,7 +164,7 @@ void GlobalContext::CollectGarbage(Snapshot *snap) {
       }
       return;
     }
-    if (status == EjectStatus::RetainEmpty) {
+    if (status == PruneResult::Retain) {
       // It is possible for an allocation to have been
       // fully pruned but for it to still be alive
       // on the shadow stack. For example, this will
@@ -171,22 +173,18 @@ void GlobalContext::CollectGarbage(Snapshot *snap) {
       // insert the allocation into the pending set,
       // without providing any tags for it.
       still_pending.insert(idx);
-      return;
+      // Any leftover tags must be kept around
+      // for the next cycle.
+      tags.forEach([&](BorTag tag) {
+        // When we prune a tag, we write
+        // zero into the list of tags. This
+        // is treated as a special "omnivalid"
+        // provenance value, which is filtered
+        // out when we try to insert it into
+        // the pending set.
+        still_pending.insert({tag, info});
+      });
     }
-    CHECK(status == EjectStatus::RetainNonEmpty);
-    if (!tags.size())
-      still_pending.insert(idx);
-    // Any leftover tags must be kept around
-    // for the next cycle.
-    tags.forEach([&](BorTag tag) {
-      // When we prune a tag, we write
-      // zero into the list of tags. This
-      // is treated as a special "omnivalid"
-      // provenance value, which is filtered
-      // out when we try to insert it into
-      // the pending set.
-      still_pending.insert({tag, info});
-    });
   });
   pending_.swap(still_pending);
   block_allocator.FlushCache(&block_cache_);
