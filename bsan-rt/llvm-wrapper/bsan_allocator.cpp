@@ -36,12 +36,12 @@ void __bsan::InitializeRustAllocator() {
     max_rust_malloc_size = kMaxAllowedMallocSize;
 }
 
-void __bsan::LockRustAllocator() {
+void __bsan::LockRustAllocator() SANITIZER_NO_THREAD_SAFETY_ANALYSIS {
   fallback_rust_mutex.Lock();
   rust_allocator.ForceLock();
 }
 
-void __bsan::UnlockRustAllocator() {
+void __bsan::UnlockRustAllocator() SANITIZER_NO_THREAD_SAFETY_ANALYSIS {
   rust_allocator.ForceUnlock();
   fallback_rust_mutex.Unlock();
 }
