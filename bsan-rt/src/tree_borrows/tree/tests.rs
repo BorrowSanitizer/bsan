@@ -870,7 +870,7 @@ fn add_child_perm(tree: &mut EagerTree, parent: BorTag, child: BorTag, perm: Per
 
 /// Whether `tag` is a dead node that a pass could not prune.
 fn is_dead(tree: &EagerTree, tag: BorTag) -> bool {
-    tree.dead_unprunable.binary_search(&tag).is_ok()
+    tree.dead_persisting.binary_search(&tag).is_ok()
 }
 
 #[test]
@@ -1017,7 +1017,7 @@ fn retained_tag_is_pruned_once_children_die() {
 fn stale_dead_node_is_revisited_without_its_own_tag() {
     // A node retained by one pass must still be reconsidered by a later one, even when its own
     // tag is never handed over again and nothing in its subtree changes. That is the whole job
-    // of `EagerTree::dead_unprunable`: without it, the only way back to such a node would be a
+    // of `EagerTree::dead_persisting`: without it, the only way back to such a node would be a
     // full scan of the tree.
     let mut tree = new_tree(t(10));
     add_child(&mut tree, t(10), t(11));
@@ -1035,7 +1035,7 @@ fn stale_dead_node_is_revisited_without_its_own_tag() {
     assert!(is_dead(&tree, t(11)));
 
     // Second pass: compaction is on, and the only tag passed belongs to the unrelated branch.
-    // t(11) is reachable only through `dead_unprunable`, and is compacted away.
+    // t(11) is reachable only through `dead_persisting`, and is compacted away.
     let compact = GlobalCtx::new(&SharedSanitizerFlags {
         max_compacted_children: usize::MAX,
         tree_gc_min_nodes: 0,
@@ -1058,15 +1058,19 @@ fn retained_tag_that_becomes_live_again_is_not_pruned() {
     let mut tree = new_tree(t(10));
     add_child(&mut tree, t(10), t(11));
     add_child(&mut tree, t(11), t(12));
+    add_child(&mut tree, t(10), t(20));
     tree.increment(t(12));
+    tree.increment(t(20));
 
     assert!(!tree.remove_dead_tags(&ctx, &[t(11)]));
     assert!(is_dead(&tree, t(11)));
 
-    // t(11) is reachable again. The next pass must leave it alone, even though it is still
-    // listed and its own tag is not passed.
+    // t(11) is reachable again. The next pass, triggered by an unrelated dead leaf, must leave
+    // it alone, even though it is still listed and its own tag is not passed.
     tree.increment(t(11));
-    assert!(!tree.remove_dead_tags(&ctx, &[]));
+    tree.decrement(t(20));
+    assert!(!tree.remove_dead_tags(&ctx, &[t(20)]));
+    assert!(!tree.contains_tag(t(20)));
 
     assert!(tree.contains_tag(t(11)), "a live node must never be pruned");
     assert!(!is_dead(&tree, t(11)), "it should have been dropped from the list");

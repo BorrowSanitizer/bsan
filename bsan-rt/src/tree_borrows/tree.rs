@@ -124,7 +124,7 @@ pub struct EagerTree {
     /// Tags of dead nodes that were unpruned in an earlier GC pass, sorted ascending and free of
     /// duplicates. Lets [`Self::remove_useless_children`] revisit them without scanning every
     /// node.
-    pub(super) dead_unprunable: SmallVec<[BorTag; 2]>,
+    pub(super) dead_persisting: SmallVec<[BorTag; 2]>,
 }
 
 /// A tree that is lazily initialized: starts as `Uninit` (storing only the root tag, size, and
@@ -495,7 +495,7 @@ impl EagerTree {
             nodes,
             locations,
             tag_mapping,
-            dead_unprunable: SmallVec::default(),
+            dead_persisting: SmallVec::default(),
         }
     }
 
@@ -635,7 +635,7 @@ impl EagerTree {
     /// reverse-topological (bottom-up) traversal.
     ///
     /// A tag that cannot be pruned now may become prunable later, so it is kept in
-    /// [`Self::dead_unprunable`] and merged with `dead_tags` on the next pass.
+    /// [`Self::dead_persisting`] and merged with `dead_tags` on the next pass.
     ///
     /// When `compact` is false, dead interior nodes are left in place instead of being
     /// coalesced into their parent. Dead *leaves* are still removed unconditionally, so a tree
@@ -656,7 +656,7 @@ impl EagerTree {
     ) {
         // `dead_tags` is ascending, since tags come from a monotonic counter, and so is the
         // retained list; this is therefore a two-run merge.
-        let mut pending = mem::take(&mut self.dead_unprunable);
+        let mut pending = mem::take(&mut self.dead_persisting);
         pending.extend_from_slice(dead_tags);
         pending.sort_unstable();
         pending.dedup();
@@ -674,22 +674,21 @@ impl EagerTree {
             if node.refcount.get() != 0 || node.is_exposed {
                 continue;
             }
-
             if !self.try_remove_node(global_ctx, idx, compact) {
                 survivors.push(tag);
             }
         }
 
         survivors.reverse();
-        self.dead_unprunable = survivors;
+        self.dead_persisting = survivors;
         debug_assert!(
-            self.dead_unprunable.windows(2).all(|w| w[0] < w[1]),
-            "`dead_unprunable` must stay sorted and free of duplicates"
+            self.dead_persisting.windows(2).all(|w| w[0] < w[1]),
+            "`dead_persisting` must stay sorted and free of duplicates"
         );
     }
 
     /// Attempts to remove a single dead node, returning whether it was removed. A `false` return
-    /// means it is still in the tree and must be revisited; see [`Self::dead_unprunable`].
+    /// means it is still in the tree and must be revisited; see [`Self::dead_persisting`].
     fn try_remove_node(&mut self, ctx: &GlobalCtx, idx: UniIndex, compact: bool) -> bool {
         let node = self.nodes.get(idx).unwrap();
         debug_assert!(node.refcount.get() == 0 && !node.is_exposed);
@@ -729,33 +728,35 @@ impl EagerTree {
                     self.remove_useless_node(idx);
                     true
                 } else {
+                    // Cannot be pruned, record in `dead_persisting`
                     false
                 }
             }
             // Node has more than one child. If every child can soundly replace it, compact it
             // by reparenting all of its children onto its parent.
-            _ if compact && self.can_be_replaced_by_children(ctx, idx) => {
-                let parent_idx = parent.unwrap();
-                // Move `idx`'s children out so we can reparent them
-                let children = mem::take(&mut self.nodes.get_mut(idx).unwrap().children);
-                // Point every grandchild at the grandparent.
-                for i in 0..children.len() {
-                    self.nodes.get_mut(children[i]).unwrap().parent = Some(parent_idx);
+            _ => {
+                if compact && self.can_be_replaced_by_children(ctx, idx) {
+                    let parent_idx = parent.unwrap();
+                    // Move `idx`'s children out so we can reparent them
+                    let children = mem::take(&mut self.nodes.get_mut(idx).unwrap().children);
+                    // Point every grandchild at the grandparent.
+                    for i in 0..children.len() {
+                        self.nodes.get_mut(children[i]).unwrap().parent = Some(parent_idx);
+                    }
+                    // Replace `idx` in the grandparent's child list with all of its children.
+                    let siblings = &mut self.nodes.get_mut(parent_idx).unwrap().children;
+                    let pos = siblings.iter().position(|&c| c == idx).unwrap();
+                    siblings.swap_remove(pos);
+                    for i in 0..children.len() {
+                        siblings.push(children[i]);
+                    }
+                    self.remove_useless_node(idx);
+                    true
+                } else {
+                    // Cannot be pruned, record in `dead_persisting`
+                    false
                 }
-                // Replace `idx` in the grandparent's child list with all of its children.
-                let siblings = &mut self.nodes.get_mut(parent_idx).unwrap().children;
-                let pos = siblings.iter().position(|&c| c == idx).unwrap();
-                siblings.swap_remove(pos);
-                for i in 0..children.len() {
-                    siblings.push(children[i]);
-                }
-                self.remove_useless_node(idx);
-                true
             }
-            // A dead interior node that cannot be replaced by its children, or one on a tree
-            // too small to be worth compacting. It stays in the tree and is recorded in
-            // `dead_unprunable`; it is removed as a leaf once its subtree dies.
-            _ => false,
         }
     }
 }
@@ -1239,13 +1240,7 @@ impl AllocState for LazyTree {
     }
     fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_tags: &[BorTag]) -> bool {
         match self {
-            LazyTree::Init(tree) => {
-                // Only *compaction* of dead interior nodes is skipped on small trees
-                let compact = tree.tag_mapping.len() > global_ctx.flags.tree_gc_min_nodes;
-                tree.remove_useless_children(global_ctx, dead_tags, compact);
-                tree.locations.merge_adjacent_thorough();
-                tree.roots.is_empty()
-            }
+            LazyTree::Init(tree) => tree.remove_dead_tags(global_ctx, dead_tags),
             LazyTree::Uninit { root_tag, refcount, .. } => {
                 // A tree in the Uninit state only has a single node (the root). If
                 // this node is in the dead list with a zero reference count, then the
@@ -1563,7 +1558,12 @@ impl AllocState for EagerTree {
         }
     }
 
+    // Removes all dead tags from the tree. Returns true if the tree is now empty.
     fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_tags: &[BorTag]) -> bool {
+        // Retained tags are only revisited when new dead tags arrive for this tree.
+        if dead_tags.is_empty() {
+            return self.roots.is_empty();
+        }
         // Only *compaction* of dead interior nodes is skipped on small trees
         let compact = self.tag_mapping.len() > global_ctx.flags.tree_gc_min_nodes;
         self.remove_useless_children(global_ctx, dead_tags, compact);
