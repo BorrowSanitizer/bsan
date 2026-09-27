@@ -626,14 +626,14 @@ unsafe extern "C" fn __bsan_prune(
         if tree_is_empty {
             if absent_from_heap {
                 PruneResult::Eject
-            }else{
+            } else {
                 // The tree only has one node left,
                 // but the node is on the heap somewhere,
                 // so we can remove it from the pending set
                 // and wait for it to be requeued.
                 PruneResult::Remove
             }
-        }else{
+        } else {
             // One or more nodes are dead but could not
             // be pruned, due to live nodes with blocking
             // permissions. Keep this allocation and any
