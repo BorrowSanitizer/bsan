@@ -208,6 +208,10 @@ impl BsanEnv {
         Ok(result)
     }
 
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
     pub fn in_mode<F, T>(&mut self, m: Mode, f: F) -> Result<T>
     where
         F: Fn(&mut BsanEnv) -> Result<T>,
