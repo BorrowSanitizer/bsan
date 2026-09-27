@@ -1435,7 +1435,6 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // removal is deferred until after checks have been inserted, because each one
   // is the insertion point for the checks guarding its own access.
   SmallVector<MemIntrinsic *, 4> ReplacedMemIntrinsics;
-
   // When we enter a function that may be called while the thread is
   // "gc-safe", we need to tell the GC that we are now "gc-unsafe". We do this
   // by calling `__bsan_enter_gc_unsafe` in the prologue, which returns a flag
@@ -1443,6 +1442,18 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // `__bsan_exit_gc_unsafe` on every exit from the function, to restore the
   // previous state.
   Value *GCEnterUninstFlag = nullptr;
+  // PHI nodes must be clustered at the beginning of a block. If a PHI Node
+  // can be re-entered, and it carries provenance, then we need to add a
+  // shadow stack slot for its contents so that they remain rooted during
+  // the backedge of a loop. We cache the location of the first non-PHI
+  // instruction at the beginning of the basic block. Each new shadow slot for
+  // a PHI node must be allocated starting at this location to ensure that
+  // earlier slots are allocated before later ones. If we dynamically computed
+  // the the first non-PHI insertion point every time, then it would be
+  // different for each call, and we would allocate the slots for the last PHI
+  // node before the slots for the first one, leading to an SSA dominance
+  // violation.
+  DenseMap<BasicBlock *, Instruction *> PHISlotInsertPtrs;
 
 public:
   BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
@@ -2296,10 +2307,35 @@ private:
     unsigned NumIncoming = PN.getNumIncomingValues();
     SmallVector<ProvenanceField> Components =
         BS.getProvenanceLayout(IRB, PN.getType());
+
+    // PHI nodes need to be clustered at the beginning of
+    // a basic block.
+    BasicBlock *Parent = PN.getParent();
+
+    // Cache the insertion point, so that we always allocate new
+    // slots at the same location. This ensures that the slots for
+    // each PHI node are allocated in the same relative order as the PHI nodes.
+    // If we called `getFirstInsertionPt()` every time, then the insertion
+    // point would always be different for each successive slot, and we would
+    // end up allocating slots in reverse order. Each stack slot allocation
+    // increments the value of the counter for the previous allocation, so
+    // allocating in reverse order would violate SSA dominance, leading to a
+    // compilation error.
+    auto [It, _] =
+        PHISlotInsertPtrs.try_emplace(Parent, &*Parent->getFirstInsertionPt());
+    IRBuilder<> AfterPHI(It->second);
+
     for (auto [Idx, Comp] : llvm::enumerate(Components)) {
       Provenance Prov =
           createProvenancePHI(IRB, Comp, predecessors(PN.getParent()));
       ProvMap.setProvenance({&PN, Idx}, Prov);
+
+      // TODO: does every PHI node need to be
+      // rooted in this way?
+      Value *Slot = allocStackSlot(AfterPHI, false);
+      ProvenanceDest SlotPtr = getMainProvenancePtr(AfterPHI, Slot);
+      storeProvenance(AfterPHI, SlotPtr, Prov);
+
       ProvPHINodes.push_back({{&PN, Idx}, Prov});
     }
   }
