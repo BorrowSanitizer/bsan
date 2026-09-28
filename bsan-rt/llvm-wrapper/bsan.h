@@ -42,7 +42,7 @@ struct Provenance {
   BorTag tag;
   Block *block;
   bool isConcrete() {
-    bool cond = tag > 2;
+    bool cond = tag > 16; // Above the wildcard sentinel.
     DCHECK(cond || block == nullptr);
     return cond;
   }

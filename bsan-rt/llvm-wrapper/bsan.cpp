@@ -89,7 +89,7 @@ THREADLOCAL uptr __bsan_had_error = 0;
 // - 1: an invalid tag
 // - 2: a wildcard tag
 SANITIZER_INTERFACE_ATTRIBUTE
-atomic_uintptr_t __bsan_bor_tag_ctr{3};
+atomic_uintptr_t __bsan_bor_tag_ctr{3 * kMinProvAlignment};
 
 // Accumulates the number of tree-node visits performed by the Rust runtime
 // on this thread since the last garbage collection.
@@ -120,7 +120,8 @@ __bsan_alloc_impl(void *base_addr, uptr size, BorTag bor_tag, Block *block,
 
 Provenance BsanAllocateMeta(void *ptr, uptr size, uptr span) {
   if (LIKELY(__bsan_alloc_impl)) {
-    BorTag tag = atomic_fetch_add(&__bsan_bor_tag_ctr, 1, memory_order_relaxed);
+    BorTag tag = atomic_fetch_add(&__bsan_bor_tag_ctr, kMinProvAlignment,
+                                 memory_order_relaxed);
     Block *block = BLOCK_PTR(CurrentThread()->AllocBlock());
     __bsan_alloc_impl(ptr, size, tag, block, span);
     Provenance prov = {tag, block};
