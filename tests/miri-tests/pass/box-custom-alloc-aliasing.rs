@@ -5,8 +5,6 @@
 //miri: @revisions: stack tree tree_implicit_writes
 //miri: @[tree_implicit_writes]compile-flags: -Zmiri-tree-borrows -Zmiri-tree-borrows-implicit-writes
 //miri: @[tree]compile-flags: -Zmiri-tree-borrows
-#![feature(allocator_api)]
-
 use std::alloc::{AllocError, Allocator, Layout};
 use std::cell::{Cell, UnsafeCell};
 use std::mem;

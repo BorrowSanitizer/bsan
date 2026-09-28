@@ -1,8 +1,5 @@
 #![cfg_attr(not(test), no_std)]
-#![cfg_attr(not(test), feature(core_intrinsics))]
 #![feature(thread_local)]
-#![feature(allocator_api)]
-#![allow(internal_features)]
 
 #[macro_use]
 extern crate alloc;
@@ -639,6 +636,7 @@ extern "C" fn __bsan_print_diff(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
-    eprintln!("The BorrowSanitizer runtime panicked! {:?}", info);
-    core::intrinsics::abort()
+    loop {
+        eprintln!("The BorrowSanitizer runtime panicked! {:?}", info);
+    }
 }
