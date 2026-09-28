@@ -153,14 +153,11 @@ void BsanThread::Init() {
 }
 
 void BsanThread::poll() {
-  // We need to block asynchronous signals during polling.
+  // TODO: We need to block asynchronous signals during polling.
   // Otherwise, if the user's code has an instrumented asynchronous
   // signal handler, then we'll be kicked out of the waiting state
   // back into the unsafe state, which is an invalid transition.
   // Only the GC is allowed to move threads out of waiting.
-#if SANITIZER_LINUX
-  ScopedBlockSignals block(nullptr);
-#endif
   do {
     setGCState(GCState::kWaiting, memory_order_release);
     // This is a compiler fence. All it does is
