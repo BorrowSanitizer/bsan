@@ -109,6 +109,7 @@ public:
   void acquireProvenance(Provenance prov) { zct_.insert(prov); }
 
   bool enterSafeMode();
+  bool tryEnterUnsafeMode();
   bool enterUnsafeMode();
 
   void poll();
@@ -226,6 +227,23 @@ private:
   BsanThread *thread_;
   bool entered_;
 };
+
+template <typename Fn, typename... Args>
+inline bool EveryThread(ScopedThreadLock &threads, Fn callback, Args... args) {
+  auto invoke = [&](auto &&thread) -> bool {
+    return callback(thread, args...);
+  };
+  using Invoke = decltype(invoke);
+  ThreadContextBase *failed = GetThreadRegistry().FindThreadContextLocked(
+      [](ThreadContextBase *tctx_base, void *arg) -> bool {
+        if (tctx_base->status != ThreadStatusRunning)
+          return false;
+        BsanThreadContext *tctx = static_cast<BsanThreadContext *>(tctx_base);
+        return !(*static_cast<Invoke *>(arg))(tctx->thread);
+      },
+      &invoke);
+  return failed == nullptr;
+}
 
 template <typename Fn, typename... Args>
 inline void ForEachThread(ScopedThreadLock &threads, Fn callback,

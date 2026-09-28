@@ -152,6 +152,21 @@ void BsanThread::Init() {
   visits_ptr_ = &__bsan_visits_since_gc;
 }
 
+bool BsanThread::enterSafeMode() {
+  return setGCState(GCState::kSafe, memory_order_release) == GCState::kUnsafe;
+}
+
+bool BsanThread::tryEnterUnsafeMode() {
+  setGCState(kUnsafe, memory_order_relaxed);
+  atomic_signal_fence(memory_order_seq_cst);
+  // Anything that moves us back into unsafe mode needs an acquire load,
+  // so that we are ordered after the GC restarting the world, which is
+  // a release store of 0 into `__bsan_gc_trigger`. In particular, you can
+  // think of this function as being equivalent to the operations
+  // used above for polling. We would use this there, if tail calls
+  return getGCTrigger(memory_order_acquire) == 0;
+}
+
 void BsanThread::poll() {
   // TODO: We need to block asynchronous signals during polling.
   // Otherwise, if the user's code has an instrumented asynchronous
@@ -164,37 +179,17 @@ void BsanThread::poll() {
     // prevents the read within `getGCTrigger` from
     // being moved before the write in `setGCState`.
     atomic_signal_fence(memory_order_seq_cst);
-    while (getGCTrigger(memory_order_acquire)) {
+    if (getGCTrigger(memory_order_relaxed)) {
       FutexWait(&__bsan_gc_trigger, 1);
     }
-    // It's possible that another GC run will start
-    // here, and see that were in waiting, before
-    // we get a chance to move into unsafe mode.
-    // However, that's not an issue, since we'll
-    // just end up back in safe mode due to the
-    // acquire check at the end of this while loop.
-    setGCState(GCState::kUnsafe, memory_order_relaxed);
-    // We need another barrier to prevent reordering,
-    // like above.
-    atomic_signal_fence(memory_order_seq_cst);
-  } while (getGCTrigger(memory_order_acquire));
-}
-
-bool BsanThread::enterSafeMode() {
-  return setGCState(GCState::kSafe, memory_order_release) == GCState::kUnsafe;
+  } while (!tryEnterUnsafeMode());
 }
 
 bool BsanThread::enterUnsafeMode() {
   auto state = getGCState(memory_order_relaxed);
   if (LIKELY(state == kUnsafe))
     return false;
-  setGCState(kUnsafe, memory_order_relaxed);
-  // we have an inverse dependency here. We are writing to our state,
-  // and then reading from trigger. Meanwhile, the GC is setting the trigger,
-  // and then reading from our state.
-  atomic_signal_fence(memory_order_seq_cst);
-  bool gc_enabled = atomic_load(&__bsan_gc_trigger, memory_order_relaxed);
-  if (gc_enabled)
+  if (!tryEnterUnsafeMode())
     poll();
   return true;
 };

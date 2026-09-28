@@ -57,13 +57,9 @@ struct ScopedStopTheWorldLock {
       }
       visit_counter++;
 
-      bool all_stopped = true;
-      ForEachThread(threads, [&](BsanThread *thread) {
-        if (thread != CurrentThread()) {
-          if (thread->getGCState(memory_order_acquire) == GCState::kUnsafe) {
-            all_stopped = false;
-          }
-        }
+      bool all_stopped = EveryThread(threads, [&](BsanThread *thread) {
+        return thread == CurrentThread() ||
+               thread->getGCState(memory_order_acquire) != GCState::kUnsafe;
       });
       if (all_stopped)
         break;
@@ -76,8 +72,7 @@ struct ScopedStopTheWorldLock {
 
   ~ScopedStopTheWorldLock() {
     // We want a release ordering here, paired
-    // with the acquire ordering within the
-    // while loop of `BsanThread::poll`.
+    // with the acquire ordering in `BsanThread::tryEnterUnsafeMode`.
     setGCTrigger(false, memory_order_release);
     FutexWake(&__bsan_gc_trigger, INT32_MAX);
   }
