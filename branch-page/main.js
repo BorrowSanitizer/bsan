@@ -1,13 +1,14 @@
 "use strict";
 /* global Chart */
 
-// One colour per side, the same on every chart. Blue/orange stays distinct
-// under the common colour-vision deficiencies, and main is also dashed so the
-// two lines never depend on colour alone.
-const SIDES = [
-    { key: "main", label: "main", color: "#1f77b4", dash: [6, 4] },
-    { key: "branch", label: "branch", color: "#ff7f0e", dash: [] }
-];
+// Main is blue and dashed; the branch's runs are orange, one line each, darker
+// the newer the run, so the newest reads first. Blue/orange stays distinct
+// under the common colour-vision deficiencies, and the dash means main never
+// depends on colour alone. Each line is also named in the legend.
+const MAIN_STYLE = { color: "#1f77b4", dash: [6, 4] };
+// Oldest to newest; a page keeps at most as many runs as bench.yml's
+// MAX_BRANCH_RUNS, and any beyond this share the lightest.
+const RUN_COLORS = ["#fdae6b", "#fd8d3c", "#f16913", "#d94801", "#a63603"];
 
 const MARKER_SIZE = 3;
 const LINE_WIDTH = 2;
@@ -69,7 +70,44 @@ function el(tag, className, text) {
 
 let charts = [];
 
-function renderChart(parent, target, data, mode) {
+// The runs a report keeps, oldest first, each with its line's label. A report
+// written before runs were kept has one, drawn from its `branch` numbers.
+function runsOf(report) {
+    const runs = (report.runs && report.runs.length) ? report.runs
+        : [{ key: null, commit: report.commit, generated: report.generated }];
+    const seen = {};
+    return runs.map(r => {
+        const sha = (r.commit || "").slice(0, 7) || "run";
+        seen[sha] = (seen[sha] || 0) + 1;
+        const when = r.generated ? new Date(r.generated).toLocaleDateString(
+            "en-US", { month: "short", day: "numeric" }) : "";
+        const label = `${sha}${seen[sha] > 1 ? ` (run ${seen[sha]})` : ""}` +
+            (when ? ` · ${when}` : "");
+        return { ...r, label };
+    });
+}
+
+function runSeries(data, run) {
+    return run.key === null ? data.branch : (data.history || {})[run.key] || {};
+}
+
+function lineStyle(color, dash, width) {
+    return {
+        borderColor: rgba(color, LINE_ALPHA),
+        backgroundColor: rgba(color, LINE_ALPHA),
+        pointBackgroundColor: rgba(color, LINE_ALPHA),
+        borderDash: dash,
+        borderWidth: width,
+        pointRadius: MARKER_SIZE,
+        pointHoverRadius: MARKER_SIZE + 2,
+        pointHitRadius: 10,
+        fill: false,
+        lineTension: 0,
+        spanGaps: false
+    };
+}
+
+function renderChart(parent, target, data, mode, runs) {
     const set = el("div", "benchmark-set");
     set.appendChild(el("h2", "benchmark-title", target));
     parent.appendChild(set);
@@ -83,10 +121,11 @@ function renderChart(parent, target, data, mode) {
     const sum = side => data.crates.reduce((acc, c) => acc + data[side][c], 0);
     const totalMain = sum("main");
     const totalBranch = sum("branch");
+    const side = runs.length > 1 ? "newest run" : "branch";
     set.appendChild(el("p", "benchmark-subtitle",
-        `${mode}: branch ${formatSeconds(totalBranch)}s vs. main ` +
+        `${mode}: ${side} ${formatSeconds(totalBranch)}s vs. main ` +
         `${formatSeconds(totalMain)}s over ${data.crates.length} crate(s) ` +
-        `(branch/main = ${formatRatio(totalBranch, totalMain)})`));
+        `(${side}/main = ${formatRatio(totalBranch, totalMain)})`));
 
     const graphs = el("div", "benchmark-graphs");
     const panel = el("div", "chart-panel");
@@ -100,19 +139,21 @@ function renderChart(parent, target, data, mode) {
     graphs.appendChild(panel);
     set.appendChild(graphs);
 
-    const datasets = SIDES.map(s => ({
-        label: s.label,
-        data: data.crates.map(c => data[s.key][c]),
-        borderColor: rgba(s.color, LINE_ALPHA),
-        backgroundColor: rgba(s.color, LINE_ALPHA),
-        pointBackgroundColor: rgba(s.color, LINE_ALPHA),
-        borderDash: s.dash,
-        borderWidth: LINE_WIDTH,
-        pointRadius: MARKER_SIZE,
-        pointHoverRadius: MARKER_SIZE + 2,
-        pointHitRadius: 10,
-        fill: false,
-        lineTension: 0
+    const offset = RUN_COLORS.length - runs.length;
+    const datasets = [{
+        label: "main",
+        data: data.crates.map(c => data.main[c]),
+        ...lineStyle(MAIN_STYLE.color, MAIN_STYLE.dash, LINE_WIDTH)
+    }].concat(runs.map((run, i) => {
+        const series = runSeries(data, run);
+        const newest = i === runs.length - 1;
+        return {
+            label: newest && runs.length > 1 ? `${run.label} (newest)` : run.label,
+            // A run that did not measure a crate has a gap there.
+            data: data.crates.map(c => (c in series ? series[c] : null)),
+            ...lineStyle(RUN_COLORS[Math.max(0, offset + i)], [],
+                newest ? LINE_WIDTH : LINE_WIDTH - 0.5)
+        };
     }));
 
     charts.push(new Chart(canvas.getContext("2d"), {
@@ -131,9 +172,11 @@ function renderChart(parent, target, data, mode) {
                     afterBody: (items) => {
                         const c = data.crates[items[0].index];
                         const t = data.tests[c];
+                        const counted = t ? `${t.kept} of ${t.total} tests counted` +
+                            (runs.length > 1 ? " (those every run passed)" : "") : "";
                         return [
-                            `branch/main: ${formatRatio(data.branch[c], data.main[c])}`,
-                            t ? `${t.kept} of ${t.total} tests counted` : ""
+                            `${side}/main: ${formatRatio(data.branch[c], data.main[c])}`,
+                            counted
                         ];
                     }
                 }
@@ -167,7 +210,7 @@ function renderCharts(report, mode) {
     const main = document.getElementById("main");
     main.innerHTML = "";
     for (const target of Object.keys(report.targets).sort()) {
-        renderChart(main, target, report.targets[target][mode], mode);
+        renderChart(main, target, report.targets[target][mode], mode, runsOf(report));
     }
 }
 
