@@ -1,5 +1,18 @@
-/* Additions to the site root's style.css for the per-branch page: the excluded
-   tests table, which the root dashboard has no equivalent of. */
+/* Additions to the site root's style.css for the per-branch page: one chart per
+   target stacked in #main, and the excluded tests table, which the root
+   dashboard has no equivalent of. */
+
+#main {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Crate names are drawn rotated under the axis, so give the plot more room
+   than the root dashboard's small multiples. */
+.chart-canvas-wrap.branch-chart {
+  height: 420px;
+}
 
 #dropped-container {
   margin: 20px auto 0;
@@ -49,7 +62,7 @@
 #dropped-table td.status-failed { color: #b3261e; font-weight: 600; }
 #dropped-table td.status-missing { color: #8a6d00; font-weight: 600; }
 
-#dropped-table tr.reason-disagreed td.reason { color: #b3261e; font-weight: 600; }
+#dropped-table tr.reason-changed td.reason { color: #b3261e; font-weight: 600; }
 
 .dropped-empty {
   color: #5b6472;

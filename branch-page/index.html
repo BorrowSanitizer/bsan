@@ -1,4 +1,5 @@
-<!-- Per-branch benchmark page, kept on gh-pages next to the root dashboard.
+<!-- Per-branch benchmark page: this branch against main, kept on gh-pages next
+     to the root dashboard.
 
      bench.yml copies THIS file into branches/<slug>/ beside the data.json that
      branch_report.py writes; main.js and branch.css are loaded from here rather
@@ -12,21 +13,22 @@
   <meta name="viewport" content="width=device-width, minimum-scale=1.0, initial-scale=1, user-scalable=yes">
   <link rel="stylesheet" href="../../style.css">
   <link rel="stylesheet" href="../../branch-page/branch.css">
-  <title>BorrowSanitizer Benchmarks: branch</title>
+  <title>BorrowSanitizer Benchmarks: branch vs. main</title>
   <link rel="icon" type="image/x-icon" href="../../favicon.svg">
 </head>
 
 <body>
   <header id="header">
-    <h1 class="dashboard-title">Branch Benchmarks</h1>
+    <h1 class="dashboard-title">Branch vs. main</h1>
     <div class="dashboard-meta">
       <div class="header-item">
         <strong class="header-label">Branch:</strong>
         <span id="branch-name"></span>
+        <span id="commit-link"></span>
       </div>
       <div class="header-item">
-        <strong class="header-label">Commit:</strong>
-        <span id="commit-link"></span>
+        <strong class="header-label">Main:</strong>
+        <span id="main-commits"></span>
       </div>
       <div class="header-item">
         <strong class="header-label">Measured:</strong>
@@ -43,21 +45,21 @@
     <div class="dashboard-explanation">
       <h2>Overview</h2>
       <p>
-        This is a one-off measurement of a branch, not a history. Each point is a crate's
-        total wall time under one configuration &mdash; the sum of its tests' mean execution
-        times, in seconds, on a log scale.
+        Each chart compares this branch against <code>main</code> on one architecture. Each
+        point is a crate's total wall time under the selected configuration: the sum of its
+        tests' mean execution times, in seconds, on a log scale.
       </p>
       <p>
-        Only tests that <strong>every</strong> configuration ran with the same result are
-        counted. A configuration that loses tests would otherwise be credited with less work
-        and look faster for it. Everything left out is listed under
-        <a href="#dropped-container">Excluded tests</a>, with each configuration's result, so a
-        test that fails only under instrumentation is visible rather than silently missing.
+        Only tests that succeeded on <strong>both</strong> main and the branch are counted.
+        Otherwise a side that lost tests would be credited with less work and look faster
+        for it. Everything left out is listed under
+        <a href="#dropped-container">Excluded tests</a> with its result on each side, so a
+        test the branch broke (or fixed) is visible rather than silently missing.
       </p>
       <p>
-        Times are raw sums with nothing subtracted. Each measurement runs a test binary
-        directly with an <code>--exact</code> filter, so there is no per-invocation cargo
-        overhead to remove.
+        Main's numbers come from its most recent benchmark run when one covers the crate,
+        and are measured alongside the branch otherwise. They can come from different
+        runners, so treat differences of a few percent as noise.
       </p>
     </div>
   </section>
@@ -65,8 +67,8 @@
   <section id="controls-container" aria-label="Benchmark controls">
     <div id="controls">
       <div class="control-field">
-        <label for="target-select">Target</label>
-        <select id="target-select"></select>
+        <label for="mode-select">Configuration</label>
+        <select id="mode-select"></select>
       </div>
     </div>
   </section>

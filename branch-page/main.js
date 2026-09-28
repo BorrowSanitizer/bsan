@@ -1,17 +1,18 @@
 "use strict";
 /* global Chart */
 
-// Matplotlib's tab10, in order, so a branch page and a locally produced
-// plot_by_crate plot colour the same series the same way.
-const TAB10 = [
-    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
-    "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"
+// One colour per side, the same on every chart. Blue/orange stays distinct
+// under the common colour-vision deficiencies, and main is also dashed so the
+// two lines never depend on colour alone.
+const SIDES = [
+    { key: "main", label: "main", color: "#1f77b4", dash: [6, 4] },
+    { key: "branch", label: "branch", color: "#ff7f0e", dash: [] }
 ];
 
-// plot_by_crate draws seconds with marker="o", ms=3, lw=0.8, alpha=0.8.
 const MARKER_SIZE = 3;
-const LINE_WIDTH = 1.2;
-const LINE_ALPHA = 0.8;
+const LINE_WIDTH = 2;
+const LINE_ALPHA = 0.85;
+const DEFAULT_MODE = "full";
 
 const DATE_FORMAT_OPTS = {
     day: "numeric", hour: "numeric", minute: "numeric", month: "long",
@@ -33,9 +34,13 @@ function formatSeconds(v) {
     return v.toPrecision(3).replace(/0+$/, "").replace(/\.$/, "");
 }
 
+function formatRatio(branch, main) {
+    if (!(main > 0) || !isFinite(branch)) return "-";
+    return `${(branch / main).toFixed(3)}x`;
+}
+
 // A log axis in Chart.js 2 emits a tick for every 1..9 in each decade, which
-// overprints. Keep the 1/2/5 ladder, the convention matplotlib's LogLocator
-// uses for a minor-tick subset.
+// overprints. Keep the 1/2/5 ladder.
 function logTick(value) {
     if (value <= 0) return "";
     const decade = Math.pow(10, Math.floor(Math.log10(value)));
@@ -43,48 +48,73 @@ function logTick(value) {
     return [1, 2, 5].includes(mantissa) ? formatSeconds(value) : "";
 }
 
-let chart = null;
+function commitLink(report, sha) {
+    if (report.repoUrl && sha) {
+        const a = document.createElement("a");
+        a.rel = "noopener";
+        a.href = `${report.repoUrl}/commit/${sha}`;
+        a.textContent = sha.slice(0, 8);
+        return a;
+    }
+    return document.createTextNode((sha || "unknown").slice(0, 8));
+}
 
-function renderChart(report, target) {
-    const data = report.targets[target];
-    const main = document.getElementById("main");
-    main.innerHTML = "";
+function el(tag, className, text) {
+    const e = document.createElement(tag);
+    if (className) e.className = className;
+    if (text !== undefined) e.textContent = text;
+    return e;
+}
+
+let charts = [];
+
+function renderChart(parent, target, data, mode) {
+    const set = el("div", "benchmark-set");
+    set.appendChild(el("h2", "benchmark-title", target));
+    parent.appendChild(set);
 
     if (!data || !data.crates.length) {
-        const empty = document.createElement("div");
-        empty.className = "empty-state";
-        empty.textContent =
-            "No crate has a test that every configuration ran with the same result.";
-        main.appendChild(empty);
-        chart = null;
+        set.appendChild(el("p", "benchmark-subtitle",
+            `No crate has a test that succeeded under ${mode} on both main and the branch.`));
         return;
     }
 
-    const set = document.createElement("div");
-    set.className = "benchmark-set";
-    set.innerHTML =
-        '<h2 class="benchmark-title">Unsafe Crate Testbench Runtimes</h2>' +
-        `<p class="benchmark-subtitle">${target}</p>` +
-        '<div class="benchmark-graphs"><div class="chart-panel">' +
-        '<div class="chart-canvas-wrap"><canvas id="seconds-chart"></canvas></div>' +
-        "</div></div>";
-    main.appendChild(set);
+    const sum = side => data.crates.reduce((acc, c) => acc + data[side][c], 0);
+    const totalMain = sum("main");
+    const totalBranch = sum("branch");
+    set.appendChild(el("p", "benchmark-subtitle",
+        `${mode}: branch ${formatSeconds(totalBranch)}s vs. main ` +
+        `${formatSeconds(totalMain)}s over ${data.crates.length} crate(s) ` +
+        `(branch/main = ${formatRatio(totalBranch, totalMain)})`));
 
-    const datasets = report.modes.map((mode, i) => ({
-        label: mode,
-        data: data.crates.map(c => data.seconds[mode][c]),
-        borderColor: rgba(TAB10[i % TAB10.length], LINE_ALPHA),
-        backgroundColor: rgba(TAB10[i % TAB10.length], LINE_ALPHA),
-        pointBackgroundColor: rgba(TAB10[i % TAB10.length], LINE_ALPHA),
+    const graphs = el("div", "benchmark-graphs");
+    const panel = el("div", "chart-panel");
+    const wrap = el("div", "chart-canvas-wrap branch-chart");
+    const canvas = document.createElement("canvas");
+    canvas.setAttribute("role", "img");
+    canvas.setAttribute("aria-label",
+        `Per-crate runtime on ${target} under ${mode}, main against the branch`);
+    wrap.appendChild(canvas);
+    panel.appendChild(wrap);
+    graphs.appendChild(panel);
+    set.appendChild(graphs);
+
+    const datasets = SIDES.map(s => ({
+        label: s.label,
+        data: data.crates.map(c => data[s.key][c]),
+        borderColor: rgba(s.color, LINE_ALPHA),
+        backgroundColor: rgba(s.color, LINE_ALPHA),
+        pointBackgroundColor: rgba(s.color, LINE_ALPHA),
+        borderDash: s.dash,
         borderWidth: LINE_WIDTH,
         pointRadius: MARKER_SIZE,
         pointHoverRadius: MARKER_SIZE + 2,
+        pointHitRadius: 10,
         fill: false,
         lineTension: 0
     }));
 
-    if (chart) chart.destroy();
-    chart = new Chart(document.getElementById("seconds-chart").getContext("2d"), {
+    charts.push(new Chart(canvas.getContext("2d"), {
         type: "line",
         data: { labels: data.crates, datasets },
         options: {
@@ -97,9 +127,13 @@ function renderChart(report, target) {
                 callbacks: {
                     label: (item, d) =>
                         `${d.datasets[item.datasetIndex].label}: ${formatSeconds(item.yLabel)}s`,
-                    afterTitle: (items) => {
-                        const t = data.tests[data.crates[items[0].index]];
-                        return t ? `${t.kept} of ${t.total} tests counted` : "";
+                    afterBody: (items) => {
+                        const c = data.crates[items[0].index];
+                        const t = data.tests[c];
+                        return [
+                            `branch/main: ${formatRatio(data.branch[c], data.main[c])}`,
+                            t ? `${t.kept} of ${t.total} tests counted` : ""
+                        ];
                     }
                 }
             },
@@ -107,7 +141,7 @@ function renderChart(report, target) {
                 xAxes: [{
                     scaleLabel: {
                         display: true,
-                        labelString: `Crate  (Ordered by ${report.modes[0]}, ascending)`
+                        labelString: "Crate  (Ordered by main, ascending)"
                     },
                     ticks: { autoSkip: false, maxRotation: 90, minRotation: 90 },
                     gridLines: { display: false }
@@ -123,39 +157,58 @@ function renderChart(report, target) {
                 }]
             }
         }
-    });
+    }));
 }
 
-function renderDropped(report, target) {
-    const data = report.targets[target];
+function renderCharts(report, mode) {
+    charts.forEach(c => c.destroy());
+    charts = [];
+    const main = document.getElementById("main");
+    main.innerHTML = "";
+    for (const target of Object.keys(report.targets).sort()) {
+        renderChart(main, target, report.targets[target][mode], mode);
+    }
+}
+
+function statusClass(status) {
+    return status === "success" ? "status-success"
+        : status === "not run" ? "status-missing" : "status-failed";
+}
+
+function renderDropped(report, mode) {
     const table = document.getElementById("dropped-table");
     const summary = document.getElementById("dropped-summary");
     table.innerHTML = "";
 
-    const dropped = (data && data.dropped) || [];
-    const disagreed = dropped.filter(d => d.reason === "disagreed").length;
+    const rows = [];
+    for (const target of Object.keys(report.targets).sort()) {
+        const data = report.targets[target][mode];
+        for (const d of (data && data.dropped) || []) rows.push({ target, ...d });
+    }
+    const changed = rows.filter(d => d.reason === "changed").length;
 
-    if (!dropped.length) {
+    if (!rows.length) {
         summary.textContent =
-            "Every test ran with the same result under every configuration.";
+            `Under ${mode}, every test succeeded on both main and the branch.`;
         summary.className = "chart-meta dropped-empty";
         return;
     }
     summary.className = "chart-meta";
     summary.textContent =
-        `${dropped.length} test(s) left out of the totals above, ` +
-        `${disagreed} because the configurations disagreed.`;
+        `Under ${mode}, ${rows.length} test(s) are left out of the totals above; ` +
+        `${changed} of them have a different result on the branch than on main.`;
 
     const head = table.insertRow();
-    ["Crate", "Test", "Reason"].concat(report.modes).forEach(h => {
+    ["Target", "Crate", "Test", "Reason", "main", "branch"].forEach(h => {
         const th = document.createElement("th");
         th.textContent = h;
         head.appendChild(th);
     });
 
-    for (const row of dropped) {
+    for (const row of rows) {
         const tr = table.insertRow();
-        tr.className = `reason-${row.reason === "disagreed" ? "disagreed" : "other"}`;
+        tr.className = `reason-${row.reason === "changed" ? "changed" : "other"}`;
+        tr.insertCell().textContent = row.target;
         tr.insertCell().textContent = row.crate;
         const test = tr.insertCell();
         test.textContent = row.test;
@@ -163,36 +216,32 @@ function renderDropped(report, target) {
         const reason = tr.insertCell();
         reason.textContent = row.reason;
         reason.className = "reason";
-        for (const mode of report.modes) {
-            const status = row.statuses[mode] || "not run";
+        for (const side of ["main", "branch"]) {
             const cell = tr.insertCell();
-            cell.textContent = status;
-            cell.className = status === "success" ? "status-success"
-                : status === "not run" ? "status-missing" : "status-failed";
+            cell.textContent = row[side];
+            cell.className = statusClass(row[side]);
         }
     }
 }
 
-function render(report, target) {
-    renderChart(report, target);
-    renderDropped(report, target);
+function render(report, mode) {
+    renderCharts(report, mode);
+    renderDropped(report, mode);
 }
 
 function init(report) {
     document.getElementById("branch-name").textContent = report.branch || "unknown";
+    document.getElementById("commit-link").appendChild(commitLink(report, report.commit));
     document.getElementById("last-update").textContent =
         new Date(report.generated).toLocaleString("en-US", DATE_FORMAT_OPTS);
 
-    const commit = document.getElementById("commit-link");
-    if (report.commit && report.repoUrl) {
-        const a = document.createElement("a");
-        a.rel = "noopener";
-        a.href = `${report.repoUrl}/commit/${report.commit}`;
-        a.textContent = report.commit.slice(0, 8);
-        commit.appendChild(a);
-    } else {
-        commit.textContent = (report.commit || "unknown").slice(0, 8);
-    }
+    const mainCommits = document.getElementById("main-commits");
+    const shas = report.mainCommits || [];
+    if (!shas.length) mainCommits.textContent = "unknown";
+    shas.forEach((sha, i) => {
+        if (i) mainCommits.appendChild(document.createTextNode(", "));
+        mainCommits.appendChild(commitLink(report, sha));
+    });
 
     if (report.runUrl) {
         document.getElementById("run-link").href = report.runUrl;
@@ -200,14 +249,14 @@ function init(report) {
         document.getElementById("run-sep").hidden = true;
     }
 
-    const select = document.getElementById("target-select");
-    const targets = Object.keys(report.targets).sort();
-    for (const t of targets) {
+    const select = document.getElementById("mode-select");
+    for (const m of report.modes) {
         const opt = document.createElement("option");
-        opt.value = t;
-        opt.textContent = t;
+        opt.value = m;
+        opt.textContent = m;
         select.appendChild(opt);
     }
+    select.value = report.modes.includes(DEFAULT_MODE) ? DEFAULT_MODE : report.modes[0];
     select.addEventListener("change", () => render(report, select.value));
 
     const dl = document.getElementById("dl-button");
@@ -223,7 +272,7 @@ function init(report) {
         URL.revokeObjectURL(url);
     };
 
-    render(report, targets[0]);
+    render(report, select.value);
 }
 
 fetch("data.json")
@@ -235,8 +284,6 @@ fetch("data.json")
     .catch(err => {
         const main = document.getElementById("main");
         main.innerHTML = "";
-        const empty = document.createElement("div");
-        empty.className = "empty-state";
-        empty.textContent = `Could not load benchmark data (${err.message}).`;
-        main.appendChild(empty);
+        main.appendChild(el("div", "empty-state",
+            `Could not load benchmark data (${err.message}).`));
     });
