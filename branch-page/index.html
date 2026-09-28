@@ -46,8 +46,9 @@
       <h2>Overview</h2>
       <p>
         Each chart compares this branch against <code>main</code> on one architecture. Each
-        point is a crate's total wall time under the selected configuration: the sum of its
-        tests' mean execution times, in seconds, on a log scale.
+        point is a crate's total wall time under BorrowSanitizer's <code>full</code>
+        configuration: the sum of its tests' mean execution times, in seconds, on a log
+        scale.
       </p>
       <p>
         Only tests that succeeded on <strong>both</strong> main and the branch are counted.
@@ -61,15 +62,6 @@
         and are measured alongside the branch otherwise. They can come from different
         runners, so treat differences of a few percent as noise.
       </p>
-    </div>
-  </section>
-
-  <section id="controls-container" aria-label="Benchmark controls">
-    <div id="controls">
-      <div class="control-field">
-        <label for="mode-select">Configuration</label>
-        <select id="mode-select"></select>
-      </div>
     </div>
   </section>
 

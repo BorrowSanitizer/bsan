@@ -12,7 +12,8 @@ const SIDES = [
 const MARKER_SIZE = 3;
 const LINE_WIDTH = 2;
 const LINE_ALPHA = 0.85;
-const DEFAULT_MODE = "full";
+// Branches are only benchmarked under `full`; see bench_plan.py.
+const MODE = "full";
 
 const DATE_FORMAT_OPTS = {
     day: "numeric", hour: "numeric", minute: "numeric", month: "long",
@@ -249,16 +250,6 @@ function init(report) {
         document.getElementById("run-sep").hidden = true;
     }
 
-    const select = document.getElementById("mode-select");
-    for (const m of report.modes) {
-        const opt = document.createElement("option");
-        opt.value = m;
-        opt.textContent = m;
-        select.appendChild(opt);
-    }
-    select.value = report.modes.includes(DEFAULT_MODE) ? DEFAULT_MODE : report.modes[0];
-    select.addEventListener("change", () => render(report, select.value));
-
     const dl = document.getElementById("dl-button");
     dl.hidden = false;
     dl.onclick = () => {
@@ -272,7 +263,7 @@ function init(report) {
         URL.revokeObjectURL(url);
     };
 
-    render(report, select.value);
+    render(report, MODE);
 }
 
 fetch("data.json")
