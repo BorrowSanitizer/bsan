@@ -1,0 +1,56 @@
+/* Additions to the site root's style.css for the per-branch page: the excluded
+   tests table, which the root dashboard has no equivalent of. */
+
+#dropped-container {
+  margin: 20px auto 0;
+  max-width: 1200px;
+  width: 100%;
+  background: #ffffff;
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+/* A long test name must not widen the page; the table scrolls on its own. */
+.table-scroll {
+  overflow-x: auto;
+}
+
+#dropped-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.85em;
+}
+
+#dropped-table th,
+#dropped-table td {
+  border-bottom: 1px solid #e3e8ef;
+  padding: 6px 10px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+#dropped-table th {
+  font-weight: 600;
+  border-bottom: 2px solid #d5dce6;
+}
+
+#dropped-table td.test-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: normal;
+  word-break: break-word;
+  min-width: 18em;
+}
+
+/* A status that differs from the others is the point of the table, so give the
+   failures weight and leave the passes quiet. */
+#dropped-table td.status-success { color: #5b6472; }
+#dropped-table td.status-failed { color: #b3261e; font-weight: 600; }
+#dropped-table td.status-missing { color: #8a6d00; font-weight: 600; }
+
+#dropped-table tr.reason-disagreed td.reason { color: #b3261e; font-weight: 600; }
+
+.dropped-empty {
+  color: #5b6472;
+}
