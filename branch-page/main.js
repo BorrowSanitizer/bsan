@@ -176,6 +176,33 @@ function statusClass(status) {
         : status === "not run" ? "status-missing" : "status-failed";
 }
 
+// Only link to pages bench.py generates links for, never to whatever a test
+// happened to print.
+function safeUrl(url) {
+    return /^https:\/\/(docs\.rs|github\.com)\//.test(url || "") ? url : "";
+}
+
+// Where a failing test's error points, linked to the source line, with the
+// error text itself one click away.
+function renderError(cell, err) {
+    if (err.location) {
+        const url = safeUrl(err.url);
+        const loc = el(url ? "a" : "span", "error-location", err.location);
+        if (url) {
+            loc.href = url;
+            loc.rel = "noopener";
+            loc.target = "_blank";
+        }
+        cell.appendChild(loc);
+    }
+    if (err.message || err.detail) {
+        const details = el("details", "error-details");
+        details.appendChild(el("summary", "", err.message || "output"));
+        if (err.detail) details.appendChild(el("pre", "", err.detail));
+        cell.appendChild(details);
+    }
+}
+
 function renderDropped(report, mode) {
     const table = document.getElementById("dropped-table");
     const summary = document.getElementById("dropped-summary");
@@ -196,7 +223,7 @@ function renderDropped(report, mode) {
     }
     summary.className = "chart-meta";
     summary.textContent =
-        `Under ${mode}, ${rows.length} test(s) are left out of the totals above; ` +
+        `Under ${mode}, ${rows.length} test(s) are left out of the totals below; ` +
         `${changed} of them have a different result on the branch than on main.`;
 
     const head = table.insertRow();
@@ -219,8 +246,10 @@ function renderDropped(report, mode) {
         reason.className = "reason";
         for (const side of ["main", "branch"]) {
             const cell = tr.insertCell();
-            cell.textContent = row[side];
-            cell.className = statusClass(row[side]);
+            cell.className = `status-cell ${statusClass(row[side])}`;
+            cell.appendChild(el("div", "status", row[side]));
+            const err = row.errors && row.errors[side];
+            if (err) renderError(cell, err);
         }
     }
 }

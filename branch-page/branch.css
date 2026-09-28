@@ -15,7 +15,7 @@
 }
 
 #dropped-container {
-  margin: 20px auto 0;
+  margin: 20px auto;
   max-width: 1200px;
   width: 100%;
   background: #ffffff;
@@ -61,6 +61,46 @@
 #dropped-table td.status-success { color: #5b6472; }
 #dropped-table td.status-failed { color: #b3261e; font-weight: 600; }
 #dropped-table td.status-missing { color: #8a6d00; font-weight: 600; }
+
+/* A failing side shows where its error points and, folded, what it said. The
+   cell may wrap; the error text scrolls on its own rather than widening the
+   table. */
+#dropped-table td.status-cell {
+  white-space: normal;
+  min-width: 12em;
+  max-width: 32em;
+  vertical-align: top;
+}
+
+#dropped-table .error-location {
+  display: block;
+  margin-top: 2px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 400;
+  word-break: break-all;
+}
+
+#dropped-table .error-details {
+  margin-top: 2px;
+  color: #374151;
+  font-weight: 400;
+}
+
+#dropped-table .error-details summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+#dropped-table .error-details pre {
+  margin: 6px 0 0;
+  padding: 8px;
+  max-height: 20em;
+  overflow: auto;
+  background: #f6f8fa;
+  border: 1px solid #e3e8ef;
+  font-size: 0.9em;
+  white-space: pre;
+}
 
 #dropped-table tr.reason-changed td.reason { color: #b3261e; font-weight: 600; }
 

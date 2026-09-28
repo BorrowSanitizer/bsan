@@ -52,10 +52,9 @@
       </p>
       <p>
         Only tests that succeeded on <strong>both</strong> main and the branch are counted.
-        Otherwise a side that lost tests would be credited with less work and look faster
-        for it. Everything left out is listed under
+        Everything left out is listed under
         <a href="#dropped-container">Excluded tests</a> with its result on each side, so a
-        test the branch broke (or fixed) is visible rather than silently missing.
+        test the branch broke (or fixed) is identifiable.
       </p>
       <p>
         Main's numbers come from its most recent benchmark run when one covers the crate,
@@ -65,8 +64,6 @@
     </div>
   </section>
 
-  <main id="main"></main>
-
   <section id="dropped-container" aria-label="Excluded tests">
     <h2 class="benchmark-title">Excluded tests</h2>
     <p class="chart-meta" id="dropped-summary"></p>
@@ -74,6 +71,8 @@
       <table id="dropped-table"></table>
     </div>
   </section>
+
+  <main id="main"></main>
 
   <footer>
     <button id="dl-button" hidden>Download data as JSON</button>
