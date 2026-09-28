@@ -72,12 +72,20 @@
   vertical-align: top;
 }
 
-#dropped-table .error-location {
-  display: block;
+#dropped-table .error-links {
   margin-top: 2px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-weight: 400;
+}
+
+#dropped-table .error-location {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #374151;
   word-break: break-all;
+}
+
+#dropped-table .error-log {
+  margin-left: 0.6em;
+  white-space: nowrap;
 }
 
 #dropped-table .error-details {

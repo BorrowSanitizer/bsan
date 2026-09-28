@@ -176,24 +176,27 @@ function statusClass(status) {
         : status === "not run" ? "status-missing" : "status-failed";
 }
 
-// Only link to pages bench.py generates links for, never to whatever a test
-// happened to print.
+// Only link to CI logs, never to whatever else ends up in the data.
 function safeUrl(url) {
-    return /^https:\/\/(docs\.rs|github\.com)\//.test(url || "") ? url : "";
+    return /^https:\/\/github\.com\//.test(url || "") ? url : "";
 }
 
-// Where a failing test's error points, linked to the source line, with the
-// error text itself one click away.
+// Where a failing test's error points and a link to the CI log its output was
+// printed to (search it for "FAILED"), with the error text one click away.
 function renderError(cell, err) {
-    if (err.location) {
-        const url = safeUrl(err.url);
-        const loc = el(url ? "a" : "span", "error-location", err.location);
+    const url = safeUrl(err.url);
+    if (err.location || url) {
+        const line = el("div", "error-links");
+        if (err.location) line.appendChild(el("span", "error-location", err.location));
         if (url) {
-            loc.href = url;
-            loc.rel = "noopener";
-            loc.target = "_blank";
+            const log = el("a", "error-log", "log");
+            log.href = url;
+            log.rel = "noopener";
+            log.target = "_blank";
+            log.title = "The CI job this test failed in; search its log for FAILED";
+            line.appendChild(log);
         }
-        cell.appendChild(loc);
+        cell.appendChild(line);
     }
     if (err.message || err.detail) {
         const details = el("details", "error-details");
