@@ -1,4 +1,4 @@
-//@run:0
+//@run:1
 // This is a copy of the test `send_patch` from librsync at version 0.2.3
 // This test originally triggered UB under BorrowSanitizer and MiriLLI. 
 // Moving a closure triggered a function-entry retag, leading
