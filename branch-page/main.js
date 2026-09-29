@@ -10,6 +10,10 @@ const MAIN_STYLE = { color: "#1f77b4", dash: [6, 4] };
 // MAX_BRANCH_RUNS, and any beyond this share the lightest.
 const RUN_COLORS = ["#fdae6b", "#fd8d3c", "#f16913", "#d94801", "#a63603"];
 
+// What the dashed line is compared against: `main` for a PR, or the baseline a
+// run by hand chose. Set from the report in init().
+let BASELINE = "main";
+
 const MARKER_SIZE = 3;
 const LINE_WIDTH = 2;
 const LINE_ALPHA = 0.85;
@@ -154,7 +158,7 @@ function renderChart(parent, target, data, mode, runs) {
 
     if (!data || !data.crates.length) {
         set.appendChild(el("p", "benchmark-subtitle",
-            `No crate has a test that succeeded under ${mode} on both main and the branch.`));
+            `No crate has a test that succeeded under ${mode} on both ${BASELINE} and the branch.`));
         return;
     }
 
@@ -163,9 +167,9 @@ function renderChart(parent, target, data, mode, runs) {
     const totalBranch = sum("branch");
     const side = runs.length > 1 ? "newest run" : "branch";
     set.appendChild(el("p", "benchmark-subtitle",
-        `${mode}: ${side} ${formatSeconds(totalBranch)}s vs. main ` +
+        `${mode}: ${side} ${formatSeconds(totalBranch)}s vs. ${BASELINE} ` +
         `${formatSeconds(totalMain)}s over ${data.crates.length} crate(s) ` +
-        `(${side}/main = ${formatRatio(totalBranch, totalMain)})`));
+        `(${side}/${BASELINE} = ${formatRatio(totalBranch, totalMain)})`));
 
     const graphs = el("div", "benchmark-graphs");
     const panel = el("div", "chart-panel");
@@ -173,7 +177,7 @@ function renderChart(parent, target, data, mode, runs) {
     const canvas = document.createElement("canvas");
     canvas.setAttribute("role", "img");
     canvas.setAttribute("aria-label",
-        `Per-crate runtime on ${target} under ${mode}, main against the branch`);
+        `Per-crate runtime on ${target} under ${mode}, ${BASELINE} against the branch`);
     wrap.appendChild(canvas);
     panel.appendChild(wrap);
     graphs.appendChild(panel);
@@ -181,7 +185,7 @@ function renderChart(parent, target, data, mode, runs) {
 
     const offset = RUN_COLORS.length - runs.length;
     const datasets = [{
-        label: "main",
+        label: BASELINE,
         data: data.crates.map(c => data.main[c]),
         ...lineStyle(MAIN_STYLE.color, MAIN_STYLE.dash, LINE_WIDTH)
     }].concat(runs.map((run, i) => {
@@ -217,7 +221,7 @@ function renderChart(parent, target, data, mode, runs) {
                         const counted = t ? `${t.kept} of ${t.total} tests counted` +
                             (runs.length > 1 ? " (those every run passed)" : "") : "";
                         return [
-                            `${side}/main: ${formatRatio(data.branch[c], data.main[c])}`,
+                            `${side}/${BASELINE}: ${formatRatio(data.branch[c], data.main[c])}`,
                             counted
                         ];
                     }
@@ -227,7 +231,7 @@ function renderChart(parent, target, data, mode, runs) {
                 xAxes: [{
                     scaleLabel: {
                         display: true,
-                        labelString: "Crate  (Ordered by main, ascending)"
+                        labelString: `Crate  (Ordered by ${BASELINE}, ascending)`
                     },
                     ticks: { autoSkip: false, maxRotation: 90, minRotation: 90 },
                     gridLines: { display: false }
@@ -305,17 +309,17 @@ function renderDropped(report, mode) {
 
     if (!rows.length) {
         summary.textContent =
-            `Under ${mode}, every test succeeded on both main and the branch.`;
+            `Under ${mode}, every test succeeded on both ${BASELINE} and the branch.`;
         summary.className = "chart-meta dropped-empty";
         return;
     }
     summary.className = "chart-meta";
     summary.textContent =
         `Under ${mode}, ${rows.length} test(s) are left out of the totals below; ` +
-        `${changed} of them have a different result on the branch than on main.`;
+        `${changed} of them have a different result on the branch than on ${BASELINE}.`;
 
     const head = table.insertRow();
-    ["Target", "Crate", "Test", "Reason", "main", "branch"].forEach(h => {
+    ["Target", "Crate", "Test", "Reason", BASELINE, "branch"].forEach(h => {
         const th = document.createElement("th");
         th.textContent = h;
         head.appendChild(th);
@@ -348,6 +352,10 @@ function render(report, mode) {
 }
 
 function init(report) {
+    BASELINE = report.baseline || "main";
+    // Pages copied before the header had this label keep saying "Main:".
+    const baselineLabel = document.getElementById("baseline-label");
+    if (baselineLabel) baselineLabel.textContent = `${BASELINE}:`;
     document.getElementById("branch-name").textContent = report.branch || "unknown";
     document.getElementById("commit-link").appendChild(commitLink(report, report.commit));
     document.getElementById("last-update").textContent =
