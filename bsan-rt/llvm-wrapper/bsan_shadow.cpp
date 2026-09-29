@@ -243,9 +243,9 @@ ALWAYS_INLINE static void UpdateShadowSlot(uptr d_shadow, uptr d_origin,
   BorTag source_tag = *source_tag_ptr;
 
   if (source_tag != 0)
-    __bsan_rc_inc(source_tag, *source_block_ptr);
+    __bsan_rc_inc(source_tag, *source_block_ptr, dest_tag_ptr);
   if (dest_tag != 0)
-    __bsan_rc_dec(dest_tag, *dest_block_ptr);
+    __bsan_rc_dec(dest_tag, *dest_block_ptr, dest_tag_ptr);
 
   *dest_tag_ptr = source_tag;
 
@@ -356,7 +356,7 @@ void ClearShadowAligned(uptr shadow_start, uptr origin_start,
     // We use the borrow tag as a proxy for the initialization of the
     // `AllocInfo` component of provenance metadata.
     if (*tag_ptr != 0) {
-      __bsan_rc_dec(*tag_ptr, *block_ptr);
+      __bsan_rc_dec(*tag_ptr, *block_ptr, tag_ptr);
       *tag_ptr = 0;
     }
   }
@@ -374,9 +374,9 @@ void WriteShadow(void *dest, Provenance prov) {
   Block **block_ptr = reinterpret_cast<Block **>(origin_start);
 
   if (prov.block != nullptr)
-    __bsan_rc_inc(prov.tag, prov.block);
+    __bsan_rc_inc(prov.tag, prov.block, tag_ptr);
   if (*tag_ptr != 0)
-    __bsan_rc_dec(*tag_ptr, *block_ptr);
+    __bsan_rc_dec(*tag_ptr, *block_ptr, tag_ptr);
 
   *block_ptr = prov.block;
   *tag_ptr = prov.tag;

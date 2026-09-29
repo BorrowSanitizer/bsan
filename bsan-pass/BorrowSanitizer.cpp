@@ -689,10 +689,10 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
       BSAN("validate_retval"), AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
 
   BsanFuncRcInc = M.getOrInsertFunction(BSAN("rc_inc"), AL, IRB.getVoidTy(),
-                                        IntptrTy, PtrTy);
+                                        IntptrTy, PtrTy, PtrTy);
 
   BsanFuncRcDec = M.getOrInsertFunction(BSAN("rc_dec"), AL, IRB.getVoidTy(),
-                                        IntptrTy, PtrTy);
+                                        IntptrTy, PtrTy, PtrTy);
 
   BsanFuncMemCpy = M.getOrInsertFunction(BSAN("memcpy"), AL, IRB.getVoidTy(),
                                          PtrTy, PtrTy, IntptrTy);
@@ -1603,7 +1603,10 @@ private:
     Value *OriginPtr = IRB.CreateIntToPtr(
         OriginLong, getPtrToShadowPtrType(IntptrTy, BS.PtrTy));
 
-    return ProvenanceDest(ShadowPtr, OriginPtr, true);
+    // We scan the stack, instead of using reference counting.
+    bool UpdateRefCt = !isa<AllocaInst>(getUnderlyingObject(Addr));
+
+    return ProvenanceDest(ShadowPtr, OriginPtr, UpdateRefCt);
   }
 
   Value *newBorrowTag(IRBuilder<> &IRB) {
@@ -1754,14 +1757,14 @@ private:
       // may see a zero reference count and deinitialize the provenance
       // that we are about to store.
       if (Prov != Provenance::omnivalid(BS)) {
-        IRB.CreateCall(BS.BsanFuncRcInc, {Prov.Tag, Prov.Info});
+        IRB.CreateCall(BS.BsanFuncRcInc, {Prov.Tag, Prov.Info, Dest.ShadowPtr});
       }
       // We only decrement on nonatomic stores. This leaks provenance
       // values that are exposed to atomic operations, which is necessary
       // to support atomics without locking.
       if (Ordering == AtomicOrdering::NotAtomic) {
         Provenance Old = loadProvenanceAlignedPairwise(IRB, Dest, Ordering);
-        IRB.CreateCall(BS.BsanFuncRcDec, {Old.Tag, Old.Info});
+        IRB.CreateCall(BS.BsanFuncRcDec, {Old.Tag, Old.Info, Dest.ShadowPtr});
       }
     }
 

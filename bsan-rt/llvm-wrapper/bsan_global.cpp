@@ -105,10 +105,16 @@ void GlobalContext::RunGarbageCollector(Snapshot &snap,
   ForEachThread(
       threads,
       [](BsanThread *thread, Snapshot *snap) {
-        // Collect all of the provenance values that are reachable from each
-        // thread.
+        // Collect all of the provenance values that
+        // are reachable from each thread.
         for (auto prov : thread->shadow_stack()) {
           snap->live.insert(prov);
+        }
+        for (uptr addr = thread->stack_bottom(); addr < thread->stack_top();
+             addr += kMinProvAlignment) {
+          Block *block = *(Block **)MEM_TO_ORIGIN(addr);
+          if (block)
+            snap->live.insert({*(BorTag *)MEM_TO_SHADOW(addr), block});
         }
       },
       &snap);

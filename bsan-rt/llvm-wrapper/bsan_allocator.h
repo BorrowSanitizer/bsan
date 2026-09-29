@@ -70,5 +70,7 @@ void *bsan_memalign(uptr alignment, uptr size);
 int bsan_posix_memalign(void **memptr, uptr alignment, uptr size);
 uptr bsan_mz_size(const void *p);
 
+bool IsHeapAddr(uptr addr);
+
 } // namespace __bsan
 #endif // BSAN_ALLOC_H

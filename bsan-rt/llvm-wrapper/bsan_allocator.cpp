@@ -244,6 +244,8 @@ static uptr AllocationSizeFast(const void *p) {
 
 namespace __bsan {
 
+bool IsHeapAddr(uptr addr) { return allocator.PointerIsMine((void *)addr); }
+
 void *bsan_malloc(uptr size) {
   return SetErrnoOnNull(BsanAllocate(size, sizeof(u64), false /*zeroise*/));
 }

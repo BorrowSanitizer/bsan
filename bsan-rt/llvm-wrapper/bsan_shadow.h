@@ -99,6 +99,7 @@ const uptr kMetadataSpace = 0x610000000000ULL;
 const uptr kMemoryLayoutSize = sizeof(kMemoryLayout) / sizeof(kMemoryLayout[0]);
 
 #define MEM_TO_ORIGIN(mem) (SHADOW_TO_ORIGIN(MEM_TO_SHADOW((mem))))
+#define SHADOW_TO_MEM(shadow) MEM_TO_SHADOW(shadow)
 
 #ifndef __clang__
 __attribute__((optimize("unroll-loops")))

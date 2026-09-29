@@ -194,6 +194,18 @@ bool BsanThread::enterUnsafeMode() {
   return true;
 };
 
+BlockIndex BsanThread::AllocBlock() {
+  return block_allocator.Alloc(&this->block_cache_);
+}
+
+void BsanThread::FreeBlock(BlockIndex idx) {
+  block_allocator.Free(&this->block_cache_, idx);
+}
+
+bool BsanThread::AddrWithinThreadStack(uptr addr) {
+  return addr < stack_bottom() && addr >= stack_top();
+}
+
 GCState BsanThread::getGCState(memory_order order) {
   return (GCState)atomic_load(&gc_state_, order);
 }

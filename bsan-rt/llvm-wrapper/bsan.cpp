@@ -1,4 +1,5 @@
 #include "bsan.h"
+#include "bsan_allocator.h"
 #include "bsan_flags.h"
 #include "bsan_global.h"
 #include "bsan_interface_internal.h"
@@ -624,18 +625,34 @@ SANITIZER_WEAK_ATTRIBUTE
 bool __bsan_rc_inc_impl(BorTag Tag, Block *Info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_rc_inc(BorTag Tag, Block *Info) {
-  if (__bsan_rc_inc_impl) {
+void __bsan_rc_inc(BorTag Tag, Block *Info, void *DestShadow) {
+  if (UNLIKELY(!__bsan_rc_inc_impl)) {
+    return;
+  }
+  uptr dest = SHADOW_TO_MEM(DestShadow);
+  if (!dest)
+    return;
+  BsanThread *t = CurrentThread();
+  bool is_thread = t && t->AddrWithinThreadStack(dest);
+  if (is_thread) {
+    return;
+  }
+  bool is_heap = IsHeapAddr(dest);
+  if (is_heap) {
     InterceptorBarrier barrier;
     __bsan_rc_inc_impl(Tag, Info);
+    return;
   }
+  __bsan_expose_prov(Tag, Info);
 }
 
 SANITIZER_WEAK_ATTRIBUTE
 bool __bsan_rc_dec_impl(BorTag tag, Block *info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_rc_dec(BorTag tag, Block *info) {
+void __bsan_rc_dec(BorTag tag, Block *info, void *dest_shadow) {
+  if (!IsHeapAddr(SHADOW_TO_MEM(dest_shadow)))
+    return;
   if (__bsan_rc_dec_impl) {
     InterceptorBarrier barrier;
     if (__bsan_rc_dec_impl(tag, info)) {

@@ -116,11 +116,9 @@ public:
   GCState getGCState(memory_order order);
   GCState setGCState(GCState state, memory_order order);
 
-  BlockIndex AllocBlock() { return block_allocator.Alloc(&this->block_cache_); }
-
-  void FreeBlock(BlockIndex idx) {
-    block_allocator.Free(&this->block_cache_, idx);
-  }
+  BlockIndex AllocBlock();
+  void FreeBlock(BlockIndex idx);
+  bool AddrWithinThreadStack(uptr addr);
 
 private:
   friend class BsanThreadContext;
