@@ -24,6 +24,9 @@ void BsanThreadContext::OnFinished() {
   // Any thread-local state that involves the GC must be handled
   // within this function.
   if (thread) {
+    // We know that the GC is not running here, because we
+    // have locked the thread registry, which is a prerequisite
+    // for the GC.
     global_ctx()->acquireProvenance(thread->zct_);
   }
   thread = nullptr;
@@ -159,11 +162,8 @@ bool BsanThread::enterSafeMode() {
 bool BsanThread::tryEnterUnsafeMode() {
   setGCState(kUnsafe, memory_order_relaxed);
   atomic_signal_fence(memory_order_seq_cst);
-  // Anything that moves us back into unsafe mode needs an acquire load,
-  // so that we are ordered after the GC restarting the world, which is
-  // a release store of 0 into `__bsan_gc_trigger`. In particular, you can
-  // think of this function as being equivalent to the operations
-  // used above for polling. We would use this there, if tail calls
+  // Anything that moves us back into unsafe mode needs an acquire load
+  // to ensure that we are ordered after the GC restarts the world.
   return getGCTrigger(memory_order_acquire) == 0;
 }
 
@@ -175,9 +175,6 @@ void BsanThread::poll() {
   // Only the GC is allowed to move threads out of waiting.
   do {
     setGCState(GCState::kWaiting, memory_order_release);
-    // This is a compiler fence. All it does is
-    // prevents the read within `getGCTrigger` from
-    // being moved before the write in `setGCState`.
     atomic_signal_fence(memory_order_seq_cst);
     if (getGCTrigger(memory_order_relaxed)) {
       FutexWait(&__bsan_gc_trigger, 1);
@@ -222,8 +219,19 @@ void BsanThread::TSDDtor(void *tsd) {
 
 void BsanThread::Destroy() {
   int tid = this->tid();
-  bool was_running =
-      (GetThreadRegistry().FinishThread(tid) == ThreadStatusRunning);
+  bool was_running;
+  {
+    // We need to allow the GC to run before
+    // we attempt to lock the thread registry.
+    // If we did not do this, then the GC would be able
+    // lock the registry while we are still in an unsafe state.
+    // This is an extra precaution—we should typically be in
+    // a safe state already when we reach this function.
+    AllowGC allow;
+    DCHECK(getGCState(memory_order_relaxed) == kSafe);
+    was_running =
+        (GetThreadRegistry().FinishThread(tid) == ThreadStatusRunning);
+  }
   if (was_running) {
     if (BsanThread *thread = CurrentThread())
       CHECK_EQ(this, thread);
