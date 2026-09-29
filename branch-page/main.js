@@ -61,6 +61,12 @@ function commitLink(report, sha) {
     return document.createTextNode((sha || "unknown").slice(0, 8));
 }
 
+// The report keys crates as `name@version`; on a chart, `name version` reads
+// better.
+function crateLabel(crate) {
+    return crate.replace("@", " ");
+}
+
 function el(tag, className, text) {
     const e = document.createElement(tag);
     if (className) e.className = className;
@@ -195,7 +201,7 @@ function renderChart(parent, target, data, mode, runs) {
 
     charts.push(new Chart(canvas.getContext("2d"), {
         type: "line",
-        data: { labels: data.crates, datasets },
+        data: { labels: data.crates.map(crateLabel), datasets },
         options: {
             responsive: true,
             maintainAspectRatio: false,
