@@ -61,10 +61,9 @@ function commitLink(report, sha) {
     return document.createTextNode((sha || "unknown").slice(0, 8));
 }
 
-// The report keys crates as `name@version`; on a chart, `name version` reads
-// better.
+// The report keys crates as `name@version`; a chart shows just the name.
 function crateLabel(crate) {
-    return crate.replace("@", " ");
+    return crate.split("@")[0];
 }
 
 function el(tag, className, text) {
