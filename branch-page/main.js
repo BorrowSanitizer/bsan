@@ -79,13 +79,10 @@ function el(tag, className, text) {
 
 let charts = [];
 
-// The runs a report keeps, oldest first, each with its line's label. A report
-// written before runs were kept has one, drawn from its `branch` numbers.
+// The runs a report keeps, oldest first, each with its line's label.
 function runsOf(report) {
-    const runs = (report.runs && report.runs.length) ? report.runs
-        : [{ key: null, commit: report.commit, generated: report.generated }];
     const seen = {};
-    return runs.map(r => {
+    return report.runs.map(r => {
         const sha = (r.commit || "").slice(0, 7) || "run";
         seen[sha] = (seen[sha] || 0) + 1;
         const when = r.generated ? new Date(r.generated).toLocaleDateString(
@@ -97,7 +94,7 @@ function runsOf(report) {
 }
 
 function runSeries(data, run) {
-    return run.key === null ? data.branch : (data.history || {})[run.key] || {};
+    return data.history[run.key] || {};
 }
 
 function lineStyle(color, dash, width) {
@@ -361,13 +358,9 @@ function init(report) {
     document.getElementById("last-update").textContent =
         new Date(report.generated).toLocaleString("en-US", DATE_FORMAT_OPTS);
 
-    const mainCommits = document.getElementById("main-commits");
-    const shas = report.mainCommits || [];
-    if (!shas.length) mainCommits.textContent = "unknown";
-    shas.forEach((sha, i) => {
-        if (i) mainCommits.appendChild(document.createTextNode(", "));
-        mainCommits.appendChild(commitLink(report, sha));
-    });
+    // `mainCommits` is how reports published before 2026-09-29 named it.
+    const mainCommit = report.mainCommit || (report.mainCommits || [])[0];
+    document.getElementById("main-commits").appendChild(commitLink(report, mainCommit));
 
     if (report.runUrl) {
         document.getElementById("run-link").href = report.runUrl;
