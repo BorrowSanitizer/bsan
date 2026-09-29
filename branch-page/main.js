@@ -107,6 +107,41 @@ function lineStyle(color, dash, width) {
     };
 }
 
+// Mean and geometric mean of each line's per-crate totals, over the crates
+// every line has a point for, so that every row averages the same workload.
+// The mean is dominated by the slowest crates; the geomean weighs every crate
+// alike, so a change that helps small crates shows there.
+function renderSummary(panel, datasets, crates) {
+    const common = crates.map((_, i) => i)
+        .filter(i => datasets.every(ds => ds.data[i] > 0));
+    const table = el("table", "summary-table");
+    const head = table.createTHead().insertRow();
+    ["Config", "Mean (s)", "Geomean (s)"].forEach(h => {
+        const th = document.createElement("th");
+        th.textContent = h;
+        head.appendChild(th);
+    });
+    const body = table.createTBody();
+    for (const ds of datasets) {
+        const values = common.map(i => ds.data[i]);
+        const mean = values.reduce((a, v) => a + v, 0) / values.length;
+        const geomean = Math.exp(values.reduce((a, v) => a + Math.log(v), 0) / values.length);
+        const tr = body.insertRow();
+        const name = tr.insertCell();
+        const swatch = el("span", "summary-swatch");
+        swatch.style.background = ds.borderColor;
+        name.appendChild(swatch);
+        name.appendChild(document.createTextNode(ds.label));
+        tr.insertCell().textContent = values.length ? mean.toFixed(3) : "-";
+        tr.insertCell().textContent = values.length ? geomean.toFixed(3) : "-";
+    }
+    panel.appendChild(table);
+    if (common.length < crates.length) {
+        panel.appendChild(el("p", "chart-meta",
+            `Over the ${common.length} of ${crates.length} crates every line has a point for.`));
+    }
+}
+
 function renderChart(parent, target, data, mode, runs) {
     const set = el("div", "benchmark-set");
     set.appendChild(el("h2", "benchmark-title", target));
@@ -155,6 +190,8 @@ function renderChart(parent, target, data, mode, runs) {
                 newest ? LINE_WIDTH : LINE_WIDTH - 0.5)
         };
     }));
+
+    renderSummary(panel, datasets, data.crates);
 
     charts.push(new Chart(canvas.getContext("2d"), {
         type: "line",

@@ -115,3 +115,42 @@
 .dropped-empty {
   color: #5b6472;
 }
+
+/* The mean / geomean table under each chart. Numbers are right-aligned in a
+   tabular face so the rows line up digit for digit. */
+.summary-table {
+  border-collapse: collapse;
+  margin: 12px 0 4px;
+  font-size: 0.85em;
+}
+
+.summary-table th,
+.summary-table td {
+  border-bottom: 1px solid #e3e8ef;
+  padding: 4px 12px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.summary-table th:first-child,
+.summary-table td:first-child {
+  text-align: left;
+}
+
+.summary-table th {
+  font-weight: 600;
+  border-bottom: 2px solid #d5dce6;
+}
+
+.summary-table td {
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 6px;
+  vertical-align: -1px;
+}
