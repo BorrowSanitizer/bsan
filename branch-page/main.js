@@ -311,7 +311,7 @@ function renderDropped(report, mode) {
     }
     summary.className = "chart-meta";
     summary.textContent =
-        `Under ${mode}, ${rows.length} test(s) are left out of the totals below; ` +
+        `Under ${mode}, ${rows.length} test(s) are left out of the totals above; ` +
         `${changed} of them have a different result on the branch than on ${BASELINE}.`;
 
     const head = table.insertRow();
