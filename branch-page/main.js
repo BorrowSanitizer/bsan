@@ -1,14 +1,14 @@
 "use strict";
 /* global Chart */
 
-// Main is blue and dashed; the branch's runs are orange, one line each, darker
-// the newer the run, so the newest reads first. Blue/orange stays distinct
-// under the common colour-vision deficiencies, and the dash means main never
-// depends on colour alone. Each line is also named in the legend.
+// Main is blue and dashed; each of the branch's runs is a solid line in a hue
+// of its own, from the Okabe-Ito palette (distinct under the common colour-
+// vision deficiencies) without its blues. A run keeps its hue for as long as
+// the page keeps it: it is picked by the run's `seq`, which counts the
+// branch's runs, not by its position among those kept. The newest line is also
+// the thickest, and is marked in the legend.
 const MAIN_STYLE = { color: "#1f77b4", dash: [6, 4] };
-// Oldest to newest; a page keeps at most as many runs as bench.yml's
-// MAX_BRANCH_RUNS, and any beyond this share the lightest.
-const RUN_COLORS = ["#fdae6b", "#fd8d3c", "#f16913", "#d94801", "#a63603"];
+const RUN_COLORS = ["#D55E00", "#009E73", "#CC79A7", "#E69F00", "#8C564B"];
 
 // What the dashed line is compared against: `main` for a PR, or the baseline a
 // run by hand chose. Set from the report in init().
@@ -180,7 +180,6 @@ function renderChart(parent, target, data, mode, runs) {
     graphs.appendChild(panel);
     set.appendChild(graphs);
 
-    const offset = RUN_COLORS.length - runs.length;
     const datasets = [{
         label: BASELINE,
         data: data.crates.map(c => data.main[c]),
@@ -192,7 +191,7 @@ function renderChart(parent, target, data, mode, runs) {
             label: newest && runs.length > 1 ? `${run.label} (newest)` : run.label,
             // A run that did not measure a crate has a gap there.
             data: data.crates.map(c => (c in series ? series[c] : null)),
-            ...lineStyle(RUN_COLORS[Math.max(0, offset + i)], [],
+            ...lineStyle(RUN_COLORS[(run.seq ?? i) % RUN_COLORS.length], [],
                 newest ? LINE_WIDTH : LINE_WIDTH - 0.5)
         };
     }));
