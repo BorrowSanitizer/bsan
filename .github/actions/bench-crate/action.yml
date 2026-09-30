@@ -1,0 +1,75 @@
+name: Benchmark one crate
+description: >-
+  Run bench.py for one crate in a bench image, and upload its results as
+  results_<label>_<target>_<crate>. Shared by bench-branch.yml's branch and
+  main jobs.
+inputs:
+  label:
+    description: "`branch` or `main`: the side being measured."
+    required: true
+  crate:
+    required: true
+  target:
+    required: true
+  job-name:
+    description: This job's name, to find its log when check-run-id is empty.
+    required: true
+  check-run-id:
+    description: "`job.check_run_id`, which composite actions cannot read themselves."
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+  # A failing test's output is printed to this job's log, and the report
+  # links each failure here.
+  - name: Resolve log URL
+    id: log
+    shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CHECK_RUN_ID: ${{ inputs.check-run-id }}
+      JOB_NAME: ${{ inputs.job-name }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    run: |
+      # A job's ID is its check run's ID. Older runners do not expose it, so
+      # fall back to finding this job by name, and then to the whole run. A
+      # matrix this size spans several pages of jobs.
+      id="$CHECK_RUN_ID"
+      page=1
+      while [ -z "$id" ] && [ "$page" -le 10 ]; do
+        id=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+          "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100&page=$page" \
+          | python3 -c 'import json, os, sys; print(next((str(j["id"]) for j in json.load(sys.stdin)["jobs"] if j["name"] == os.environ["JOB_NAME"]), ""))' \
+          || true)
+        page=$((page + 1))
+      done
+      if [ -n "$id" ]; then
+        echo "url=$RUN_URL/job/$id" >> "$GITHUB_OUTPUT"
+      else
+        echo "url=$RUN_URL" >> "$GITHUB_OUTPUT"
+      fi
+  - name: Benchmark
+    shell: bash
+    env:
+      LABEL: ${{ inputs.label }}
+      CRATE: ${{ inputs.crate }}
+      TARGET: ${{ inputs.target }}
+      LOG_URL: ${{ steps.log.outputs.url }}
+    run: |
+      set -euo pipefail
+      # A branch is compared against its baseline under BorrowSanitizer's
+      # `full` configuration alone, so every other one, and Miri, are skipped.
+      flags=(--crate "$CRATE" --log-url "$LOG_URL" --no-miri --mode full)
+      mkdir -p results
+      out="results/results_${LABEL}_${TARGET}_${CRATE}"
+      python3 bsan-script/etc/bench.py "${flags[@]}" \
+        "$CRATES_JSON" "$TARGET" "$out.json" "$out.csv"
+  - name: Upload results
+    if: ${{ !cancelled() }}
+    uses: actions/upload-artifact@v7
+    with:
+      name: results_${{ inputs.label }}_${{ inputs.target }}_${{ inputs.crate }}
+      path: results/
+      if-no-files-found: warn
+      retention-days: 30

@@ -1,0 +1,95 @@
+name: Branch benchmark request
+# Decides whether a pull request is ready to be benchmarked and, if so, starts
+# bench-branch.yml on its branch. The benchmarks themselves run there, as a
+# separate run started by a manual-run request rather than by the PR, so that
+# their hundreds of jobs are not all listed among the PR's checks. The PR gets
+# one commit status instead, "Branch benchmarks", which bench-branch.yml keeps
+# up to date, and which can be made a required check.
+#
+# A PR is benchmarked once it is ready for review (never a draft) and has the
+# latest `main` merged into it, so that the only difference measured is its
+# own. A PR from a fork is not: its token is read-only, so it could neither
+# start the benchmarks nor comment.
+#
+# GitHub only lets a workflow start one that is on the default branch, so
+# bench-branch.yml must be on `main` for this to work; it then runs the
+# branch's own copy of it.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  # To start bench-branch.yml.
+  actions: write
+  contents: read
+  pull-requests: write
+  statuses: write
+# A newer push supersedes the request for the older one; bench-branch.yml
+# likewise cancels a run it replaces.
+concurrency:
+  group: bench-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  request:
+    name: Request benchmarks
+    if: >-
+      ${{ !github.event.pull_request.draft
+          && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      BRANCH_NAME: ${{ github.head_ref }}
+      PR: ${{ github.event.pull_request.number }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+        # The whole history, to tell whether `main` has been merged in.
+        fetch-depth: 0
+    - name: Check that main is merged in
+      id: main
+      run: |
+        set -euo pipefail
+        # Pin `main` now, so the benchmarks measure the commit checked here.
+        git fetch --quiet origin main
+        sha=$(git rev-parse FETCH_HEAD)
+        echo "sha=$sha" >> "$GITHUB_OUTPUT"
+        if git merge-base --is-ancestor "$sha" "$HEAD_SHA"; then
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::Not benchmarking: this branch does not have main's latest commit (${sha:0:8}) merged in."
+        fi
+    - name: Ask for main to be merged in
+      if: steps.main.outputs.ready == 'false'
+      env:
+        SHA: ${{ steps.main.outputs.sha }}
+      run: |
+        set -euo pipefail
+        gh api -X POST "/repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
+          -f state=pending -f context="Branch benchmarks" \
+          -f description="Waiting: merge the latest main (${SHA:0:8}) to benchmark" > /dev/null
+        {
+          echo "<!-- bsan-branch-benchmarks -->"
+          echo "### Benchmarks for \`$BRANCH_NAME\`"
+          echo
+          echo "Not run: merge the latest \`main\` (\`${SHA:0:8}\`) into this branch, and the next push will be benchmarked against it."
+        } > "$RUNNER_TEMP/comment.md"
+    - if: steps.main.outputs.ready == 'false'
+      uses: ./.github/actions/pr-comment
+      with:
+        body-file: ${{ runner.temp }}/comment.md
+        pr: ${{ github.event.pull_request.number }}
+    - name: Start the benchmarks
+      if: steps.main.outputs.ready == 'true'
+      env:
+        MAIN_SHA: ${{ steps.main.outputs.sha }}
+      run: |
+        set -euo pipefail
+        gh workflow run bench-branch.yml --ref "$BRANCH_NAME" \
+          -f pr="$PR" -f head_sha="$HEAD_SHA" -f baseline="$MAIN_SHA"
+        gh api -X POST "/repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
+          -f state=pending -f context="Branch benchmarks" \
+          -f description="Queued" \
+          -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/bench-branch.yml" > /dev/null
+        echo "Started bench-branch.yml on $BRANCH_NAME at ${HEAD_SHA:0:8}, against main at ${MAIN_SHA:0:8}."

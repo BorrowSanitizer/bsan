@@ -1,0 +1,72 @@
+name: Branch benchmark cleanup
+# Deletes the benchmark pages of branches that no longer exist from gh-pages:
+# a branch's page, branches/<branch>/, and those of runs by hand against other
+# baselines, branches/<branch>-vs-<baseline>/ (see bench-branch.yml).
+#
+# Runs whenever a branch is deleted, e.g. after its pull request is merged,
+# and by hand. It keeps only the pages of branches that exist, rather than
+# deleting just the one branch, so a run also catches any left behind before,
+# such as by a deletion while this workflow was not yet on `main`. GitHub runs
+# a `delete` workflow from the default branch, so that is where it must be.
+on:
+  delete:
+  workflow_dispatch:
+permissions:
+  contents: write
+# Deletions arriving together are handled by one run at a time; each keeps
+# whatever pages still have a branch, so none can undo another.
+concurrency:
+  group: bench-cleanup
+  cancel-in-progress: false
+jobs:
+  prune:
+    name: Delete pages of deleted branches
+    if: github.event_name == 'workflow_dispatch' || github.event.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+    - name: Delete stale pages
+      env:
+        PAGES: ${{ runner.temp }}/pages
+      run: |
+        set -euo pipefail
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+        owner=$(printf '%s' "${GITHUB_REPOSITORY%%/*}" | tr '[:upper:]' '[:lower:]')
+        root="https://${owner}.github.io/${GITHUB_REPOSITORY#*/}/"
+        script="$GITHUB_WORKSPACE/bsan-script/etc/bench-branch/branch_pages.sh"
+
+        # Like bench-branch.yml's publishing, start over from a fresh gh-pages
+        # if another push lands first.
+        prune() {
+          git fetch --quiet origin +refs/heads/gh-pages:refs/remotes/origin/gh-pages
+          rm -rf "$PAGES"
+          git worktree prune
+          git worktree add --quiet -B gh-pages "$PAGES" origin/gh-pages
+          # Listed afresh each attempt, so a branch created meanwhile is kept.
+          mapfile -t branches < <(git ls-remote --heads origin | sed 's|.*refs/heads/||')
+          bash "$script" prune "$PAGES" "${branches[@]}"
+          bash "$script" index "$PAGES" "$root"
+          cd "$PAGES"
+          git add -A
+          if git diff --staged --quiet; then
+            echo "Nothing to delete."
+            cd "$GITHUB_WORKSPACE"
+            return 0
+          fi
+          git commit --quiet -m "Delete benchmark pages of deleted branches"
+          local pushed=0
+          git push --quiet origin gh-pages && pushed=1
+          cd "$GITHUB_WORKSPACE"
+          [ "$pushed" = 1 ]
+        }
+
+        for attempt in 1 2 3 4 5; do
+          if prune; then
+            exit 0
+          fi
+          echo "gh-pages moved while cleaning up; retrying ($attempt)"
+          sleep $((attempt * 10))
+        done
+        echo "::error::Could not update gh-pages."
+        exit 1

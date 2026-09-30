@@ -5,7 +5,6 @@
 //! accesses and a different garbage collection algorithm.
 #![cfg_attr(not(test), no_std)]
 #![feature(thread_local)]
-#![feature(allocator_api)]
 #![allow(internal_features)]
 #[macro_use]
 extern crate alloc;

@@ -1,0 +1,34 @@
+name: Update the benchmark comment
+description: >-
+  Post a comment on the pull request, or edit the one an earlier run posted,
+  found by the marker on its first line, so a PR has one benchmark comment
+  however many times it is benchmarked.
+inputs:
+  body-file:
+    description: The comment's Markdown. Its first line must be the marker.
+    required: true
+  pr:
+    description: The pull request's number.
+    required: true
+runs:
+  using: composite
+  steps:
+  - shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BODY_FILE: ${{ inputs.body-file }}
+      PR: ${{ inputs.pr }}
+    run: |
+      set -euo pipefail
+      marker=$(head -n1 "$BODY_FILE")
+      id=$(gh api --paginate "/repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+        --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" \
+        | head -n1)
+      body=$(jq -Rs '{body: .}' < "$BODY_FILE")
+      if [ -n "$id" ]; then
+        gh api -X PATCH "/repos/$GITHUB_REPOSITORY/issues/comments/$id" --input - <<< "$body" > /dev/null
+        echo "Updated comment $id"
+      else
+        gh api -X POST "/repos/$GITHUB_REPOSITORY/issues/$PR/comments" --input - <<< "$body" > /dev/null
+        echo "Posted a comment"
+      fi

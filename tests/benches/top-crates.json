@@ -1,0 +1,593 @@
+[
+    {
+        "name": "flate2",
+        "version": "1.1.9",
+        "exclude": [
+            "zlib::tests::total_in",
+            "zlib::tests::reset_decoder",
+            "test_extract_failure",
+            "test_extract_success",
+            "zlib::tests::qc_reader",
+            "zlib::tests::qc_writer",
+            "deflate::tests::qc_writer",
+            "deflate::tests::qc_reader",
+            "gz::tests::qc_reader",
+            "deflate::tests::reset_decoder",
+            "deflate::tests::reset_reader",
+            "deflate::tests::reset_writer",
+            "deflate::tests::roundtrip",
+            "deflate::tests::roundtrip2",
+            "deflate::tests::roundtrip3",
+            "deflate::tests::total_in",
+            "deflate::tests::zero_length_read_with_data",
+            "gz::tests::gzip_encoder_matches_rfc1952",
+            "gz::tests::roundtrip_big",
+            "gz::tests::roundtrip_big2",
+            "zlib::tests::roundtrip",
+            "zlib::tests::roundtrip2",
+            "zlib::tests::roundtrip3"
+        ]
+    },
+    {
+        "name": "twox-hash",
+        "version": "2.1.2",
+        "exclude": [
+            "xxhash3_128::test::streaming_241_plus_bytes",
+            "xxhash3_64::test::streaming_241_plus_bytes",
+            "xxhash32::test::hashes_with_different_offsets_are_the_same",
+            "xxhash64::test::hashes_with_different_offsets_are_the_same",
+            "xxhash3_64::test::streaming_with_seed"
+        ]
+    },
+    {
+        "name": "simd-adler32",
+        "version": "0.3.9",
+        "exclude": [
+            "imp::neon::tests::random",
+            "imp::avx2::tests::random",
+            "imp::avx2::tests::random",
+            "imp::sse2::tests::random",
+            "mp::neon::tests::ones",
+            "imp::neon::tests::zeroes"
+        ]
+    },
+    {
+        "name": "aho-corasick",
+        "version": "1.1.4",
+        "exclude": [
+            "tests::search_leftmost_first::dfa_start_both_no_byte_class",
+            "tests::search_standard_overlapping_dfa_start_both_no_byte_class",
+            "tests::search_standard_nonoverlapping::dfa_start_both_no_byte_class",
+            "tests::regression_case_insensitive_prefilter",
+            "tests::search_leftmost_longest::nfa_contig_no_byte_class",
+            "tests::search_leftmost_first::nfa_contig_no_byte_class",
+            "tests::search_leftmost_longest::dfa_no_byte_class",
+            "tests::search_leftmost_first::dfa_no_byte_class",
+            "tests::search_leftmost_first::dfa_start_both",
+            "tests::search_standard_nonoverlapping::nfa_contig_no_byte_class",
+            "tests::search_leftmost_first::dfa_start_both_no_prefilter",
+            "tests::search_leftmost_first::dfa_no_prefilter",
+            "tests::search_leftmost_longest::nfa_contig_default",
+            "tests::search_leftmost_longest::dfa_start_both",
+            "tests::search_leftmost_longest::default",
+            "tests::search_leftmost_longest::nfa_noncontig_no_prefilter",
+            "tests::search_leftmost_first::nfa_contig_all_dense",
+            "tests::search_leftmost_first::dfa_default",
+            "tests::search_leftmost_first::nfa_contig_default",
+            "tests::search_leftmost_first::default",
+            "tests::search_leftmost_longest::nfa_contig_no_prefilter",
+            "tests::search_leftmost_first::nfa_contig_no_prefilter",
+            "tests::search_leftmost_first::nfa_noncontig_all_dense",
+            "tests::search_leftmost_longest::nfa_default",
+            "tests::search_standard_nonoverlapping::dfa_no_byte_class",
+            "tests::search_leftmost_first::nfa_default",
+            "tests::search_standard_overlapping_dfa_no_byte_class",
+            "tests::search_leftmost_first::nfa_noncontig_no_prefilter",
+            "tests::search_leftmost_first::nfa_contig_all_sparse",
+            "tests::search_leftmost_longest::dfa_start_both_no_prefilter",
+            "tests::search_leftmost_longest::nfa_contig_all_dense",
+            "tests::search_leftmost_longest::dfa_default",
+            "tests::search_leftmost_longest::dfa_no_prefilter",
+            "tests::search_leftmost_longest::nfa_noncontig_all_dense",
+            "tests::search_standard_nonoverlapping::nfa_default",
+            "tests::search_standard_overlapping_nfa_contig_default",
+            "tests::search_leftmost_longest::nfa_contig_all_sparse",
+            "tests::search_standard_nonoverlapping::nfa_contig_all_dense",
+            "tests::search_leftmost_longest_anchored_nfa_noncontig_default",
+            "tests::search_standard_nonoverlapping::nfa_contig_default",
+            "tests::search_standard_nonoverlapping::nfa_contig_no_prefilter",
+            "tests::search_leftmost_longest_anchored_dfa_start_both",
+            "tests::search_standard_nonoverlapping::dfa_default",
+            "tests::search_leftmost_longest_anchored_nfa_contig_default",
+            "tests::search_leftmost_longest_anchored_dfa_default",
+            "tests::search_leftmost_first::nfa_noncontig_all_sparse",
+            "tests::search_standard_overlapping_dfa_default",
+            "tests::search_standard_overlapping_nfa_contig_all_dense",
+            "tests::search_leftmost_longest::nfa_noncontig_all_sparse",
+            "tests::search_leftmost_longest_anchored_default",
+            "tests::search_leftmost_first_anchored_dfa_start_both",
+            "tests::search_standard_nonoverlapping::nfa_contig_all_sparse",
+            "tests::search_standard_nonoverlapping::dfa_start_both",
+            "tests::search_standard_stream_default",
+            "tests::search_standard_overlapping_nfa_noncontig_default",
+            "tests::search_standard_nonoverlapping::default",
+            "tests::search_standard_nonoverlapping::dfa_no_prefilter",
+            "tests::search_standard_nonoverlapping::dfa_start_both_no_prefilter",
+            "tests::search_standard_nonoverlapping::nfa_noncontig_all_sparse",
+            "tests::search_standard_overlapping_dfa_start_both_no_prefilter",
+            "tests::search_standard_overlapping_dfa_no_prefilter",
+            "tests::search_standard_overlapping_nfa_contig_no_prefilter",
+            "tests::search_standard_stream_nfa_noncontig_default",
+            "tests::search_standard_overlapping_dfa_start_both",
+            "tests::search_standard_nonoverlapping::nfa_noncontig_all_dense",
+            "tests::search_leftmost_first_anchored_default",
+            "tests::search_standard_stream_dfa_default",
+            "tests::search_leftmost_first_anchored_nfa_contig_default",
+            "tests::search_standard_nonoverlapping::nfa_noncontig_no_prefilter",
+            "tests::search_standard_overlapping_default",
+            "tests::search_standard_overlapping_nfa_noncontig_no_prefilter",
+            "tests::search_leftmost_first_anchored_dfa_default",
+            "tests::search_leftmost_first_anchored_nfa_noncontig_default",
+            "tests::search_standard_stream_nfa_contig_default",
+            "tests::search_standard_overlapping_nfa_contig_all_sparse",
+            "tests::search_standard_anchored_nfa_contig_default",
+            "tests::regression_stream_rare_byte_prefilter",
+            "tests::search_leftmost_longest::dfa_start_both_no_byte_class"
+        ]
+    },
+    {
+        "name": "arrayvec",
+        "version": "0.7.6"
+    },
+    {
+        "name": "anstyle-query",
+        "version": "1.1.5"
+    },
+    {
+        "name": "cc",
+        "version": "1.2.63"
+    },
+    {
+        "name": "base64ct",
+        "version": "1.8.3",
+        "exclude": [
+            "decoder::tests::decode_multiline_unpadded",
+            "encoder::tests::encode_multiline_padded",
+            "encoder::tests::encode_multiline_unpadded"
+        ]
+    },
+    {
+        "name": "ansi_term",
+        "version": "0.12.1"
+    },
+    {
+        "name": "camino",
+        "version": "1.2.2"
+    },
+    {
+        "name": "byteorder",
+        "version": "1.5.0"
+    },
+    {
+        "name": "anstyle",
+        "version": "1.0.14"
+    },
+    {
+        "name": "bumpalo",
+        "version": "3.20.3"
+    },
+    {
+        "name": "core-foundation-sys",
+        "version": "0.8.7"
+    },
+    {
+        "name": "crc32fast",
+        "version": "1.5.0",
+        "exclude": [
+            "specialized::pclmulqdq::test::check_against_baseline"
+        ]
+    },
+    {
+        "name": "dirs-sys",
+        "version": "0.5.0"
+    },
+    {
+        "name": "bit-vec",
+        "version": "0.9.1",
+        "exclude": [
+            "tests::test_bit_vec_iterator"
+        ]
+    },
+    {
+        "name": "bytes",
+        "version": "1.11.1",
+        "exclude": [
+            "test_maybe_uninit_buf_mut_large",
+            "test_slice_buf_mut_large"
+        ]
+    },
+    {
+        "name": "anyhow",
+        "version": "1.0.102"
+    },
+    {
+        "name": "colored",
+        "version": "3.1.1",
+        "exclude": [
+            "tests::compute_style_blue_bold_on_blue",
+            "tests::compute_style_blue_on_blue",
+            "tests::compute_style_bright_blue_on_bright_blue",
+            "tests::compute_style_simple_bg_blue",
+            "tests::compute_style_simple_bg_bright_blue",
+            "tests::compute_style_simple_bold",
+            "tests::compute_style_simple_fg_blue",
+            "tests::compute_style_simple_fg_bright_blue",
+            "tests::escape_reset_sequence_spec_should_replace_inner_reset_sequence_with_current_style",
+            "tests::escape_reset_sequence_spec_should_replace_multiple_inner_reset_sequences_with_current_style"
+        ]
+    },
+    {
+        "name": "arc-swap",
+        "version": "1.9.1",
+        "exclude": [
+            "default::ops",
+            "independent::ops"
+        ]
+    },
+    {
+        "name": "futures-task",
+        "version": "0.3.32"
+    },
+    {
+        "name": "dirs-sys-next",
+        "version": "0.1.2"
+    },
+    {
+        "name": "csv",
+        "version": "1.4.0"
+    },
+    {
+        "name": "der",
+        "version": "0.8.0"
+    },
+    {
+        "name": "errno",
+        "version": "0.3.14"
+    },
+    {
+        "name": "anstream",
+        "version": "1.0.0"
+    },
+    {
+        "name": "either",
+        "version": "1.15.0"
+    },
+    {
+        "name": "bindgen",
+        "version": "0.72.1"
+    },
+    {
+        "name": "bit-set",
+        "version": "0.10.0"
+    },
+    {
+        "name": "curve25519-dalek",
+        "version": "4.1.3",
+        "exclude": [
+            "backend::serial::scalar_mul::pippenger::test::test_vartime_pippenger",
+            "edwards::test::monte_carlo_overflow_underflow_debug_assert_test",
+            "edwards::test::mul_base_clamped",
+            "edwards::test::multiscalar_consistency_n_100",
+            "edwards::test::vartime_precomputed_vs_nonprecomputed_multiscalar",
+            "montgomery::test::montgomery_ladder_matches_edwards_scalarmult",
+            "montgomery::test::montgomery_mul_bits_be",
+            "montgomery::test::montgomery_mul_bits_be_twist",
+            "ristretto::test::vartime_precomputed_vs_nonprecomputed_multiscalar",
+            "scalar::test::non_adjacent_form_random",
+            "scalar::test::test_pippenger_radix",
+            "edwards::test::multiscalar_consistency_n_1000",
+            "edwards::test::multiscalar_consistency_n_250",
+            "edwards::test::multiscalar_consistency_n_500"
+        ]
+    },
+    {
+        "name": "const-oid",
+        "version": "0.10.2"
+    },
+    {
+        "name": "encoding_rs",
+        "version": "0.8.35"
+    },
+    {
+        "name": "combine",
+        "version": "4.6.7"
+    },
+    {
+        "name": "is-terminal",
+        "version": "0.4.17"
+    },
+    {
+        "name": "hostname",
+        "version": "0.4.2",
+        "exclude": [
+            "test_html_root_url"
+        ]
+    },
+    {
+        "name": "libc",
+        "version": "0.2.186"
+    },
+    {
+        "name": "hashbrown",
+        "version": "0.17.0"
+    },
+    {
+        "name": "hyper",
+        "version": "1.10.1"
+    },
+    {
+        "name": "half",
+        "version": "2.7.1"
+    },
+    {
+        "name": "crossbeam-utils",
+        "version": "0.8.21"
+    },
+    {
+        "name": "indexmap",
+        "version": "2.14.0"
+    },
+    {
+        "name": "log",
+        "version": "0.4.29"
+    },
+    {
+        "name": "httparse",
+        "version": "1.10.1"
+    },
+    {
+        "name": "erased-serde",
+        "version": "0.4.10"
+    },
+    {
+        "name": "lru",
+        "version": "0.18.0"
+    },
+    {
+        "name": "matchers",
+        "version": "0.2.0"
+    },
+    {
+        "name": "gimli",
+        "version": "0.33.0",
+        "exclude": [
+            "leb128::tests::dogfood_signed",
+            "leb128::tests::dogfood_unsigned",
+            "write::line::tests::test_advance"
+        ]
+    },
+    {
+        "name": "memchr",
+        "version": "2.8.1"
+    },
+    {
+        "name": "once_cell",
+        "version": "1.21.4"
+    },
+    {
+        "name": "futures-util",
+        "version": "0.3.32"
+    },
+    {
+        "name": "num-complex",
+        "version": "0.4.6"
+    },
+    {
+        "name": "nu-ansi-term",
+        "version": "0.50.3"
+    },
+    {
+        "name": "object",
+        "version": "0.39.1",
+        "exclude": [
+            "parse_self_cache"
+        ]
+    },
+    {
+        "name": "event-listener",
+        "version": "5.4.1"
+    },
+    {
+        "name": "event-listener-strategy",
+        "version": "0.5.4"
+    },
+    {
+        "name": "lazycell",
+        "version": "1.3.0"
+    },
+    {
+        "name": "num-bigint",
+        "version": "0.4.6",
+        "exclude": [
+            "bigint::test_modpow_big",
+            "bigint::test_modpow_small",
+            "biguint::test_modpow_big",
+            "biguint::test_nth_root_twos",
+            "fuzzed_mul_1",
+            "fuzzed_mul_2",
+            "test_signed_bytes_be_round_trip",
+            "test_signed_bytes_le_round_trip"
+        ]
+    },
+    {
+        "name": "percent-encoding",
+        "version": "2.3.2"
+    },
+    {
+        "name": "pem-rfc7468",
+        "version": "1.0.0"
+    },
+    {
+        "name": "parking_lot_core",
+        "version": "0.9.12",
+        "exclude": [
+            "parking_lot::tests::hundred_unpark_all_one_fast",
+            "parking_lot::tests::unpark_all_hundred_fast",
+            "parking_lot::tests::unpark_one_fifty_then_fifty_all_fast",
+            "parking_lot::tests::hundred_unpark_all_one"
+        ]
+    },
+    {
+        "name": "bincode",
+        "version": "2.0.1",
+        "exclude": [
+            "test_numbers"
+        ]
+    },
+    {
+        "name": "generic-array",
+        "version": "1.4.3"
+    },
+    {
+        "name": "unicode-normalization",
+        "version": "0.1.25"
+    },
+    {
+        "name": "utf8_iter",
+        "version": "1.0.4"
+    },
+    {
+        "name": "urlencoding",
+        "version": "2.1.3"
+    },
+    {
+        "name": "utf-8",
+        "version": "0.7.6"
+    },
+    {
+        "name": "smallvec",
+        "version": "1.15.1"
+    },
+    {
+        "name": "tracing-core",
+        "version": "0.1.36"
+    },
+    {
+        "name": "thread_local",
+        "version": "1.1.9"
+    },
+    {
+        "name": "siphasher",
+        "version": "1.0.3"
+    },
+    {
+        "name": "tower-http",
+        "version": "0.6.11"
+    },
+    {
+        "name": "unicode-bidi",
+        "version": "0.3.18"
+    },
+    {
+        "name": "which",
+        "version": "8.0.2"
+    },
+    {
+        "name": "yoke",
+        "version": "0.8.2"
+    },
+    {
+        "name": "tracing-log",
+        "version": "0.2.0"
+    },
+    {
+        "name": "uuid",
+        "version": "1.23.2"
+    },
+    {
+        "name": "writeable",
+        "version": "0.6.3"
+    },
+    {
+        "name": "tinystr",
+        "version": "0.8.3"
+    },
+    {
+        "name": "spin",
+        "version": "0.12.0"
+    },
+    {
+        "name": "tungstenite",
+        "version": "0.29.0"
+    },
+    {
+        "name": "rand",
+        "version": "0.10.1"
+    },
+    {
+        "name": "ppv-lite86",
+        "version": "0.2.21"
+    },
+    {
+        "name": "scopeguard",
+        "version": "1.2.0"
+    },
+    {
+        "name": "socket2",
+        "version": "0.6.2"
+    },
+    {
+        "name": "predicates",
+        "version": "3.1.4"
+    },
+    {
+        "name": "crypto-bigint",
+        "version": "0.7.3",
+        "exclude": [
+            "concatenating_mul_large",
+            "gcd",
+            "gcd_large"
+        ]
+    },
+    {
+        "name": "petgraph",
+        "version": "0.8.3",
+        "exclude": [
+            "generic_graph6_encoder_test_cases",
+            "graph6_for_graph_map_test_cases",
+            "graph6_for_graph_test_cases",
+            "graph6_for_matrix_graph_test_cases",
+            "graph6_for_stable_graph_test_cases",
+            "test::b01_vienna_test",
+            "test::b07_vienna_test"
+        ]
+    },
+    {
+        "name": "serde_with",
+        "version": "3.20.0"
+    },
+    {
+        "name": "redox_syscall",
+        "version": "0.8.0"
+    },
+    {
+        "name": "serde_core",
+        "version": "1.0.228"
+    },
+    {
+        "name": "radium",
+        "version": "1.1.1"
+    },
+    {
+        "name": "shlex",
+        "version": "2.0.1"
+    },
+    {
+        "name": "r-efi",
+        "version": "6.0.0"
+    },
+    {
+        "name": "quinn-udp",
+        "version": "0.6.1"
+    }
+]

@@ -1,8 +1,6 @@
 //@run:0
 //miri: @revisions: stack tree
 //miri: @[tree]compile-flags: -Zmiri-tree-borrows
-#![feature(allocator_api)]
-
 use std::alloc::{Global, AllocError, Allocator, Layout};
 use std::cell::Cell;
 use std::mem::MaybeUninit;

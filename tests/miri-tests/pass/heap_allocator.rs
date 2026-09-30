@@ -1,5 +1,5 @@
 //@run:0
-#![feature(allocator_api, slice_ptr_get)]
+#![feature(slice_ptr_get)]
 
 use std::alloc::{Allocator, Global, Layout, System};
 use std::ptr::NonNull;
