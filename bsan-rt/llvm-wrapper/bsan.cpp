@@ -674,7 +674,9 @@ void __bsan_shadow_clear_aligned(void *dest_shadow, void *dest_origin,
 
 SANITIZER_INTERFACE_ATTRIBUTE
 Block *__bsan_reserve_stack_slot() {
-  return BLOCK_PTR(CurrentThread()->AllocBlock());
+  Block* block = CurrentThread()->AllocBlock();
+  internal_memset(block, 0, sizeof(atomic_uint64_t));
+  return block;
 }
 
 SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE bool
