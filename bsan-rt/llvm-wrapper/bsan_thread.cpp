@@ -142,9 +142,11 @@ void BsanThread::Init() {
   GetThreadStackTopAndBottom(is_main_thread, &stack_top_, &stack_bottom_);
   shadow_stack_size_ = stack_top_ - stack_bottom_;
   shadow_stack_bottom_ = MmapOrDie(shadow_stack_size_, __func__);
+  uptr shadow_stack_bottom_addr = (uptr)shadow_stack_bottom_;
   __bsan_shadow_stack =
-      (Provenance *)(((uptr)shadow_stack_bottom_) + shadow_stack_size_);
-
+      (Provenance *)(shadow_stack_bottom_addr + shadow_stack_size_);
+  atomic_store(&curr_stack_bottom_, shadow_stack_bottom_addr,
+               memory_order_relaxed);
   // We record the address of the thread-local shadow stack pointer so
   // that the GC can accurately read the initialized contents of the
   // shadow stack when it stops the world.
@@ -156,6 +158,7 @@ void BsanThread::Init() {
 }
 
 bool BsanThread::enterSafeMode() {
+  publishStackPointer(memory_order_relaxed);
   return setGCState(GCState::kSafe, memory_order_release) == GCState::kUnsafe;
 }
 
@@ -173,6 +176,7 @@ void BsanThread::poll() {
   // signal handler, then we'll be kicked out of the waiting state
   // back into the unsafe state, which is an invalid transition.
   // Only the GC is allowed to move threads out of waiting.
+  publishStackPointer(memory_order_relaxed);
   do {
     setGCState(GCState::kWaiting, memory_order_release);
     atomic_signal_fence(memory_order_seq_cst);
@@ -199,8 +203,17 @@ void BsanThread::FreeBlock(BlockIndex idx) {
   block_allocator.Free(&this->block_cache_, idx);
 }
 
-bool BsanThread::AddrWithinThreadStack(uptr addr) {
-  return addr < stack_bottom() && addr >= stack_top();
+void BsanThread::publishStackPointer(memory_order order) {
+  uptr addr = (uptr)__builtin_frame_address(0);
+  atomic_store(&curr_stack_bottom_, addr, order);
+}
+
+uptr BsanThread::getStackPointer(memory_order order) {
+  return atomic_load(&curr_stack_bottom_, order);
+}
+
+bool BsanThread::ownsAddress(uptr addr) {
+  return addr >= stack_bottom() && addr < stack_top();
 }
 
 GCState BsanThread::getGCState(memory_order order) {

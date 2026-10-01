@@ -633,7 +633,7 @@ void __bsan_rc_inc(BorTag Tag, Block *Info, void *DestShadow) {
   if (!dest)
     return;
   BsanThread *t = CurrentThread();
-  bool is_thread = t && t->AddrWithinThreadStack(dest);
+  bool is_thread = t && t->ownsAddress(dest);
   if (is_thread) {
     return;
   }

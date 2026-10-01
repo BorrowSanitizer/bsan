@@ -110,11 +110,12 @@ void GlobalContext::RunGarbageCollector(Snapshot &snap,
         for (auto prov : thread->shadow_stack()) {
           snap->live.insert(prov);
         }
-        for (uptr addr = thread->stack_bottom(); addr < thread->stack_top();
-             addr += kMinProvAlignment) {
-          Block *block = *(Block **)MEM_TO_ORIGIN(addr);
+        uptr addr = thread->getStackPointer(memory_order_relaxed);
+        uptr cursor = addr & ~(kMinProvAlignment - 1);
+        for (; cursor < thread->stack_top(); cursor += kMinProvAlignment) {
+          Block *block = *(Block **)MEM_TO_ORIGIN(cursor);
           if (block)
-            snap->live.insert({*(BorTag *)MEM_TO_SHADOW(addr), block});
+            snap->live.insert({*(BorTag *)MEM_TO_SHADOW(cursor), block});
         }
       },
       &snap);
@@ -196,6 +197,7 @@ void GlobalContext::CollectGarbage(Snapshot *snap) {
 }
 
 void GlobalContext::requestGC() {
+  CurrentThread()->publishStackPointer(memory_order_relaxed);
   // Get the current generation count
   uptr gen = atomic_load(&gc_gen, memory_order_acquire);
   // Try and lock the garbage collector
@@ -219,6 +221,7 @@ void GlobalContext::requestGC() {
         Lock zct_lock(&global_ctx()->global_zct_lock_);
         {
           {
+
             Snapshot snap;
             RunGarbageCollector(snap, threads);
           }

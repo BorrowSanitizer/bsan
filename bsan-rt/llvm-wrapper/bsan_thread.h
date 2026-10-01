@@ -94,6 +94,9 @@ public:
     return shadow_stack_ptr_ ? *shadow_stack_ptr_ : nullptr;
   }
 
+  void publishStackPointer(memory_order order);
+  uptr getStackPointer(memory_order order);
+
   // Zeroes this thread's tree-node visit counter. This writes to another
   // thread's thread-local storage, so it can only be called when the world
   // has been stopped.
@@ -118,7 +121,7 @@ public:
 
   BlockIndex AllocBlock();
   void FreeBlock(BlockIndex idx);
-  bool AddrWithinThreadStack(uptr addr);
+  bool ownsAddress(uptr addr);
 
 private:
   friend class BsanThreadContext;
@@ -132,8 +135,8 @@ private:
   __sanitizer_sigset_t starting_sigset_;
 
   // The base of this thread's alternate signal stack.
-  // This is needed when deadly signal handlers run on a thread whose
-  // stack has overflowed.
+  // This is needed when deadly signal handlers run on
+  // a thread whose stack has overflowed.
   void *altstack_base_ = nullptr;
 
   BsanThreadContext *context_;
@@ -142,12 +145,18 @@ private:
 
   // Executes the start routine.
   thread_return_t Start();
-
   thread_callback_t start_routine_;
   void *arg_;
 
+  // The top of the stack (a fixed value).
   uptr stack_top_;
+  // The bottom of the stack.
   uptr stack_bottom_;
+  // The value of the current stack pointer.
+  // This needs to be atomic so that it can be
+  // reliably observed by the thread that triggers
+  // the garbage collector.
+  atomic_uintptr_t curr_stack_bottom_;
 
   void *shadow_stack_bottom_;
   uptr shadow_stack_size_;
@@ -164,8 +173,8 @@ private:
   Provenance **shadow_stack_ptr_;
 
   // The address of this thread's thread-local visit counter
-  // (`__bsan_visits_since_gc`), so that the GC can reset it when it stops
-  // the world.
+  // (`__bsan_visits_since_gc`), so that the GC can reset it
+  // when it stops the world.
   uptr *visits_ptr_;
   atomic_uint32_t gc_state_{kSafe};
 
