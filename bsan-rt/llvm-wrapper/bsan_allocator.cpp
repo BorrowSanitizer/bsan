@@ -27,6 +27,16 @@ static StaticSpinMutex fallback_rust_mutex;
 static uptr max_rust_malloc_size;
 } // namespace
 
+namespace __bsan {
+bool ShadowedMetadata::containsProvenance() {
+  return atomic_load(&this->rc, memory_order_acquire) == 0;
+}
+
+void ShadowedMetadata::setContainsProvenance(bool value) {
+  atomic_store(&this->rc, value, memory_order_release);
+}
+} // namespace __bsan
+
 void __bsan::InitializeRustAllocator() {
   rust_allocator.Init(common_flags()->allocator_release_to_os_interval_ms);
   if (common_flags()->max_allocation_size_mb)
@@ -100,8 +110,8 @@ static void *BsanAllocate(uptr size, uptr alignment, bool zeroise) {
     UNINITIALIZED BufferedStackTrace stack;
     ReportOutOfMemory(size, &stack);
   }
-  Metadata *meta =
-      reinterpret_cast<Metadata *>(allocator.GetMetaData(allocated));
+  ShadowedMetadata *meta =
+      reinterpret_cast<ShadowedMetadata *>(allocator.GetMetaData(allocated));
   meta->requested_size = size;
   if (zeroise) {
     internal_memset(allocated, 0, size);
@@ -111,8 +121,14 @@ static void *BsanAllocate(uptr size, uptr alignment, bool zeroise) {
 
 void __bsan::bsan_deallocate(void *p) {
   CHECK(p);
-  Metadata *meta = reinterpret_cast<Metadata *>(allocator.GetMetaData(p));
+  ShadowedMetadata *meta =
+      reinterpret_cast<ShadowedMetadata *>(allocator.GetMetaData(p));
+  if (meta->containsProvenance()) {
+    BlockGC gc;
+    ClearShadow(p, meta->requested_size);
+  }
   meta->requested_size = 0;
+  meta->setContainsProvenance(false);
   BsanThread *t = CurrentThread();
   if (t) {
     AllocatorCache *cache = t->allocator_cache();
@@ -179,18 +195,34 @@ void __bsan::RustDealloc(void *p) {
 uptr __bsan::bsan_mz_size(const void *p) {
   if (!p)
     return 0;
-  Metadata *meta = reinterpret_cast<Metadata *>(allocator.GetMetaData(p));
-  if (!meta)
+  if (ShadowedMetadata *meta = GetAllocMetaData(p)) {
+    return meta->requested_size;
+  } else {
     return 0;
-  return meta->requested_size;
+  }
+}
+
+ShadowedMetadata *__bsan::GetAllocMetaData(const void *p) {
+  if (!p)
+    return nullptr;
+  void *beg = allocator.GetBlockBegin(p);
+  if (!beg)
+    return nullptr;
+  return reinterpret_cast<ShadowedMetadata *>(allocator.GetMetaData(beg));
 }
 
 static void *BsanReallocate(void *old_p, uptr new_size, uptr alignment) {
-  Metadata *meta = reinterpret_cast<Metadata *>(allocator.GetMetaData(old_p));
+  ShadowedMetadata *meta =
+      reinterpret_cast<ShadowedMetadata *>(allocator.GetMetaData(old_p));
   uptr old_size = meta->requested_size;
   uptr actually_allocated_size = allocator.GetActuallyAllocatedSize(old_p);
   if (new_size <= actually_allocated_size) {
-    // We are not reallocating here.
+    if (new_size < old_size && meta->containsProvenance()) {
+      // If the allocation is shrinking, then clear any
+      // provenance within the tail.
+      BlockGC gc;
+      ClearShadow((u8 *)old_p + new_size, old_size - new_size);
+    }
     meta->requested_size = new_size;
     return old_p;
   }
@@ -220,7 +252,7 @@ static const void *AllocationBegin(const void *p) {
   void *beg = allocator.GetBlockBegin(p);
   if (!beg)
     return nullptr;
-  Metadata *b = (Metadata *)allocator.GetMetaData(beg);
+  ShadowedMetadata *b = (ShadowedMetadata *)allocator.GetMetaData(beg);
   if (!b)
     return nullptr;
   if (b->requested_size == 0)
@@ -234,17 +266,20 @@ static uptr AllocationSize(const void *p) {
   const void *beg = allocator.GetBlockBegin(p);
   if (beg != p)
     return 0;
-  Metadata *b = (Metadata *)allocator.GetMetaData(p);
+  ShadowedMetadata *b = (ShadowedMetadata *)allocator.GetMetaData(p);
   return b->requested_size;
 }
 
 static uptr AllocationSizeFast(const void *p) {
-  return reinterpret_cast<Metadata *>(allocator.GetMetaData(p))->requested_size;
+  return reinterpret_cast<ShadowedMetadata *>(allocator.GetMetaData(p))
+      ->requested_size;
 }
 
 namespace __bsan {
 
-bool IsHeapAddr(uptr addr) { return allocator.PointerIsMine((void *)addr); }
+bool IsHeapAddr(void *addr) { return allocator.PointerIsMine((void *)addr); }
+
+bool IsHeapAddr(uptr addr) { return IsHeapAddr((void *)addr); }
 
 void *bsan_malloc(uptr size) {
   return SetErrnoOnNull(BsanAllocate(size, sizeof(u64), false /*zeroise*/));

@@ -8,8 +8,14 @@ using namespace __sanitizer;
 
 namespace __bsan {
 
-struct Metadata {
-  uptr requested_size;
+struct ShadowedMetadata {
+public:
+  bool containsProvenance();
+  void setContainsProvenance(bool value);
+  uptr requested_size = 0;
+
+private:
+  atomic_uint8_t rc{0};
 };
 
 // Parameters for the primary allocator that replaces
@@ -18,7 +24,7 @@ struct Metadata {
 struct ShadowedAP64 {
   static const uptr kSpaceBeg = kAllocatorSpace;
   static const uptr kSpaceSize = kAllocatorSpaceSize;
-  static const uptr kMetadataSize = sizeof(Metadata);
+  static const uptr kMetadataSize = sizeof(ShadowedMetadata);
   using SizeClassMap = DefaultSizeClassMap;
   typedef NoOpMapUnmapCallback MapUnmapCallback;
   static const uptr kFlags = 0;
@@ -31,6 +37,8 @@ typedef Allocator::AllocatorCache AllocatorCache;
 
 // Parameters for the primary allocator used by the Rust runtime.
 struct RustAP64 {
+  // Dynamically choose the region for these allocations.
+  // They aren't shadowed.
   static const uptr kSpaceBeg = ~(uptr)0;
   static const uptr kSpaceSize = kAllocatorSpaceSize;
   static const uptr kMetadataSize = 0;
@@ -50,6 +58,7 @@ void CommitBackRustCache(RustAllocatorCache *cache);
 void InitializeShadowedAllocator();
 void LockShadowedAllocator();
 void UnlockShadowedAllocator();
+ShadowedMetadata *GetAllocMetaData(const void *p);
 
 void InitializeRustAllocator();
 void LockRustAllocator();
@@ -71,6 +80,7 @@ int bsan_posix_memalign(void **memptr, uptr alignment, uptr size);
 uptr bsan_mz_size(const void *p);
 
 bool IsHeapAddr(uptr addr);
+bool IsHeapAddr(void *addr);
 
 } // namespace __bsan
 #endif // BSAN_ALLOC_H

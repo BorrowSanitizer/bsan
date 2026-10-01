@@ -639,6 +639,8 @@ void __bsan_rc_inc(BorTag Tag, Block *Info, void *DestShadow) {
   }
   bool is_heap = IsHeapAddr(dest);
   if (is_heap) {
+    if (ShadowedMetadata *meta = GetAllocMetaData((void *)dest))
+      meta->setContainsProvenance(true);
     InterceptorBarrier barrier;
     __bsan_rc_inc_impl(Tag, Info);
     return;
@@ -651,7 +653,10 @@ bool __bsan_rc_dec_impl(BorTag tag, Block *info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_rc_dec(BorTag tag, Block *info, void *dest_shadow) {
-  if (!IsHeapAddr(SHADOW_TO_MEM(dest_shadow)))
+  uptr dest = SHADOW_TO_MEM(dest_shadow);
+  if (!dest)
+    return;
+  if (!IsHeapAddr(dest))
     return;
   if (__bsan_rc_dec_impl) {
     InterceptorBarrier barrier;

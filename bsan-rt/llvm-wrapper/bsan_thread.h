@@ -122,6 +122,7 @@ public:
   BlockIndex AllocBlock();
   void FreeBlock(BlockIndex idx);
   bool ownsAddress(uptr addr);
+  bool ownsAddress(void *addr);
 
 private:
   friend class BsanThreadContext;
