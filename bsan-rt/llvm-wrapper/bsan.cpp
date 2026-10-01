@@ -625,11 +625,11 @@ SANITIZER_WEAK_ATTRIBUTE
 bool __bsan_rc_inc_impl(BorTag Tag, Block *Info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_rc_inc(BorTag Tag, Block *Info, void *DestShadow) {
+void __bsan_rc_inc(BorTag tag, Block *info, void *dest_shadow) {
   if (UNLIKELY(!__bsan_rc_inc_impl)) {
     return;
   }
-  uptr dest = SHADOW_TO_MEM(DestShadow);
+  uptr dest = SHADOW_TO_MEM(dest_shadow);
   if (!dest)
     return;
   BsanThread *t = CurrentThread();
@@ -641,11 +641,9 @@ void __bsan_rc_inc(BorTag Tag, Block *Info, void *DestShadow) {
   if (is_heap) {
     if (ShadowedMetadata *meta = GetAllocMetaData((void *)dest))
       meta->setContainsProvenance(true);
-    InterceptorBarrier barrier;
-    __bsan_rc_inc_impl(Tag, Info);
-    return;
   }
-  __bsan_expose_prov(Tag, Info);
+  InterceptorBarrier barrier;
+  __bsan_rc_inc_impl(tag, info);
 }
 
 SANITIZER_WEAK_ATTRIBUTE
