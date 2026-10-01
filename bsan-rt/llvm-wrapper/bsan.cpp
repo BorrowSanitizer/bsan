@@ -674,7 +674,7 @@ void __bsan_shadow_clear_aligned(void *dest_shadow, void *dest_origin,
 
 SANITIZER_INTERFACE_ATTRIBUTE
 Block *__bsan_reserve_stack_slot() {
-  Block* block = CurrentThread()->AllocBlock();
+  Block *block = BLOCK_PTR(CurrentThread()->AllocBlock());
   internal_memset(block, 0, sizeof(atomic_uint64_t));
   return block;
 }
