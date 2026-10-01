@@ -180,9 +180,13 @@ function renderChart(parent, target, data, mode, runs) {
     graphs.appendChild(panel);
     set.appendChild(graphs);
 
+    // `order` stacks the lines, lowest on top: the newest run, then each older
+    // one, then the baseline at the bottom. It orders the legend and tooltip
+    // the same way.
     const datasets = [{
         label: BASELINE,
         data: data.crates.map(c => data.main[c]),
+        order: runs.length,
         ...lineStyle(MAIN_STYLE.color, MAIN_STYLE.dash, LINE_WIDTH)
     }].concat(runs.map((run, i) => {
         const series = runSeries(data, run);
@@ -191,6 +195,7 @@ function renderChart(parent, target, data, mode, runs) {
             label: newest && runs.length > 1 ? `${run.label} (newest)` : run.label,
             // A run that did not measure a crate has a gap there.
             data: data.crates.map(c => (c in series ? series[c] : null)),
+            order: runs.length - 1 - i,
             ...lineStyle(RUN_COLORS[(run.seq ?? i) % RUN_COLORS.length], [],
                 newest ? LINE_WIDTH : LINE_WIDTH - 0.5)
         };
