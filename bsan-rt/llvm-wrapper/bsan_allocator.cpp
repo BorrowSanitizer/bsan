@@ -29,11 +29,12 @@ static uptr max_rust_malloc_size;
 
 namespace __bsan {
 bool ShadowedMetadata::containsProvenance() {
-  return atomic_load(&this->rc, memory_order_acquire) == 0;
+  return atomic_load(&this->rc, memory_order_relaxed) != 0;
 }
 
 void ShadowedMetadata::setContainsProvenance(bool value) {
-  atomic_store(&this->rc, value, memory_order_release);
+  if (!atomic_load(&this->rc, memory_order_relaxed) == value)
+    atomic_store(&this->rc, value, memory_order_relaxed);
 }
 } // namespace __bsan
 

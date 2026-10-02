@@ -12,17 +12,23 @@ namespace __bsan {
 
 static pthread_key_t TSD_KEY;
 static bool TSD_KEY_INITED = false;
+THREADLOCAL void *tsd_cache = nullptr;
 
 void TSDSet(void *t) {
   // Make sure that `Destroy` gets called at the end.
   CHECK(TSD_KEY_INITED);
   pthread_setspecific(TSD_KEY, t);
+  tsd_cache = t;
 }
 
 void *TSDGet() {
-  // Make sure that `Destroy` gets called at the end.
-  CHECK(TSD_KEY_INITED);
-  return pthread_getspecific(TSD_KEY);
+  if (tsd_cache) {
+    return tsd_cache;
+  } else {
+    // Make sure that `Destroy` gets called at the end.
+    CHECK(TSD_KEY_INITED);
+    return pthread_getspecific(TSD_KEY);
+  }
 }
 
 void PlatformTSDDtor(void *tsd) {
@@ -34,6 +40,7 @@ void PlatformTSDDtor(void *tsd) {
   }
   BlockSignals();
   BsanThread::TSDDtor(tsd);
+  tsd_cache = nullptr;
 }
 
 void InitializeTSD(void (*destructor)(void *tsd)) {

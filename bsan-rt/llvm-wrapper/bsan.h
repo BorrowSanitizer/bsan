@@ -38,10 +38,11 @@ using __sanitizer::Vector;
 typedef uptr Span;
 typedef uptr BorTag;
 
+#define CONCRETE(tag) (tag > 2)
+
 struct Provenance {
   BorTag tag;
   Block *block;
-  bool isConcrete() { return tag > 2; }
 };
 
 struct AtExitRecord {

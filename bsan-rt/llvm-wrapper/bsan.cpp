@@ -626,9 +626,8 @@ bool __bsan_rc_inc_impl(BorTag Tag, Block *Info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_rc_inc(BorTag tag, Block *info, void *dest_shadow) {
-  if (UNLIKELY(!__bsan_rc_inc_impl)) {
+  if (!CONCRETE(tag))
     return;
-  }
   uptr dest = SHADOW_TO_MEM(dest_shadow);
   if (!dest)
     return;
@@ -642,8 +641,10 @@ void __bsan_rc_inc(BorTag tag, Block *info, void *dest_shadow) {
     if (ShadowedMetadata *meta = GetAllocMetaData((void *)dest))
       meta->setContainsProvenance(true);
   }
-  InterceptorBarrier barrier;
-  __bsan_rc_inc_impl(tag, info);
+  if (LIKELY(__bsan_rc_inc_impl)) {
+    InterceptorBarrier barrier;
+    __bsan_rc_inc_impl(tag, info);
+  }
 }
 
 SANITIZER_WEAK_ATTRIBUTE
@@ -651,12 +652,14 @@ bool __bsan_rc_dec_impl(BorTag tag, Block *info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_rc_dec(BorTag tag, Block *info, void *dest_shadow) {
+  if (CONCRETE(tag))
+    return;
   uptr dest = SHADOW_TO_MEM(dest_shadow);
   if (!dest)
     return;
   if (!IsHeapAddr(dest))
     return;
-  if (__bsan_rc_dec_impl) {
+  if (LIKELY(__bsan_rc_dec_impl)) {
     InterceptorBarrier barrier;
     if (__bsan_rc_dec_impl(tag, info)) {
       AcquireProvenance({tag, info});

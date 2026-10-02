@@ -34,7 +34,6 @@ void BsanThreadContext::OnFinished() {
 
 static ThreadRegistry *bsan_thread_registry;
 static ThreadArgRetval *thread_data;
-
 static Mutex mu_for_thread_context;
 
 static LowLevelAllocator allocator_for_thread_context;
@@ -223,7 +222,9 @@ GCState BsanThread::getGCState(memory_order order) {
 }
 
 GCState BsanThread::setGCState(GCState state, memory_order order) {
-  return (GCState)atomic_exchange(&gc_state_, state, order);
+  auto prev_state = (GCState)atomic_load(&gc_state_, memory_order_relaxed);
+  atomic_store(&gc_state_, state, order);
+  return prev_state;
 }
 
 void BsanThread::TSDDtor(void *tsd) {

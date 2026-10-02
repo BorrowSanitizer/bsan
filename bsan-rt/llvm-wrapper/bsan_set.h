@@ -10,19 +10,22 @@ using __sanitizer::DenseMap;
 namespace __bsan {
 
 // A set of borrow tags, implemented as a sorted array.
-// We need this representation because the contents of the
-// tag set are exposed to the Rust core. We provide a pointer
-// to the list and its length, which becomes a slice. Using a
-// `DenseMap`, or another C++ representation, could be more efficient
-// but it would make the API more cumbersome.
+// This has inline capacity for 2 tags, which covers the
+// overwhelming majority of all trees for all allocations.
+// We need a custom representation, instead of using
+// Vector<BorTag>, because the sanitizer vector does not
+// have a copy constructor, and we need to use this as the
+// value in a DenseMap.
 class BorTagSet {
 public:
-  BorTagSet() : begin_(), end_(), last_() {}
+  static constexpr u32 kInlineCapacity = 2;
 
-  const BorTag *data() const { return begin_; }
+  BorTagSet() : size_(0), capacity_(kInlineCapacity), heap_(nullptr) {}
+
+  const BorTag *data() const { return isInline() ? inline_ : heap_; }
   // Mutable access to the underlying array.
-  BorTag *data() { return begin_; }
-  uptr size() const { return (end_ - begin_); }
+  BorTag *data() { return isInline() ? inline_ : heap_; }
+  uptr size() const { return size_; }
 
   void insert(BorTag Tag);
   void erase(BorTag Tag);
@@ -30,25 +33,25 @@ public:
 
   // Frees the underlying allocation.
   void reset() {
-    if (begin_)
-      InternalFree(begin_);
-    begin_ = 0;
-    end_ = 0;
-    last_ = 0;
+    if (!isInline())
+      InternalFree(heap_);
+    size_ = 0;
+    capacity_ = kInlineCapacity;
+    heap_ = nullptr;
   }
 
   // Removes all elements of the list without freeing
   // the underlying allocation.
-  void clear() { end_ = begin_; }
+  void clear() { size_ = 0; }
 
   BorTag &operator[](uptr i) {
-    DCHECK_LT(i, end_ - begin_);
-    return begin_[i];
+    DCHECK_LT(i, size_);
+    return data()[i];
   }
 
   const BorTag &operator[](uptr i) const {
-    DCHECK_LT(i, end_ - begin_);
-    return begin_[i];
+    DCHECK_LT(i, size_);
+    return data()[i];
   }
 
   template <typename Fn> void forEach(Fn fn) const {
@@ -66,13 +69,18 @@ public:
         (*this)[w++] = tag;
       }
     }
-    end_ = begin_ + w;
+    size_ = w;
   }
 
 private:
-  BorTag *begin_;
-  BorTag *end_;
-  BorTag *last_;
+  u32 size_;
+  u32 capacity_;
+  union {
+    BorTag inline_[kInlineCapacity];
+    BorTag *heap_;
+  };
+
+  bool isInline() const { return capacity_ <= kInlineCapacity; }
 
   // Returns the index where this tag exists, or needs
   // to be inserted.
