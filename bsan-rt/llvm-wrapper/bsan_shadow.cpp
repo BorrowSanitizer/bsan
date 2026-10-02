@@ -214,22 +214,6 @@ static void AlignRange8(uptr addr, uptr size, uptr &aligned_addr,
   aligned_size = end - aligned_addr;
 }
 
-void MoveAligned(void *dest, const void *src, uptr size) {
-  uptr d_aligned;
-  uptr s_aligned, s_size;
-  AlignPtr8((uptr)dest, d_aligned);
-  AlignRange8((uptr)src, size, s_aligned, s_size);
-  internal_memmove((void *)d_aligned, (const void *)s_aligned, s_size);
-}
-
-void CopyAligned(void *dest, const void *src, uptr size) {
-  uptr d_aligned;
-  uptr s_aligned, s_size;
-  AlignPtr8((uptr)dest, d_aligned);
-  AlignRange8((uptr)src, size, s_aligned, s_size);
-  internal_memcpy((void *)d_aligned, (const void *)s_aligned, s_size);
-}
-
 ALWAYS_INLINE static void UpdateShadowSlot(uptr d_shadow, uptr d_origin,
                                            uptr s_shadow, uptr s_origin,
                                            uptr offset) {

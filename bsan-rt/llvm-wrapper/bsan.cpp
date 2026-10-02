@@ -371,11 +371,11 @@ void __sanitizer::BufferedStackTrace::UnwindImpl(uptr pc, uptr bp,
   if (!t || !StackTrace::WillUseFastUnwind(request_fast)) {
     // Block reports from our interceptors during _Unwind_Backtrace.
     InterceptorBarrier barrier;
-    return Unwind(max_depth, pc, bp, context, t ? t->stack_top() : 0,
-                  t ? t->stack_bottom() : 0, false);
+    return Unwind(max_depth, pc, bp, context, t ? t->stackTop() : 0,
+                  t ? t->stackBottom() : 0, false);
   }
   if (StackTrace::WillUseFastUnwind(request_fast))
-    Unwind(max_depth, pc, bp, nullptr, t->stack_top(), t->stack_bottom(), true);
+    Unwind(max_depth, pc, bp, nullptr, t->stackTop(), t->stackBottom(), true);
   else
     Unwind(max_depth, pc, 0, context, 0, 0, false);
 }

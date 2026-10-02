@@ -15,7 +15,7 @@ namespace __bsan {
 
 void BsanThreadContext::OnCreated(void *arg) {
   thread = static_cast<BsanThread *>(arg);
-  thread->set_context(this);
+  thread->setContext(this);
 }
 
 void BsanThreadContext::OnFinished() {
@@ -214,7 +214,7 @@ bool BsanThread::ownsAddress(void *addr) {
 }
 
 bool BsanThread::ownsAddress(uptr addr) {
-  return addr >= stack_bottom() && addr < stack_top();
+  return addr >= stackBottom() && addr < stackTop();
 }
 
 GCState BsanThread::getGCState(memory_order order) {

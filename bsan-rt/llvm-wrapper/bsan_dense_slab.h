@@ -17,14 +17,14 @@ namespace __bsan {
 // A thread-local cache of free blocks.
 class DenseSlabAllocCache {
   static const BlockIndex kSize = 128;
-  uptr pos;
+  uptr pos = 0;
   BlockIndex cache[kSize];
   // Each cache owns a "segment" of memory,
   // which is an array of blocks. If the
   // cache is empty, then we refill it by
   // bump-allocating through the segment.
-  uptr cursor;
-  uptr end;
+  uptr cursor = 0;
+  uptr end = 0;
   template <uptr> friend class DenseSlabAlloc;
 public:
   constexpr DenseSlabAllocCache() : pos(0), cache(), cursor(0), end(0) {}
@@ -89,13 +89,6 @@ public:
     // then push the segment to the free list.
     DrainSegment(c);
   }
-  
-  void InitCache(Cache *c) {
-    c->pos = 0;
-    c->cursor = 0;
-    c->end = 0;
-    internal_memset(c->cache, 0, sizeof(c->cache));
-  }
 
 private:
   // The freelist is organized as a lock-free stack of batches of nodes.
@@ -103,7 +96,6 @@ private:
   // stack node uses Block::batch links.
   // Low 32-bits of block_freelist_ is the node index, top 32-bits is ABA-counter.
   atomic_uint64_t block_freelist_;
-  // 
   atomic_uint64_t seg_freelist_;
   atomic_uintptr_t fillpos_;
   const char *const name_;

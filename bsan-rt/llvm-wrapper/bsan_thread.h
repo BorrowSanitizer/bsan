@@ -64,25 +64,22 @@ public:
 
   u32 tid() { return context_->tid; }
   BsanThreadContext *context() { return context_; }
-  void set_context(BsanThreadContext *context) { context_ = context; }
+  void setContext(BsanThreadContext *context) { context_ = context; }
 
   // Returns the top of the "real" stack associated with this thread.
-  uptr stack_top() const { return stack_top_; }
+  uptr stackTop() const { return stack_top_; }
 
   // Returns the bottom of the "real" stack associated with this thread.
-  uptr stack_bottom() const { return stack_bottom_; }
-
-  // Returns the bottom of the "shadow" stack associated with this thread.
-  uptr shadow_stack_bottom() const { return (uptr)shadow_stack_bottom_; }
+  uptr stackBottom() const { return stack_bottom_; }
 
   // Returns the top of the "shadow" stack associated with this thread.
-  uptr shadow_stack_top() const {
+  uptr shadowStackTop() const {
     return (uptr)shadow_stack_bottom_ + shadow_stack_size_;
   }
 
-  ArrayRef<Provenance> shadow_stack() const {
-    Provenance *cursor = shadow_stack_cursor();
-    Provenance *top = (Provenance *)(shadow_stack_top());
+  ArrayRef<Provenance> shadowStack() const {
+    Provenance *cursor = shadowStackCursor();
+    Provenance *top = (Provenance *)(shadowStackTop());
     if (cursor == nullptr || cursor > top) {
       return {};
     }
@@ -90,7 +87,7 @@ public:
   }
 
   // Returns the current value of this thread's shadow stack pointer.
-  Provenance *shadow_stack_cursor() const {
+  Provenance *shadowStackCursor() const {
     return shadow_stack_ptr_ ? *shadow_stack_ptr_ : nullptr;
   }
 
@@ -144,8 +141,6 @@ private:
 
   ConcreteProvenanceSet zct_;
 
-  // Executes the start routine.
-  thread_return_t Start();
   thread_callback_t start_routine_;
   void *arg_;
 
