@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs::{self};
 use std::path::{Path, PathBuf};
 
@@ -8,11 +9,11 @@ use xshell::{cmd, Shell};
 
 use crate::env::BsanConfig;
 use crate::utils::{
-    self, active_toolchain, prompt_user_unless, show_error, version_meta, PromptResult,
+    self, active_toolchain, cmdq, prompt_user_unless, show_error, version_meta, PromptResult,
 };
 use crate::TOOLCHAIN_NAME;
 
-static INSTALL_PROMPT: &str = "You need to install the latest version of our custom Rust toolchain (`bsan`) to build BorrowSanitizer. Continue?";
+static INSTALL_PROMPT: &str = "You need to configure a custom Rust toolchain (`bsan`) to build BorrowSanitizer from source. Continue?";
 
 // The endpoint where Rust CI artifacts are distributed. This is the same URL used
 // by default with `rustup-toolchain-install-master`.
@@ -23,6 +24,18 @@ static GH_ARTIFACT_URL: &str = "https://github.com/BorrowSanitizer/bsan/releases
 
 // Rust's fork of LLVM
 static LLVM_URL: &str = "https://github.com/rust-lang/llvm-project.git";
+
+fn prompt<F, T>(skip: &mut bool, mut action: F) -> Result<T>
+where
+    F: FnMut() -> Result<T>,
+{
+    if let Some(PromptResult::Yes) = prompt_user_unless(*skip, INSTALL_PROMPT)? {
+        *skip = true;
+        action()
+    } else {
+        std::process::exit(0)
+    }
+}
 
 pub struct ToolchainConfig {
     pub llvm_dir: PathBuf,
@@ -35,20 +48,20 @@ pub fn setup_toolchain(
     config: &mut BsanConfig,
     toolchain_dir: &Path,
     root_dir: &Path,
-    skip_prompt: bool,
+    mut skip_prompt: bool,
     local_dir: Option<PathBuf>,
 ) -> Result<ToolchainConfig> {
-    let meta = ensure_toolchain(sh, host, config, toolchain_dir, skip_prompt, local_dir)?;
-    let llvm_dir = ensure_llvm_cmake(sh, config, toolchain_dir, root_dir)?;
-    Ok(ToolchainConfig { llvm_dir, meta })
+    let meta = ensure_toolchain(sh, host, config, toolchain_dir, local_dir, &mut skip_prompt)?;
+    ensure_llvm_cmake(sh, config, toolchain_dir, root_dir, &mut skip_prompt)?;
+    Ok(ToolchainConfig { llvm_dir: toolchain_dir.to_path_buf(), meta })
 }
 fn ensure_toolchain(
     sh: &Shell,
     host: &VersionMeta,
     config: &mut BsanConfig,
     toolchain_dir: &Path,
-    mut skip_prompt: bool,
     local_dir: Option<PathBuf>,
+    skip_prompt: &mut bool,
 ) -> Result<VersionMeta> {
     // If we have the `bsan` toolchain installed, then we've either already
     // run the setup script, or we're in our Docker container, which has all of
@@ -75,18 +88,17 @@ fn ensure_toolchain(
         if !crate::TARGETS.contains(&current_target.as_str()) {
             show_error!("The current target `{current_target}` is not supported.");
         }
+
         // If we've passed these checks, then let's do the expensive step of
         // downloading and installing our custom toolchain.
-        skip_prompt = skip_prompt || local_dir.is_some();
-        if let Some(PromptResult::Yes) = prompt_user_unless(skip_prompt, INSTALL_PROMPT)? {
-            skip_prompt = true;
+        *skip_prompt |= local_dir.is_some();
+
+        prompt(skip_prompt, || {
             fs::create_dir_all(toolchain_dir)?;
-            install_toolchain(sh, host, config, toolchain_dir, local_dir.as_deref())?
-        } else {
-            std::process::exit(0)
-        }
+            install_toolchain(sh, host, config, toolchain_dir, local_dir.as_deref())
+        })?
     };
-    install_clang(sh, skip_prompt, config, &metadata, toolchain_dir)?;
+    install_clang(sh, *skip_prompt, config, &metadata, toolchain_dir)?;
     Ok(metadata)
 }
 
@@ -97,7 +109,7 @@ fn install_toolchain(
     toolchain_dir: &Path,
     local_dir: Option<&Path>,
 ) -> Result<VersionMeta> {
-    cmd!(sh, "rustup toolchain uninstall {TOOLCHAIN_NAME}").quiet().run()?;
+    cmdq!(sh, "rustup toolchain uninstall {TOOLCHAIN_NAME}").run()?;
 
     let target = &version.host;
     let artifact_url = path!(&RUST_ARTIFACT_URL / config.rust_sha);
@@ -127,7 +139,7 @@ fn install_toolchain(
         fs::remove_file(&tar_path)?;
 
         // Install it into the toolchain directory
-        cmd!(sh, "{out_dir}/install.sh --prefix=\"\" --destdir={toolchain_dir}").quiet().run()?;
+        cmdq!(sh, "{out_dir}/install.sh --prefix=\"\" --destdir={toolchain_dir}").run()?;
         fs::remove_dir_all(&out_dir)?;
         Ok(())
     };
@@ -137,7 +149,7 @@ fn install_toolchain(
     download_unpack_install("rust-src", false)?;
 
     let meta = version_meta(sh, TOOLCHAIN_NAME)?;
-    cmd!(sh, "rustup override set {TOOLCHAIN_NAME}").quiet().run()?;
+    cmdq!(sh, "rustup override set {TOOLCHAIN_NAME}").run()?;
     Ok(meta)
 }
 
@@ -189,7 +201,8 @@ pub fn ensure_llvm_cmake(
     config: &BsanConfig,
     toolchain_dir: &Path,
     root_dir: &Path,
-) -> Result<PathBuf> {
+    skip_prompt: &mut bool,
+) -> Result<()> {
     let compiler_rt_src = path!(toolchain_dir / "compiler-rt");
     if !compiler_rt_src.exists() {
         show_error!(
@@ -207,33 +220,51 @@ pub fn ensure_llvm_cmake(
     let sha = &config.llvm_sha;
     let lockfile = path!(toolchain_dir / ".llvm.lock");
 
-    if !(lockfile.exists() && fs::read_to_string(&lockfile)?.eq(sha)) {
+    // The top-level directories of the LLVM source tree that
+    // the sparse checkout populates.
+    let sparse = sh.read_file(&llvm_sparse)?;
+    let subdirs = sparse
+        .lines()
+        .filter_map(|pattern| pattern.trim().trim_start_matches('/').split('/').next())
+        .filter(|subdir| !subdir.is_empty())
+        .collect::<BTreeSet<_>>();
+
+    // The sparse checkout config can change without the
+    // LLVM revision changing, so we also check that each
+    // directory is present.
+    let is_installed = subdirs.iter().all(|subdir| path!(toolchain_dir / subdir).exists());
+    let lockfile_matches = lockfile.exists() && fs::read_to_string(&lockfile)?.eq(sha);
+
+    if is_installed && lockfile_matches {
+        return Ok(());
+    }
+
+    prompt(skip_prompt, || {
         let tmp_dir = sh.create_temp_dir()?;
         let tmp_dir = tmp_dir.path();
 
         let _tmp = sh.push_dir(tmp_dir);
-        cmd!(sh, "git init -q .").run()?;
-        cmd!(sh, "git remote add origin {LLVM_URL}").run()?;
+        cmdq!(sh, "git init -q .").run()?;
+        cmdq!(sh, "git remote add origin {LLVM_URL}").run()?;
 
-        cmd!(sh, "git sparse-checkout set --no-cone --stdin")
-            .stdin(sh.read_file(&llvm_sparse)?)
-            .run()?;
+        cmdq!(sh, "git sparse-checkout set --no-cone --stdin").stdin(&sparse).run()?;
 
-        cmd!(sh, "git fetch -q --depth=1 --filter=tree:0 origin {sha}").run()?;
-        cmd!(sh, "git checkout -q FETCH_HEAD").run()?;
+        cmdq!(sh, "git fetch -q --depth=1 --filter=tree:0 origin {sha}").run()?;
+        cmdq!(sh, "git checkout -q FETCH_HEAD").run()?;
 
-        for subdir in ["llvm", "cmake"] {
-            cmd!(sh, "cp -fr {subdir} {toolchain_dir}").run()?;
+        for subdir in &subdirs {
+            cmdq!(sh, "cp -fr {subdir} {toolchain_dir}").run()?;
         }
+        fs::write(&lockfile, sha)?;
+        Ok(())
+    })?;
 
-        fs::write(lockfile, sha)?;
-    }
+    if !(is_installed && lockfile.exists() && fs::read_to_string(&lockfile)?.eq(sha)) {}
 
     let link_source = path!(root_dir / "bsan-rt" / "llvm-wrapper");
     let link_target = path!(compiler_rt_src / "lib" / "bsan");
     if !link_target.exists() {
-        cmd!(sh, "ln -fs {link_source} {link_target}").quiet().run()?;
+        cmdq!(sh, "ln -fs {link_source} {link_target}").run()?;
     }
-
-    Ok(toolchain_dir.to_path_buf())
+    Ok(())
 }

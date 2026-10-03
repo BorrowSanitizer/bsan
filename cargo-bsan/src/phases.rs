@@ -1,10 +1,10 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use rustc_version::VersionMeta;
 
 use crate::arg::*;
-use crate::llvm::LlvmTools;
+use crate::llvm::{LibCxx, LlvmTools};
 use crate::setup::*;
 use crate::util::*;
 use crate::*;
@@ -18,7 +18,8 @@ Subcommands:
     run, r                   Run binaries
     test, t                  Run tests
     nextest                  Run tests with nextest (requires `cargo-nextest` to be installed)
-    setup                    Only perform automatic setup, but without asking questions (for getting a proper libstd)
+    setup                    Build an instrumented sysroot. 
+                             Passing `--build-libcxx` will also builds an instrumented libc++.
     clean                    Clean the BorrowSanitizer cache & target directory
 
 The cargo options are exactly the same as for `cargo run` and `cargo test`, respectively.
@@ -129,6 +130,15 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
             if has_arg_flag("--print-rustflags") {
                 println!("{}", bsan_rustflags(&env, &deps, &llvm_tools).join(" "))
             }
+            if has_arg_flag("--print-cxxflags") {
+                println!("{}", bsan_cflags(&deps).join(" "))
+            }
+            if has_arg_flag("--print-ldflags") {
+                println!("{}", bsan_ldflags(&env, &deps, &llvm_tools).join(" "))
+            }
+            if has_arg_flag("--build-libcxx") {
+                LibCxx::build(&deps, &llvm_tools, &env);
+            }
             return;
         }
     };
@@ -177,6 +187,13 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     cmd.env("CC", &cc_wrapper);
     cmd.env("CXX", &cc_wrapper);
     cmd.env("BSAN_CC_WRAPPER", &cc_wrapper);
+    if LibCxx::locate().is_some() {
+        // The `cc` crate links C++ code against the GNU libstdc++ by default.
+        // We want to tell it to use LLVM's libc++ instead. We place our custom
+        // instrumented copy within the includepath to ensure it gets found over
+        // any preexisting uninstrumented copy.
+        cmd.env("CXXSTDLIB", "c++");
+    }
 
     let mut target_out_dir = target_dir;
     target_out_dir.push(&rustc_version.host);
@@ -250,19 +267,11 @@ pub fn phase_cc(args: impl Iterator<Item = String>) {
     let out_dir = PathBuf::from(expect_env("OUT_DIR"));
 
     if out_dir.starts_with(build_output_root) {
-        // The sanitizer runtime requires a set of default system libraries
-        // to always be linked. Here, we pass them with `--no-as-needed` to
-        // ensure that these libraries are never excluded due to other linker
-        // configurations.
-        // (see llvm-project/clang/lib/Driver/ToolChains/CommonArgs.cpp#L1590)
-        cmd.arg("-Wl,--push-state,--no-as-needed");
-        for arg in BSAN_SYSTEM_LIBS {
-            cmd.arg(format!("-l{arg}"));
+        cmd.args(bsan_cflags(&deps));
+        if let Some(libcxx) = LibCxx::locate() {
+            cmd.args(libcxx_cflags(&libcxx));
         }
-        cmd.arg("-Wl,--pop-state");
-
-        let cflags = bsan_cflags(&env, &deps, &llvm_tools);
-        cmd.args(cflags);
+        cmd.args(bsan_ldflags(&env, &deps, &llvm_tools));
     }
 
     debug_cmd("[clang]", env.verbose, &cmd);
@@ -364,6 +373,10 @@ fn bsan_rustflags(env: &EnvConfig, deps: &Dependencies, llvm_tools: &LlvmTools) 
         additional_args.push(format!("-Clink-arg=-l{rust_lib}"));
     }
 
+    if let Some(libcxx) = LibCxx::locate() {
+        additional_args.push(format!("-Lnative={}", libcxx.join("lib").display()));
+    }
+
     additional_args.push(format!("-Clinker={}", llvm_tools.clang.display()));
     additional_args.push(format!("-Clink-arg=-fuse-ld={}", llvm_tools.lld.display()));
 
@@ -379,13 +392,34 @@ fn bsan_rustflags(env: &EnvConfig, deps: &Dependencies, llvm_tools: &LlvmTools) 
     additional_args
 }
 
-fn bsan_cflags(env: &EnvConfig, deps: &Dependencies, llvm_tools: &LlvmTools) -> Vec<String> {
+/// Flags needed to compile C/C++ sources with BorrowSanitizer instrumentation.
+pub fn bsan_cflags(deps: &Dependencies) -> Vec<String> {
     let mut additional_args =
         BSAN_DEFAULT_CFLAGS.iter().map(ToString::to_string).collect::<Vec<_>>();
     // The instrumentation pass must run during compilation, so it is always required.
     additional_args.push(format!("-fpass-plugin={}", deps.llvm_pass.display()));
+    additional_args
+}
 
-    additional_args.push(format!("--ld-path={}", llvm_tools.lld.display()));
+/// Flags needed to compile C++ sources against our instrumented libc++. Clang only searches
+/// its own installation for `-stdlib=libc++`, so we point it to the headers directly.
+fn libcxx_cflags(libcxx: &Path) -> Vec<String> {
+    let headers = libcxx.join("include").join("c++").join("v1");
+    vec![String::from("-stdlib++-isystem"), headers.display().to_string()]
+}
+
+/// Flags needed to link instrumented C/C++ objects against the BorrowSanitizer runtime.
+pub fn bsan_ldflags(env: &EnvConfig, deps: &Dependencies, llvm_tools: &LlvmTools) -> Vec<String> {
+    let mut additional_args = vec![format!("--ld-path={}", llvm_tools.lld.display())];
+
+    // The sanitizer runtime requires a set of default system libraries
+    // to always be linked. Here, we pass them with `--no-as-needed` to
+    // ensure that these libraries are never excluded due to other linker
+    // configurations.
+    // (see llvm-project/clang/lib/Driver/ToolChains/CommonArgs.cpp#L1590)
+    additional_args.push(String::from("-Wl,--push-state,--no-as-needed"));
+    additional_args.extend(BSAN_SYSTEM_LIBS.iter().map(|lib| format!("-l{lib}")));
+    additional_args.push(String::from("-Wl,--pop-state"));
 
     let (llvm_include, llvm_lib) = deps.llvm_runtime();
     additional_args.push(format!("-L{}", llvm_include.display()));
