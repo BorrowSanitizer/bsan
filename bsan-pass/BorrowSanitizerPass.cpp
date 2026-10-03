@@ -7,6 +7,10 @@ using namespace llvm;
 static llvm::PassPluginLibraryInfo getBorrowSanitizerPluginInfo() {
   return {LLVM_PLUGIN_API_VERSION, "BorrowSanitizer", LLVM_VERSION_STRING,
           [](PassBuilder &PB) {
+            PB.registerPipelineStartEPCallback(
+                [](ModulePassManager &MPM, OptimizationLevel Level) {
+                  MPM.addPass(BorrowSanitizerNoMergeRetagsPass());
+                });
             PB.registerOptimizerLastEPCallback([](ModulePassManager &MPM,
                                                   OptimizationLevel Level,
                                                   ThinOrFullLTOPhase Phase) {
@@ -23,6 +27,10 @@ static llvm::PassPluginLibraryInfo getBorrowSanitizerPluginInfo() {
             PB.registerPipelineParsingCallback(
                 [](StringRef Name, ModulePassManager &MPM,
                    ArrayRef<PassBuilder::PipelineElement>) {
+                  if (Name == "bsan-nomerge-retags") {
+                    MPM.addPass(BorrowSanitizerNoMergeRetagsPass());
+                    return true;
+                  }
                   if (Name == "bsan") {
                     MPM.addPass(BorrowSanitizerPass(BorrowSanitizerOptions()));
                     return true;
