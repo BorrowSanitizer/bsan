@@ -10,9 +10,6 @@ use crate::phases::{bsan_cflags, bsan_ldflags};
 use crate::setup::{Dependencies, EnvConfig};
 use crate::util::{assert_host_bin, expect_env_path, show_error, show_error_cmd, Sysroot, *};
 
-/// Tools that need to be installed on the host to build libcxx.
-pub const HOST_TOOLS: &[&str] = &["cmake", "ninja"];
-
 fn rustc_lld(sysroot_target_bindir: &Path) -> PathBuf {
     let lld_binary = |prefix: &str| format!("{}.lld", prefix);
     cfg_if::cfg_if! {
@@ -136,9 +133,11 @@ impl LibCxx {
         Self::stamp(&install_dir).exists().then_some(install_dir)
     }
 
-    /// Builds libcxx for `cargo bsan setup --build-libcxx`, replacing any existing installation.
+    /// Builds `libc++.a`, replacing any existing installation.
+    /// This contains `libc++abi.a`, providing a single instrumented archive
+    /// that we can link via `-lc++`.
     pub fn build(deps: &Dependencies, llvm_tools: &LlvmTools, env: &EnvConfig) {
-        for tool in HOST_TOOLS {
+        for tool in ["cmake", "ninja"] {
             if which::which(tool).is_err() {
                 show_error!("Unable to build libc++: `{tool}` is not installed.");
             }
@@ -148,9 +147,8 @@ impl LibCxx {
         if !clangxx.exists() {
             show_error!("Unable to build libc++: `{}` does not exist.", clangxx.display());
         }
-        // `./xb setup` installs the LLVM sources that we need into the toolchain's sysroot.
-        let runtimes = clang.ancestors().nth(2).unwrap().join("runtimes");
 
+        let runtimes = Sysroot::target(env).join("runtimes");
         let install_dir = Self::install_dir(&Sysroot::target(env));
         let stamp = Self::stamp(&install_dir);
         let _ = fs::remove_dir_all(&install_dir);
@@ -160,7 +158,6 @@ impl LibCxx {
 
         let run = |cmd: &mut Command| {
             debug_cmd("[cargo-bsan libcxx]", env.verbose, cmd);
-            // Keep stdout clean for the `--print-*` flags.
             let status = cmd.stdin(Stdio::null()).stdout(io::stderr()).status();
             if !status.is_ok_and(|status| status.success()) {
                 show_error!("Failed to build libc++.\n - using: {cmd:?}");
@@ -173,7 +170,11 @@ impl LibCxx {
 
         // Instrument libcxx with the same flags that we pass to clang. We only build static
         // libraries, which resolve their references to the runtime from the instrumented
-        // program, so the runtime is only linked into executables (e.g. CMake's compiler checks).
+        // program via flags passed to the Rust compiler (`-Lnative=<sysroot>/libcxx/lib`)
+        // FIXME: support for C++ libraries that use Rust components as a dependency.
+        // This will likely involve "factoring out" components of `cargo-bsan` into an intermediate
+        // CLI utility that can be invoked directly to provide necessary flags and setup artifacts for
+        // use by `cargo-bsan` and other build systems.
         let cflags = bsan_cflags(deps).join(" ");
         let ldflags = bsan_ldflags(env, deps, llvm_tools).join(" ");
 
@@ -199,7 +200,6 @@ impl LibCxx {
             ("LIBCXX_ENABLE_SHARED", "OFF"),
             ("LIBCXXABI_ENABLE_SHARED", "OFF"),
             ("LIBUNWIND_ENABLE_SHARED", "OFF"),
-            // Merge libc++abi into `libc++.a`, so that `-lc++` is all that we need to link.
             ("LIBCXX_ENABLE_STATIC_ABI_LIBRARY", "ON"),
         ];
         run(cmake_build()
@@ -212,9 +212,9 @@ impl LibCxx {
         run(cmake_build().arg("--build").arg(build_dir.path()).arg("--target").args(targets));
 
         fs::write(&stamp, "")
-            .unwrap_or_else(|err| show_error!("failed to write `{}`: {err}", stamp.display()));
+            .unwrap_or_else(|err| show_error!("Failed to write `{}`: {err}", stamp.display()));
         if !env.quiet {
-            eprintln!("libc++ is now available in `{}`.", install_dir.display());
+            eprintln!("Installed libc++: `{}`.", install_dir.display());
         }
     }
 }
