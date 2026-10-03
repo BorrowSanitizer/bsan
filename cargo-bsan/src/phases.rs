@@ -188,10 +188,7 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     cmd.env("CXX", &cc_wrapper);
     cmd.env("BSAN_CC_WRAPPER", &cc_wrapper);
     if LibCxx::locate().is_some() {
-        // The `cc` crate links C++ code against the GNU libstdc++ by default.
-        // We want to tell it to use LLVM's libc++ instead. We place our custom
-        // instrumented copy within the includepath to ensure it gets found over
-        // any preexisting uninstrumented copy.
+        // Ensure that the `cc` crate uses LLVM's `libc++` instead of GNU `libstdc++`. 
         cmd.env("CXXSTDLIB", "c++");
     }
 
@@ -247,7 +244,7 @@ pub fn phase_cc(args: impl Iterator<Item = String>) {
         // as a linker, which would require implementing some additional,
         // possibly flaky heuristics, we allow warnings. However, we
         // silence them.
-        if arg == "-Werror" {
+        if arg.as_str() == "-Werror" {
             continue;
         }
         cmd.arg(arg);
@@ -401,9 +398,11 @@ pub fn bsan_cflags(deps: &Dependencies) -> Vec<String> {
     additional_args
 }
 
-/// Flags needed to compile C++ sources against our instrumented libc++. Clang only searches
-/// its own installation for `-stdlib=libc++`, so we point it to the headers directly.
+/// Flags needed to compile C++ sources against our instrumented libc++.
 fn libcxx_cflags(libcxx: &Path) -> Vec<String> {
+    // Rust does the linking, so all we need is to instruct clang to use the
+    // C++ headers provided by our sysroot, instead of those from any existing
+    // standard library installation. 
     let headers = libcxx.join("include").join("c++").join("v1");
     vec![String::from("-stdlib++-isystem"), headers.display().to_string()]
 }
