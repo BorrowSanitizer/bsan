@@ -26,8 +26,8 @@ impl Command {
         match self {
             Command::Setup => Self::setup(env),
             Command::Clean => Self::clean(env),
-            Command::Ci { args, allow_unsafe_deps, cxx } => {
-                Self::ci(env, &args, allow_unsafe_deps, cxx)
+            Command::Ci { args, allow_unsafe_deps, libcxx } => {
+                Self::ci(env, &args, allow_unsafe_deps, libcxx)
             }
             Command::Doc { components, args } => components.iter().try_for_each(|c| {
                 c.doc(env, &args)?;
