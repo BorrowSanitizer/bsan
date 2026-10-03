@@ -26,9 +26,7 @@ impl Command {
         match self {
             Command::Setup => Self::setup(env),
             Command::Clean => Self::clean(env),
-            Command::Ci { args, allow_unsafe_deps, libcxx } => {
-                Self::ci(env, &args, allow_unsafe_deps, libcxx)
-            }
+            Command::CI { args, allow_unsafe_deps } => Self::ci(env, &args, allow_unsafe_deps),
             Command::Doc { components, args } => {
                 components.iter().try_for_each(|c| c.doc(env, &args))
             }
@@ -52,8 +50,8 @@ impl Command {
             Command::Install { components, args } => {
                 components.iter().try_for_each(|c| c.install(env, &args))
             }
-            Command::UI { bless, keep_sysroot, allow_unsafe_deps, cxx } => {
-                Self::ui(env, bless, keep_sysroot, allow_unsafe_deps, cxx)
+            Command::UI { bless, keep_sysroot, allow_unsafe_deps, libcxx } => {
+                Self::ui(env, bless, keep_sysroot, allow_unsafe_deps, libcxx)
             }
             Command::Miri { components, args } => components.iter().try_for_each(|c| {
                 c.miri(env, &args)?;
@@ -86,9 +84,9 @@ impl Command {
         bless: bool,
         keep_sysroot: bool,
         allow_unsafe_deps: bool,
-        cxx: bool,
+        libcxx: bool,
     ) -> Result<()> {
-        let config = TestConfig { keep_sysroot, allow_unsafe_deps, cxx, bless, fix: false };
+        let config = TestConfig { keep_sysroot, allow_unsafe_deps, libcxx, bless, fix: false };
 
         run_tests(env, config)?;
 
@@ -101,7 +99,7 @@ impl Command {
         Ok(())
     }
 
-    fn ci(env: &mut BsanEnv, args: &[String], allow_unsafe_deps: bool, cxx: bool) -> Result<()> {
+    fn ci(env: &mut BsanEnv, args: &[String], allow_unsafe_deps: bool) -> Result<()> {
         let components = crate::all_components!();
         env.with_flags("RUSTFLAGS", &["-Dwarnings"], |env| {
             // We want to ensure that all formatting steps are completed for every component
@@ -109,7 +107,7 @@ impl Command {
             Self::fmt(env, true)?;
             components.iter().try_for_each(|c| c.clippy(env, args))?;
             components.iter().try_for_each(|c| c.test(env, args))?;
-            Self::ui(env, false, false, allow_unsafe_deps, cxx)
+            Self::ui(env, false, false, allow_unsafe_deps, true)
         })
     }
 
@@ -240,7 +238,7 @@ impl Command {
             bless: false,
             fix: true,
             allow_unsafe_deps: false,
-            cxx: false,
+            libcxx: false,
         };
         run_tests(env, config)?;
         Ok(())
@@ -262,10 +260,9 @@ struct TestConfig {
     /// that we can recreate with BorrowSanitizer. This should only
     /// be used in CI, or in a secure environment.
     allow_unsafe_deps: bool,
-    /// Build tests that are partially written in C++. This requires
-    /// an instrumented copy of libc++, which is installed into the
-    /// sysroot if it is not already there.
-    cxx: bool,
+    /// Builds tests with C++ dependencies. This will also build an
+    /// instrumented copy of libc++.
+    libcxx: bool,
 }
 
 fn run_tests(env: &mut BsanEnv, config: TestConfig) -> Result<(), anyhow::Error> {
@@ -315,13 +312,12 @@ fn run_tests(env: &mut BsanEnv, config: TestConfig) -> Result<(), anyhow::Error>
         }
 
         cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
-        if config.cxx {
-            // libc++ is instrumented by the same pass as the sysroot, so it only needs
-            // to be rebuilt when the sysroot is. This has to happen before we query the
-            // flags below, which depend on whether libc++ has been installed.
+        if config.libcxx {
             if !path!(&sysroot_dir / "libcxx" / ".installed").exists() {
                 cmd!(env.sh, "{cargo_bsan} bsan setup --build-libcxx").run()?;
             }
+            // This flag is read by the ui-test harness, and used to
+            // determine if C++ tests should be executed.
             env_guards.push(env.sh.push_env("BSAN_CXX", "1"));
         }
         let rustflags = cmd!(env.sh, "{cargo_bsan} bsan setup --print-rustflags").output()?;

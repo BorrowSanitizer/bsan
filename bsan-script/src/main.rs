@@ -23,15 +23,17 @@ pub enum Command {
     /// Removes `target` directory
     Clean,
     /// Execute all tests and build steps in CI.
-    Ci {
+    CI {
         /// Flags that are passed through to each subcommand.
         #[arg(trailing_var_arg = true, allow_hyphen_values(true))]
         args: Vec<String>,
+        // Allow building tests with third-party dependencies. We use outdated
+        // versions to ensure that we can replicate past bugs, but some of these
+        // versions have had security advisories. None related to exploits that would
+        // be triggered when running tests, but out of an abundance of caution we want
+        // to ensure that users aren't downloading these and running them by default.
         #[arg(long)]
         allow_unsafe_deps: bool,
-        /// Build an instrumented libc++ and run the C++ interoperation tests.
-        #[arg(long)]
-        libcxx: bool,
     },
     /// Build documentation.
     Doc {
@@ -115,12 +117,16 @@ pub enum Command {
         /// it from scratch.
         #[arg(long)]
         keep_sysroot: bool,
-
+        // Allow building tests with third-party dependencies. We use outdated
+        // versions to ensure that we can replicate past bugs, but some of these
+        // versions have had security advisories. None related to exploits that would
+        // be triggered when running tests, but out of an abundance of caution we want
+        // to ensure that users aren't downloading these and running them by default.
         #[arg(long)]
         allow_unsafe_deps: bool,
         /// Build an instrumented libc++ and run the C++ interoperation tests.
         #[arg(long)]
-        cxx: bool,
+        libcxx: bool,
     },
     /// Installs binaries into the custom toolchain.
     Install {
