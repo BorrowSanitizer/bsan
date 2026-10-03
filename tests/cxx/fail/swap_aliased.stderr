@@ -1,0 +1,27 @@
+error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+  --> LIBCXX/include/__utility/swap.h:LL:CC
+   |
+LL | __y = std::move(__t);
+   |     ^
+   = help: the accessed tag <TAG>(unprotected) has state Disabled which forbids this child write access
+help: the accessed tag <TAG>(unprotected) was created here, in the initial state Reserved
+  --> bsan/tests/cxx/fail/aliased_mut_args.rs:LL:CC
+   |
+LL | unsafe { aliased_mut_args_swap(a, b) };
+   |                                   ^
+help: the accessed tag <TAG>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x0..0x4]
+  --> LIBCXX/include/__utility/swap.h:LL:CC
+   |
+LL | __x = std::move(__y);
+   |     ^
+   = help: this transition corresponds to a loss of read and write permissions
+
+stack backtrace:
+0: std::__1::enable_if<is_move_constructible<int>::value && is_move_assignable<int>::value, void>::type std::__1::swap[abi:TAG]<int>(int&, int&)
+      at LIBCXX/include/__utility/swap.h:LL:CC
+1: aliased_mut_args_swap
+      at bsan/tests/cxx/fail/aliased_mut_args.cpp:LL:CC
+2: aliased_mut_args::main
+ at bsan/tests/cxx/fail/aliased_mut_args.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

@@ -29,6 +29,9 @@ pub enum Command {
         args: Vec<String>,
         #[arg(long)]
         allow_unsafe_deps: bool,
+        /// Build an instrumented libc++ and run the C++ interoperation tests.
+        #[arg(long)]
+        cxx: bool,
     },
     /// Build documentation.
     Doc {
@@ -115,6 +118,9 @@ pub enum Command {
 
         #[arg(long)]
         allow_unsafe_deps: bool,
+        /// Build an instrumented libc++ and run the C++ interoperation tests.
+        #[arg(long)]
+        cxx: bool,
     },
     /// Installs binaries into the custom toolchain.
     Install {

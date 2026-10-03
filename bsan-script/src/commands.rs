@@ -26,7 +26,9 @@ impl Command {
         match self {
             Command::Setup => Self::setup(env),
             Command::Clean => Self::clean(env),
-            Command::Ci { args, allow_unsafe_deps } => Self::ci(env, &args, allow_unsafe_deps),
+            Command::Ci { args, allow_unsafe_deps, cxx } => {
+                Self::ci(env, &args, allow_unsafe_deps, cxx)
+            }
             Command::Doc { components, args } => components.iter().try_for_each(|c| {
                 c.doc(env, &args)?;
                 Ok(())
@@ -51,8 +53,8 @@ impl Command {
             Command::Install { components, args } => {
                 components.iter().try_for_each(|c| c.install(env, &args))
             }
-            Command::UI { bless, keep_sysroot, allow_unsafe_deps } => {
-                Self::ui(env, bless, keep_sysroot, allow_unsafe_deps)
+            Command::UI { bless, keep_sysroot, allow_unsafe_deps, cxx } => {
+                Self::ui(env, bless, keep_sysroot, allow_unsafe_deps, cxx)
             }
             Command::Miri { components, args } => components.iter().try_for_each(|c| {
                 c.miri(env, &args)?;
@@ -85,8 +87,9 @@ impl Command {
         bless: bool,
         keep_sysroot: bool,
         allow_unsafe_deps: bool,
+        cxx: bool,
     ) -> Result<()> {
-        let config = TestConfig { keep_sysroot, allow_unsafe_deps, bless, fix: false };
+        let config = TestConfig { keep_sysroot, allow_unsafe_deps, cxx, bless, fix: false };
 
         run_tests(env, config)?;
 
@@ -99,7 +102,7 @@ impl Command {
         Ok(())
     }
 
-    fn ci(env: &mut BsanEnv, args: &[String], allow_unsafe_deps: bool) -> Result<()> {
+    fn ci(env: &mut BsanEnv, args: &[String], allow_unsafe_deps: bool, cxx: bool) -> Result<()> {
         let components = crate::all_components!();
         env.with_flags("RUSTFLAGS", &["-Dwarnings"], |env| {
             // We want to ensure that all formatting steps are completed for every component
@@ -107,7 +110,7 @@ impl Command {
             Self::fmt(env, true)?;
             components.iter().try_for_each(|c| c.clippy(env, args))?;
             components.iter().try_for_each(|c| c.test(env, args))?;
-            Self::ui(env, false, false, allow_unsafe_deps)
+            Self::ui(env, false, false, allow_unsafe_deps, cxx)
         })
     }
 
@@ -172,10 +175,12 @@ impl Command {
     fn stats(env: &mut BsanEnv) -> Result<()> {
         let root = &env.root_dir;
         let pass = count_rs(&path!(root / "tests" / "pass"))?
-            + count_rs(&path!(root / "tests" / "pass-dep"))?;
+            + count_rs(&path!(root / "tests" / "pass-dep"))?
+            + count_rs(&path!(root / "tests" / "cxx" / "pass"))?;
         let miri_pass = count_rs(&path!(root / "tests" / "miri-tests" / "pass"))?;
         let fail = count_rs(&path!(root / "tests" / "fail"))?
-            + count_rs(&path!(root / "tests" / "fail-dep"))?;
+            + count_rs(&path!(root / "tests" / "fail-dep"))?
+            + count_rs(&path!(root / "tests" / "cxx" / "fail"))?;
         let miri_fail = count_rs(&path!(root / "tests" / "miri-tests" / "fail"))?;
         let mirilli_fail = count_rs(&path!(root / "tests" / "fail-dep" / "mirilli"))?;
         let miri_should_pass = count_rs(&path!(root / "tests" / "miri-tests" / "should-pass"))?;
@@ -232,7 +237,13 @@ impl Command {
     }
 
     fn fix(env: &mut BsanEnv, keep_sysroot: bool) -> Result<()> {
-        let config = TestConfig { keep_sysroot, bless: false, fix: true, allow_unsafe_deps: false };
+        let config = TestConfig {
+            keep_sysroot,
+            bless: false,
+            fix: true,
+            allow_unsafe_deps: false,
+            cxx: false,
+        };
         run_tests(env, config)?;
         Ok(())
     }
@@ -253,6 +264,10 @@ struct TestConfig {
     /// that we can recreate with BorrowSanitizer. This should only
     /// be used in CI, or in a secure environment.
     allow_unsafe_deps: bool,
+    /// Build tests that are partially written in C++. This requires
+    /// an instrumented copy of libc++, which is installed into the
+    /// sysroot if it is not already there.
+    cxx: bool,
 }
 
 fn run_tests(env: &mut BsanEnv, config: TestConfig) -> Result<(), anyhow::Error> {
@@ -302,6 +317,15 @@ fn run_tests(env: &mut BsanEnv, config: TestConfig) -> Result<(), anyhow::Error>
         }
 
         cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
+        if config.cxx {
+            // libc++ is instrumented by the same pass as the sysroot, so it only needs
+            // to be rebuilt when the sysroot is. This has to happen before we query the
+            // flags below, which depend on whether libc++ has been installed.
+            if !path!(&sysroot_dir / "libcxx" / ".installed").exists() {
+                cmd!(env.sh, "{cargo_bsan} bsan setup --build-libcxx").run()?;
+            }
+            env_guards.push(env.sh.push_env("BSAN_CXX", "1"));
+        }
         let rustflags = cmd!(env.sh, "{cargo_bsan} bsan setup --print-rustflags").output()?;
         let rustflags = String::from_utf8(rustflags.stdout)?;
 
