@@ -9,7 +9,7 @@ use xshell::{cmd, Cmd, Shell};
 
 use crate::commands::Buildable;
 use crate::setup::ToolchainConfig;
-use crate::utils::{active_libdir, active_sysroot, active_toolchain, show_error};
+use crate::utils::{active_libdir, active_sysroot, active_toolchain, cmdq, show_error};
 use crate::{setup, utils, TOOLCHAIN_NAME};
 
 #[allow(dead_code)]
@@ -250,7 +250,7 @@ impl BsanEnv {
     }
 
     fn cargo_cmd_base(&self, cmd: &str) -> Cmd<'_> {
-        let cmd = cmd!(self.sh, "cargo +{TOOLCHAIN_NAME} {cmd}").quiet();
+        let cmd = cmdq!(self.sh, "cargo +{TOOLCHAIN_NAME} {cmd}");
         if self.quiet {
             cmd.arg("--quiet")
         } else {
@@ -372,7 +372,7 @@ impl BsanEnv {
     }
 
     pub fn cc_cmd(&self) -> Cmd<'_> {
-        cmd!(self.sh, "cc").quiet()
+        cmdq!(self.sh, "cc")
     }
 
     pub fn cc(&self) -> cc::Build {
