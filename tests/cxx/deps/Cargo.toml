@@ -1,0 +1,14 @@
+[package]
+authors = ["BorrowSanitizer Team"]
+description = "the C++ sources of the unit tests in `tests/cxx`"
+license = "MIT OR Apache-2.0"
+name = "cxx_deps"
+repository = "https://github.com/borrowsanitizer/rust"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+cc = "1.2.57"
+
+# Make sure we are not part of the rustc workspace.
+[workspace]
