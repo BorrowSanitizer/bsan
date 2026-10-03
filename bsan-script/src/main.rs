@@ -31,7 +31,7 @@ pub enum Command {
         allow_unsafe_deps: bool,
         /// Build an instrumented libc++ and run the C++ interoperation tests.
         #[arg(long)]
-        cxx: bool,
+        libcxx: bool,
     },
     /// Build documentation.
     Doc {
