@@ -66,10 +66,13 @@ jobs:
   # queue for the account's concurrent job slots, which other workflows share.
   #
   # The baseline (called `main` throughout, which it usually is) is measured
-  # once per commit: the first run against it publishes its per-test results to
-  # gh-pages (main-cache/<sha>.csv), and later runs against the same commit
+  # once per source tree: per-test results are published to gh-pages as
+  # main-cache/<tree>.csv, and later runs against a commit with that tree
   # reuse them, measuring it only for crates they do not cover, e.g. one the
-  # branch added or bumped.
+  # branch added or bumped. They are keyed by tree rather than commit so that
+  # a branch's own results serve as `main`'s once it is merged: bench-pr.yml
+  # only benchmarks a PR with the latest `main` merged in, so merging it, by
+  # squash or merge commit, gives `main` a new commit with the same tree.
   #
   # See bench_plan.py for the plan.
   setup:
@@ -84,6 +87,8 @@ jobs:
       has_branch: ${{ steps.plan.outputs.has_branch }}
       has_main: ${{ steps.plan.outputs.has_main }}
       main_sha: ${{ steps.main.outputs.sha }}
+      main_tree: ${{ steps.main.outputs.tree }}
+      head_tree: ${{ steps.main.outputs.head_tree }}
       baseline_label: ${{ steps.main.outputs.label }}
       cached_main_commit: ${{ steps.plan.outputs.cached_main_commit }}
     steps:
@@ -122,6 +127,8 @@ jobs:
         {
           echo "sha=$sha"
           echo "label=$label"
+          echo "tree=$(git rev-parse "$sha^{tree}")"
+          echo "head_tree=$(git rev-parse "$HEAD_SHA^{tree}")"
         } >> "$GITHUB_OUTPUT"
         echo "Benchmarking $BRANCH_NAME at ${HEAD_SHA:0:8} against $label at ${sha:0:8}."
     - name: Mark the PR's status as running
@@ -135,14 +142,15 @@ jobs:
     - name: Fetch main's published results
       env:
         MAIN_SHA: ${{ steps.main.outputs.sha }}
+        MAIN_TREE: ${{ steps.main.outputs.tree }}
       run: |
         mkdir -p main-cache
         if git fetch --depth=1 origin gh-pages \
-           && git show "FETCH_HEAD:main-cache/$MAIN_SHA.csv" > main-cache/raw.csv 2>/dev/null; then
-          echo "Found results for main at ${MAIN_SHA:0:8}."
+           && git show "FETCH_HEAD:main-cache/$MAIN_TREE.csv" > main-cache/raw.csv 2>/dev/null; then
+          echo "Found results for main at ${MAIN_SHA:0:8} (tree ${MAIN_TREE:0:8})."
         else
           rm -f main-cache/raw.csv
-          echo "No published results for main at ${MAIN_SHA:0:8}; it will be benchmarked in this run."
+          echo "No published results for main at ${MAIN_SHA:0:8} (tree ${MAIN_TREE:0:8}); it will be benchmarked in this run."
         fi
     - name: Plan the benchmark matrices
       id: plan
@@ -337,7 +345,7 @@ jobs:
           previous=(--previous "$RUNNER_TEMP/previous.json")
         fi
         # The published copy goes first, so a crate this run re-measured on main
-        # replaces it (the last row for a test wins). Both are the same commit.
+        # replaces it (the last row for a test wins). Both are the same tree.
         main_csvs=()
         if [ -n "$CACHED_MAIN_COMMIT" ]; then
           main_csvs+=(main-cache/raw.csv)
@@ -361,9 +369,12 @@ jobs:
           --run-url "$RUN_URL" \
           --summary-md summary.md \
           --page-url "$PAGE_URL"
-        # main's results for this commit, cached and fresh together, for later
-        # runs against the same `main` to reuse.
-        python3 - main-cache.csv "${main_csvs[@]}" <<'EOF'
+        # Each side's results in one CSV, for the publish step to cache by tree:
+        # main's, cached and fresh together, for later runs against the same
+        # `main` to reuse; and the branch's, for runs against `main` once this
+        # branch is merged into it.
+        merge_csvs() {
+        python3 - "$@" <<'EOF'
         import csv, sys
         out, *paths = sys.argv[1:]
         rows, header = {}, None
@@ -380,11 +391,15 @@ jobs:
                 w.writeheader()
                 w.writerows(rows.values())
         EOF
+        }
+        merge_csvs main-cache.csv "${main_csvs[@]}"
+        merge_csvs branch-cache.csv results/results_branch_*.csv
     - name: Publish branch page
       env:
         DIR: ${{ steps.pages.outputs.dir }}
         ROOT: ${{ steps.pages.outputs.root }}
-        MAIN_SHA: ${{ needs.setup.outputs.main_sha }}
+        MAIN_TREE: ${{ needs.setup.outputs.main_tree }}
+        HEAD_TREE: ${{ needs.setup.outputs.head_tree }}
         PAGES: ${{ runner.temp }}/pages
       run: |
         set -euo pipefail
@@ -392,11 +407,17 @@ jobs:
         git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
         # Lay this run's files over a fresh copy of gh-pages and commit them.
-        # Everything here is this branch's own directory and main's cache for
-        # MAIN_SHA, so after losing a race with another push (bench.yml's, or
+        # Everything here is this branch's own directory and the caches for
+        # MAIN_TREE and HEAD_TREE, so after losing a race with another push (bench.yml's, or
         # another branch's) it is safe to start over from the newer gh-pages.
         publish() {
           git fetch --quiet origin +refs/heads/gh-pages:refs/remotes/origin/gh-pages
+          # main's tree as of now, which may be newer than MAIN_TREE if a PR was
+          # merged during this run; its cache, that PR's, is kept below.
+          local main_now=""
+          if git fetch --quiet --depth=1 origin main; then
+            main_now=$(git rev-parse 'FETCH_HEAD^{tree}')
+          fi
           rm -rf "$PAGES"
           git worktree prune
           git worktree add --quiet -B gh-pages "$PAGES" origin/gh-pages
@@ -413,15 +434,35 @@ jobs:
           cp branch-page/index.html "$DIR/index.html"
           cp "$GITHUB_WORKSPACE/data.json" "$DIR/data.json"
 
+          # The tree this page last measured, whose cache is kept while the
+          # page is: it becomes main's if the branch is merged as it is.
+          printf '%s\n' "$HEAD_TREE" > "$DIR/cache-tree"
+
           # A PR is only benchmarked with the latest `main` merged in, so once
-          # one has been, every other commit's results can go, including those
-          # of baselines chosen by hand. A run by hand only adds its own.
+          # one has been, the only caches still of use are main's, now or as
+          # this run pinned it, and those of branches that could be merged next,
+          # i.e. that have a page. The rest go, including those of baselines
+          # chosen by hand. A run by hand only adds its own.
           mkdir -p main-cache
           if [ -n "$PR" ]; then
-            find main-cache -name '*.csv' ! -name "$MAIN_SHA.csv" -delete
+            local -A keep=()
+            local f t
+            for t in "$MAIN_TREE" "$main_now" $(cat branches/*/cache-tree 2>/dev/null); do
+              if [ -n "$t" ]; then keep["$t"]=1; fi
+            done
+            for f in main-cache/*.csv; do
+              if [ -f "$f" ] && [ -z "${keep[$(basename "$f" .csv)]:-}" ]; then
+                rm -f "$f"
+              fi
+            done
           fi
           if [ -f "$GITHUB_WORKSPACE/main-cache.csv" ]; then
-            cp "$GITHUB_WORKSPACE/main-cache.csv" "main-cache/$MAIN_SHA.csv"
+            cp "$GITHUB_WORKSPACE/main-cache.csv" "main-cache/$MAIN_TREE.csv"
+          fi
+          # A branch with no changes of its own has main's tree, whose cache
+          # was just written from main's side; leave it be.
+          if [ -f "$GITHUB_WORKSPACE/branch-cache.csv" ] && [ "$HEAD_TREE" != "$MAIN_TREE" ]; then
+            cp "$GITHUB_WORKSPACE/branch-cache.csv" "main-cache/$HEAD_TREE.csv"
           fi
 
           bash "$GITHUB_WORKSPACE/bsan-script/etc/bench-branch/branch_pages.sh" index . "$ROOT"

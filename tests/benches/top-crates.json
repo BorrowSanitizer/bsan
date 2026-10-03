@@ -47,8 +47,9 @@
             "imp::avx2::tests::random",
             "imp::avx2::tests::random",
             "imp::sse2::tests::random",
-            "mp::neon::tests::ones",
-            "imp::neon::tests::zeroes"
+            "imp::neon::tests::ones",
+            "imp::neon::tests::zeroes",
+            "imp::ssse3::tests::random"
         ]
     },
     {
@@ -459,10 +460,6 @@
     {
         "name": "urlencoding",
         "version": "2.1.3"
-    },
-    {
-        "name": "utf-8",
-        "version": "0.7.6"
     },
     {
         "name": "smallvec",

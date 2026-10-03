@@ -60,6 +60,11 @@ MIRI = {
 # Every Miri configuration.
 MIRI_CONFIGS = [MIRI]
 
+# `cargo bsan` sets `BSAN_SYMBOLIZER` for the processes it runs, but test
+# binaries are copied out and run directly, so without this an error's stack
+# trace has no source locations.
+SYMBOLIZER = "/root/.rustup/toolchains/bsan/bin/llvm-symbolizer"
+
 # BorrowSanitizer configurations.
 BSAN_CONFIGS = [
     # Full checking.
@@ -820,6 +825,7 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     for tool in ["cargo", "hyperfine"]:
         require_tool(tool)
+    os.environ.setdefault("BSAN_SYMBOLIZER", SYMBOLIZER)
 
     crates_json = args.crates_json
     if not crates_json.is_file():
