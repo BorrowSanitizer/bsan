@@ -1,2 +1,14 @@
 /llvm/cmake/
 /cmake/
+/llvm/utils/llvm-lit/
+/llvm/utils/lit/
+/runtimes/
+/libcxx/
+/libcxxabi/
+/libunwind/
+/libc/shared/
+/libc/hdr/
+/libc/src/__support/
+/libc/include/llvm-libc-macros/
+/libc/include/llvm-libc-types/
+/third-party/benchmark/
