@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs::{self};
 use std::path::{Path, PathBuf};
 
@@ -207,7 +208,21 @@ pub fn ensure_llvm_cmake(
     let sha = &config.llvm_sha;
     let lockfile = path!(toolchain_dir / ".llvm.lock");
 
-    if !(lockfile.exists() && fs::read_to_string(&lockfile)?.eq(sha)) {
+    // The top-level directories of the LLVM source tree that
+    // the sparse checkout populates.
+    let sparse = sh.read_file(&llvm_sparse)?;
+    let subdirs = sparse
+        .lines()
+        .filter_map(|pattern| pattern.trim().trim_start_matches('/').split('/').next())
+        .filter(|subdir| !subdir.is_empty())
+        .collect::<BTreeSet<_>>();
+
+    // The sparse checkout config can change without the
+    // LLVM revision changing, so we also check that each
+    // directory is present.
+    let is_installed = subdirs.iter().all(|subdir| path!(toolchain_dir / subdir).exists());
+
+    if !(is_installed && lockfile.exists() && fs::read_to_string(&lockfile)?.eq(sha)) {
         let tmp_dir = sh.create_temp_dir()?;
         let tmp_dir = tmp_dir.path();
 
@@ -215,17 +230,14 @@ pub fn ensure_llvm_cmake(
         cmd!(sh, "git init -q .").run()?;
         cmd!(sh, "git remote add origin {LLVM_URL}").run()?;
 
-        cmd!(sh, "git sparse-checkout set --no-cone --stdin")
-            .stdin(sh.read_file(&llvm_sparse)?)
-            .run()?;
+        cmd!(sh, "git sparse-checkout set --no-cone --stdin").stdin(&sparse).run()?;
 
         cmd!(sh, "git fetch -q --depth=1 --filter=tree:0 origin {sha}").run()?;
         cmd!(sh, "git checkout -q FETCH_HEAD").run()?;
 
-        for subdir in ["llvm", "cmake"] {
+        for subdir in subdirs {
             cmd!(sh, "cp -fr {subdir} {toolchain_dir}").run()?;
         }
-
         fs::write(lockfile, sha)?;
     }
 
