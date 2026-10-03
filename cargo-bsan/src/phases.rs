@@ -18,8 +18,8 @@ Subcommands:
     run, r                   Run binaries
     test, t                  Run tests
     nextest                  Run tests with nextest (requires `cargo-nextest` to be installed)
-    setup                    Only perform automatic setup, but without asking questions (for getting a proper libstd)
-                             With `--build-libcxx`, also builds an instrumented libc++
+    setup                    Build an instrumented sysroot. 
+                             Passing `--build-libcxx` will also builds an instrumented libc++.
     clean                    Clean the BorrowSanitizer cache & target directory
 
 The cargo options are exactly the same as for `cargo run` and `cargo test`, respectively.
