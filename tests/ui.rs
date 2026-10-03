@@ -36,6 +36,8 @@ pub fn flagsplit(flags: &str) -> Vec<String> {
 }
 
 struct WithDependencies {
+    /// The crate whose dependencies are made available to each test.
+    manifest: &'static str,
     bless: bool,
 }
 
@@ -44,6 +46,7 @@ fn bsan_config(
     path: &str,
     mode: Mode,
     with_dependencies: Option<WithDependencies>,
+    extra_stderr_filters: &[(Match, &'static [u8])],
 ) -> Config {
     // The BorrowSanitizer driver is rustc-like, so we create a default builder for rustc and modify it
     let mut program = CommandBuilder::rustc();
@@ -71,14 +74,17 @@ fn bsan_config(
     config.comment_defaults.base().require_annotations =
         Spanned::dummy(matches!(mode, Mode::Fail)).into();
 
-    config.comment_defaults.base().normalize_stderr =
-        stderr_filters().iter().map(|(m, p)| (m.clone(), p.to_vec())).collect();
+    config.comment_defaults.base().normalize_stderr = extra_stderr_filters
+        .iter()
+        .chain(stderr_filters())
+        .map(|(m, p)| (m.clone(), p.to_vec()))
+        .collect();
     config.comment_defaults.base().normalize_stdout =
         stdout_filters().iter().map(|(m, p)| (m.clone(), p.to_vec())).collect();
 
     config.comment_defaults.base().add_custom("edition", Edition("2021".into()));
 
-    if let Some(WithDependencies { bless }) = with_dependencies {
+    if let Some(WithDependencies { manifest, bless }) = with_dependencies {
         config.comment_defaults.base().set_custom(
             "dependencies",
             DependencyBuilder {
@@ -97,7 +103,7 @@ fn bsan_config(
                     ],
                     ..CommandBuilder::cargo()
                 },
-                crate_manifest_path: Path::new("tests/deps").join("Cargo.toml"),
+                crate_manifest_path: Path::new(manifest).join("Cargo.toml"),
                 build_std: None,
                 bless_lockfile: bless,
             },
@@ -110,7 +116,7 @@ fn run_tests(
     mode: Mode,
     path: &str,
     target: &VersionMeta,
-    with_dependencies: bool,
+    with_dependencies: Dependencies,
     tmpdir: &Path,
     fix_mode: bool,
 ) -> Result<FixResult> {
@@ -118,9 +124,15 @@ fn run_tests(
     let mut args = ui_test::Args::test()?;
     args.bless |= env::var_os("RUSTC_BLESS").is_some_and(|v| v != "0");
 
-    let with_dependencies = with_dependencies.then_some(WithDependencies { bless: args.bless });
+    let (with_dependencies, extra_stderr_filters) = match with_dependencies {
+        WithDependencies => (Some("tests/deps"), &[][..]),
+        WithCxxDependencies => (Some("tests/cxx/deps"), cxx_stderr_filters()),
+        WithoutDependencies => (None, &[][..]),
+    };
+    let with_dependencies =
+        with_dependencies.map(|manifest| WithDependencies { manifest, bless: args.bless });
 
-    let mut config = bsan_config(target, path, mode, with_dependencies);
+    let mut config = bsan_config(target, path, mode, with_dependencies, extra_stderr_filters);
     config.with_args(&args);
     config.bless_command = Some("./xb test --bless".into());
 
@@ -305,9 +317,29 @@ regexes! {
     r"::h[0-9a-f]{16}\b" => "::HASH",
 }
 
+regexes! {
+    // These are applied before `stderr_filters` to the tests that are partially written in C++.
+    cxx_stderr_filters:
+    // erase line and column info, but keep the extension, so that a test's
+    // C++ sources can be told apart from its Rust sources.
+    r"\.(cpp|h):[0-9]+:[0-9]+(: [0-9]+:[0-9]+)?" => ".$1:LL:CC",
+    // erase paths into libc++, which is built in a temporary directory
+    // from the sources in the toolchain and then installed into the sysroot.
+    r"[^ \n`]*/include/c\+\+/v1/"  => "LIBCXX/include/",
+    r"[^ \n`]*/libcxx/include/"    => "LIBCXX/include/",
+    r"[^ \n`]*/(libcxx|libcxxabi|libunwind)/src/" => "LIBCXX/$1/src/",
+    // not every libc++ header has an extension
+    r"(LIBCXX/[^ \n:]+):[0-9]+:[0-9]+" => "$1:LL:CC",
+    // erase libc++'s ABI tag, which encodes its version
+    r"\[abi:[a-z0-9]+\]"            => "[abi:TAG]",
+}
+
 #[allow(unused)]
 enum Dependencies {
+    /// The crates in `tests/deps`.
     WithDependencies,
+    /// The C++ sources of the tests in `tests/cxx`.
+    WithCxxDependencies,
     WithoutDependencies,
 }
 
@@ -324,10 +356,6 @@ fn ui(
     let msg = format!("## Running ui tests in {path} for {}", target.host);
     eprintln!("{}", msg.green().bold());
 
-    let with_dependencies = match with_dependencies {
-        WithDependencies => true,
-        WithoutDependencies => false,
-    };
     run_tests(mode, path, target, with_dependencies, tmpdir, fix_mode)
         .with_context(|| format!("ui tests in {path} for {} failed", target.host))
 }
@@ -426,6 +454,11 @@ fn main() -> Result<()> {
     if env::var("BSAN_UNSAFE_DEPS").is_ok() {
         ui(Mode::Pass, "tests/pass-dep", &target, WithDependencies, tmpdir.path(), false)?;
         ui(Mode::Fail, "tests/fail-dep", &target, WithDependencies, tmpdir.path(), false)?;
+    }
+
+    if env::var("BSAN_CXX").is_ok() {
+        ui(Mode::Pass, "tests/cxx/pass", &target, WithCxxDependencies, tmpdir.path(), false)?;
+        ui(Mode::Fail, "tests/cxx/fail", &target, WithCxxDependencies, tmpdir.path(), false)?;
     }
 
     Ok(())
