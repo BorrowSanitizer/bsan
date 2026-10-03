@@ -1,6 +1,3 @@
-//! Implements `cargo bsan setup`.
-//! This was copied directly from cargo-miri, with only small changes
-//! to comments and the names of environment variables.
 use std::env;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -170,8 +167,11 @@ pub fn setup_sysroot(
     let only_setup = matches!(subcommand, BsanCommand::Setup);
     let ask_user = !only_setup;
     let print_rustflags = only_setup && has_arg_flag("--print-rustflags");
+    let print_cxxflags = only_setup && has_arg_flag("--print-cxxflags");
+    let print_ldflags = only_setup && has_arg_flag("--print-ldflags");
     let print_sysroot = only_setup && has_arg_flag("--print-sysroot"); // whether we just print the sysroot path
-    let show_setup = only_setup && !print_sysroot && !print_rustflags;
+    let show_setup =
+        only_setup && !print_sysroot && !print_rustflags && !print_cxxflags && !print_ldflags;
 
     if !only_setup && let Some(sysroot) = std::env::var_os("BSAN_SYSROOT") {
         // Skip setup step if BSAN_SYSROOT is explicitly set, *unless* we are `cargo bsan setup`.
