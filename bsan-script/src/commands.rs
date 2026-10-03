@@ -10,7 +10,7 @@ use xshell::cmd;
 
 use crate::env::{BsanEnv, Mode};
 use crate::stats::*;
-use crate::utils::install_git_hooks;
+use crate::utils::{cmdq, install_git_hooks};
 use crate::Command;
 
 impl Command {
@@ -129,7 +129,7 @@ impl Command {
         let pass = env.build_artifact(BsanPass, args)?;
         let pass = pass.to_str().unwrap();
         let opt = env.target_binary("opt");
-        cmd!(env.sh, "{opt} --load-pass-plugin={pass} -passes=bsan {args...}").quiet().run()?;
+        cmdq!(env.sh, "{opt} --load-pass-plugin={pass} -passes=bsan {args...}").run()?;
         Ok(())
     }
 
@@ -159,11 +159,10 @@ impl Command {
             let flags = String::from_utf8(flags.stdout)?;
             let flags = flags.split_whitespace().collect::<Vec<_>>();
 
-            cmd!(env.sh, "rustc {file}")
+            cmdq!(env.sh, "rustc {file}")
                 .args(flags)
                 .args(args)
                 .arg(format!("--sysroot={}", sysroot_dir.display()))
-                .quiet()
                 .run()?;
 
             drop(env_guards);
@@ -273,12 +272,12 @@ struct TestConfig {
 fn run_tests(env: &mut BsanEnv, config: TestConfig) -> Result<(), anyhow::Error> {
     let sysroot_dir = path!(&env.target_dir / "sysroot");
     if !config.keep_sysroot {
-        cmd!(env.sh, "rm -rf {sysroot_dir}").quiet().run()?;
+        cmdq!(env.sh, "rm -rf {sysroot_dir}").run()?;
         // The cached build of the test suite's dependencies goes stale for the
         // same reasons as the sysroot: Cargo does not know to rebuild it when
         // the instrumentation pass changes.
         let dep_cache = path!(&env.target_dir / "tmp" / "bsan_ui");
-        cmd!(env.sh, "rm -rf {dep_cache}").quiet().run()?;
+        cmdq!(env.sh, "rm -rf {dep_cache}").run()?;
     }
     env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
 
@@ -557,7 +556,7 @@ impl Buildable for BsanRt {
             Ok(env.assert_artifact(&self.artifact(env)))
         })?;
 
-        cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_*").arg(&rust_runtime).quiet().run()?;
+        cmdq!(env.sh, "{llvm_objcopy} -w -G __bsan_*").arg(&rust_runtime).run()?;
 
         Ok(Some(rust_runtime))
     }

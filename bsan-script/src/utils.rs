@@ -16,6 +16,11 @@ pub fn show_error_(msg: &impl std::fmt::Display) -> ! {
     std::process::exit(1)
 }
 
+macro_rules! cmdq {
+    ($($tt:tt)*) => { cmd!($($tt)*).quiet() };
+}
+pub(crate) use cmdq;
+
 macro_rules! show_error {
     ($($tt:tt)*) => { crate::utils::show_error_(&format_args!($($tt)*)) };
 }
@@ -91,7 +96,7 @@ pub fn active_libdir() -> Result<PathBuf> {
 }
 
 pub fn version_meta(sh: &Shell, toolchain: &str) -> Result<VersionMeta> {
-    let target_output = cmd!(sh, "rustc +{toolchain} --version --verbose").quiet().read()?;
+    let target_output = cmdq!(sh, "rustc +{toolchain} --version --verbose").read()?;
     rustc_version::version_meta_for(&target_output).map_err(|e| anyhow!("{e}"))
 }
 
@@ -234,7 +239,7 @@ pub fn download_file(
         fs::remove_file(destination)?;
     }
 
-    let mut curl: Cmd<'_> = cmd!(sh, "curl");
+    let mut curl: Cmd<'_> = cmdq!(sh, "curl");
     curl = curl.args([
         // output file
         "--output",
@@ -253,7 +258,7 @@ pub fn download_file(
         curl = curl.arg("--retry-all-errors");
     }
 
-    if curl.quiet().run().is_err() {
+    if curl.run().is_err() {
         if !help_on_error.is_empty() {
             show_error!("{help_on_error}");
         }
