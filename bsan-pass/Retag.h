@@ -2,6 +2,7 @@
 #define BSAN_RETAG_H
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
+#include "llvm/Support/ErrorHandling.h"
 
 namespace llvm {
 
@@ -19,6 +20,15 @@ public:
 
   RetagInfo(CallBase *CB) : CB(CB) {
     assert(CB->arg_size() == 5);
+    // Compile-time check that all operands are constants (not a PHI or select),
+    // which would be the result of a merge.
+    if (!isa<ConstantInt>(CB->getOperand(1)) ||
+        !isa<ConstantInt>(CB->getOperand(2)) ||
+        !isa<Constant>(CB->getOperand(3)) || !isa<Constant>(CB->getOperand(4)))
+      report_fatal_error(Twine("BorrowSanitizer: retag in `") +
+                         CB->getFunction()->getName() +
+                         "` has a non-constant operand. It was likely "
+                         "merged with another retag by an optimization.");
     Ptr = CB->getOperand(0);
     Size = cast<ConstantInt>(CB->getOperand(1));
     Perms = cast<ConstantInt>(CB->getOperand(2));
