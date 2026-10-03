@@ -29,10 +29,9 @@ impl Command {
             Command::Ci { args, allow_unsafe_deps, libcxx } => {
                 Self::ci(env, &args, allow_unsafe_deps, libcxx)
             }
-            Command::Doc { components, args } => components.iter().try_for_each(|c| {
-                c.doc(env, &args)?;
-                Ok(())
-            }),
+            Command::Doc { components, args } => {
+                components.iter().try_for_each(|c| c.doc(env, &args))
+            }
             Command::Bin { binary_name, args } => Self::bin(env, binary_name, &args),
             Command::Opt { args } => Self::opt(env, &args),
             Command::Fmt { check } => Self::fmt(env, check),
