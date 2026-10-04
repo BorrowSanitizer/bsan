@@ -1,3 +1,6 @@
+// This test has an aliasing violation. It needs the C++
+// standard library to be instrumented with BorrowSanitizer for
+// us to be able to find the bug. 
 //@run: 1
 use cxx_deps as _;
 
