@@ -57,6 +57,12 @@ macro_rules! show_error {
 
 pub(crate) use show_error;
 
+pub fn cmd_output(cmd: &mut Command) -> Option<String> {
+    let output = cmd.output().ok()?;
+    let output = String::from_utf8(output.stdout).ok()?;
+    Some(String::from(output.trim()))
+}
+
 /// Debug-print a command that is going to be run.
 pub fn debug_cmd(prefix: &str, verbose: bool, cmd: &Command) {
     if verbose {

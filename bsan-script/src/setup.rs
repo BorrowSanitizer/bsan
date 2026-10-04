@@ -259,8 +259,6 @@ pub fn ensure_llvm_cmake(
         Ok(())
     })?;
 
-    if !(is_installed && lockfile.exists() && fs::read_to_string(&lockfile)?.eq(sha)) {}
-
     let link_source = path!(root_dir / "bsan-rt" / "llvm-wrapper");
     let link_target = path!(compiler_rt_src / "lib" / "bsan");
     if !link_target.exists() {
