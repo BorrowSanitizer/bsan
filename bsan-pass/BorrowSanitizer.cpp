@@ -444,25 +444,22 @@ private:
   Value *getAllocaSizeBytes(IRBuilder<> &IRB, AllocaInst *AI);
 
   /// Returns a list of the fields within a type that carry provenance
-  SmallVector<ProvenanceField> getProvenanceLayout(IRBuilder<> &IRB, Type *Ty,
-                                                   bool ClearGaps = false);
+  SmallVector<ProvenanceField> getProvenanceLayout(IRBuilder<> &IRB, Type *Ty);
 
 private:
   Value *getProvenanceLayout(IRBuilder<> &IRB,
                              SmallVector<ProvenanceField> &ProvDesc,
-                             Type *CurrentTy, Value *ByteOffset,
-                             bool ClearGaps = false);
+                             Type *CurrentTy, Value *ByteOffset);
 };
 } // end anonymous namespace
 
 // Provides a list of the locations of provenance values inside a type.
 SmallVector<ProvenanceField>
-BorrowSanitizer::getProvenanceLayout(IRBuilder<> &IRB, Type *Ty,
-                                     bool ClearGaps) {
+BorrowSanitizer::getProvenanceLayout(IRBuilder<> &IRB, Type *Ty) {
   SmallVector<ProvenanceField> Desc;
   if (Ty->isSized()) {
     Value *Zero = ConstantInt::get(IRB.getIntPtrTy(*DL), 0);
-    getProvenanceLayout(IRB, Desc, Ty, Zero, ClearGaps);
+    getProvenanceLayout(IRB, Desc, Ty, Zero);
   }
   return Desc;
 }
@@ -474,9 +471,10 @@ Value *BorrowSanitizer::getAllocaSizeBytes(IRBuilder<> &IRB, AllocaInst *AI) {
 
 // Populates a vector with the list of locations of provenance
 // values within a type.
-Value *BorrowSanitizer::getProvenanceLayout(
-    IRBuilder<> &IRB, SmallVector<ProvenanceField> &ProvDesc, Type *CurrentTy,
-    Value *ByteOffset, bool ClearGaps) {
+Value *
+BorrowSanitizer::getProvenanceLayout(IRBuilder<> &IRB,
+                                     SmallVector<ProvenanceField> &ProvDesc,
+                                     Type *CurrentTy, Value *ByteOffset) {
   assert(CurrentTy->isSized() && "expected a sized type");
   Type *IntptrTy = IRB.getIntPtrTy(*DL);
 
@@ -491,23 +489,16 @@ Value *BorrowSanitizer::getProvenanceLayout(
     return ConstantInt::get(IntptrTy, 1);
   } break;
   case Type::IntegerTyID: {
-    if (!ClearGaps)
-      break;
     IntegerType *IT = cast<IntegerType>(CurrentTy);
     unsigned IntBitWidth = IT->getBitWidth();
     unsigned PtrBitWidth = DL->getPointerSizeInBits();
     // If the integer type is as large (or larger) than the
-    // word size, then we assume that it could be used in type-punning.
-    // We can assume that it's being used in place of the byte type,
-    // so we need to do *something* with provenance.
+    // word size, then we need to assume that it could be used in
+    // type-punning, so we treat it as having provenance. This is
+    // a temporary workaround until byte type support lands in
+    // Clang and Rust.
     if (IntBitWidth < PtrBitWidth)
       break;
-    // Normally, we could be able to take care of this by clearing
-    // provenance on stores, where type-punned pointers end up receiving
-    // omnivalid provenance. However, things work a bit differently when we
-    // pass provenance between functions. We store the provenance of each field
-    // in adjacent slots of the shadow stack. This avoids needing to allocate
-    // space for values that we know will never be treated as pointers.
     TypeSize AllocTySize = DL->getTypeAllocSize(CurrentTy);
     Value *AllocSize = IRB.CreateTypeSize(IntptrTy, AllocTySize);
     Align AllocAlign = DL->getABITypeAlign(CurrentTy);
@@ -525,7 +516,7 @@ Value *BorrowSanitizer::getProvenanceLayout(
           IRB.CreateTypeSize(IntptrTy, SL->getElementOffset(Idx));
       Value *CurrByteOffset = IRB.CreateAdd(ByteOffset, ElemOffset);
       auto *ProvOffset =
-          getProvenanceLayout(IRB, ProvDesc, ElemTy, CurrByteOffset, ClearGaps);
+          getProvenanceLayout(IRB, ProvDesc, ElemTy, CurrByteOffset);
       CurrProvOffset = IRB.CreateAdd(CurrProvOffset, ProvOffset);
     }
     return CurrProvOffset;
@@ -540,7 +531,7 @@ Value *BorrowSanitizer::getProvenanceLayout(
           IRB.CreateMul(ConstantInt::get(IntptrTy, Idx), ElemSize);
       CurrByteOffset = IRB.CreateAdd(ByteOffset, CurrByteOffset);
       auto *ProvOffset = getProvenanceLayout(
-          IRB, ProvDesc, AT->getElementType(), CurrByteOffset, ClearGaps);
+          IRB, ProvDesc, AT->getElementType(), CurrByteOffset);
       CurrProvOffset = IRB.CreateAdd(CurrProvOffset, ProvOffset);
     }
     return CurrProvOffset;
@@ -1827,16 +1818,15 @@ private:
         MaybeAlign ParamAlign = Arg.getParamAlign();
         Info.Alignment = ParamAlign.value_or(BS.DL->getABITypeAlign(Ty));
 
-        for (auto &Desc : BS.getProvenanceLayout(
-                 EntryIRB, Ty, /*ClearGaps=*/MaybeCalledFromUninst)) {
+        for (auto &Desc : BS.getProvenanceLayout(EntryIRB, Ty)) {
           Info.Fields.push_back({NumParamProv, Desc});
           Value *NumProv = EntryIRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
           NumParamProv = EntryIRB.CreateAdd(NumParamProv, NumProv);
         }
         ByValArgs.push_back(Info);
       } else {
-        SmallVector<ProvenanceField> ProvDesc = BS.getProvenanceLayout(
-            EntryIRB, Arg.getType(), /*ClearGaps=*/MaybeCalledFromUninst);
+        SmallVector<ProvenanceField> ProvDesc =
+            BS.getProvenanceLayout(EntryIRB, Arg.getType());
         for (auto &Desc : ProvDesc) {
           ArgumentProvenance[&Arg].push_back({NumParamProv, Desc.Elems});
           Value *NumProv = EntryIRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
@@ -2057,8 +2047,8 @@ private:
       bool IsByVal = CB.paramHasAttr(i, Attribute::ByVal);
       Type *ArgTy = IsByVal ? CB.getParamByValType(i) : Arg->getType();
 
-      SmallVector<ProvenanceField> ProvDesc = BS.getProvenanceLayout(
-          Before, ArgTy, /*ClearGaps=*/MaybeUninstrumented);
+      SmallVector<ProvenanceField> ProvDesc =
+          BS.getProvenanceLayout(Before, ArgTy);
 
       for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
 
