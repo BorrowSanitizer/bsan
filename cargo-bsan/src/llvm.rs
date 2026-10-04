@@ -10,17 +10,6 @@ use crate::phases::{bsan_cflags, bsan_ldflags};
 use crate::setup::{Dependencies, EnvConfig};
 use crate::util::{assert_host_bin, expect_env_path, show_error, show_error_cmd, Sysroot, *};
 
-fn rustc_lld(sysroot_target_bindir: &Path) -> PathBuf {
-    let lld_binary = |prefix: &str| format!("{}.lld", prefix);
-    cfg_if::cfg_if! {
-        if #[cfg(target_family = "unix")] {
-            sysroot_target_bindir.join("gcc-ld").join(lld_binary("ld"))
-        } else {
-            show_error!("Only unix targets are supported.");
-        }
-    }
-}
-
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct LlvmTools {
     pub clang: PathBuf,
@@ -72,7 +61,7 @@ impl LlvmTools {
 fn assert_rustc_llvm_version(binary: &PathBuf, expected: &LlvmVersion) -> LlvmVersion {
     let mut cmd = Command::new(binary);
     cmd.arg("--version");
-    let output = command_output(&mut cmd).unwrap_or_else(|| {
+    let output = cmd_output(&mut cmd).unwrap_or_else(|| {
         show_error_cmd!(cmd, "Unable to obtain the LLVM version.");
     });
 
@@ -95,12 +84,6 @@ fn assert_rustc_llvm_version(binary: &PathBuf, expected: &LlvmVersion) -> LlvmVe
     version
 }
 
-fn command_output(cmd: &mut Command) -> Option<String> {
-    let output = cmd.output().ok()?;
-    let output = String::from_utf8(output.stdout).ok()?;
-    Some(String::from(output.trim()))
-}
-
 fn try_parse_llvm_version(version_string: &str) -> Option<LlvmVersion> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let version_regex = RE.get_or_init(|| Regex::new(r"(\d+)\.(\d+).\d+").expect("Invalid regex"));
@@ -110,6 +93,17 @@ fn try_parse_llvm_version(version_string: &str) -> Option<LlvmVersion> {
         let minor = captures.get(2)?.as_str().parse().ok()?;
         Some(LlvmVersion { major, minor })
     })?
+}
+
+fn rustc_lld(sysroot_target_bindir: &Path) -> PathBuf {
+    let lld_binary = |prefix: &str| format!("{}.lld", prefix);
+    cfg_if::cfg_if! {
+        if #[cfg(target_family = "unix")] {
+            sysroot_target_bindir.join("gcc-ld").join(lld_binary("ld"))
+        } else {
+            show_error!("Only unix targets are supported.");
+        }
+    }
 }
 
 pub struct LibCxx;
@@ -148,7 +142,7 @@ impl LibCxx {
             show_error!("Unable to build libc++: `{}` does not exist.", clangxx.display());
         }
 
-        let runtimes = Sysroot::target(env).join("runtimes");
+        let runtimes = Sysroot::host(env).join("runtimes");
         let install_dir = Self::install_dir(&Sysroot::target(env));
         let stamp = Self::stamp(&install_dir);
         let _ = fs::remove_dir_all(&install_dir);
@@ -190,7 +184,7 @@ impl LibCxx {
         };
         let defines = [
             ("LLVM_ENABLE_RUNTIMES", "libcxx;libcxxabi;libunwind"),
-            ("CMAKE_BUILD_TYPE", "Release"),
+            ("CMAKE_BUILD_TYPE", "Debug"),
             ("CMAKE_INSTALL_PREFIX", &install_dir.display().to_string()),
             ("CMAKE_C_COMPILER", &clang.display().to_string()),
             ("CMAKE_CXX_COMPILER", &clangxx.display().to_string()),

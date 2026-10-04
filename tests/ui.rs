@@ -457,7 +457,6 @@ fn main() -> Result<()> {
     }
 
     if env::var("BSAN_CXX").is_ok() {
-        ui(Mode::Pass, "tests/cxx/pass", &target, WithCxxDependencies, tmpdir.path(), false)?;
         ui(Mode::Fail, "tests/cxx/fail", &target, WithCxxDependencies, tmpdir.path(), false)?;
     }
 

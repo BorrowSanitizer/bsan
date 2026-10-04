@@ -65,8 +65,7 @@ pub const BSAN_DEFAULT_CFLAGS: &[&str] =
 // We need to ensure that libc and certain default system libraries are always linked.
 // Our runtime intercepts symbols within these libraries, so if they are missing, then
 // linking will fail (see llvm-project/clang/lib/Driver/ToolChains/CommonArgs.cpp#L1590).
-// These dependencies are always linked on our supported targets (x86 and arm linux);
-pub const BSAN_SYSTEM_LIBS: &[&str] = &["pthread", "rt", "m", "dl", "resolv", "c", "unwind"];
+pub const BSAN_SYSTEM_LIBS: &[&str] = &["pthread", "rt", "m", "dl", "resolv", "c"];
 
 pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     if has_arg_flag("--help") || has_arg_flag("-h") {
@@ -188,7 +187,7 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     cmd.env("CXX", &cc_wrapper);
     cmd.env("BSAN_CC_WRAPPER", &cc_wrapper);
     if LibCxx::locate().is_some() {
-        // Ensure that the `cc` crate uses LLVM's `libc++` instead of GNU `libstdc++`. 
+        // Ensure that the `cc` crate uses LLVM's `libc++` instead of GNU `libstdc++`.
         cmd.env("CXXSTDLIB", "c++");
     }
 
@@ -402,7 +401,7 @@ pub fn bsan_cflags(deps: &Dependencies) -> Vec<String> {
 fn libcxx_cflags(libcxx: &Path) -> Vec<String> {
     // Rust does the linking, so all we need is to instruct clang to use the
     // C++ headers provided by our sysroot, instead of those from any existing
-    // standard library installation. 
+    // standard library installation.
     let headers = libcxx.join("include").join("c++").join("v1");
     vec![String::from("-stdlib++-isystem"), headers.display().to_string()]
 }
