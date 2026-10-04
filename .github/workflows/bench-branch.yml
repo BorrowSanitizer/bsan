@@ -17,6 +17,15 @@ name: Branch benchmarks
 #     (a branch, tag or commit; `main` if left empty). The result goes to a page
 #     of its own, branches/<branch>-vs-<baseline>, so that it never mixes with
 #     the branch's comparison against `main`; no comment, no status.
+
+
+env:
+  # We test the `colored` crate, which requires
+  # terminal colors to be enabled for its unit
+  # tests to pass. This crate's CI enables the
+  # same flags.
+  CLICOLOR_FORCE: 1
+  COLORTERM: "truecolor"
 on:
   workflow_dispatch:
     inputs:
