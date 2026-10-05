@@ -86,12 +86,13 @@ THREADLOCAL Provenance *__bsan_shadow_stack = nullptr;
 
 // A counter used to create globally-unique "borrow tags"
 // associated with permissions in the tree for an allocation.
-// The values 0-2 are reserved:
-// - 0: an omnivalid tag
-// - 1: an invalid tag
-// - 2: a wildcard tag
+// Tags are handed out in multiples of `kBorTagStride`, and the first
+// three multiples are reserved:
+// - kOmnivalidTag: an omnivalid tag
+// - kInvalidTag: an invalid tag
+// - kWildcardTag: a wildcard tag
 SANITIZER_INTERFACE_ATTRIBUTE
-atomic_uintptr_t __bsan_bor_tag_ctr{3};
+atomic_uintptr_t __bsan_bor_tag_ctr{kFirstConcreteTag};
 
 // Accumulates the number of tree-node visits performed by the Rust runtime
 // on this thread since the last garbage collection.
@@ -130,7 +131,8 @@ __bsan_alloc_impl(void *base_addr, uptr size, BorTag bor_tag, Block *block,
 
 Provenance BsanAllocateMeta(void *ptr, uptr size, uptr span) {
   if (LIKELY(__bsan_alloc_impl)) {
-    BorTag tag = atomic_fetch_add(&__bsan_bor_tag_ctr, 1, memory_order_relaxed);
+    BorTag tag = atomic_fetch_add(&__bsan_bor_tag_ctr, kBorTagStride,
+                                  memory_order_relaxed);
     Block *block = BLOCK_PTR(CurrentThread()->AllocBlock());
     __bsan_alloc_impl(ptr, size, tag, block, span);
     Provenance prov = {tag, block};
@@ -626,6 +628,8 @@ bool __bsan_rc_inc_impl(BorTag Tag, Block *Info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_rc_inc(BorTag tag, Block *info, void *dest_shadow) {
+  // Tags read from shadow memory may carry a slot offset.
+  tag = STRIP_TAG_OFFSET(tag);
   if (!CONCRETE(tag))
     return;
   uptr dest = SHADOW_TO_MEM(dest_shadow);
@@ -652,6 +656,8 @@ bool __bsan_rc_dec_impl(BorTag tag, Block *info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_rc_dec(BorTag tag, Block *info, void *dest_shadow) {
+  // Tags read from shadow memory may carry a slot offset.
+  tag = STRIP_TAG_OFFSET(tag);
   if (!CONCRETE(tag))
     return;
   uptr dest = SHADOW_TO_MEM(dest_shadow);

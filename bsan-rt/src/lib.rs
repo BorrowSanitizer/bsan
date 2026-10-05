@@ -157,14 +157,29 @@ unsafe extern "C" {
 pub struct BorTag(usize);
 
 impl BorTag {
+    /// Tags are handed out in multiples of `STRIDE`. Within shadow memory,
+    /// the low 3 bits of a tag hold the byte offset [0, 7] of the pointer
+    /// within its 8-byte provenance slot. These bits are stripped before
+    /// a tag reaches the runtime, so they must always be zero here.
+    pub const STRIDE: usize = 1 << 3;
+    const OFFSET_MASK: usize = Self::STRIDE - 1;
+
     /// Permits any access.
     const OMNIVALID: BorTag = BorTag(0);
     /// Does not permit any access.
-    const INVALID: BorTag = BorTag(1);
+    const INVALID: BorTag = BorTag(Self::STRIDE);
     /// Optimistically permits accesses through
     /// allocations that have been "exposed" to
     /// pointer to integer conversion.
-    const WILDCARD: BorTag = BorTag(2);
+    const WILDCARD: BorTag = BorTag(2 * Self::STRIDE);
+
+    /// Returns `true` if any of the bits reserved for a slot offset are set.
+    /// This should never be the case for a tag that has left shadow memory.
+    #[inline]
+    #[must_use]
+    pub fn has_offset(self) -> bool {
+        self.0 & Self::OFFSET_MASK != 0
+    }
 
     /// Returns `true` if the borrow tag corresponds
     /// to a node within a tree, and is not one of the
@@ -186,7 +201,7 @@ impl BorTag {
 
 impl Default for BorTag {
     fn default() -> Self {
-        BorTag(unsafe { BOR_TAG_CTR.fetch_add(1, Ordering::Relaxed) })
+        BorTag(unsafe { BOR_TAG_CTR.fetch_add(Self::STRIDE, Ordering::Relaxed) })
     }
 }
 

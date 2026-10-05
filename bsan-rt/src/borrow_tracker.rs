@@ -174,6 +174,7 @@ impl<'b> BorrowTracker<'b> {
         F: FnOnce(Self) -> UBResult<T>,
         T: Default,
     {
+        debug_assert!(!prov.bor_tag.has_offset());
         let bor_tag = prov.bor_tag;
         if bor_tag == BorTag::OMNIVALID || bor_tag == BorTag::WILDCARD {
             // Only concrete provenance values have `AllocInfo` that we can
@@ -202,6 +203,7 @@ impl<'b> BorrowTracker<'b> {
         F: FnOnce(Self) -> T,
         T: Default,
     {
+        debug_assert!(!prov.bor_tag.has_offset());
         let bor_tag = prov.bor_tag;
         if !bor_tag.is_concrete() {
             return T::default();
@@ -227,6 +229,7 @@ impl<'b> BorrowTracker<'b> {
         F: FnOnce(Self) -> UBResult<T>,
         T: Default,
     {
+        debug_assert!(!prov.bor_tag.has_offset());
         let alloc_info: AllocInfoPtr = unsafe { NonNull::new_unchecked(prov.alloc_info).into() };
         let state = alloc_info.state();
         // The caller must guarantee that this allocation contains a valid tree.
@@ -248,6 +251,7 @@ impl<'b> BorrowTracker<'b> {
         F: FnOnce(Self) -> UBResult<T>,
         T: Default,
     {
+        debug_assert!(!prov.bor_tag.has_offset());
         if prov.bor_tag == BorTag::OMNIVALID {
             Ok(T::default())
         } else if prov.bor_tag == BorTag::INVALID {

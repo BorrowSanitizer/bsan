@@ -45,6 +45,14 @@ using namespace llvm::PatternMatch;
 static const unsigned kProvenanceSize = 16;
 static const Align kMinProvAlignment = Align(8);
 
+// Borrow tags are assigned in multiples of `kBorTagStride`. 
+// The low 3 bits of a tag stored in shadow memory hold the byte offset [0, 7] 
+// of the pointer within its 8-byte provenance slot.
+static const uint64_t kBorTagStride = uint64_t(1) << 3;
+static const uint64_t kOmnivalidTag = 0 * kBorTagStride;
+static const uint64_t kInvalidTag = 1 * kBorTagStride;
+static const uint64_t kWildcardTag = 2 * kBorTagStride;
+
 // The number of bytes that can be
 // stored within a TLS array for
 // variadic arguments.
@@ -980,7 +988,7 @@ void Provenance::addIncoming(BasicBlock *IncomingBlock,
 
 Provenance Provenance::omnivalid(BorrowSanitizer &BS, ElementCount Elems) {
   if (Elems.isScalar()) {
-    Value *Zero = ConstantInt::get(BS.IntptrTy, 0);
+    Value *Zero = ConstantInt::get(BS.IntptrTy, kOmnivalidTag);
     Value *InvalidPtr = ConstantPointerNull::get(BS.PtrTy);
     return Provenance(Zero, InvalidPtr, Elems);
   }
@@ -989,18 +997,18 @@ Provenance Provenance::omnivalid(BorrowSanitizer &BS, ElementCount Elems) {
 
 Provenance Provenance::invalid(BorrowSanitizer &BS, ElementCount Elems) {
   if (Elems.isScalar()) {
-    Value *One = ConstantInt::get(BS.IntptrTy, 1);
+    Value *Tag = ConstantInt::get(BS.IntptrTy, kInvalidTag);
     Value *InvalidPtr = ConstantPointerNull::get(BS.PtrTy);
-    return Provenance(One, InvalidPtr, Elems);
+    return Provenance(Tag, InvalidPtr, Elems);
   }
   report_fatal_error("Vector provenance is not supported yet");
 }
 
 Provenance Provenance::wildcard(BorrowSanitizer &BS, ElementCount Elems) {
   if (Elems.isScalar()) {
-    Value *Two = ConstantInt::get(BS.IntptrTy, 2);
+    Value *Tag = ConstantInt::get(BS.IntptrTy, kWildcardTag);
     Value *InvalidPtr = ConstantPointerNull::get(BS.PtrTy);
-    return Provenance(Two, InvalidPtr, Elems);
+    return Provenance(Tag, InvalidPtr, Elems);
   }
   report_fatal_error("Vector provenance is not supported yet");
 }
@@ -1587,8 +1595,8 @@ private:
 
   Value *newBorrowTag(IRBuilder<> &IRB) {
     return IRB.CreateAtomicRMW(AtomicRMWInst::Add, BS.BorTagCounter,
-                               ConstantInt::get(BS.IntptrTy, 1), std::nullopt,
-                               AtomicOrdering::Monotonic);
+                               ConstantInt::get(BS.IntptrTy, kBorTagStride),
+                               std::nullopt, AtomicOrdering::Monotonic);
   }
 
   // Loads a provenance value from shadow memory, storing it into a
@@ -1880,7 +1888,7 @@ private:
         ProvMap.setProvenance(AI, Prov);
       } else {
         Value *Info = EntryIRB.CreateCall(BS.BsanFuncReserveStackSlot, {});
-        Value *InitialTag = ConstantInt::get(BS.IntptrTy, 1);
+        Value *InitialTag = ConstantInt::get(BS.IntptrTy, kInvalidTag);
         Prov = Provenance(InitialTag, Info);
         ProvMap.cacheAllocaProvenance(EntryIRB, AI, Prov);
       }
