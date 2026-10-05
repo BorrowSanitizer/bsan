@@ -391,7 +391,8 @@ void WriteShadow(void *dest, Provenance prov) {
   if (*tag_ptr != 0)
     __bsan_rc_dec(*tag_ptr, *block_ptr, tag_ptr);
 
+  // Record where the pointer begins within its slot.
   *block_ptr = prov.block;
-  *tag_ptr = prov.tag;
+  *tag_ptr = prov.tag | ((uptr)dest & kBorTagOffsetMask);
 }
 } // namespace __bsan

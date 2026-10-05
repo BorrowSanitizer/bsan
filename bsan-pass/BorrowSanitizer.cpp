@@ -49,6 +49,7 @@ static const Align kMinProvAlignment = Align(8);
 // The low 3 bits of a tag stored in shadow memory hold the byte offset [0, 7]
 // of the pointer within its 8-byte provenance slot.
 static const uint64_t kBorTagStride = uint64_t(1) << 3;
+static const uint64_t kBorTagOffsetMask = kBorTagStride - 1;
 static const uint64_t kOmnivalidTag = 0 * kBorTagStride;
 static const uint64_t kInvalidTag = 1 * kBorTagStride;
 static const uint64_t kWildcardTag = 2 * kBorTagStride;
@@ -208,12 +209,37 @@ struct ProvenanceDest {
   // We can use this struct for each situation, setting the following
   // flag to control the desired behavior.
   bool UpdateRefCt = false;
+  // For destinations within shadow memory, the byte offset [0, 7] of the
+  // application address within its provenance slot. This offset is stored
+  // in the low bits of the borrow tag. It is null for destinations in main
+  // memory, which are always aligned.
+  Value *SlotOffset = nullptr;
   ProvenanceDest() {}
-  ProvenanceDest(Value *Shadow, Value *Origin, bool UpdateRefCt)
-      : ShadowPtr(Shadow), OriginPtr(Origin), UpdateRefCt(UpdateRefCt) {}
+  ProvenanceDest(Value *Shadow, Value *Origin, bool UpdateRefCt,
+                 Value *SlotOffset = nullptr)
+      : ShadowPtr(Shadow), OriginPtr(Origin), UpdateRefCt(UpdateRefCt),
+        SlotOffset(SlotOffset) {}
+  // Returns the destination for whole slots at the given offset. The
+  // result has no slot offset, so it should only be used for clearing.
   ProvenanceDest ptradd(IRBuilder<> &IRB, ProvenanceOffset Offset) {
     return ProvenanceDest(::ptradd(IRB, ShadowPtr, Offset),
                           ::ptradd(IRB, OriginPtr, Offset), UpdateRefCt);
+  }
+  // Returns the destination for a field located `ByteOffset` bytes past
+  // the start of this destination, which falls within the slot at
+  // `AlignedOffset`.
+  ProvenanceDest field(IRBuilder<> &IRB, ProvenanceOffset AlignedOffset,
+                       Value *ByteOffset) {
+    ProvenanceDest Dest = ptradd(IRB, AlignedOffset);
+    if (SlotOffset) {
+      Dest.SlotOffset = SlotOffset;
+      if (!match(ByteOffset, m_Zero())) {
+        Value *Sum = IRB.CreateAdd(SlotOffset, ByteOffset);
+        Dest.SlotOffset = IRB.CreateAnd(
+            Sum, ConstantInt::get(Sum->getType(), kBorTagOffsetMask));
+      }
+    }
+    return Dest;
   }
 };
 
@@ -1544,6 +1570,19 @@ private:
     return OffsetLong;
   }
 
+  /// Returns the byte offset [0, 7] of an application address within its
+  /// provenance slot. We trust the alignment hint: if it is a multiple of
+  /// the slot size, then the offset is zero.
+  Value *getSlotOffset(Value *Addr, IRBuilder<> &IRB, MaybeAlign Alignment) {
+    Type *IntptrTy = ptrToIntPtrType(Addr->getType());
+    Align CommonAlign =
+        commonAlignment(Alignment.valueOrOne(), kMinProvAlignment.value());
+    if (CommonAlign == kMinProvAlignment)
+      return constToIntPtr(IntptrTy, 0);
+    Value *AddrLong = IRB.CreatePointerCast(Addr, IntptrTy);
+    return IRB.CreateAnd(AddrLong, constToIntPtr(IntptrTy, kBorTagOffsetMask));
+  }
+
   // Returns a destination for a provenance value to be stored within
   // "main" memory, indicating that reference counts will not be
   // updated by the store.
@@ -1590,7 +1629,8 @@ private:
     // We scan the stack, instead of using reference counting.
     bool UpdateRefCt = !isa<AllocaInst>(getUnderlyingObject(Addr));
 
-    return ProvenanceDest(ShadowPtr, OriginPtr, UpdateRefCt);
+    Value *SlotOffset = getSlotOffset(Addr, IRB, Alignment);
+    return ProvenanceDest(ShadowPtr, OriginPtr, UpdateRefCt, SlotOffset);
   }
 
   Value *newBorrowTag(IRBuilder<> &IRB) {
@@ -1607,13 +1647,32 @@ private:
       AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
     if (Elems.isScalar()) {
       auto ShadowPtr = getShadowProvenancePtr(IRB, Base, Alignment);
-      Provenance Prov = loadProvenanceAlignedPairwise(IRB, ShadowPtr, Ordering);
+      Provenance Stored =
+          loadProvenanceAlignedPairwise(IRB, ShadowPtr, Ordering);
+      Provenance Prov = checkSlotOffset(IRB, Stored, ShadowPtr.SlotOffset);
       Value *Slot = allocStackSlot(IRB, false);
       ProvenanceDest SlotPtr = getMainProvenancePtr(IRB, Slot);
       storeProvenance(IRB, SlotPtr, Prov);
       return Prov;
     }
     report_fatal_error("Vectors are not supported.");
+  }
+
+  // Validates a provenance value loaded from shadow memory against the
+  // offset of the address it was loaded from. If the offset stored in the
+  // tag does not match, then the pointer was stored at a different address
+  // within this slot, so its provenance does not correspond to the bytes
+  // being loaded. In that case, we optimistically return omnivalid
+  // provenance. Otherwise, we strip the offset from the tag.
+  Provenance checkSlotOffset(IRBuilder<> &IRB, Provenance Stored,
+                             Value *SlotOffset) {
+    Value *Mask = ConstantInt::get(BS.IntptrTy, kBorTagOffsetMask);
+    Value *StoredOffset = IRB.CreateAnd(Stored.Tag, Mask);
+    Value *Matches = IRB.CreateICmpEQ(StoredOffset, SlotOffset);
+    Value *Tag = IRB.CreateAnd(Stored.Tag, IRB.CreateNot(Mask));
+    Provenance Omnivalid = Provenance::omnivalid(BS);
+    return Provenance(IRB.CreateSelect(Matches, Tag, Omnivalid.Tag),
+                      IRB.CreateSelect(Matches, Stored.Info, Omnivalid.Info));
   }
 
   // Loads a provenance value from an already-aligned address in main memory.
@@ -1752,7 +1811,13 @@ private:
       }
     }
 
-    IRB.CreateAlignedStore(Prov.Tag, Dest.ShadowPtr, kMinProvAlignment);
+    // Record where the pointer begins within its slot, so that loads from
+    // a different offset will not pick up this provenance.
+    Value *Tag = Prov.Tag;
+    if (Dest.SlotOffset && !match(Dest.SlotOffset, m_Zero()))
+      Tag = IRB.CreateOr(Tag, Dest.SlotOffset);
+
+    IRB.CreateAlignedStore(Tag, Dest.ShadowPtr, kMinProvAlignment);
     IRB.CreateAlignedStore(Prov.Info, Dest.OriginPtr, kMinProvAlignment);
   }
 
@@ -2523,7 +2588,7 @@ private:
       }
 
       auto AlignedOffset = ProvenanceOffset::alignDown(IRB, Desc.ByteOffset);
-      auto ObjAddr = Dest.ptradd(IRB, AlignedOffset);
+      auto ObjAddr = Dest.field(IRB, AlignedOffset, Desc.ByteOffset);
       storeProvenance(IRB, ObjAddr, Prov, Ordering);
 
       Cursor = IRB.CreateNUWAdd(Desc.ByteOffset, Desc.ByteWidth);
