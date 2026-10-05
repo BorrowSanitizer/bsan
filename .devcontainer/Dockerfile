@@ -1,5 +1,9 @@
+# syntax=docker/dockerfile:1
 FROM ubuntu:24.04 AS base
 ENV DEBIAN_FRONTEND=noninteractive
+ENV RUSTUP_HOME=/root/.rustup \
+    CARGO_HOME=/root/.cargo \
+    XDG_CACHE_HOME=/root/.cache
 
 RUN apt-get update && apt-get install -y \
     gh \
@@ -16,6 +20,8 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
     libunwind-dev \
+    jq \
+    hyperfine \
     sudo \
     git \
     gdb \
@@ -48,16 +54,13 @@ RUN ./xb --skip setup
 FROM base AS image-dev
 COPY --from=build-image-dev /root/.rustup/toolchains/bsan /root/.rustup/toolchains/bsan
 COPY --from=build-image-dev /root/.cargo/ /root/.cargo
-# Install requriements for benchmarking
-RUN curl --proto '=https' --tlsv1.2 -sSfL https://bencher.dev/download/install-cli.sh | sh
-RUN apt-get update && apt-get install -y \
-    hyperfine
 
 FROM base AS build-image-release
-COPY . . 
-RUN ./xb install
+RUN --mount=type=bind,target=/bsan,rw \
+    cd /bsan \
+    && ./xb install
 
 FROM base AS image-release
 COPY --from=build-image-release /root/.rustup/toolchains/bsan /root/.rustup/toolchains/bsan
-COPY --from=build-image-release /root/.cargo/ /root/.cargo
+COPY --from=build-image-release /root/.cargo/bin /root/.cargo/bin
 RUN rustup default bsan && rustc -vV
