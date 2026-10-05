@@ -652,7 +652,7 @@ bool __bsan_rc_dec_impl(BorTag tag, Block *info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_rc_dec(BorTag tag, Block *info, void *dest_shadow) {
-  if (CONCRETE(tag))
+  if (!CONCRETE(tag))
     return;
   uptr dest = SHADOW_TO_MEM(dest_shadow);
   if (!dest)
