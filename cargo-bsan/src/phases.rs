@@ -249,9 +249,9 @@ pub fn phase_cc(args: impl Iterator<Item = String>) {
     // this directory, then we enable instrumentation. Otherwise, we skip it.
     let build_output_root = expect_env("BSAN_TARGET_OUT_DIR");
     let build_output_root = PathBuf::from(build_output_root);
-    let out_dir = PathBuf::from(expect_env("OUT_DIR"));
-
-    if out_dir.starts_with(build_output_root) {
+    if let Some(out_dir) = env::var("OUT_DIR").ok().map(PathBuf::from)
+        && out_dir.starts_with(build_output_root)
+    {
         // We pass the same flags to every invocation, regardless of whether clang
         // is compiling C or C++, or linking. Some of them will be unused, depending
         // on the invocation, so we tell clang not to warn about them.
