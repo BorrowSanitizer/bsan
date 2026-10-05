@@ -3,9 +3,37 @@
 
 namespace llvm {
 
+static cl::opt<bool>
+    ClInstrumentAllocas("bsan-inst-allocas",
+                        cl::desc("Instrument stack allocations (`alloca`)"),
+                        cl::Hidden, cl::init(true));
+
+static cl::opt<bool>
+    ClInstrumentByval("bsan-inst-byval",
+                      cl::desc("Instrument implicit `byval` allocations."),
+                      cl::Hidden, cl::init(true));
+
+// Indicates if all stack instrumentation has been disabled, covering both
+// `alloca` and `byval` allocations.
+//
+// rustc parses `-Cllvm-args` before loading plugins passed via
+// `-Zllvm-plugins`, so our options are not registered yet at parse time. The
+// environment provides an alternative channel for disabling stack
+// instrumentation when the pass is loaded through rustc instead of `opt`.
+static bool disableStackInstrumentation() {
+  return std::getenv("BSAN_DISABLE_STACK_INSTRUMENTATION") != nullptr;
+}
+
+bool InstrumentationPlan::shouldInstrumentByVal(const Argument &Arg) {
+  return ClInstrumentByval && !disableStackInstrumentation() &&
+         Arg.hasAttribute(Attribute::ByVal);
+}
+
 // We only instrument static allocas that have a non-zero size
 // and cannot be proven safe via LLVM's StackSafetyAnalysis.
 bool InstrumentationPlan::shouldInstrumentAlloca(const AllocaInst &AI) {
+  if (!ClInstrumentAllocas || disableStackInstrumentation())
+    return false;
   // Although Rust emits retags for ZSTs, tracking these
   // allocations leads to false positive errors—probably
   // due to interactions with lowering.

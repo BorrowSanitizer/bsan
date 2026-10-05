@@ -145,6 +145,10 @@ public:
     return HasLifetimeStart.contains(AI);
   }
 
+  // Indicates if the implicit allocation backing this `byval` argument needs
+  // to be instrumented.
+  bool shouldInstrumentByVal(const Argument &Arg);
+
   ~InstrumentationPlan() {
     for (CallBase *CB : Retags) {
       if (CB->getType()->isPointerTy()) {
