@@ -59,6 +59,10 @@ env:
   HEAD_SHA: ${{ inputs.head_sha || github.sha }}
   BRANCH_NAME: ${{ github.ref_name }}
   PR: ${{ inputs.pr }}
+  # We need to force color to be on, because tests for the crate
+  # `colored` depend on it. 
+  CARGO_TERM_COLOR: always
+  CLICOLOR_FORCE: "1"
 jobs:
   # One bench job per crate and target, in two matrices: the branch's, and
   # `main`'s. GitHub caps each matrix at 256 jobs, so CRATES_JSON can list at
