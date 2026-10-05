@@ -226,7 +226,6 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     cmd.env("BSAN_SYMBOLIZER", &llvm_tools.llvm_symbolizer);
     cmd.env("BSAN_SYSROOT", target_sysroot.as_os_str());
 
-    // Run cargo.
     debug_cmd("[cargo-bsan rustc]", env.verbose, &cmd);
     exec(cmd)
 }
@@ -237,20 +236,10 @@ pub fn phase_cc(args: impl Iterator<Item = String>) {
     let env: EnvConfig = EnvConfig::from_env();
     let mut cmd = Command::new(&llvm_tools.clang);
 
-    for arg in args {
-        // Unused linker arguments are treated as warnings.
-        // Instead of manually determining when clang is being invoked
-        // as a linker, which would require implementing some additional,
-        // possibly flaky heuristics, we allow warnings. However, we
-        // silence them.
-        if arg.as_str() == "-Werror" {
-            continue;
-        }
-        cmd.arg(arg);
-    }
+    cmd.args(args);
 
-    // For rustc invocations, the flag `--target` is *not* provided, then we do not
-    // configure rustc to instrument its output. This lets us ignore nything for the
+    // For rustc invocations, if the flag `--target` is *not* provided, then we do not
+    // configure rustc to instrument its output. This lets us ignore anything for the
     // host (e.g. procedural macros and build scripts). For clang, there isn't a
     // similar heuristic, and our host and target are always going to be the same
     // (unless we end up supporting cross compilation).
@@ -263,11 +252,16 @@ pub fn phase_cc(args: impl Iterator<Item = String>) {
     let out_dir = PathBuf::from(expect_env("OUT_DIR"));
 
     if out_dir.starts_with(build_output_root) {
+        // We pass the same flags to every invocation, regardless of whether clang
+        // is compiling C or C++, or linking. Some of them will be unused, depending
+        // on the invocation, so we tell clang not to warn about them.
+        cmd.arg("--start-no-unused-arguments");
         cmd.args(bsan_cflags(&deps));
         if let Some(libcxx) = LibCxx::locate() {
             cmd.args(libcxx_cflags(&libcxx));
         }
         cmd.args(bsan_ldflags(&env, &deps, &llvm_tools));
+        cmd.arg("--end-no-unused-arguments");
     }
 
     debug_cmd("[clang]", env.verbose, &cmd);
