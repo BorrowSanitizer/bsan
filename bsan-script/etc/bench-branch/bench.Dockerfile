@@ -8,15 +8,13 @@
 ARG BASE=ghcr.io/borrowsanitizer/bsan:latest
 FROM ${BASE}
 
-# The source is only mounted for the build, and the build
-# and cargo caches are dropped in the same step. This ensures
-# that there's only two layers added onto the base image. One
-# contains the artifacts changed by `xb install`, and the other
-# contains the instrumented sysroot. 
+# The source is only mounted for the build, with caches dropped
+# in the same step. This ensures that there's only two layers added
+# onto the base image. One contains the artifacts changed by `xb install`... 
 RUN --mount=type=bind,target=/bsan,rw \
     cd /bsan \
     && ./xb install \
     && rm -rf /root/.cargo/registry /root/.cargo/git
 
-# We also want to build a sysroot. 
-RUN cargo bsan setup || true
+# ...and the other contains a prebuilt, instrumented sysroot.
+RUN cargo bsan setup
