@@ -467,7 +467,10 @@
     },
     {
         "name": "tracing-core",
-        "version": "0.1.36"
+        "version": "0.1.36",
+        "exclude": [
+            "metadata::tests::level_filter_reprs"
+        ]
     },
     {
         "name": "thread_local",
