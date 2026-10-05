@@ -170,11 +170,11 @@ struct ProvenanceOffset {
     Val = ConstantInt::get(Ty, Bytes);
   }
 
+  operator Value *() const { return Val; }
+
   static ProvenanceOffset alignDown(IRBuilder<> &IRB, Value *V) {
     const uint64_t ProvAlign = kMinProvAlignment.value();
-    Value *Rounded =
-        IRB.CreateAnd(V, ConstantInt::get(V->getType(), ~(ProvAlign - 1)));
-    return ProvenanceOffset(Rounded);
+    return IRB.CreateAnd(V, ConstantInt::get(V->getType(), ~(ProvAlign - 1)));
   }
 
   static ProvenanceOffset alignUp(IRBuilder<> &IRB, Value *V) {
@@ -204,8 +204,8 @@ struct ProvenanceDest {
   ProvenanceDest(Value *Shadow, Value *Origin, bool UpdateRefCt)
       : ShadowPtr(Shadow), OriginPtr(Origin), UpdateRefCt(UpdateRefCt) {}
   ProvenanceDest ptradd(IRBuilder<> &IRB, ProvenanceOffset Offset) {
-    return ProvenanceDest(::ptradd(IRB, ShadowPtr, Offset.Val),
-                          ::ptradd(IRB, OriginPtr, Offset.Val), UpdateRefCt);
+    return ProvenanceDest(::ptradd(IRB, ShadowPtr, Offset),
+                          ::ptradd(IRB, OriginPtr, Offset), UpdateRefCt);
   }
 };
 
@@ -1759,11 +1759,8 @@ private:
       }
     }
 
-    IRB.CreateAlignedStore(Prov.Tag, Dest.ShadowPtr, kMinProvAlignment)
-        ->setAtomic(Ordering);
-
-    IRB.CreateAlignedStore(Prov.Info, Dest.OriginPtr, kMinProvAlignment)
-        ->setAtomic(Ordering);
+    IRB.CreateAlignedStore(Prov.Tag, Dest.ShadowPtr, kMinProvAlignment);
+    IRB.CreateAlignedStore(Prov.Info, Dest.OriginPtr, kMinProvAlignment);
   }
 
   // Populates the array of argument provenance pointers and initializes the
@@ -2457,10 +2454,14 @@ private:
     // This is necessary for accurate reference counting and to
     // make sure that pointers that are cast from integers via load / store
     // type punning receive omnivalid provenance.
-    NextNodeIRBuilder AfterIRB(&SI);
-    ProvenanceDest ShadowPtr =
-        getShadowProvenancePtr(AfterIRB, Ptr, SI.getAlign());
-    copyProvenance(AfterIRB, ShadowPtr, Val, SI.getOrdering());
+    //
+    // Provenance is stored before the application's store, which is given an
+    // additional release ordering if it is atomic. Any thread that
+    // acquires the stored value will also observe its provenance.
+    IRBuilder<> IRB(&SI);
+    ProvenanceDest ShadowPtr = getShadowProvenancePtr(IRB, Ptr, SI.getAlign());
+    copyProvenance(IRB, ShadowPtr, Val, SI.getOrdering());
+    SI.setOrdering(addReleaseOrdering(SI.getOrdering()));
   }
 
   void copyProvenance(IRBuilder<> &IRB, ProvenanceDest Dest, Value *Val,
@@ -2567,15 +2568,35 @@ private:
 
     if (Dest.UpdateRefCt) {
       IRB.CreateCall(BS.BsanFuncShadowClearAligned,
-                     {Dest.ShadowPtr, Dest.OriginPtr, Size.Val});
+                     {Dest.ShadowPtr, Dest.OriginPtr, Size});
 
     } else {
       // We only need to clear tag values, since they gate the validity
       // of a provenance value.
       IRB.CreateMemSet(Dest.ShadowPtr,
-                       ConstantInt::getNullValue(IRB.getInt8Ty()), Size.Val,
+                       ConstantInt::getNullValue(IRB.getInt8Ty()), Size,
                        kMinProvAlignment);
     }
+  }
+
+  void handleCASOrRMW(Instruction &I) {
+    IRBuilder<> IRB(&I);
+    Value *Addr = I.getOperand(0);
+    Value *Val = I.getOperand(1);
+    ProvenanceDest ShadowPtr = getShadowProvenancePtr(IRB, Addr, Align(1));
+    TypeSize StoreSize = BS.DL->getTypeStoreSize(Val->getType());
+    Value *TotalSize = IRB.CreateTypeSize(BS.IntptrTy, StoreSize);
+    clearProvenance(IRB, ShadowPtr, TotalSize);
+  }
+
+  void visitAtomicRMWInst(AtomicRMWInst &I) {
+    handleCASOrRMW(I);
+    I.setOrdering(addReleaseOrdering(I.getOrdering()));
+  }
+
+  void visitAtomicCmpXchgInst(AtomicCmpXchgInst &I) {
+    handleCASOrRMW(I);
+    I.setSuccessOrdering(addReleaseOrdering(I.getSuccessOrdering()));
   }
 
   void visitGetElementPtrInst(GetElementPtrInst &I) {
