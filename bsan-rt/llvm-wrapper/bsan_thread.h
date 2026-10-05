@@ -72,27 +72,42 @@ public:
   // Returns the bottom of the "real" stack associated with this thread.
   uptr stackBottom() const { return stack_bottom_; }
 
-  // Returns the top of the "shadow" stack associated with this thread.
-  uptr shadowStackTop() const {
-    return (uptr)shadow_stack_bottom_ + shadow_stack_size_;
-  }
-
-  ArrayRef<Provenance> shadowStack() const {
-    Provenance *cursor = shadowStackCursor();
-    Provenance *top = (Provenance *)(shadowStackTop());
+  ArrayRef<Provenance> shadowRoots() const {
+    Provenance *cursor = shadowRootCursor();
+    Provenance *top =
+        (Provenance *)((uptr)shadow_stack_bottom_ + shadow_stack_size_);
     if (cursor == nullptr || cursor > top) {
       return {};
     }
     return ArrayRef<Provenance>(cursor, top - cursor);
   }
 
+  // Returns the shadow memory for the live region of this thread's "real"
+  // stack, from the last published stack pointer up to the top of the stack.
+  // This can only be called when the world has been stopped.
+  ShadowRange liveShadowStack() const {
+    uptr sp = atomic_load(&curr_stack_bottom_, memory_order_relaxed);
+    return ShadowRange(sp, stack_top_);
+  }
+
+  // Returns the shadow memory for the dead region of this thread's "real"
+  // stack, from the watermark up to the last published stack pointer.
+  // This can only be called when the world has been stopped.
+  ShadowRange deadShadowStack() const {
+    uptr watermark = atomic_load(&stack_watermark_, memory_order_relaxed);
+    uptr sp = atomic_load(&curr_stack_bottom_, memory_order_relaxed);
+    return ShadowRange(watermark, sp);
+  }
+
   // Returns the current value of this thread's shadow stack pointer.
-  Provenance *shadowStackCursor() const {
+  Provenance *shadowRootCursor() const {
     return shadow_stack_ptr_ ? *shadow_stack_ptr_ : nullptr;
   }
 
   void publishStackPointer(memory_order order);
   uptr getStackPointer(memory_order order);
+  uptr getStackWatermark(memory_order order);
+  void setStackWatermark(uptr addr, memory_order order);
 
   // Zeroes this thread's tree-node visit counter. This writes to another
   // thread's thread-local storage, so it can only be called when the world
@@ -153,6 +168,7 @@ private:
   // reliably observed by the thread that triggers
   // the garbage collector.
   atomic_uintptr_t curr_stack_bottom_;
+  atomic_uintptr_t stack_watermark_;
 
   void *shadow_stack_bottom_;
   uptr shadow_stack_size_;

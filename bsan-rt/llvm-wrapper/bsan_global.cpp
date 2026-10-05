@@ -105,18 +105,44 @@ void GlobalContext::RunGarbageCollector(Snapshot &snap,
   ForEachThread(
       threads,
       [](BsanThread *thread, Snapshot *snap) {
-        // Collect all of the provenance values that
-        // are reachable from each thread.
-        for (auto prov : thread->shadowStack()) {
+        // Each thread has three different areas that
+        // we need to scan to identify provenance values in
+        // shadow memory. First, we look at the "shadow roots",
+        // which store the provenance of values that may have been
+        // loaded into registers at the time the world is stopped.
+        for (auto prov : thread->shadowRoots()) {
           snap->live.insert(prov);
         }
-        uptr addr = thread->getStackPointer(memory_order_relaxed);
-        uptr cursor = addr & ~(kMinProvAlignment - 1);
-        for (; cursor < thread->stackTop(); cursor += kMinProvAlignment) {
-          Block *block = *(Block **)MEM_TO_ORIGIN(cursor);
-          if (block)
-            snap->live.insert({*(BorTag *)MEM_TO_SHADOW(cursor), block});
+
+        // Next, we scan the shadow of the thread's stack. There are
+        // two different ranges of the stack that we need to consider:
+        // The range [sp, top) includes all values within the shadow of
+        // live stack allocations. These must be read and then left untouched.
+        ShadowRange live = thread->liveShadowStack();
+        for (uptr i = 0; i < live.size; i++) {
+          if (live.blocks[i])
+            snap->live.insert({live.tags[i], live.blocks[i]});
         }
+
+        // The next range is [watermark, sp). These values are below the
+        // current stack pointer, and correspond to the shadow of stack
+        // allocations. that were live at one point in time since the last GC
+        // pass. We need to clear these values so that they are not
+        // "resurrected" within the shadow of uninitialized allocations in
+        // future stack frames.
+        ShadowRange dead = thread->deadShadowStack();
+        for (uptr i = 0; i < dead.size; i++) {
+          if (dead.blocks[i] || dead.tags[i]) {
+            dead.blocks[i] = nullptr;
+            dead.tags[i] = 0;
+          }
+        }
+
+        // Once we've cleared the "tail" end of the shadow stack, we reset the
+        // watermark equal to the stack pointer. Everything below the stack
+        // pointer has been zeroed successfully.
+        thread->setStackWatermark(thread->getStackPointer(memory_order_relaxed),
+                                  memory_order_relaxed);
       },
       &snap);
 
