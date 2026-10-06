@@ -56,11 +56,10 @@ runs:
       CRATE: ${{ inputs.crate }}
       TARGET: ${{ inputs.target }}
       LOG_URL: ${{ steps.log.outputs.url }}
-      CLICOLOR_FORCE: "1"
+      CLICOLOR_FORCE: 1
+      COLORTERM: "truecolor"
     run: |
       set -euo pipefail
-      # A branch is compared against its baseline under BorrowSanitizer's
-      # `full` configuration alone, so every other one, and Miri, are skipped.
       flags=(--crate "$CRATE" --log-url "$LOG_URL" --no-miri --mode full)
       mkdir -p results
       out="results/results_${LABEL}_${TARGET}_${CRATE}"
