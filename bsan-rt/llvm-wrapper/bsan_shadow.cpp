@@ -256,7 +256,7 @@ ALWAYS_INLINE static void ClearIfOverlapping(uptr slot, uptr dst, uptr size) {
   if (tag == 0)
     return;
   uptr start = slot + (tag & kBorTagOffsetMask);
-  if (start < dst + size && start + 8 > dst) {
+  if (start < dst + size && start + kMinProvAlignment > dst) {
     __bsan_rc_dec(tag, *SlotBlock(slot), tag_ptr);
     *tag_ptr = 0;
   }
@@ -266,16 +266,17 @@ ALWAYS_INLINE static void ClearIfOverlapping(uptr slot, uptr dst, uptr size) {
 // of its bytes lie within the source range, and it lands in `dest_slot`.
 ALWAYS_INLINE static uptr MovedPointer(uptr src_slot, uptr dest_slot, uptr dst,
                                        uptr src, uptr size) {
-  if (src_slot < (src & ~kBorTagOffsetMask) || src_slot + 8 > src + size)
+  if (src_slot < (src & ~(kMinProvAlignment - 1)) ||
+      src_slot + kMinProvAlignment > src + size)
     return 0;
   BorTag tag = *SlotTag(src_slot);
   if (STRIP_TAG_OFFSET(tag) == kOmnivalidTag)
     return 0;
   uptr start = src_slot + (tag & kBorTagOffsetMask);
-  if (start < src || start + 8 > src + size)
+  if (start < src || start + kMinProvAlignment > src + size)
     return 0;
   uptr moved = start - src + dst;
-  if ((moved & ~kBorTagOffsetMask) != dest_slot)
+  if ((moved & ~(kMinProvAlignment - 1)) != dest_slot)
     return 0;
   return moved;
 }
@@ -285,11 +286,11 @@ ALWAYS_INLINE static uptr MovedPointer(uptr src_slot, uptr dest_slot, uptr dst,
 ALWAYS_INLINE static void TransferSlot(uptr slot, uptr dst, uptr src,
                                        uptr size) {
   uptr window = slot - dst + src;
-  uptr first_src = window & ~kBorTagOffsetMask;
+  uptr first_src = window & ~(kMinProvAlignment - 1);
   uptr moved = MovedPointer(first_src, slot, dst, src, size);
   uptr moved_slot = first_src;
-  if (window & kBorTagOffsetMask) {
-    uptr second_src = first_src + 8;
+  if (window & (kMinProvAlignment - 1)) {
+    uptr second_src = first_src + kMinProvAlignment;
     if (uptr other = MovedPointer(second_src, slot, dst, src, size)) {
       // Two pointers cannot overlap, so one of them must be stale.
       // We cannot tell which, so neither one is copied.
@@ -350,17 +351,17 @@ void MoveShadow(void *dest, const void *src, uptr size) {
   if (size == 0 || dst == from)
     return;
 
-  uptr first = (dst & ~kBorTagOffsetMask) - 8;
+  uptr first = (dst & ~(kMinProvAlignment - 1)) - kMinProvAlignment;
   if (!MEM_IS_APP(first))
-    first += 8;
-  uptr last = (dst + size - 1) & ~kBorTagOffsetMask;
-  // Read in the backwards/forwards direction based on the ordering of `dst`/`from`.
-  // This prevents slots being overwritten before they're read.
+    first += kMinProvAlignment;
+  uptr last = (dst + size - 1) & ~(kMinProvAlignment - 1);
+  // Read in the backwards/forwards direction based on the ordering of
+  // `dst`/`from`. This prevents slots being overwritten before they're read.
   if (dst < from) {
-    for (uptr slot = first; slot <= last; slot += 8)
+    for (uptr slot = first; slot <= last; slot += kMinProvAlignment)
       TransferSlot(slot, dst, from, size);
   } else {
-    for (uptr slot = last;; slot -= 8) {
+    for (uptr slot = last;; slot -= kMinProvAlignment) {
       TransferSlot(slot, dst, from, size);
       if (slot == first)
         break;
@@ -372,11 +373,11 @@ void ClearShadow(void *dest, uptr size) {
   if (!MEM_IS_APP(dest) || size == 0)
     return;
   uptr dst = (uptr)dest;
-  uptr first = (dst & ~kBorTagOffsetMask) - 8;
+  uptr first = (dst & ~(kMinProvAlignment - 1)) - kMinProvAlignment;
   if (!MEM_IS_APP(first))
-    first += 8;
-  uptr last = (dst + size - 1) & ~kBorTagOffsetMask;
-  for (uptr slot = first; slot <= last; slot += 8)
+    first += kMinProvAlignment;
+  uptr last = (dst + size - 1) & ~(kMinProvAlignment - 1);
+  for (uptr slot = first; slot <= last; slot += kMinProvAlignment)
     ClearIfOverlapping(slot, dst, size);
 }
 
