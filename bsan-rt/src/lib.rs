@@ -159,8 +159,7 @@ pub struct BorTag(usize);
 impl BorTag {
     /// Tags are handed out in multiples of `STRIDE`. Within shadow memory,
     /// the low 3 bits of a tag hold the byte offset [0, 7] of the pointer
-    /// within its 8-byte provenance slot. These bits are stripped before
-    /// a tag reaches the runtime, so they must always be zero here.
+    /// within its 8-byte provenance slot.
     const STRIDE: usize = 1 << 3;
     const OFFSET_MASK: usize = Self::STRIDE - 1;
 

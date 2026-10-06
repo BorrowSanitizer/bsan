@@ -238,9 +238,6 @@ ALWAYS_INLINE static void UpdateShadowSlot(uptr d_shadow, uptr d_origin,
     *dest_block_ptr = *source_block_ptr;
 }
 
-// The tag in each provenance slot records the offset at which its pointer
-// begins, so the pointer occupies [slot + offset, slot + offset + 8). This may
-// extend into the following slot.
 ALWAYS_INLINE static BorTag *SlotTag(uptr slot) {
   return reinterpret_cast<BorTag *>(MEM_TO_SHADOW(slot));
 }

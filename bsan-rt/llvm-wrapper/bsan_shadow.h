@@ -19,7 +19,7 @@ typedef u32 BlockIndex;
 
 typedef uptr BorTag;
 
-// Borrow tags are minted in multiples of `kBorTagStride`. The low 3 bits of a
+// Borrow tags are assigned in multiples of `kBorTagStride`. The low 3 bits of a
 // tag stored in shadow memory hold the byte offset [0, 7] of the pointer within
 // its 8-byte provenance slot. These bits are never set outside of shadow
 // memory.
