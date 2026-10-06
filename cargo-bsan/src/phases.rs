@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 use rustc_version::VersionMeta;
@@ -183,9 +183,14 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     cmd.env("RUSTC_WRAPPER", &cargo_bsan_path);
 
     let cc_wrapper = create_symlink(&cargo_bsan_path, "clang").unwrap();
+    let cxx_wrapper = create_symlink(&cargo_bsan_path, "clang++").unwrap();
+
     cmd.env("CC", &cc_wrapper);
-    cmd.env("CXX", &cc_wrapper);
+    cmd.env("CXX", &cxx_wrapper);
+
     cmd.env("BSAN_CC_WRAPPER", &cc_wrapper);
+    cmd.env("BSAN_CXX_WRAPPER", &cxx_wrapper);
+
     if LibCxx::locate().is_some() {
         // Ensure that the `cc` crate uses LLVM's `libc++` instead of GNU `libstdc++`.
         cmd.env("CXXSTDLIB", "c++");
@@ -230,14 +235,9 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     exec(cmd)
 }
 
-pub fn phase_cc(args: impl Iterator<Item = String>) {
-    let deps = Dependencies::from_env();
-    let llvm_tools = LlvmTools::from_env();
-    let env: EnvConfig = EnvConfig::from_env();
-    let mut cmd = Command::new(&llvm_tools.clang);
-
-    cmd.args(args);
-
+// Determines if a command is being invoked to produce build output within
+// Cargo's target output directory.
+fn maybe_building_artifact() -> bool {
     // For rustc invocations, if the flag `--target` is *not* provided, then we do not
     // configure rustc to instrument its output. This lets us ignore anything for the
     // host (e.g. procedural macros and build scripts). For clang, there isn't a
@@ -249,18 +249,36 @@ pub fn phase_cc(args: impl Iterator<Item = String>) {
     // this directory, then we enable instrumentation. Otherwise, we skip it.
     let build_output_root = expect_env("BSAN_TARGET_OUT_DIR");
     let build_output_root = PathBuf::from(build_output_root);
-    if let Some(out_dir) = env::var("OUT_DIR").ok().map(PathBuf::from)
-        && out_dir.starts_with(build_output_root)
-    {
+    env::var("OUT_DIR").is_ok_and(|dir| PathBuf::from(dir).starts_with(build_output_root))
+}
+
+/// Intercept an invocation of `clang`, providing flags that
+/// enable BorrowSanitizer.
+pub fn phase_cc(args: impl Iterator<Item = String>, is_cxx: bool) {
+    let deps = Dependencies::from_env();
+    let llvm_tools = LlvmTools::from_env();
+    let env: EnvConfig = EnvConfig::from_env();
+    let mut cmd = Command::new(&llvm_tools.clang);
+
+    cmd.args(args);
+
+    if is_cxx {
+        cmd.arg("--driver-mode=g++");
+    }
+
+    if maybe_building_artifact() {
         // We pass the same flags to every invocation, regardless of whether clang
         // is compiling C or C++, or linking. Some of them will be unused, depending
         // on the invocation, so we tell clang not to warn about them.
         cmd.arg("--start-no-unused-arguments");
         cmd.args(bsan_cflags(&deps));
-        if let Some(libcxx) = LibCxx::locate() {
-            cmd.args(libcxx_cflags(&libcxx));
-        }
         cmd.args(bsan_ldflags(&env, &deps, &llvm_tools));
+        if is_cxx && let Some(libcxx) = LibCxx::locate() {
+            let headers = libcxx.join("include").join("c++").join("v1");
+            cmd.args(["-stdlib++-isystem", &headers.display().to_string()]);
+            cmd.arg("-stdlib=libc++");
+            cmd.arg(format!("-L{}", libcxx.join("lib").display()));
+        }
         cmd.arg("--end-no-unused-arguments");
     }
 
@@ -363,6 +381,8 @@ fn bsan_rustflags(env: &EnvConfig, deps: &Dependencies, llvm_tools: &LlvmTools) 
         additional_args.push(format!("-Clink-arg=-l{rust_lib}"));
     }
 
+    // Rust will receive `-lc++` if it's linking C++ dependencies, so it needs to
+    // know where to find it.
     if let Some(libcxx) = LibCxx::locate() {
         additional_args.push(format!("-Lnative={}", libcxx.join("lib").display()));
     }
@@ -389,15 +409,6 @@ pub fn bsan_cflags(deps: &Dependencies) -> Vec<String> {
     // The instrumentation pass must run during compilation, so it is always required.
     additional_args.push(format!("-fpass-plugin={}", deps.llvm_pass.display()));
     additional_args
-}
-
-/// Flags needed to compile C++ sources against our instrumented libc++.
-fn libcxx_cflags(libcxx: &Path) -> Vec<String> {
-    // Rust does the linking, so all we need is to instruct clang to use the
-    // C++ headers provided by our sysroot, instead of those from any existing
-    // standard library installation.
-    let headers = libcxx.join("include").join("c++").join("v1");
-    vec![String::from("-stdlib++-isystem"), headers.display().to_string()]
 }
 
 /// Flags needed to link instrumented C/C++ objects against the BorrowSanitizer runtime.

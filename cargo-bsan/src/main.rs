@@ -21,11 +21,13 @@ fn main() {
     let mut args = env::args();
 
     let binary_name = args.next().unwrap();
-    if let Some(cc_wrapper) = env::var_os("BSAN_CC_WRAPPER")
-        && let Some(as_str) = cc_wrapper.to_str()
-        && as_str == binary_name
-    {
-        return phase_cc(args);
+
+    if env::var_os("BSAN_CXX_WRAPPER").is_some_and(|v| *v == *binary_name) {
+        return phase_cc(args, true);
+    }
+
+    if env::var_os("BSAN_CC_WRAPPER").is_some_and(|v| *v == *binary_name) {
+        return phase_cc(args, false);
     }
 
     if env::var_os("BSAN_CALLED_FROM_SETUP").is_some() {
