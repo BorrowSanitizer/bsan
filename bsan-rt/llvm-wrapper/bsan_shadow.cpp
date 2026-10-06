@@ -349,7 +349,7 @@ void MoveShadow(void *dest, const void *src, uptr size) {
   uptr from = (uptr)src;
   if (size == 0 || dst == from)
     return;
-  
+
   uptr first = (dst & ~kBorTagOffsetMask) - 8;
   if (!MEM_IS_APP(first))
     first += 8;
