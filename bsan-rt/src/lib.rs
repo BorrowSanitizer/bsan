@@ -161,7 +161,7 @@ impl BorTag {
     /// the low 3 bits of a tag hold the byte offset [0, 7] of the pointer
     /// within its 8-byte provenance slot. These bits are stripped before
     /// a tag reaches the runtime, so they must always be zero here.
-    pub const STRIDE: usize = 1 << 3;
+    const STRIDE: usize = 1 << 3;
     const OFFSET_MASK: usize = Self::STRIDE - 1;
 
     /// Permits any access.

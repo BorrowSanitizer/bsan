@@ -61,7 +61,7 @@ static bool ProtectMemoryRange(uptr beg, uptr size, const char *name) {
   if (size > 0) {
     void *addr = MmapFixedNoAccess(beg, size, name);
     if (beg == 0 && addr) {
-      // Depending on the kernel configuration, we may not be able to protect
+      // DepJending on the kernel configuration, we may not be able to protect
       // the page at address zero.
       uptr gap = 16 * GetPageSizeCached();
       beg += gap;
@@ -292,7 +292,7 @@ ALWAYS_INLINE static void TransferSlot(uptr slot, uptr dst, uptr src,
     uptr second_src = first_src + 8;
     if (uptr other = MovedPointer(second_src, slot, dst, src, size)) {
       // Two pointers cannot overlap, so one of them must be stale.
-      // We cannot tell which, so neither one is copied
+      // We cannot tell which, so neither one is copied.
       moved = moved ? 0 : other;
       moved_slot = second_src;
     }
@@ -354,8 +354,8 @@ void MoveShadow(void *dest, const void *src, uptr size) {
   if (!MEM_IS_APP(first))
     first += 8;
   uptr last = (dst + size - 1) & ~kBorTagOffsetMask;
-  // Read in the backwards/forwards direction based on the ordering of dst/from
-  // This prevents slots being overwritten before they're read
+  // Read in the backwards/forwards direction based on the ordering of `dst`/`from`.
+  // This prevents slots being overwritten before they're read.
   if (dst < from) {
     for (uptr slot = first; slot <= last; slot += 8)
       TransferSlot(slot, dst, from, size);
@@ -368,7 +368,6 @@ void MoveShadow(void *dest, const void *src, uptr size) {
   }
 }
 
-// Clears the provenance of each pointer that overlaps [dest, dest + size).
 void ClearShadow(void *dest, uptr size) {
   if (!MEM_IS_APP(dest) || size == 0)
     return;

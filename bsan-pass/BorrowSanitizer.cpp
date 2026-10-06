@@ -219,8 +219,9 @@ struct ProvenanceDest {
                  Value *SlotOffset = nullptr)
       : ShadowPtr(Shadow), OriginPtr(Origin), UpdateRefCt(UpdateRefCt),
         SlotOffset(SlotOffset) {}
-  // Returns the destination for whole slots at the given offset. The
-  // result has no slot offset, so it should only be used for clearing.
+  // Returns the destination at the given offset. The result has no slot
+  // offset, so it should only be used for aligned destinations, such as
+  // main memory or whole slots that are being cleared.
   ProvenanceDest ptradd(IRBuilder<> &IRB, ProvenanceOffset Offset) {
     return ProvenanceDest(::ptradd(IRB, ShadowPtr, Offset),
                           ::ptradd(IRB, OriginPtr, Offset), UpdateRefCt);
