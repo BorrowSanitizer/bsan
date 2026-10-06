@@ -83,13 +83,12 @@ void GlobalContext::acquireProvenance(Provenance prov) {
   global_zct_.insert(prov);
 }
 
-void GlobalContext::acquireProvenance(ConcreteProvenanceSet &source) {
+void GlobalContext::acquireProvenance(ProvenanceSet &source) {
   Lock lock(&global_zct_lock_);
   global_zct_.takeFrom(source);
 }
 
-void GlobalContext::MergeZeroCounts(Snapshot *snap,
-                                    ConcreteProvenanceSet &zct) {
+void GlobalContext::MergeZeroCounts(Snapshot *snap, ProvenanceSet &zct) {
   zct.retainIf([&](BlockIndex idx, BorTag tag) -> bool {
     Provenance prov = {tag, BLOCK_PTR(idx)};
     if (snap->live.contains(prov)) {
@@ -118,31 +117,23 @@ void GlobalContext::RunGarbageCollector(Snapshot &snap,
         // two different ranges of the stack that we need to consider:
         // The range [sp, top) includes all values within the shadow of
         // live stack allocations. These must be read and then left untouched.
-        ShadowRange live = thread->liveShadowStack();
+        uptr sp = thread->getStackPointer(memory_order_relaxed);
+        ShadowRange live = thread->shadowStack(sp);
         for (uptr i = 0; i < live.size; i++) {
           if (live.blocks[i])
             snap->live.insert({live.tags[i], live.blocks[i]});
         }
 
-        // The next range is [watermark, sp). These values are below the
+        // The next range is [bottom, sp). These values are below the
         // current stack pointer, and correspond to the shadow of stack
-        // allocations. that were live at one point in time since the last GC
+        // allocations that were live at one point in time since the last GC
         // pass. We need to clear these values so that they are not
         // "resurrected" within the shadow of uninitialized allocations in
-        // future stack frames.
-        ShadowRange dead = thread->deadShadowStack();
-        for (uptr i = 0; i < dead.size; i++) {
-          if (dead.blocks[i] || dead.tags[i]) {
-            dead.blocks[i] = nullptr;
-            dead.tags[i] = 0;
-          }
-        }
-
-        // Once we've cleared the "tail" end of the shadow stack, we reset the
-        // watermark equal to the stack pointer. Everything below the stack
-        // pointer has been zeroed successfully.
-        thread->setStackWatermark(thread->getStackPointer(memory_order_relaxed),
-                                  memory_order_relaxed);
+        // future stack frames that get pushed. A thread only publishes its
+        // stack pointer when it reaches a safepoint, so we cannot know how far
+        // below the stack pointer it has been. Instead, we drop every page of
+        // shadow memory beneath it.
+        thread->releaseDeadShadowStack(sp);
       },
       &snap);
 
@@ -177,7 +168,7 @@ void GlobalContext::RunGarbageCollector(Snapshot &snap,
 }
 
 void GlobalContext::CollectGarbage(Snapshot *snap) {
-  ConcreteProvenanceSet still_pending;
+  ProvenanceSet still_pending;
   pending_.drain([&](BlockIndex idx, BorTagSet &tags) {
     Block *info = BLOCK_PTR(idx);
     tags.forEach([&](BorTag tag) {

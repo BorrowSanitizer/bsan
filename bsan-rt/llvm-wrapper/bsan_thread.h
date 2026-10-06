@@ -83,20 +83,15 @@ public:
   }
 
   // Returns the shadow memory for the live region of this thread's "real"
-  // stack, from the last published stack pointer up to the top of the stack.
+  // stack, from the given stack pointer up to the top of the stack.
   // This can only be called when the world has been stopped.
-  ShadowRange liveShadowStack() const {
-    uptr sp = atomic_load(&curr_stack_bottom_, memory_order_relaxed);
-    return ShadowRange(sp, stack_top_);
-  }
+  ShadowRange shadowStack(uptr sp) const { return ShadowRange(sp, stack_top_); }
 
-  // Returns the shadow memory for the dead region of this thread's "real"
-  // stack, from the watermark up to the last published stack pointer.
+  // Zeroes the shadow memory for the dead region of this thread's "real"
+  // stack, from the bottom of the stack up to the given stack pointer.
   // This can only be called when the world has been stopped.
-  ShadowRange deadShadowStack() const {
-    uptr watermark = atomic_load(&stack_watermark_, memory_order_relaxed);
-    uptr sp = atomic_load(&curr_stack_bottom_, memory_order_relaxed);
-    return ShadowRange(watermark, sp);
+  void releaseDeadShadowStack(uptr sp) const {
+    ReleaseShadow(stack_bottom_, sp & ~(kMinProvAlignment - 1));
   }
 
   // Returns the current value of this thread's shadow stack pointer.
@@ -106,8 +101,6 @@ public:
 
   void publishStackPointer(memory_order order);
   uptr getStackPointer(memory_order order);
-  uptr getStackWatermark(memory_order order);
-  void setStackWatermark(uptr addr, memory_order order);
 
   // Zeroes this thread's tree-node visit counter. This writes to another
   // thread's thread-local storage, so it can only be called when the world
@@ -154,7 +147,7 @@ private:
 
   BsanThreadContext *context_;
 
-  ConcreteProvenanceSet zct_;
+  ProvenanceSet zct_;
 
   thread_callback_t start_routine_;
   void *arg_;
@@ -168,7 +161,6 @@ private:
   // reliably observed by the thread that triggers
   // the garbage collector.
   atomic_uintptr_t curr_stack_bottom_;
-  atomic_uintptr_t stack_watermark_;
 
   void *shadow_stack_bottom_;
   uptr shadow_stack_size_;

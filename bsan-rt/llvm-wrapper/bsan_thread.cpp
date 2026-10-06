@@ -144,7 +144,10 @@ void BsanThread::Init() {
   __bsan_shadow_stack =
       (Provenance *)((uptr)shadow_stack_bottom_ + shadow_stack_size_);
   atomic_store(&curr_stack_bottom_, (uptr)stack_top_, memory_order_relaxed);
-  atomic_store(&stack_watermark_, (uptr)stack_top_, memory_order_relaxed);
+
+  // The memory backing a thread's stack is reused once the thread exits, so
+  // its shadow may still hold the provenance values of a previous thread.
+  ReleaseShadow(stack_bottom_, stack_top_);
 
   // We record the address of the thread-local shadow stack pointer so
   // that the GC can accurately read the initialized contents of the
@@ -205,22 +208,10 @@ void BsanThread::FreeBlock(BlockIndex idx) {
 void BsanThread::publishStackPointer(memory_order order) {
   uptr addr = (uptr)__builtin_frame_address(0);
   atomic_store(&curr_stack_bottom_, addr, order);
-  uptr watermark = atomic_load(&stack_watermark_, order);
-  if (watermark > addr) {
-    atomic_store(&stack_watermark_, addr, order);
-  }
 }
 
 uptr BsanThread::getStackPointer(memory_order order) {
   return atomic_load(&curr_stack_bottom_, order);
-}
-
-uptr BsanThread::getStackWatermark(memory_order order) {
-  return atomic_load(&stack_watermark_, order);
-}
-
-void BsanThread::setStackWatermark(uptr addr, memory_order order) {
-  atomic_store(&stack_watermark_, addr, order);
 }
 
 bool BsanThread::ownsAddress(void *addr) {
@@ -270,7 +261,13 @@ void BsanThread::Destroy() {
     block_allocator.FlushCache(&this->block_cache_);
     if (common_flags()->use_sigaltstack)
       UnsetAlternateSignalStack(altstack_base_);
-    zct_.~ConcreteProvenanceSet();
+
+    // The provenance within this set was drained into the
+    // global table via `FinishThread` above, so this must be
+    // empty at this point.
+
+    zct_.~ProvenanceSet();
+    ReleaseShadow(stack_bottom_, stack_top_);
     UnmapOrDie(shadow_stack_bottom_, shadow_stack_size_);
   } else {
     CHECK_NE(this, CurrentThread());

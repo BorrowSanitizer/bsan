@@ -153,6 +153,11 @@ void ClearShadow(void *dest, uptr size);
 void ClearShadowAligned(uptr shadow_start, uptr origin_start,
                         uptr size_aligned);
 void WriteShadow(void *dest, Provenance prov);
+// Zeroes the shadow of the application range [begin, end) without adjusting
+// reference counts. Whole pages are returned to the OS, so the cost is
+// proportional to the amount of shadow that was actually written to, and
+// not to the size of the range.
+void ReleaseShadow(uptr begin, uptr end);
 } // namespace __bsan
 
 #endif

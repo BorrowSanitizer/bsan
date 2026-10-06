@@ -12,7 +12,7 @@ public:
   Snapshot() {};
   // The set of borrow tags that are currently
   // reachable from any of the shadow stacks.
-  ConcreteProvenanceSet live;
+  ProvenanceSet live;
 };
 
 // Global state associated with the runtime.
@@ -27,7 +27,7 @@ public:
   // try to start the GC, and only one will succeed.
   void requestGC();
   void acquireProvenance(Provenance prov);
-  void acquireProvenance(ConcreteProvenanceSet &source);
+  void acquireProvenance(ProvenanceSet &source);
 
   void FreeBlock(BlockIndex idx) {
     block_allocator.Free(&this->block_cache_, idx);
@@ -41,7 +41,7 @@ private:
   // When a thread exits, its zero count table needs to be
   // retained so that we can clean up any of the provenance
   // values that it acquired in a future garbage collection pass.
-  ConcreteProvenanceSet global_zct_;
+  ProvenanceSet global_zct_;
 
   // A lock held by the thread that succeeds at invoking
   // the garbage collector. While this lock is held, the
@@ -61,7 +61,7 @@ private:
   // ready to be garbage collected. These values are no longer reachable
   // in shadow memory, or within the zero count tables associated with
   // each thread.
-  ConcreteProvenanceSet pending_;
+  ProvenanceSet pending_;
 
   // We use a shared, global cache of blocks to handle allocation
   // and deallocation in contexts where a thread has yet to be
@@ -72,7 +72,7 @@ private:
   // the set of pending provenance values. We only add values to the pending set
   // if they are not present on any shadow stack. Values that we add to the
   // pending set are also removed from their thread's zero-count-table.
-  static void MergeZeroCounts(Snapshot *snap, ConcreteProvenanceSet &zct);
+  static void MergeZeroCounts(Snapshot *snap, ProvenanceSet &zct);
   // Drains the contents of the pending provenance set, pruning the associated
   // state from the tree for each allocation. Ejects any retired allocation
   // objects that are confirmed to be unreachable.

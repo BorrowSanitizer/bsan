@@ -3,6 +3,7 @@
 #include "bsan_interface_internal.h"
 #include "sanitizer_common/sanitizer_common.h"
 #if SANITIZER_LINUX
+#include <sys/mman.h>
 #include <sys/personality.h>
 #endif
 
@@ -344,6 +345,34 @@ void ClearShadowAligned(uptr shadow_start, uptr origin_start,
       *tag_ptr = 0;
     }
   }
+}
+
+// Zeroes the range [beg, end) of shadow memory. Every page that lies
+// entirely within the range is dropped instead of being written to.
+static void ZeroShadowRange(uptr beg, uptr end) {
+  uptr page_size = GetPageSizeCached();
+  uptr beg_aligned = RoundUpTo(beg, page_size);
+  uptr end_aligned = RoundDownTo(end, page_size);
+  if (beg_aligned >= end_aligned) {
+    internal_memset((void *)beg, 0, end - beg);
+    return;
+  }
+  internal_memset((void *)beg, 0, beg_aligned - beg);
+  // Shadow memory is a private, anonymous mapping, so the pages that we
+  // drop here will read as zero the next time that they are touched. Pages
+  // that were never touched to begin with are skipped by the kernel.
+  if (internal_madvise(beg_aligned, end_aligned - beg_aligned, MADV_DONTNEED))
+    internal_memset((void *)beg_aligned, 0, end_aligned - beg_aligned);
+  internal_memset((void *)end_aligned, 0, end - end_aligned);
+}
+
+void ReleaseShadow(uptr begin, uptr end) {
+  begin = RoundUpTo(begin, kMinProvAlignment);
+  end = RoundDownTo(end, kMinProvAlignment);
+  if (begin >= end)
+    return;
+  ZeroShadowRange(MEM_TO_SHADOW(begin), MEM_TO_SHADOW(end));
+  ZeroShadowRange(MEM_TO_ORIGIN(begin), MEM_TO_ORIGIN(end));
 }
 
 void WriteShadow(void *dest, Provenance prov) {

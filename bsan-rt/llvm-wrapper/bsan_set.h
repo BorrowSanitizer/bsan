@@ -90,12 +90,12 @@ private:
 
 // A set of concrete provenance values (e.g. not wildcard, omnivalid, or null).
 // Implemented as a mapping from allocations to sets of borrow tags.
-class ConcreteProvenanceSet {
+class ProvenanceSet {
 public:
-  ConcreteProvenanceSet() = default;
-  ~ConcreteProvenanceSet();
-  ConcreteProvenanceSet(const ConcreteProvenanceSet &) = delete;
-  ConcreteProvenanceSet &operator=(const ConcreteProvenanceSet &) = delete;
+  ProvenanceSet() = default;
+  ~ProvenanceSet();
+  ProvenanceSet(const ProvenanceSet &) = delete;
+  ProvenanceSet &operator=(const ProvenanceSet &) = delete;
 
   void insert(Provenance Prov);
   void insert(BlockIndex idx);
@@ -104,11 +104,11 @@ public:
   bool contains(Provenance prov);
   bool contains(BlockIndex idx);
 
-  void swap(ConcreteProvenanceSet &other) { set_.swap(other.set_); }
+  void swap(ProvenanceSet &other) { set_.swap(other.set_); }
 
   // Removes all entries from the set, after executing the
   // given callback for each allocation.
-  void takeFrom(ConcreteProvenanceSet &other) {
+  void takeFrom(ProvenanceSet &other) {
     other.drain([&](BlockIndex idx, BorTagSet &tags) {
       tags.forEach([&](BorTag tag) { set_[idx].insert(tag); });
     });

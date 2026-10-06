@@ -70,37 +70,35 @@ void BorTagSet::EnsureCapacity(uptr req_size) {
   size_ = req_size;
 }
 
-void ConcreteProvenanceSet::insert(BlockIndex idx) {
+void ProvenanceSet::insert(BlockIndex idx) {
   if (!set_.contains(idx)) {
     set_[idx] = BorTagSet();
   }
 }
 
-void ConcreteProvenanceSet::insert(Provenance prov) {
+void ProvenanceSet::insert(Provenance prov) {
   if (CONCRETE(prov.tag)) {
     set_[BLOCK_IDX(prov.block)].insert(prov.tag);
   }
 }
 
-void ConcreteProvenanceSet::clear() {
+void ProvenanceSet::clear() {
   set_.forEach([](DenseMap<BlockIndex, BorTagSet>::value_type &KV) {
     KV.second.clear();
     return true;
   });
 }
 
-bool ConcreteProvenanceSet::contains(BlockIndex idx) {
-  return find(idx) != nullptr;
-}
+bool ProvenanceSet::contains(BlockIndex idx) { return find(idx) != nullptr; }
 
-bool ConcreteProvenanceSet::contains(Provenance prov) {
+bool ProvenanceSet::contains(Provenance prov) {
   if (auto *tags = find(BLOCK_IDX(prov.block))) {
     return tags->contains(prov.tag);
   }
   return false;
 }
 
-ConcreteProvenanceSet::~ConcreteProvenanceSet() {
+ProvenanceSet::~ProvenanceSet() {
   set_.forEach([](DenseMap<BlockIndex, BorTagSet>::value_type &KV) {
     KV.second.reset();
     return true;
