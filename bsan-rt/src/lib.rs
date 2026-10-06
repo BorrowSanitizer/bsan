@@ -89,10 +89,10 @@ macro_rules! debug_bsan {
         #[cfg(feature = "debug")]
         {
             #[allow(unused_unsafe)]
-            let info = match $bor_tag.0 {
-                0 => AllocInfoSummary::Omnivalid,
-                1 => AllocInfoSummary::Null,
-                2 => AllocInfoSummary::Wildcard,
+            let info = match $bor_tag {
+                BorTag::OMNIVALID => AllocInfoSummary::Omnivalid,
+                BorTag::INVALID => AllocInfoSummary::Null,
+                BorTag::WILDCARD => AllocInfoSummary::Wildcard,
                 _ => unsafe { &*$alloc_info }.summarize(),
             };
             let summary = DebugSummary { op: $op, ptr: 0, bor_tag: $bor_tag, info };
