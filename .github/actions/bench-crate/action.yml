@@ -56,6 +56,7 @@ runs:
       CRATE: ${{ inputs.crate }}
       TARGET: ${{ inputs.target }}
       LOG_URL: ${{ steps.log.outputs.url }}
+      CLICOLOR_FORCE: "1"
     run: |
       set -euo pipefail
       # A branch is compared against its baseline under BorrowSanitizer's
