@@ -147,9 +147,9 @@ static Constant *getOrInsertGlobal(Module &M, StringRef Name, Type *Ty) {
 /// it may be called from an uninstrumented context, or from an instrumented
 /// context that uses a different ABI lowering for parameter types.
 static bool needsBoundaryValidation(const Function *Callee) {
-  return !Callee ||
-         (Callee->isDeclaration() || Callee->hasExternalLinkage() ||
-          Callee->hasExternalWeakLinkage() || Callee->hasAddressTaken());
+  if (!Callee)
+    return true;
+  return !Callee->hasLocalLinkage() || Callee->hasAddressTaken();
 }
 
 namespace {
@@ -524,20 +524,24 @@ BorrowSanitizer::getProvenanceLayout(IRBuilder<> &IRB,
     IntegerType *IT = cast<IntegerType>(CurrentTy);
     unsigned IntBitWidth = IT->getBitWidth();
     unsigned PtrBitWidth = DL->getPointerSizeInBits();
-    // If the integer type is as large (or larger) than the
-    // word size, then we need to assume that it could be used in
-    // type-punning, so we treat it as having provenance. This is
-    // a temporary workaround until byte type support lands in
-    // Clang and Rust.
-    if (IntBitWidth < PtrBitWidth)
-      break;
-    TypeSize AllocTySize = DL->getTypeAllocSize(CurrentTy);
-    Value *AllocSize = IRB.CreateTypeSize(IntptrTy, AllocTySize);
-    Align AllocAlign = DL->getABITypeAlign(CurrentTy);
-    ProvenanceField Desc(ByteOffset, AllocSize, ElementCount::get(1, false),
-                         AllocAlign);
-    ProvDesc.push_back(Desc);
-    return ConstantInt::get(IntptrTy, 1);
+    // Each full, pointer-sized chunk of an integer
+    // is treated as possibly carrying provenance. This
+    // is necessary to handle type-punning.
+    // We round down to the nearest number of slots,
+    // which is equivalent to returning zero for integers
+    // that are less than the size of a pointer.
+    unsigned NumSlots = IntBitWidth / PtrBitWidth;
+    uint64_t PtrBytes = PtrBitWidth / 8;
+    Align IntAlign = DL->getABITypeAlign(CurrentTy);
+    for (unsigned I = 0; I < NumSlots; ++I) {
+      uint64_t ChunkOffset = I * PtrBytes;
+      Value *Offset =
+          IRB.CreateAdd(ByteOffset, ConstantInt::get(IntptrTy, ChunkOffset));
+      ProvDesc.push_back(ProvenanceField(
+          Offset, ConstantInt::get(IntptrTy, PtrBytes),
+          ElementCount::getFixed(1), commonAlignment(IntAlign, ChunkOffset)));
+    }
+    return ConstantInt::get(IntptrTy, NumSlots);
   } break;
   case Type::StructTyID: {
     StructType *ST = cast<StructType>(CurrentTy);
@@ -569,9 +573,9 @@ BorrowSanitizer::getProvenanceLayout(IRBuilder<> &IRB,
     return CurrProvOffset;
   } break;
   default: {
+    return ConstantInt::get(IntptrTy, 0);
   } break;
   }
-  return ConstantInt::get(IntptrTy, 0);
 }
 
 bool BorrowSanitizer::shouldTrustFunction(const TargetLibraryInfo *TLI,
