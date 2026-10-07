@@ -120,8 +120,9 @@ void GlobalContext::RunGarbageCollector(Snapshot &snap,
         uptr sp = thread->getStackPointer(memory_order_relaxed);
         ShadowRange live = thread->shadowStack(sp);
         for (uptr i = 0; i < live.size; i++) {
+          // Tags in shadow memory may carry a slot offset.
           if (live.blocks[i])
-            snap->live.insert({live.tags[i], live.blocks[i]});
+            snap->live.insert({STRIP_TAG_OFFSET(live.tags[i]), live.blocks[i]});
         }
 
         // The next range is [bottom, sp). These values are below the

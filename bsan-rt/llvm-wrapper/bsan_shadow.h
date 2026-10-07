@@ -18,7 +18,25 @@ typedef u8 Block[kBlockSize];
 typedef u32 BlockIndex;
 
 typedef uptr BorTag;
-#define CONCRETE(tag) (tag > 2)
+
+// Borrow tags are assigned in multiples of `kBorTagStride`. The low 3 bits of a
+// tag stored in shadow memory hold the byte offset [0, 7] of the pointer within
+// its 8-byte provenance slot. These bits are never set outside of shadow
+// memory.
+static constexpr BorTag kBorTagStride = (BorTag)1 << 3;
+static constexpr BorTag kBorTagOffsetMask = kBorTagStride - 1;
+
+static_assert(kBorTagStride == kMinProvAlignment,
+              "tag offset bits must cover every byte of a provenance slot");
+
+// Reserved tag values.
+static constexpr BorTag kOmnivalidTag = 0 * kBorTagStride;
+static constexpr BorTag kInvalidTag = 1 * kBorTagStride;
+static constexpr BorTag kWildcardTag = 2 * kBorTagStride;
+static constexpr BorTag kFirstConcreteTag = 3 * kBorTagStride;
+
+#define CONCRETE(tag) ((tag) > kWildcardTag)
+#define STRIP_TAG_OFFSET(tag) ((tag) & ~kBorTagOffsetMask)
 
 struct MappingDesc {
   uptr start;

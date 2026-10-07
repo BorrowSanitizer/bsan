@@ -47,7 +47,7 @@ struct AtExitRecord {
   void *arg;
 };
 
-const Provenance OMNIVALID = {0, nullptr};
+const Provenance OMNIVALID = {kOmnivalidTag, nullptr};
 
 static constexpr uptr kParamTLSSizeProv = 100;
 static constexpr uptr kVarArgTLSSizeBytes = 800;

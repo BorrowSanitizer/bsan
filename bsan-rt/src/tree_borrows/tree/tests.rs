@@ -846,8 +846,9 @@ mod spurious_read {
 const ALLOC_BYTES: usize = 8;
 
 fn t(n: usize) -> BorTag {
-    assert!(BorTag(n).is_concrete());
-    BorTag(n)
+    let tag = BorTag(n * BorTag::STRIDE);
+    assert!(tag.is_concrete());
+    tag
 }
 
 fn new_tree(root: BorTag) -> EagerTree {

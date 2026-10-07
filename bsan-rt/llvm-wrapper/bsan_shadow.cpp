@@ -238,28 +238,84 @@ ALWAYS_INLINE static void UpdateShadowSlot(uptr d_shadow, uptr d_origin,
     *dest_block_ptr = *source_block_ptr;
 }
 
+ALWAYS_INLINE static BorTag *SlotTag(uptr slot) {
+  return reinterpret_cast<BorTag *>(MEM_TO_SHADOW(slot));
+}
+
+ALWAYS_INLINE static Block **SlotBlock(uptr slot) {
+  return reinterpret_cast<Block **>(MEM_TO_ORIGIN(slot));
+}
+
+// Clears the provenance in `slot` if its pointer overlaps [dst, dst + size).
+ALWAYS_INLINE static void ClearIfOverlapping(uptr slot, uptr dst, uptr size) {
+  BorTag *tag_ptr = SlotTag(slot);
+  BorTag tag = *tag_ptr;
+  if (tag == 0)
+    return;
+  uptr start = slot + (tag & kBorTagOffsetMask);
+  if (start < dst + size && start + kMinProvAlignment > dst) {
+    __bsan_rc_dec(tag, *SlotBlock(slot), tag_ptr);
+    *tag_ptr = 0;
+  }
+}
+
+// Returns the address that the pointer in `src_slot` is copied to, if all
+// of its bytes lie within the source range, and it lands in `dest_slot`.
+ALWAYS_INLINE static uptr MovedPointer(uptr src_slot, uptr dest_slot, uptr dst,
+                                       uptr src, uptr size) {
+  if (src_slot < (src & ~(kMinProvAlignment - 1)) ||
+      src_slot + kMinProvAlignment > src + size)
+    return 0;
+  BorTag tag = *SlotTag(src_slot);
+  if (STRIP_TAG_OFFSET(tag) == kOmnivalidTag)
+    return 0;
+  uptr start = src_slot + (tag & kBorTagOffsetMask);
+  if (start < src || start + kMinProvAlignment > src + size)
+    return 0;
+  uptr moved = start - src + dst;
+  if ((moved & ~(kMinProvAlignment - 1)) != dest_slot)
+    return 0;
+  return moved;
+}
+
+// Computes the new value of `slot` after copying `size` bytes from `src` to
+// `dst`, adjusting reference counts for any provenance that is overwritten.
+ALWAYS_INLINE static void TransferSlot(uptr slot, uptr dst, uptr src,
+                                       uptr size) {
+  uptr window = slot - dst + src;
+  uptr first_src = window & ~(kMinProvAlignment - 1);
+  uptr moved = MovedPointer(first_src, slot, dst, src, size);
+  uptr moved_slot = first_src;
+  if (window & (kMinProvAlignment - 1)) {
+    uptr second_src = first_src + kMinProvAlignment;
+    if (uptr other = MovedPointer(second_src, slot, dst, src, size)) {
+      // Two pointers cannot overlap, so one of them must be stale.
+      // We cannot tell which, so neither one is copied.
+      moved = moved ? 0 : other;
+      moved_slot = second_src;
+    }
+  }
+
+  // If no pointer lands here, clear any pointer whose bytes were overwritten.
+  if (!moved) {
+    ClearIfOverlapping(slot, dst, size);
+    return;
+  }
+
+  BorTag *tag_ptr = SlotTag(slot);
+  Block **block_ptr = SlotBlock(slot);
+  BorTag old_tag = *tag_ptr;
+  BorTag tag = STRIP_TAG_OFFSET(*SlotTag(moved_slot));
+  Block *block = *SlotBlock(moved_slot);
+  __bsan_rc_inc(tag, block, tag_ptr);
+  if (old_tag != 0)
+    __bsan_rc_dec(old_tag, *block_ptr, tag_ptr);
+  *block_ptr = block;
+  *tag_ptr = tag | (moved & kBorTagOffsetMask);
+}
+
 void CopyShadow(void *dest, const void *src, uptr size) {
-  if (!MEM_IS_APP(dest))
-    return;
-  if (!MEM_IS_APP(src))
-    return;
-  if (size == 0)
-    return;
-
-  const uptr step = kMinProvAlignment;
-
-  uptr d_aligned;
-  uptr s_aligned, s_size;
-  AlignPtr8((uptr)dest, d_aligned);
-  AlignRange8((uptr)src, size, s_aligned, s_size);
-
-  uptr d_shadow = MEM_TO_SHADOW(d_aligned);
-  uptr d_origin = MEM_TO_ORIGIN(d_aligned);
-  uptr s_shadow = MEM_TO_SHADOW(s_aligned);
-  uptr s_origin = MEM_TO_ORIGIN(s_aligned);
-
-  for (uptr offset = 0; offset < s_size; offset += step)
-    UpdateShadowSlot(d_shadow, d_origin, s_shadow, s_origin, offset);
+  MoveShadow(dest, src, size);
 }
 
 void JoinShadow(void *dest, const void *s_shadow, const void *s_origin,
@@ -281,52 +337,45 @@ void JoinShadow(void *dest, const void *s_shadow, const void *s_origin,
     UpdateShadowSlot(d_shadow, d_origin, s_shadow_addr, s_origin_addr, offset);
 }
 
+// Copies provenance for `size` bytes from `src` to `dest`, as if by `memmove`.
 void MoveShadow(void *dest, const void *src, uptr size) {
   if (!MEM_IS_APP(dest))
     return;
   if (!MEM_IS_APP(src))
     return;
-  if (size == 0)
+  uptr dst = (uptr)dest;
+  uptr from = (uptr)src;
+  if (size == 0 || dst == from)
     return;
 
-  const uptr step = kMinProvAlignment;
-
-  uptr d_aligned;
-  uptr s_aligned, s_size;
-  AlignPtr8((uptr)dest, d_aligned);
-  AlignRange8((uptr)src, size, s_aligned, s_size);
-
-  if (d_aligned == s_aligned)
-    return;
-
-  uptr d_shadow = MEM_TO_SHADOW(d_aligned);
-  uptr d_origin = MEM_TO_ORIGIN(d_aligned);
-  uptr s_shadow = MEM_TO_SHADOW(s_aligned);
-  uptr s_origin = MEM_TO_ORIGIN(s_aligned);
-
-  if (d_aligned < s_aligned) {
-    for (uptr offset = 0; offset < s_size; offset += step)
-      UpdateShadowSlot(d_shadow, d_origin, s_shadow, s_origin, offset);
+  uptr first = (dst & ~(kMinProvAlignment - 1)) - kMinProvAlignment;
+  if (!MEM_IS_APP(first))
+    first += kMinProvAlignment;
+  uptr last = (dst + size - 1) & ~(kMinProvAlignment - 1);
+  // Read in the backwards/forwards direction based on the ordering of
+  // `dst`/`from`. This prevents slots being overwritten before they're read.
+  if (dst < from) {
+    for (uptr slot = first; slot <= last; slot += kMinProvAlignment)
+      TransferSlot(slot, dst, from, size);
   } else {
-    for (uptr offset = s_size - step;; offset -= step) {
-      UpdateShadowSlot(d_shadow, d_origin, s_shadow, s_origin, offset);
-      // signed so must break at 0
-      if (offset == 0)
+    for (uptr slot = last;; slot -= kMinProvAlignment) {
+      TransferSlot(slot, dst, from, size);
+      if (slot == first)
         break;
     }
   }
 }
 
 void ClearShadow(void *dest, uptr size) {
-  if (!MEM_IS_APP(dest))
+  if (!MEM_IS_APP(dest) || size == 0)
     return;
-  uptr d_aligned, d_size;
-  AlignRange8((uptr)dest, size, d_aligned, d_size);
-
-  uptr shadow_start = MEM_TO_SHADOW(d_aligned);
-  uptr origin_start = MEM_TO_ORIGIN(d_aligned);
-
-  ClearShadowAligned(shadow_start, origin_start, d_size);
+  uptr dst = (uptr)dest;
+  uptr first = (dst & ~(kMinProvAlignment - 1)) - kMinProvAlignment;
+  if (!MEM_IS_APP(first))
+    first += kMinProvAlignment;
+  uptr last = (dst + size - 1) & ~(kMinProvAlignment - 1);
+  for (uptr slot = first; slot <= last; slot += kMinProvAlignment)
+    ClearIfOverlapping(slot, dst, size);
 }
 
 void ClearShadowAligned(uptr shadow_start, uptr origin_start,
@@ -391,7 +440,8 @@ void WriteShadow(void *dest, Provenance prov) {
   if (*tag_ptr != 0)
     __bsan_rc_dec(*tag_ptr, *block_ptr, tag_ptr);
 
+  // Record where the pointer begins within its slot.
   *block_ptr = prov.block;
-  *tag_ptr = prov.tag;
+  *tag_ptr = prov.tag | ((uptr)dest & kBorTagOffsetMask);
 }
 } // namespace __bsan
