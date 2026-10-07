@@ -54,6 +54,10 @@ pub const BSAN_DEFAULT_RUSTFLAGS: &[&str] = &[
     "-Cforce-frame-pointers=yes",
     "-Zmir-preserve-ub",
     "-Zinline-llvm=no",
+    // Functions that need boundary validation pass their own address to the
+    // runtime, which prevents them from being merged. LLVM's MergeFunctions
+    // pass crashes on aarch64 unless this feature is turned off.
+    "-Zmerge-functions=disabled",
     "-Cembed-bitcode=yes",
     "-Cdebuginfo=2",
     "-Zmir-enable-passes=-CheckAlignment,-CheckNull,-CheckEnums",

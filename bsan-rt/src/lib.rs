@@ -628,31 +628,19 @@ unsafe extern "C" fn __bsan_prune(
         } else {
             true
         };
-        // Even if we have removed every tag, this does
-        // not imply that the tree's reference count is
-        // also zero. We reuse allocation metadata objects
-        // for different lifetimes of stack allocations. If
-        // a stack allocation was stored into the heap during a
-        // previous lifetime, then its allocation-level
-        // reference count may be greater than the sum of its
-        // node level reference counts.
-        if tree_is_empty {
-            if absent_from_heap {
+        // We can only eject metadata with
+        // a zero reference count.
+        if absent_from_heap {
+            if tree_is_empty {
                 PruneResult::Eject
             } else {
-                // The tree only has one node left,
-                // but the node is on the heap somewhere,
-                // so we can remove it from the pending set
-                // and wait for it to be requeued.
-                PruneResult::Remove
+                PruneResult::Retain
             }
         } else {
-            // One or more nodes are dead but could not
-            // be pruned, due to live nodes with blocking
-            // permissions. Keep this allocation and any
-            // of its remaining dead nodes around in the
-            // pending set.
-            PruneResult::Retain
+            // The tree has a node left on the heap
+            // somewhere, so we can remove it from the
+            // pending set and wait for it to be requeued.
+            PruneResult::Remove
         }
     } else {
         panic!("A thread had already locked this allocation!");

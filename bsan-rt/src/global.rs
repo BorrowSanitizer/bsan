@@ -77,9 +77,7 @@ impl GlobalCtx {
     }
 
     pub fn remove_exposed_provenance(&self, range: AllocRange, strict: bool) {
-        if self.flags.wildcard {
-            self.removing_exposed_provenance(range, strict, || {});
-        }
+        self.removing_exposed_provenance(range, strict, || {});
     }
     /// Removes a provenance value that has been exposed for the given range.
     /// If `strict`, then exposed provenance will only be removed if is matches
@@ -91,6 +89,11 @@ impl GlobalCtx {
     where
         F: Fn() -> T,
     {
+        // Avoid acquiring a lock if wildcard provenance has been turned off.
+        if !self.flags.wildcard {
+            return f();
+        }
+
         // Zero-sized allocations are never inserted into the mapping.
         if range.size == Size::ZERO {
             return f();
