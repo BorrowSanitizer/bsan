@@ -3,6 +3,9 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '0 0 * * *'
+  # `experimental` has its own image, tagged `experimental`, which is rebuilt
+  # whenever its toolchain or the image itself changes. Like `main`'s, it is
+  # also rebuilt every night (see the `experimental` job).
   push:
     branches: [ "experimental" ]
     paths:
