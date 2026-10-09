@@ -3,6 +3,12 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '0 0 * * *'
+  push:
+    branches: [ "experimental" ]
+    paths:
+      - config.toml
+      - .devcontainer/Dockerfile
+      - .github/workflows/image.yml
 
 permissions:
   contents: read
@@ -15,7 +21,7 @@ defaults:
     shell: bash
 
 concurrency:
-  group: "image"
+  group: "image-${{ github.ref }}"
   cancel-in-progress: true
 
 env:
@@ -47,7 +53,8 @@ jobs:
           run: |
             platform=${{ matrix.config.platform }}
             platform=${platform//\//-} 
-            tag=sha-$(grep -oP 'rust_sha\s*=\s*"\K[0-9a-f]{7}' config.toml)
+            source=$(grep -oP '^source\s*=\s*"\K[^"]+' config.toml)
+            tag=sha-$(sed -n "/^\[$source\]/,/^\[/p" config.toml | grep -oP 'rust_sha\s*=\s*"\K[0-9a-f]{7}')
             echo "platform=$platform" >> "$GITHUB_OUTPUT"
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
@@ -126,6 +133,7 @@ jobs:
             images: ${{ env.REGISTRY_IMAGE }}
             tags: |
               type=raw,value=latest,enable={{is_default_branch}}
+              type=raw,value=experimental,enable=${{ github.ref == 'refs/heads/experimental' }}
               type=sha
 
         - name: Create manifest list and push
@@ -133,6 +141,26 @@ jobs:
           run: |
             docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
               $(printf '${{ env.REGISTRY_IMAGE }}@sha256:%s ' *)
+
+    # A scheduled run only ever starts on `main`, so it starts the nightly
+    # build for `experimental`, which runs that branch's copy of this workflow.
+    experimental:
+      if: github.event_name == 'schedule'
+      runs-on: ubuntu-latest
+      permissions:
+        actions: write
+        contents: read
+      env:
+        GH_TOKEN: ${{ github.token }}
+      steps:
+        - name: Start the build for experimental
+          run: |
+            set -euo pipefail
+            if ! gh api "repos/$GITHUB_REPOSITORY/branches/experimental" --silent 2>/dev/null; then
+              echo "::notice::There is no experimental branch to build an image for."
+              exit 0
+            fi
+            gh workflow run image.yml --repo "$GITHUB_REPOSITORY" --ref experimental
 
     # we remove all images that are more than one month old
     cleanup:

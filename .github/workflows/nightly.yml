@@ -186,10 +186,10 @@ jobs:
       - name: Update config.toml
         run: |
           set -euo pipefail
-          {
-            echo "rust_sha = \"${{ needs.init.outputs.rust_sha }}\""
-            echo "llvm_sha = \"${{ needs.init.outputs.llvm_sha }}\""
-          } > config.toml
+          sed -i -E '/^\[nightly\]/,/^\[/ {
+            s/^(rust_sha = ).*/\1"${{ needs.init.outputs.rust_sha }}"/
+            s/^(llvm_sha = ).*/\1"${{ needs.init.outputs.llvm_sha }}"/
+          }' config.toml
       - name: Open PR
         run: |
           set -euo pipefail
