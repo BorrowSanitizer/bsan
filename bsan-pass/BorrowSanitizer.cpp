@@ -2044,6 +2044,13 @@ private:
     }
   }
 
+  void instrumentExpose(CallBase &CB) {
+    if (auto Prov = getProvenance(CB.getParent(), CB.getOperand(0))) {
+      IRBuilder<> IRB(&CB);
+      IRB.CreateCall(BS.BsanFuncExposeProv, {(*Prov).Tag, (*Prov).Info});
+    }
+  }
+
   Value *bumpStackSlot(IRBuilder<> &IRB, bool IsFnEntry,
                        ElementCount Elems = ElementCount::getFixed(1)) {
     return ShadowStack.bumpStackSlot(Cycles, IRB, IsFnEntry, Elems);
@@ -2072,6 +2079,8 @@ private:
         }
         return instrumentRetagMem(CB);
       }
+      if (IsExpose(&CB))
+        return instrumentExpose(CB);
     }
 
     if (CB.isInlineAsm()) {
@@ -2671,13 +2680,6 @@ private:
 
   void visitGetElementPtrInst(GetElementPtrInst &I) {
     ProvMap.forwardProvenance(&I, I.getPointerOperand());
-  }
-
-  void visitPtrToIntInst(PtrToIntInst &I) {
-    if (auto Prov = getProvenance(I.getParent(), I.getPointerOperand())) {
-      IRBuilder<> IRB(&I);
-      IRB.CreateCall(BS.BsanFuncExposeProv, {(*Prov).Tag, (*Prov).Info});
-    }
   }
 
   void visitIntToPtrInst(IntToPtrInst &I) {

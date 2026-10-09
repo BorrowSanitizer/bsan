@@ -122,6 +122,8 @@ void InstrumentationPlan::build(CycleInfo &CI) {
             }
           }
         }
+        if (IsExpose(CB))
+          Exposes.push_back(CB);
         if (auto *LI = dyn_cast<LifetimeIntrinsic>(CB)) {
           AllocaInst *AI = findAllocaForValue(LI->getArgOperand(0), true);
           if (AI && shouldInstrumentAlloca(*AI)) {

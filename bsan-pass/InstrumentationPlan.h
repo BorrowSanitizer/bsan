@@ -117,6 +117,8 @@ private:
   // finished.
   SmallVector<CallBase *> Retags;
 
+  SmallVector<CallBase *> Exposes;
+
   // The number of function-entry retags that occurred.
   unsigned NumFnEntryRetags = 0;
 
@@ -156,6 +158,8 @@ public:
       }
       CB->eraseFromParent();
     }
+    for (CallBase *CB : Exposes)
+      CB->eraseFromParent();
   }
 
 private:
