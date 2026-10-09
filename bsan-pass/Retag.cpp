@@ -11,6 +11,12 @@ bool IsRetag(const CallBase *CB) {
          Callee->getName().starts_with(RUST_FN("retag"));
 }
 
+bool IsExpose(const CallBase *CB) {
+  Function *Callee = CB->getCalledFunction();
+  return CB->arg_size() == 1 && Callee &&
+         Callee->getName().starts_with(RUST_FN("expose"));
+}
+
 PreservedAnalyses
 BorrowSanitizerNoMergeRetagsPass::run(Module &M, ModuleAnalysisManager &AM) {
   for (Function &F : M) {

@@ -53,6 +53,7 @@ public:
 };
 
 bool IsRetag(const CallBase *CB);
+bool IsExpose(const CallBase *CB);
 
 } // end namespace llvm
 
