@@ -4,9 +4,9 @@ permissions:
   packages: read
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "experimental" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "experimental" ]
   schedule:
     - cron: '0 0 * * *'
   workflow_dispatch: 
@@ -24,7 +24,9 @@ jobs:
             os: ubuntu-latest
     runs-on: '${{ matrix.config.os }}'
     container:
-      image: ghcr.io/borrowsanitizer/bsan:latest
+      # `experimental` uses a different toolchain than `main`, so it has an
+      # image of its own (see image.yml). A pull request uses its target's.
+      image: ghcr.io/borrowsanitizer/bsan:${{ (github.base_ref || github.ref_name) == 'experimental' && 'experimental' || 'latest' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.github_token }}

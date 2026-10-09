@@ -84,6 +84,9 @@ impl Mode {
 
 #[derive(Serialize, Deserialize)]
 pub struct BsanConfig {
+    #[serde(skip)]
+    pub source: String,
+    pub url: String,
     pub rust_sha: String,
     pub llvm_sha: String,
 }
@@ -91,8 +94,13 @@ pub struct BsanConfig {
 impl BsanConfig {
     fn from_file(path: &Path) -> Result<BsanConfig> {
         let contents: String = std::fs::read_to_string(path)?;
-        let contents: BsanConfig = toml::from_str(&contents)?;
-        Ok(contents)
+        let mut contents: toml::Table = toml::from_str(&contents)?;
+        let source =
+            contents.get("source").and_then(|s| s.as_str()).unwrap_or_default().to_string();
+        let Some(toolchain) = contents.remove(&source) else {
+            show_error!("`config.toml` does not have a table for `source = \"{source}\"`.");
+        };
+        Ok(BsanConfig { source, ..toolchain.try_into()? })
     }
 }
 

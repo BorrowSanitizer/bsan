@@ -15,10 +15,6 @@ use crate::TOOLCHAIN_NAME;
 
 static INSTALL_PROMPT: &str = "You need to configure a custom Rust toolchain (`bsan`) to build BorrowSanitizer from source. Continue?";
 
-// The endpoint where Rust CI artifacts are distributed. This is the same URL used
-// by default with `rustup-toolchain-install-master`.
-static RUST_ARTIFACT_URL: &str = "https://ci-artifacts.rust-lang.org/rustc-builds";
-
 // The endpoint where BorrowSanitizer's release artifacts are stored.
 static GH_ARTIFACT_URL: &str = "https://github.com/BorrowSanitizer/bsan/releases/download/";
 
@@ -112,7 +108,10 @@ fn install_toolchain(
     cmdq!(sh, "rustup toolchain uninstall {TOOLCHAIN_NAME}").run()?;
 
     let target = &version.host;
-    let artifact_url = path!(&RUST_ARTIFACT_URL / config.rust_sha);
+    let artifact_url = match config.source.as_str() {
+        "rolling" => path!(&config.url / format!("rolling-{}", &config.rust_sha[0..7])),
+        _ => path!(&config.url / config.rust_sha),
+    };
     let help_on_error = "Failed to download the custom Rust toolchain.";
 
     let tmp_dir = sh.create_temp_dir()?;

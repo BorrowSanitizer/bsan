@@ -1,2 +1,11 @@
+source = "rolling"
+
+[nightly]
+url = "https://ci-artifacts.rust-lang.org/rustc-builds/"
 rust_sha = "ea137335b78829b4514bf1b4c16302f74fab8581"
+llvm_sha = "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019"
+
+[rolling]
+url = "https://github.com/BorrowSanitizer/rust/releases/download/"
+rust_sha = "a208754d560a6faaa91d02295fddc633fe892d7c"
 llvm_sha = "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019"
