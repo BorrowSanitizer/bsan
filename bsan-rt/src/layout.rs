@@ -163,21 +163,20 @@ impl Iterator for LayoutArrayIter {
                 return Some((offset, size));
             }
 
-            if self.cmds_rem == 0 {
-                if let Some(frame) = self.repeats.last_mut() {
-                    if frame.rem_iter > 0 {
-                        frame.rem_iter -= 1;
-                        self.cursor = frame.start;
-                        self.cmds_rem = frame.num_cmds;
-                        self.stride_offset = self.stride_offset + frame.stride;
-                    } else {
-                        self.cmds_rem = frame.prev_cmds_rem;
-                        self.stride_offset = frame.prev_stride_offset;
-                        self.repeats.pop();
-                    };
-                    continue;
+            if self.cmds_rem == 0 && let Some(frame) = self.repeats.last_mut() {
+                if frame.rem_iter > 0 {
+                    frame.rem_iter -= 1;
+                    self.cursor = frame.start;
+                    self.cmds_rem = frame.num_cmds;
+                    self.stride_offset = self.stride_offset + frame.stride;
+                } else {
+                    self.cmds_rem = frame.prev_cmds_rem;
+                    self.stride_offset = frame.prev_stride_offset;
+                    self.repeats.pop();
                 };
-            }
+                continue;
+            };
+            
 
             let in_repeat = !self.repeats.is_empty();
             match unsafe { self.next_command() } {
