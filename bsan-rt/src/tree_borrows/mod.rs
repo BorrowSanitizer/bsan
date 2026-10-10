@@ -35,7 +35,7 @@ pub struct NewPermission {
 }
 
 impl NewPermission {
-    pub fn new(info: RetagInfo<'_>) -> Self {
+    pub fn new(info: RetagInfo) -> Self {
         let is_mutable: bool = info.flags.contains(RetagFlags::IS_MUTABLE);
         let is_protected = info.flags.contains(RetagFlags::IS_PROTECTED);
         let ty_is_freeze = info.flags.contains(RetagFlags::IS_FREEZE);
