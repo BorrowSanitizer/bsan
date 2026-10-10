@@ -163,7 +163,9 @@ impl Iterator for LayoutArrayIter {
                 return Some((offset, size));
             }
 
-            if self.cmds_rem == 0 && let Some(frame) = self.repeats.last_mut() {
+            if self.cmds_rem == 0
+                && let Some(frame) = self.repeats.last_mut()
+            {
                 if frame.rem_iter > 0 {
                     frame.rem_iter -= 1;
                     self.cursor = frame.start;
@@ -176,7 +178,6 @@ impl Iterator for LayoutArrayIter {
                 };
                 continue;
             };
-            
 
             let in_repeat = !self.repeats.is_empty();
             match unsafe { self.next_command() } {
