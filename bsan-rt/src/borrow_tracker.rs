@@ -329,7 +329,7 @@ impl<'b> BorrowTracker<'b> {
     pub fn retag(
         &mut self,
         global_ctx: &GlobalCtx,
-        retag_info: RetagInfo<'_>,
+        retag_info: RetagInfo,
         span: Span,
     ) -> UBResult<Provenance> {
         let alloc_id = self.state.alloc_id;
@@ -363,7 +363,7 @@ impl<'b> BorrowTracker<'b> {
 
         let mut cursor = Size::ZERO;
         if let Some(im_layout) = retag_info.im_layout {
-            for &[offset, size] in im_layout {
+            for (offset, size) in im_layout {
                 if cursor != offset {
                     for (_loc_range, loc) in inside_perms.iter_mut(cursor, offset - cursor) {
                         *loc = loc_state(true);
