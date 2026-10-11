@@ -7,5 +7,6 @@ llvm_sha = "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019"
 
 [rolling]
 url = "https://github.com/BorrowSanitizer/rust/releases/download/"
-rust_sha = "7f6869964536b1d171c5d86c5cd520e63e4efd0f"
+rust_sha = "d71df5f6534a91dabac02a05c96971976471f94c"
 llvm_sha = "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019"
+
