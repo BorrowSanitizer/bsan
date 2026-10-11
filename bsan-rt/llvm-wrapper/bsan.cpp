@@ -747,6 +747,14 @@ void __bsan_pop_frame(const Provenance *frame_start, uptr prot,
       const Provenance prov = frame_start[i];
       if (i < prot) {
         __bsan_protector_end_impl(prov.tag, prov.block, span);
+      } else if (UNLIKELY(prov.tag == kInvalidTag)) {
+        // We eagerly allocate blocks for `allocas`, but we assign
+        // them a dedicated invalid tag until their first lifetime.
+        // If an alloca never reaches its first lifetime, then
+        // its tag will still be invalid, so we can free it
+        // immediately.
+        if (prov.block)
+          CurrentThread()->FreeBlock(BLOCK_IDX(prov.block));
       } else {
         __bsan_dealloc_stack_impl(prov.tag, prov.block, span);
         AcquireProvenance(prov);
