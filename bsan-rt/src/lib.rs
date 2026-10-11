@@ -34,8 +34,9 @@ mod sanitizer_common;
 use borrow_tracker::*;
 
 mod errors;
-
+mod layout;
 use crate::helpers::{AllocRange, Size};
+use crate::layout::LayoutArray;
 use crate::sanitizer_common::{SharedSanitizerFlags, Span};
 use crate::tree_borrows::perms::AccessKind;
 use crate::tree_borrows::refcount::RefCount;
@@ -309,15 +310,15 @@ bitflags::bitflags! {
 
 /// The size and kind of permission created by a retag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RetagInfo<'a> {
+pub struct RetagInfo {
     /// The initial range of memory for the permission.
     pub size: Size,
     /// The kind of permission.
     pub flags: RetagFlags,
     /// The subranges that should be treated as interior mutable.
-    pub im_layout: Option<&'a [[Size; 2]]>,
+    pub im_layout: Option<LayoutArray>,
     /// The subranges that should be treated as `UnsafePinned`
-    pub pin_layout: Option<&'a [[Size; 2]]>,
+    pub pin_layout: Option<LayoutArray>,
 }
 
 /// Creates a new permission within a tree.
@@ -335,10 +336,8 @@ unsafe extern "C" fn __bsan_retag_impl(
     ptr: *mut c_void,
     size: Size,
     flags: RetagFlags,
-    im_data: Option<NonNull<[Size; 2]>>,
-    im_len: usize,
-    pin_data: Option<NonNull<[Size; 2]>>,
-    pin_len: usize,
+    im_layout: Option<LayoutArray>,
+    pin_layout: Option<LayoutArray>,
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
     dest: NonNull<Provenance>,
@@ -348,16 +347,7 @@ unsafe extern "C" fn __bsan_retag_impl(
     debug_bsan!("retag", object_addr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-    let opt_slice = |opt_ptr: Option<NonNull<[Size; 2]>>, len| -> Option<_> {
-        opt_ptr.map(|ptr| unsafe { slice::from_raw_parts(ptr.as_ptr(), len) })
-    };
-
-    let retag_info = RetagInfo {
-        size,
-        flags,
-        im_layout: opt_slice(im_data, im_len),
-        pin_layout: opt_slice(pin_data, pin_len),
-    };
+    let retag_info = RetagInfo { size, flags, im_layout, pin_layout };
 
     let offset = Size::from_addr(ptr);
     let retag_res = if checked {
