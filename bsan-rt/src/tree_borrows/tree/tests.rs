@@ -5,7 +5,7 @@ use std::fmt;
 
 use super::super::exhaustive::{precondition, Exhaustive};
 use super::*;
-use crate::helpers::FxHashSet;
+use crate::helpers::{FxHashMap, FxHashSet};
 
 impl Exhaustive for LocationState {
     fn exhaustive() -> Box<dyn Iterator<Item = Self>> {
@@ -851,27 +851,79 @@ fn t(n: usize) -> BorTag {
     tag
 }
 
-fn new_tree(root: BorTag) -> EagerTree {
-    EagerTree::new(root, Size::from_bytes(ALLOC_BYTES), Span::dummy())
+/// An [`EagerTree`] paired with the index that each of its tags was assigned.
+///
+/// The tree does not map tags to indices; at runtime, a pointer carries the index of its node
+/// alongside its tag. The tests below name nodes by tag alone, so this stands in for those
+/// pointers. Like a dangling pointer, an entry outlives the node that it refers to.
+struct TestTree {
+    tree: EagerTree,
+    indices: FxHashMap<BorTag, UniIndex>,
 }
 
-fn add_child(tree: &mut EagerTree, parent: BorTag, child: BorTag) {
+impl TestTree {
+    fn idx(&self, tag: BorTag) -> UniIndex {
+        self.indices[&tag]
+    }
+
+    fn contains_tag(&self, tag: BorTag) -> bool {
+        self.tree.contains_tag(tag, self.idx(tag))
+    }
+
+    fn node_count(&self) -> usize {
+        self.tree.node_count()
+    }
+
+    fn increment(&self, tag: BorTag) -> bool {
+        self.tree.increment(tag, self.idx(tag))
+    }
+
+    fn decrement(&self, tag: BorTag) -> bool {
+        self.tree.decrement(tag, self.idx(tag))
+    }
+
+    fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_tags: &[BorTag]) -> bool {
+        let dead_indices: Vec<UniIndex> = dead_tags.iter().map(|&tag| self.idx(tag)).collect();
+        self.tree.remove_dead_tags(global_ctx, &dead_indices)
+    }
+}
+
+fn new_tree(root: BorTag) -> TestTree {
+    let tree = EagerTree::new(root, Size::from_bytes(ALLOC_BYTES), Span::dummy());
+    let mut indices = FxHashMap::default();
+    indices.insert(root, tree.roots[0]);
+    TestTree { tree, indices }
+}
+
+fn add_child(tree: &mut TestTree, parent: BorTag, child: BorTag) {
     add_child_perm(tree, parent, child, Permission::new_frozen());
 }
 
-fn add_child_perm(tree: &mut EagerTree, parent: BorTag, child: BorTag, perm: Permission) {
+fn add_child_perm(tree: &mut TestTree, parent: BorTag, child: BorTag, perm: Permission) {
     let sifa = perm.strongest_idempotent_foreign_access(false);
     let inside_perms = DedupRangeMap::new(
         Size::from_bytes(ALLOC_BYTES),
         LocationState::new_non_accessed(perm, sifa),
     );
-    let result = tree.new_child(Size::ZERO, parent, child, inside_perms, perm, None, Span::dummy());
-    assert!(result.is_ok());
+    // A wildcard parent has no node, and its index is never looked up.
+    let parent_idx = if parent == BorTag::WILDCARD { UniIndex(u32::MAX) } else { tree.idx(parent) };
+    let result = tree.tree.new_child(
+        Size::ZERO,
+        parent,
+        parent_idx,
+        child,
+        inside_perms,
+        perm,
+        None,
+        Span::dummy(),
+    );
+    let Ok(child_idx) = result else { panic!("failed to add {child:?} as a child of {parent:?}") };
+    tree.indices.insert(child, child_idx);
 }
 
 /// Whether `tag` is a dead node that a pass could not prune.
-fn is_dead(tree: &EagerTree, tag: BorTag) -> bool {
-    tree.dead_persisting.binary_search(&tag).is_ok()
+fn is_dead(tree: &TestTree, tag: BorTag) -> bool {
+    tree.tree.dead_persisting.binary_search(&tree.idx(tag)).is_ok()
 }
 
 #[test]
@@ -1084,8 +1136,8 @@ fn retained_tag_that_becomes_live_again_is_not_pruned() {
 }
 
 /// Maps `tree.roots` to their tags, in vec order.
-fn root_tags(tree: &EagerTree) -> Vec<BorTag> {
-    tree.roots.iter().map(|&idx| tree.nodes.get(idx).unwrap().tag).collect()
+fn root_tags(tree: &TestTree) -> Vec<BorTag> {
+    tree.tree.roots.iter().map(|&idx| tree.tree.nodes.get(idx).unwrap().tag).collect()
 }
 
 #[test]

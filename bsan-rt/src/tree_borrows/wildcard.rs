@@ -1,7 +1,7 @@
 // Ported from Miri (commit:072a9fa)
 use core::fmt::Debug;
 
-use super::data_structures::{UniIndex, UniValMap};
+use super::data_structures::{UniIndex, UniKeyValMap, UniValMap};
 use super::perms::AccessKind;
 use super::tree::{AccessRelatedness, Node};
 use super::EagerTree;
@@ -151,7 +151,7 @@ impl ExposedCache {
     /// * `to`: The new access level.
     pub fn update_exposure(
         &mut self,
-        nodes: &UniValMap<Node>,
+        nodes: &UniKeyValMap<Node>,
         id: UniIndex,
         from: WildcardAccessLevel,
         to: WildcardAccessLevel,
@@ -194,17 +194,16 @@ impl EagerTree {
     /// Marks the tag as exposed & updates the wildcard tracking data structure
     /// to represent its access level.
     /// Also takes as an argument whether the tag is protected or not.
-    pub fn expose_tag(&mut self, tag: BorTag, protected: bool) {
-        let id = self.tag_mapping.get(&tag).unwrap();
-        let node = self.nodes.get_mut(id).unwrap();
+    pub fn expose_tag(&mut self, tag: BorTag, idx: UniIndex, protected: bool) {
+        let node = self.nodes.get_mut(idx).unwrap();
         if !node.is_exposed {
             node.is_exposed = true;
-            let node = self.nodes.get(id).unwrap();
+            let node = self.nodes.get(idx).unwrap();
 
             for (_, loc) in self.locations.iter_mut_all() {
                 let perm = loc
                     .perms
-                    .get(id)
+                    .get(idx)
                     .map(|p| p.permission())
                     .unwrap_or_else(|| node.default_location_state().permission());
 
@@ -214,7 +213,7 @@ impl EagerTree {
                 // `access_level`.
                 loc.exposed_cache.update_exposure(
                     &self.nodes,
-                    id,
+                    idx,
                     WildcardAccessLevel::None,
                     access_level,
                 );
@@ -222,9 +221,7 @@ impl EagerTree {
         }
     }
 
-    pub(super) fn update_exposure_for_protector_release(&mut self, tag: BorTag) {
-        let idx = self.tag_mapping.get(&tag).unwrap();
-
+    pub(super) fn update_exposure_for_protector_release(&mut self, tag: BorTag, idx: UniIndex) {
         // We check if the node is already exposed, as we don't want to expose any
         // nodes which aren't already exposed.
         let node = self.nodes.get(idx).unwrap();

@@ -16,48 +16,30 @@ use alloc::vec::Vec;
 use core::fmt::{self, Debug};
 use core::hash::Hash;
 use core::mem;
-
-#[cfg(feature = "smallvec-valmap")]
-use smallvec::SmallVec;
-
-#[cfg(feature = "smallvec-valmap")]
-const INLINE_CAP: usize = 16;
-
 use crate::helpers::{FxHashMap, ToUsize};
 
 /// Intermediate key between a UniKeyMap and a UniValMap.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct UniIndex {
-    idx: u32,
-}
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct UniIndex(pub u32);
+
 impl Debug for UniIndex {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.idx.fmt(f)
+        self.0.fmt(f)
     }
 }
 
 /// From K to UniIndex
-#[derive(Debug, Clone, Default)]
-pub struct UniKeyMap<K> {
-    /// Underlying map that does all the hard work.
-    /// Key invariant: the contents of `deassigned` are disjoint from the
-    /// keys of `mapping`, and together they form the set of contiguous integers
-    /// `0 .. (mapping.len() + deassigned.len())`.
-    pub(crate) mapping: FxHashMap<K, u32>,
+#[derive(Debug, Clone)]
+pub struct UniKeyValMap<V> {
+    data: UniValMap<V>,
     /// Indexes that can be reused: memory gain when the map gets sparse
     /// due to many deletions.
-    deassigned: Vec<u32>,
+    deassigned: Vec<UniIndex>,
 }
 
-/// From UniIndex to V
-#[cfg(feature = "smallvec-valmap")]
-#[derive(Debug, Clone, Eq)]
-pub struct UniValMap<V> {
-    data: SmallVec<[Option<V>; INLINE_CAP]>,
-}
 
 /// From UniIndex to V
-#[cfg(not(feature = "smallvec-valmap"))]
 #[derive(Debug, Clone, Eq)]
 pub struct UniValMap<V> {
     /// The mapping data. Thanks to Vec we get both fast accesses, and
@@ -94,62 +76,42 @@ impl<V: PartialEq> PartialEq for UniValMap<V> {
     }
 }
 
-impl<V> Default for UniValMap<V> {
+
+impl<V> Default for UniKeyValMap<V> {
     fn default() -> Self {
-        #[cfg(feature = "smallvec-valmap")]
-        {
-            Self { data: SmallVec::new() }
-        }
-        #[cfg(not(feature = "smallvec-valmap"))]
-        {
-            Self { data: Vec::default() }
-        }
+        Self { data: UniValMap::default(), deassigned: Vec::default() }
     }
 }
 
-impl<K> UniKeyMap<K>
-where
-    K: Hash + Eq,
-{
+impl<V> Default for UniValMap<V> {
+    fn default() -> Self {
+        Self { data: Vec::default() }
+    }
+}
+
+impl<V> UniKeyValMap<V> {
     /// How many keys/index pairs are currently active.
     pub fn len(&self) -> usize {
-        self.mapping.len()
-    }
-
-    /// Whether this key has an associated index or not.
-    pub fn contains_key(&self, key: &K) -> bool {
-        self.mapping.contains_key(key)
+        self.data.len() - self.deassigned.len()
     }
 
     /// Assign this key to a new index. Panics if the key is already assigned,
     /// use `get_or_insert` for a version that instead returns the existing
     /// assignment.
     #[track_caller]
-    pub fn insert(&mut self, key: K) -> UniIndex {
+    pub fn insert(&mut self, val: V) -> UniIndex {
         // We want an unused index. First we attempt to find one from `deassigned`,
         // and if `deassigned` is empty we generate a fresh index.
         let idx = self.deassigned.pop().unwrap_or_else(|| {
-            // `deassigned` is empty, so all keys in use are already in `mapping`.
-            // The next available key is `mapping.len()`.
-            self.mapping.len().try_into().expect("UniMap ran out of useable keys")
+            UniIndex(self.data.len().try_into().expect("`UniValMap` ran out of useable keys"))
         });
-        if self.mapping.insert(key, idx).is_some() {
+        if self.data.get(idx).is_some() {
             panic!(
                 "This key is already assigned to a different index; either use `get_or_insert` instead if you care about this data, or first call `remove` to undo the preexisting assignment."
             );
         };
-        UniIndex { idx }
-    }
-
-    /// If it exists, the index this key maps to.
-    pub fn get(&self, key: &K) -> Option<UniIndex> {
-        self.mapping.get(key).map(|&idx| UniIndex { idx })
-    }
-
-    /// Either get a previously existing entry, or create a new one if it
-    /// is not yet present.
-    pub fn get_or_insert(&mut self, key: K) -> UniIndex {
-        self.get(&key).unwrap_or_else(|| self.insert(key))
+        self.data.insert(idx, val);
+        idx
     }
 
     /// Return whatever index this key was using to the deassigned pool.
@@ -176,17 +138,48 @@ where
     /// assert_eq!(val_b, Some('A')); // Oh no
     /// // assert_eq!(val_b, None); // This is what we would have expected
     /// ```
-    pub fn remove(&mut self, key: &K) {
-        if let Some(idx) = self.mapping.remove(key) {
+    pub fn remove(&mut self, idx: UniIndex) -> Option<V> {
+        self.data.remove(idx).and_then(|v| {
             self.deassigned.push(idx);
-        }
+            Some(v)
+        })
+    }
+
+    pub fn contains_idx(&self, idx: UniIndex) -> bool {
+        self.data.contains_idx(idx)
+    }
+
+    pub fn get(&self, idx: UniIndex) -> Option<&V> {
+        self.data.get(idx)
+    }
+
+    /// Get the value at this index mutably, if it exists.
+    pub fn get_mut(&mut self, idx: UniIndex) -> Option<&mut V> {
+        self.data.get_mut(idx)
+    }
+
+    /// Iterates over all key-value pairs in the map.
+    pub fn iter(&self) -> impl Iterator<Item = (UniIndex, &V)> {
+        self.data.iter()
+    }
+
+    /// Returns true if the map is empty.
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
     }
 }
 
 impl<V> UniValMap<V> {
+    /// Returns the length of the underlying vector. Private, because
+    /// this is only meaningful in the context of the number of deassigned
+    /// keys of a `UniKeyValMap`.
+    fn len(&self) -> usize {
+        self.data.len()
+    }
+
     /// Whether this index has an associated value.
     pub fn contains_idx(&self, idx: UniIndex) -> bool {
-        self.data.get(idx.idx.to_usize()).and_then(Option::as_ref).is_some()
+        self.data.get(idx.0.to_usize()).and_then(Option::as_ref).is_some()
     }
 
     /// Reserve enough space to insert the value at the right index.
@@ -200,31 +193,32 @@ impl<V> UniValMap<V> {
         }
     }
 
-    /// Assign a value to the index. Permanently overwrites any previous value.
-    pub fn insert(&mut self, idx: UniIndex, val: V) {
-        self.extend_to_length(idx.idx.to_usize() + 1);
-        self.data[idx.idx.to_usize()] = Some(val)
+    /// Assign a value to the index. Returns the previous value, if there
+    /// was one. 
+    pub fn insert(&mut self, idx: UniIndex, val: V) -> Option<V>{
+        self.extend_to_length(idx.0.to_usize() + 1);
+        mem::replace(&mut self.data[idx.0.to_usize()], Some(val))
     }
 
     /// Get the value at this index, if it exists.
     pub fn get(&self, idx: UniIndex) -> Option<&V> {
-        self.data.get(idx.idx.to_usize()).and_then(Option::as_ref)
+        self.data.get(idx.0.to_usize()).and_then(Option::as_ref)
     }
 
     /// Get the value at this index mutably, if it exists.
     pub fn get_mut(&mut self, idx: UniIndex) -> Option<&mut V> {
-        self.data.get_mut(idx.idx.to_usize()).and_then(Option::as_mut)
+        self.data.get_mut(idx.0.to_usize()).and_then(Option::as_mut)
     }
 
     /// Delete any value associated with this index.
     /// Returns None if the value was not present, otherwise
     /// returns the previously stored value.
     pub fn remove(&mut self, idx: UniIndex) -> Option<V> {
-        if idx.idx.to_usize() >= self.data.len() {
+        if idx.0.to_usize() >= self.data.len() {
             return None;
         }
         let mut res = None;
-        mem::swap(&mut res, &mut self.data[idx.idx.to_usize()]);
+        mem::swap(&mut res, &mut self.data[idx.0.to_usize()]);
         res
     }
 
@@ -238,7 +232,7 @@ impl<V> UniValMap<V> {
         self.data
             .iter()
             .enumerate()
-            .filter_map(|(i, v)| v.as_ref().map(|r| (UniIndex { idx: i.try_into().unwrap() }, r)))
+            .filter_map(|(i, v)| v.as_ref().map(|r| (UniIndex(i.try_into().unwrap()), r)))
     }
 }
 
@@ -250,8 +244,8 @@ pub struct UniEntry<'a, V> {
 impl<'a, V> UniValMap<V> {
     /// Get a wrapper around a mutable access to the value corresponding to `idx`.
     pub fn entry(&'a mut self, idx: UniIndex) -> UniEntry<'a, V> {
-        self.extend_to_length(idx.idx.to_usize() + 1);
-        UniEntry { inner: &mut self.data[idx.idx.to_usize()] }
+        self.extend_to_length(idx.0.to_usize() + 1);
+        UniEntry { inner: &mut self.data[idx.0.to_usize()] }
     }
 }
 
@@ -286,95 +280,73 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct MapWitness<K, V> {
-        key: UniKeyMap<K>,
-        val: UniValMap<V>,
-        map: FxHashMap<K, V>,
+    struct MapWitness<V> {
+        key: UniKeyValMap<V>,
+        map: FxHashMap<UniIndex, V>,
     }
 
-    impl<K, V> MapWitness<K, V>
+    impl<V> MapWitness<V>
     where
-        K: Copy + Hash + Eq,
         V: Copy + Eq + fmt::Debug,
     {
-        fn insert(&mut self, k: K, v: V) {
+        fn insert(&mut self, v: V) -> UniIndex {
             // UniMap
-            let i = self.key.get_or_insert(k);
-            self.val.insert(i, v);
+            let i = self.key.insert(v);
             // HashMap
-            self.map.insert(k, v);
+            self.map.insert(i, v);
             // Consistency: nothing to check
+            i
         }
 
-        fn get(&self, k: &K) {
+        fn get(&self, i: UniIndex) {
             // UniMap
-            let v1 = self.key.get(k).and_then(|i| self.val.get(i));
+            let v1 = self.key.get(i);
             // HashMap
-            let v2 = self.map.get(k);
+            let v2 = self.map.get(&i);
             // Consistency
             assert_eq!(v1, v2);
         }
 
-        fn get_mut(&mut self, k: &K) {
+        fn get_mut(&mut self, i: UniIndex) {
             // UniMap
-            let v1 = self.key.get(k).and_then(|i| self.val.get_mut(i));
+            let v1 = self.key.get_mut(i);
             // HashMap
-            let v2 = self.map.get_mut(k);
+            let v2 = self.map.get_mut(&i);
             // Consistency
             assert_eq!(v1, v2);
         }
-        fn remove(&mut self, k: &K) {
+        fn remove(&mut self, i: UniIndex) {
             // UniMap
-            if let Some(i) = self.key.get(k) {
-                self.val.remove(i);
+            if self.key.get(i).is_some() {
+                self.key.remove(i);
             }
-            self.key.remove(k);
             // HashMap
-            self.map.remove(k);
+            self.map.remove(&i);
             // Consistency: nothing to check
         }
     }
 
     #[test]
     fn consistency_small() {
-        let mut m = MapWitness::<u64, char>::default();
-        m.insert(1, 'a');
-        m.insert(2, 'b');
-        m.get(&1);
-        m.get_mut(&2);
-        m.remove(&2);
-        m.insert(1, 'c');
-        m.get(&1);
-        m.insert(3, 'd');
-        m.insert(4, 'e');
-        m.insert(4, 'f');
-        m.get(&2);
-        m.get(&3);
-        m.get(&4);
-        m.get(&5);
-        m.remove(&100);
-        m.get_mut(&100);
-        m.get(&100);
-    }
-
-    #[test]
-    fn consistency_large() {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        let mut map = MapWitness::<u64, u64>::default();
-        for i in 0..1000 {
-            i.hash(&mut hasher);
-            let rng = hasher.finish();
-            let op = rng.is_multiple_of(3);
-            let key = (rng / 2) % 50;
-            let val = (rng / 100) % 1000;
-            if op {
-                map.insert(key, val);
-            } else {
-                map.get(&key);
-            }
-        }
+        let mut m = MapWitness::<char>::default();
+        let a = m.insert('a');
+        let b = m.insert('b');
+        m.get(a);
+        m.get_mut(b);
+        m.remove(b);
+        let c = m.insert('c');
+        m.get(a);
+        let d = m.insert('d');
+        let e = m.insert('e');
+        let f = m.insert('f');
+        m.get(b);
+        m.get(c);
+        m.get(d);
+        m.get(e);
+        m.get(f);
+        m.remove(UniIndex(100));
+        m.get_mut(UniIndex(100));
+        m.get(UniIndex(100));
     }
 
     #[test]
@@ -382,15 +354,7 @@ mod tests {
         use crate::tree_borrows::tree::{LocationState, Node};
         assert_eq!(core::mem::size_of::<Node>(), 144);
         assert_eq!(core::mem::size_of::<LocationState>(), 3);
-        #[cfg(feature = "smallvec-valmap")]
-        {
-            assert_eq!(core::mem::size_of::<UniValMap<Node>>(), 2576);
-            assert_eq!(core::mem::size_of::<UniValMap<LocationState>>(), 64);
-        }
-        #[cfg(not(feature = "smallvec-valmap"))]
-        {
-            assert_eq!(core::mem::size_of::<UniValMap<Node>>(), 24);
-            assert_eq!(core::mem::size_of::<UniValMap<Node>>(), 24);
-        }
+        assert_eq!(core::mem::size_of::<UniValMap<Node>>(), 24);
+        assert_eq!(core::mem::size_of::<UniKeyValMap<Node>>(), 48);
     }
 }

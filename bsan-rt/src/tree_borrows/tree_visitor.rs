@@ -2,7 +2,7 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use super::data_structures::{UniIndex, UniValMap};
+use super::data_structures::{UniIndex, UniKeyValMap};
 use super::tree::{AccessRelatedness, Node};
 
 /// Data given to the transition function
@@ -12,7 +12,7 @@ pub struct NodeAppArgs<'visit, T> {
     /// Relative position of the access.
     pub rel_pos: AccessRelatedness,
     /// The node map of this tree.
-    pub nodes: &'visit mut UniValMap<Node>,
+    pub nodes: &'visit mut UniKeyValMap<Node>,
     /// Additional data we want to be able to modify in f_propagate and read in f_continue.
     pub data: &'visit mut T,
 }
@@ -20,7 +20,7 @@ pub struct NodeAppArgs<'visit, T> {
 /// For soundness do not modify the children or parent indexes of nodes
 /// during traversal.
 pub struct TreeVisitor<'tree, T> {
-    pub nodes: &'tree mut UniValMap<Node>,
+    pub nodes: &'tree mut UniKeyValMap<Node>,
     pub data: &'tree mut T,
 }
 

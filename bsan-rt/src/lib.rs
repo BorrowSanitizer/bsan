@@ -37,6 +37,7 @@ mod errors;
 
 use crate::helpers::{AllocRange, Size};
 use crate::sanitizer_common::{SharedSanitizerFlags, Span};
+use crate::tree_borrows::data_structures::UniIndex;
 use crate::tree_borrows::perms::AccessKind;
 use crate::tree_borrows::refcount::RefCount;
 use crate::tree_borrows::Tree;
@@ -209,6 +210,9 @@ impl fmt::Debug for BorTag {
         write!(f, "<{}>", self.0)
     }
 }
+
+/// Index of a node within the tree of a single allocation.
+pub type NodeIndex = UniIndex;
 
 /// Metadata associated with a pointer.
 #[repr(C)]
@@ -608,13 +612,13 @@ pub enum PruneResult {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_prune(
     alloc_info: NonNull<AllocInfo>,
-    bor_tags: *const BorTag,
+    dead_indices: *const BorTag,
     len: usize,
 ) -> PruneResult {
     let global_ctx = unsafe { global_ctx() };
     let alloc: AllocInfoPtr = alloc_info.into();
-    let dead_tags = if len > 0 {
-        unsafe { slice::from_raw_parts(bor_tags, len) }
+    let dead_indices = if len > 0 {
+        unsafe { slice::from_raw_parts(dead_indices, len) }
     } else {
         // We pass a null pointer for `bor_tags` when the list is empty.
         // The function `slice::from_raw_parts` requires a nonnull
@@ -624,7 +628,7 @@ unsafe extern "C" fn __bsan_prune(
     if let Some(mut state) = alloc.state.try_lock() {
         let absent_from_heap = alloc.rc.get() == 0;
         let tree_is_empty = if let Some(tree) = state.tree_opt_mut() {
-            tree.remove_dead_tags(global_ctx, dead_tags)
+            tree.remove_dead_tags(global_ctx, dead_indices)
         } else {
             true
         };
