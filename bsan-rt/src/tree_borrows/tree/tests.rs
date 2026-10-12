@@ -875,11 +875,11 @@ impl TestTree {
     }
 
     fn increment(&self, tag: BorTag) -> bool {
-        self.tree.increment(tag, self.idx(tag))
+        self.contains_tag(tag) && self.tree.increment(self.idx(tag))
     }
 
     fn decrement(&self, tag: BorTag) -> bool {
-        self.tree.decrement(tag, self.idx(tag))
+        self.contains_tag(tag) && self.tree.decrement(self.idx(tag))
     }
 
     fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_tags: &[BorTag]) -> bool {
@@ -906,11 +906,10 @@ fn add_child_perm(tree: &mut TestTree, parent: BorTag, child: BorTag, perm: Perm
         Size::from_bytes(ALLOC_BYTES),
         LocationState::new_non_accessed(perm, sifa),
     );
-    // A wildcard parent has no node, and its index is never looked up.
-    let parent_idx = if parent == BorTag::WILDCARD { UniIndex(u32::MAX) } else { tree.idx(parent) };
+    // A wildcard parent has no node.
+    let parent_idx = (parent != BorTag::WILDCARD).then(|| tree.idx(parent));
     let result = tree.tree.new_child(
         Size::ZERO,
-        parent,
         parent_idx,
         child,
         inside_perms,

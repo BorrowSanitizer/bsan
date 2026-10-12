@@ -171,6 +171,12 @@ impl<'b> BorrowTracker<'b> {
         unsafe { self.state.tree_unchecked_mut() }
     }
 
+    /// Returns the index of the node used to validate the access, or `None` for a
+    /// wildcard pointer, which has no node of its own.
+    fn node_idx(&self) -> Option<UniIndex> {
+        (self.bor_tag != BorTag::WILDCARD).then_some(self.idx)
+    }
+
     pub fn for_alloc<T, F>(prov: Provenance, f: F) -> UBResult<T>
     where
         F: FnOnce(Self) -> UBResult<T>,
@@ -337,13 +343,14 @@ impl<'b> BorrowTracker<'b> {
         span: Span,
     ) -> UBResult<Provenance> {
         let alloc_id = self.state.alloc_id;
-        let parent_tag = self.bor_tag;
-        let parent_idx = self.idx;
+        let parent_idx = self.node_idx();
 
         let new_tag = BorTag::default();
         // A wildcard parent is never present in the tree: retagging it adds
         // the new tag as a fresh wildcard root instead.
-        if !(parent_tag == BorTag::WILDCARD) && !self.tree().contains_tag(parent_tag, self.idx) {
+        if let Some(parent_idx) = parent_idx
+            && !self.tree().contains_tag(self.bor_tag, parent_idx)
+        {
             return Err(UBInfo::UseAfterFree);
         }
         let new_perm: NewPermission = NewPermission::new(retag_info);
@@ -407,7 +414,6 @@ impl<'b> BorrowTracker<'b> {
                 // Perform the access (update the Tree Borrows FSM)
                 self.tree_mut().perform_access(
                     global_ctx,
-                    parent_tag,
                     parent_idx,
                     range_in_alloc,
                     access_kind,
@@ -422,7 +428,6 @@ impl<'b> BorrowTracker<'b> {
         // base offset should be the offset, from zero, where the retag is taking place within the allocation.
         let idx = self.tree_mut().new_child(
             base_offset,
-            parent_tag,
             parent_idx,
             new_tag,
             inside_perms,
@@ -436,17 +441,9 @@ impl<'b> BorrowTracker<'b> {
 
     pub fn protector_end(&mut self, global_ctx: &GlobalCtx, span: Span) -> UBResult<()> {
         let visits = VisitCounter::new();
-        let tag = self.bor_tag;
         let alloc_id = self.state.alloc_id;
         let idx = self.idx;
-        self.tree_mut().perform_protector_end_access(
-            global_ctx,
-            tag,
-            idx,
-            alloc_id,
-            span,
-            visits.cell(),
-        )
+        self.tree_mut().perform_protector_end_access(global_ctx, idx, alloc_id, span, visits.cell())
     }
 
     /// Increments the reference count, returning `true` if the count went from
@@ -460,7 +457,8 @@ impl<'b> BorrowTracker<'b> {
             if let Some(tree) = state.tree_opt_mut() {
                 // Safety: the tree is locked when this operation occurs.
                 unsafe { alloc_info.rc.increment_nonatomic() };
-                return tree.increment(prov.bor_tag, prov.idx);
+                // The node may have been pruned, and its index reassigned.
+                return tree.contains_tag(prov.bor_tag, prov.idx) && tree.increment(prov.idx);
             } else {
                 return alloc_info.rc.increment();
             }
@@ -478,7 +476,8 @@ impl<'b> BorrowTracker<'b> {
             let mut state = alloc_info.state();
             if let Some(tree) = state.tree_opt_mut() {
                 alloc_info.rc.decrement_nonatomic();
-                return tree.decrement(prov.bor_tag, prov.idx);
+                // The node may have been pruned, and its index reassigned.
+                return tree.contains_tag(prov.bor_tag, prov.idx) && tree.decrement(prov.idx);
             } else {
                 return alloc_info.rc.decrement();
             }
@@ -493,11 +492,10 @@ impl<'b> BorrowTracker<'b> {
         span: Span,
     ) -> UBResult<()> {
         let visits = VisitCounter::new();
-        let (tag, idx, range) = (self.bor_tag, self.idx, self.range);
+        let (idx, range) = (self.node_idx(), self.range);
         let alloc_id = self.state.alloc_id;
         self.tree_mut().perform_access(
             global_ctx,
-            tag,
             idx,
             range,
             access_kind,
@@ -510,12 +508,13 @@ impl<'b> BorrowTracker<'b> {
 
     pub fn dealloc(mut self, global_ctx: &GlobalCtx, span: Span) -> UBResult<()> {
         let visits = VisitCounter::new();
+        let idx = self.node_idx();
         let alloc_id = self.state.alloc_id;
         let base_addr = self.state.base_addr;
         let mut tree = unsafe { self.state.take_tree().unwrap_unchecked() };
         let size = tree.size();
         let range = AllocRange { start: Size::ZERO, size };
-        tree.dealloc(global_ctx, self.bor_tag, self.idx, range, alloc_id, span, visits.cell())?;
+        tree.dealloc(global_ctx, idx, range, alloc_id, span, visits.cell())?;
         global_ctx.remove_exposed_provenance(AllocRange { start: base_addr, size }, true);
         Ok(())
     }
@@ -538,8 +537,8 @@ impl<'b> BorrowTracker<'b> {
         let idx = self.idx;
         let tree = self.tree_mut();
         if tree.contains_tag(tag, idx) {
-            let protected = tree.get_protector_kind(tag, idx).is_some();
-            tree.expose_tag(tag, idx, protected);
+            let protected = tree.get_protector_kind(idx).is_some();
+            tree.expose_tag(idx, protected);
         }
         Ok(())
     }

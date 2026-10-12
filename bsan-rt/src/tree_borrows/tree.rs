@@ -1064,18 +1064,25 @@ impl LocationTree {
 /// Consumers outside this module interact with the tree exclusively
 /// through this trait; the underlying implementations are
 /// module-private.
+///
+/// A node is named by its index alone. An index outlives the node that it was
+/// assigned to and can be reassigned, so [`Tree::contains_tag`] is the only way
+/// to tell whether the index carried by a pointer still refers to that
+/// pointer's node; every other method trusts the index that it is given.
+/// Where an operation can also be performed through a wildcard pointer, which
+/// has no node of its own, the index is optional and `None` stands for the
+/// wildcard.
 pub trait Tree: Clone {
-    fn get_protector_kind(&self, tag: BorTag, idx: UniIndex) -> Option<ProtectorKind>;
+    fn get_protector_kind(&self, idx: UniIndex) -> Option<ProtectorKind>;
     fn contains_tag(&self, tag: BorTag, idx: UniIndex) -> bool;
     fn node_count(&self) -> usize;
-    fn increment(&self, tag: BorTag, idx: UniIndex) -> bool;
-    fn decrement(&self, tag: BorTag, idx: UniIndex) -> bool;
+    fn increment(&self, idx: UniIndex) -> bool;
+    fn decrement(&self, idx: UniIndex) -> bool;
     fn size(&self) -> Size;
     fn new_child(
         &mut self,
         base_offset: Size,
-        parent_tag: BorTag,
-        parent_idx: UniIndex,
+        parent_idx: Option<UniIndex>,
         new_tag: BorTag,
         inside_perms: DedupRangeMap<LocationState>,
         outside_perm: Permission,
@@ -1085,8 +1092,7 @@ pub trait Tree: Clone {
     fn perform_access(
         &mut self,
         global_ctx: &GlobalCtx,
-        tag: BorTag,
-        idx: UniIndex,
+        idx: Option<UniIndex>,
         access_range: AllocRange,
         access_kind: AccessKind,
         access_cause: AccessCause,
@@ -1097,8 +1103,7 @@ pub trait Tree: Clone {
     fn dealloc(
         &mut self,
         global_ctx: &GlobalCtx,
-        tag: BorTag,
-        idx: UniIndex,
+        idx: Option<UniIndex>,
         access_range: AllocRange,
         alloc_id: AllocId,
         span: Span,
@@ -1107,13 +1112,12 @@ pub trait Tree: Clone {
     fn perform_protector_end_access(
         &mut self,
         global_ctx: &GlobalCtx,
-        tag: BorTag,
         idx: UniIndex,
         alloc_id: AllocId,
         span: Span,
         visits_since_gc: &Cell<u32>,
     ) -> UBResult<()>;
-    fn expose_tag(&mut self, tag: BorTag, idx: UniIndex, protected: bool);
+    fn expose_tag(&mut self, idx: UniIndex, protected: bool);
 
     fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_nodes: &[NodeId]) -> bool;
 }
@@ -1134,8 +1138,7 @@ impl Tree for LazyTree {
     fn new_child(
         &mut self,
         base_offset: Size,
-        parent_tag: BorTag,
-        parent_idx: UniIndex,
+        parent_idx: Option<UniIndex>,
         new_tag: BorTag,
         inside_perms: DedupRangeMap<LocationState>,
         outside_perm: Permission,
@@ -1146,7 +1149,6 @@ impl Tree for LazyTree {
         let LazyTree::Init(tree) = self else { unreachable!() };
         tree.new_child(
             base_offset,
-            parent_tag,
             parent_idx,
             new_tag,
             inside_perms,
@@ -1158,8 +1160,7 @@ impl Tree for LazyTree {
     fn perform_access(
         &mut self,
         global_ctx: &GlobalCtx,
-        tag: BorTag,
-        idx: UniIndex,
+        idx: Option<UniIndex>,
         access_range: AllocRange,
         access_kind: AccessKind,
         access_cause: AccessCause,
@@ -1171,7 +1172,6 @@ impl Tree for LazyTree {
             LazyTree::Uninit { .. } => Ok(()),
             LazyTree::Init(tree) => tree.perform_access(
                 global_ctx,
-                tag,
                 idx,
                 access_range,
                 access_kind,
@@ -1185,8 +1185,7 @@ impl Tree for LazyTree {
     fn dealloc(
         &mut self,
         global_ctx: &GlobalCtx,
-        tag: BorTag,
-        idx: UniIndex,
+        idx: Option<UniIndex>,
         access_range: AllocRange,
         alloc_id: AllocId,
         span: Span,
@@ -1195,14 +1194,13 @@ impl Tree for LazyTree {
         match self {
             LazyTree::Uninit { .. } => Ok(()),
             LazyTree::Init(tree) => {
-                tree.dealloc(global_ctx, tag, idx, access_range, alloc_id, span, visits_since_gc)
+                tree.dealloc(global_ctx, idx, access_range, alloc_id, span, visits_since_gc)
             }
         }
     }
     fn perform_protector_end_access(
         &mut self,
         global_ctx: &GlobalCtx,
-        tag: BorTag,
         idx: UniIndex,
         alloc_id: AllocId,
         span: Span,
@@ -1210,20 +1208,15 @@ impl Tree for LazyTree {
     ) -> UBResult<()> {
         match self {
             LazyTree::Uninit { .. } => Ok(()),
-            LazyTree::Init(tree) => tree.perform_protector_end_access(
-                global_ctx,
-                tag,
-                idx,
-                alloc_id,
-                span,
-                visits_since_gc,
-            ),
+            LazyTree::Init(tree) => {
+                tree.perform_protector_end_access(global_ctx, idx, alloc_id, span, visits_since_gc)
+            }
         }
     }
-    fn expose_tag(&mut self, tag: BorTag, idx: UniIndex, protected: bool) {
+    fn expose_tag(&mut self, idx: UniIndex, protected: bool) {
         self.ensure_init();
         if let LazyTree::Init(tree) = self {
-            tree.expose_tag(tag, idx, protected);
+            tree.expose_tag(idx, protected);
         }
     }
     fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_nodes: &[NodeId]) -> bool {
@@ -1237,36 +1230,26 @@ impl Tree for LazyTree {
             }
         }
     }
-    fn increment(&self, tag: BorTag, idx: UniIndex) -> bool {
+    fn increment(&self, idx: UniIndex) -> bool {
         match self {
-            LazyTree::Uninit { root_tag, refcount, .. } => {
-                if *root_tag == tag {
-                    // Safety: the tree is locked when this operation occurs.
-                    unsafe { refcount.increment_nonatomic() }
-                } else {
-                    false
-                }
-            }
-            LazyTree::Init(tree) => tree.increment(tag, idx),
+            // The root is the only node of an uninitialized tree.
+            // Safety: the tree is locked when this operation occurs.
+            LazyTree::Uninit { refcount, .. } => unsafe { refcount.increment_nonatomic() },
+            LazyTree::Init(tree) => tree.increment(idx),
         }
     }
-    fn decrement(&self, tag: BorTag, idx: UniIndex) -> bool {
+    fn decrement(&self, idx: UniIndex) -> bool {
         match self {
-            LazyTree::Uninit { root_tag, refcount, .. } => {
-                if *root_tag == tag {
-                    refcount.decrement_nonatomic()
-                } else {
-                    false
-                }
-            }
-            LazyTree::Init(tree) => tree.decrement(tag, idx),
+            // The root is the only node of an uninitialized tree.
+            LazyTree::Uninit { refcount, .. } => refcount.decrement_nonatomic(),
+            LazyTree::Init(tree) => tree.decrement(idx),
         }
     }
 
-    fn get_protector_kind(&self, tag: BorTag, idx: UniIndex) -> Option<ProtectorKind> {
+    fn get_protector_kind(&self, idx: UniIndex) -> Option<ProtectorKind> {
         match self {
             LazyTree::Uninit { .. } => None,
-            LazyTree::Init(tree) => tree.get_protector_kind(tag, idx),
+            LazyTree::Init(tree) => tree.get_protector_kind(idx),
         }
     }
 
@@ -1288,8 +1271,7 @@ impl Tree for EagerTree {
     fn new_child(
         &mut self,
         base_offset: Size,
-        parent_tag: BorTag,
-        parent_idx: UniIndex,
+        parent_idx: Option<UniIndex>,
         new_tag: BorTag,
         inside_perms: DedupRangeMap<LocationState>,
         outside_perm: Permission,
@@ -1297,7 +1279,6 @@ impl Tree for EagerTree {
         span: Span,
     ) -> UBResult<UniIndex> {
         let protected = protector.is_some();
-        let parent_idx = if parent_tag == BorTag::WILDCARD { None } else { Some(parent_idx) };
         assert!(outside_perm.is_initial());
 
         let default_strongest_idempotent =
@@ -1348,8 +1329,7 @@ impl Tree for EagerTree {
     fn perform_access(
         &mut self,
         global_ctx: &GlobalCtx,
-        tag: BorTag,
-        idx: UniIndex,
+        source_idx: Option<UniIndex>,
         access_range: AllocRange,
         access_kind: AccessKind,
         access_cause: AccessCause,
@@ -1361,8 +1341,6 @@ impl Tree for EagerTree {
         if self.roots.len() > 1 || matches!(prov, ProvenanceExtra::Wildcard) {
             self.verify_wildcard_consistency(global);
         }
-
-        let source_idx = if tag == BorTag::WILDCARD { None } else { Some(idx) };
 
         // `visits_since_gc` is only written once per access.
         let mut visits: u32 = 0;
@@ -1393,8 +1371,7 @@ impl Tree for EagerTree {
     fn dealloc(
         &mut self,
         global_ctx: &GlobalCtx,
-        tag: BorTag,
-        idx: UniIndex,
+        start_idx: Option<UniIndex>,
         access_range: AllocRange,
         alloc_id: AllocId,
         span: Span,
@@ -1402,8 +1379,7 @@ impl Tree for EagerTree {
     ) -> UBResult<()> {
         self.perform_access(
             global_ctx,
-            tag,
-            idx,
+            start_idx,
             access_range,
             AccessKind::Write,
             AccessCause::Dealloc,
@@ -1411,8 +1387,6 @@ impl Tree for EagerTree {
             span,
             visits_since_gc,
         )?;
-
-        let start_idx = if tag == BorTag::WILDCARD { None } else { Some(idx) };
 
         for (loc_range, loc) in self.locations.iter_mut(access_range.start, access_range.size) {
             let diagnostics = DiagnosticInfo {
@@ -1467,7 +1441,6 @@ impl Tree for EagerTree {
     fn perform_protector_end_access(
         &mut self,
         global_ctx: &GlobalCtx,
-        tag: BorTag,
         source_idx: UniIndex,
         alloc_id: AllocId,
         span: Span,
@@ -1513,7 +1486,7 @@ impl Tree for EagerTree {
         // If the tag is exposed, then the wildcard tracking state needs to
         // reflect that it is no longer protected: accesses that were UB while
         // the protector was active may be permitted again.
-        self.update_exposure_for_protector_release(tag, source_idx);
+        self.update_exposure_for_protector_release(source_idx);
 
         // Remove the protector from the node.
         let node = self.nodes.get_mut(source_idx).unwrap();
@@ -1522,9 +1495,8 @@ impl Tree for EagerTree {
         Ok(())
     }
 
-    fn expose_tag(&mut self, tag: BorTag, idx: UniIndex, protected: bool) {
+    fn expose_tag(&mut self, idx: UniIndex, protected: bool) {
         let node = self.nodes.get_mut(idx).unwrap();
-        debug_assert_eq!(node.tag, tag);
         if !node.is_exposed {
             node.is_exposed = true;
             let node = self.nodes.get(idx).unwrap();
@@ -1558,25 +1530,23 @@ impl Tree for EagerTree {
         self.locations.merge_adjacent_thorough();
         self.roots.is_empty()
     }
-    fn increment(&self, tag: BorTag, idx: UniIndex) -> bool {
+    fn increment(&self, idx: UniIndex) -> bool {
         self.nodes
             .get(idx)
-            .filter(|node| node.tag == tag)
             // Safety: the tree is locked when this operation occurs.
             .map(|node| unsafe { node.refcount.increment_nonatomic() })
             .unwrap_or(false)
     }
-    fn decrement(&self, tag: BorTag, idx: UniIndex) -> bool {
+    fn decrement(&self, idx: UniIndex) -> bool {
         self.nodes
             .get(idx)
-            .filter(|node| node.tag == tag)
             // Safety: the tree is locked when this operation occurs.
             .map(|node| node.refcount.decrement_nonatomic())
             .unwrap_or(false)
     }
 
-    fn get_protector_kind(&self, tag: BorTag, idx: UniIndex) -> Option<ProtectorKind> {
-        self.nodes.get(idx).filter(|node| node.tag == tag).and_then(|node| node.protector_kind)
+    fn get_protector_kind(&self, idx: UniIndex) -> Option<ProtectorKind> {
+        self.nodes.get(idx).and_then(|node| node.protector_kind)
     }
 
     fn size(&self) -> Size {
