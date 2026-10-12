@@ -883,8 +883,9 @@ impl TestTree {
     }
 
     fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_tags: &[BorTag]) -> bool {
-        let dead_indices: Vec<UniIndex> = dead_tags.iter().map(|&tag| self.idx(tag)).collect();
-        self.tree.remove_dead_tags(global_ctx, &dead_indices)
+        let dead_nodes: Vec<NodeId> =
+            dead_tags.iter().map(|&bor_tag| NodeId { bor_tag, idx: self.idx(bor_tag) }).collect();
+        self.tree.remove_dead_tags(global_ctx, &dead_nodes)
     }
 }
 
@@ -937,6 +938,25 @@ fn dead_leaf_is_removed() {
     assert!(!empty, "the root is still in the tree");
     assert!(!tree.contains_tag(t(11)));
     assert_eq!(tree.node_count(), 1);
+}
+
+#[test]
+fn stale_index_does_not_alias_its_new_node() {
+    let ctx = GlobalCtx::new(&SharedSanitizerFlags::default());
+    let mut tree = new_tree(t(10));
+    add_child(&mut tree, t(10), t(11));
+    assert!(!tree.remove_dead_tags(&ctx, &[t(11)]));
+
+    add_child(&mut tree, t(10), t(12));
+    assert_eq!(tree.idx(t(11)), tree.idx(t(12)));
+    assert!(!tree.contains_tag(t(11)));
+
+    assert!(!tree.increment(t(11)));
+    assert_eq!(tree.tree.nodes.get(tree.idx(t(12))).unwrap().refcount.get(), 0);
+
+    assert!(!tree.remove_dead_tags(&ctx, &[t(11)]));
+    assert!(tree.contains_tag(t(12)));
+    assert_eq!(tree.node_count(), 2);
 }
 
 #[test]

@@ -9,7 +9,7 @@ uptr BorTagSet::LowerBound(BorTag Tag) const {
   uptr hi = size();
   while (lo < hi) {
     uptr mid = lo + (hi - lo) / 2;
-    if ((*this)[mid] < Tag) {
+    if ((*this)[mid].tag < Tag) {
       lo = mid + 1;
     } else {
       hi = mid;
@@ -20,13 +20,13 @@ uptr BorTagSet::LowerBound(BorTag Tag) const {
 
 bool BorTagSet::contains(BorTag tag) const {
   uptr i = LowerBound(tag);
-  return i < size() && (*this)[i] == tag;
+  return i < size() && (*this)[i].tag == tag;
 }
 
-void BorTagSet::insert(BorTag tag) {
-  uptr i = LowerBound(tag);
+void BorTagSet::insert(NodeId node) {
+  uptr i = LowerBound(node.tag);
 
-  if (i < size() && (*this)[i] == tag)
+  if (i < size() && (*this)[i].tag == node.tag)
     return;
 
   EnsureCapacity(size() + 1);
@@ -36,12 +36,12 @@ void BorTagSet::insert(BorTag tag) {
   for (uptr j = size() - 1; j > i; --j) {
     (*this)[j] = (*this)[j - 1];
   }
-  (*this)[i] = tag;
+  (*this)[i] = node;
 }
 
 void BorTagSet::erase(BorTag tag) {
   uptr i = LowerBound(tag);
-  if (i >= size() || (*this)[i] != tag) {
+  if (i >= size() || (*this)[i].tag != tag) {
     return;
   }
   for (uptr j = i; j + 1 < size(); ++j) {
@@ -59,8 +59,8 @@ void BorTagSet::EnsureCapacity(uptr req_size) {
       capacity = req_size;
     CHECK_LE(capacity, (u32)-1);
 
-    BorTag *p = (BorTag *)InternalAlloc(capacity * sizeof(BorTag));
-    internal_memcpy(p, data(), size_ * sizeof(BorTag));
+    NodeId *p = (NodeId *)InternalAlloc(capacity * sizeof(NodeId));
+    internal_memcpy(p, data(), size_ * sizeof(NodeId));
     if (!isInline())
       InternalFree(heap_);
 
@@ -78,7 +78,8 @@ void ProvenanceSet::insert(BlockIndex idx) {
 
 void ProvenanceSet::insert(Provenance prov) {
   if (CONCRETE(prov.tag)) {
-    set_[BLOCK_IDX(prov.block)].insert(prov.tag);
+    set_[static_cast<BlockIndex>(prov.info)].insert(
+        {prov.tag, InfoNode(prov.info)});
   }
 }
 
@@ -92,7 +93,7 @@ void ProvenanceSet::clear() {
 bool ProvenanceSet::contains(BlockIndex idx) { return find(idx) != nullptr; }
 
 bool ProvenanceSet::contains(Provenance prov) {
-  if (auto *tags = find(BLOCK_IDX(prov.block))) {
+  if (auto *tags = find(static_cast<BlockIndex>(prov.info))) {
     return tags->contains(prov.tag);
   }
   return false;

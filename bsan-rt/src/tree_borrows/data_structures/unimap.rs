@@ -138,10 +138,7 @@ impl<V> UniKeyValMap<V> {
     /// // assert_eq!(val_b, None); // This is what we would have expected
     /// ```
     pub fn remove(&mut self, idx: UniIndex) -> Option<V> {
-        self.data.remove(idx).and_then(|v| {
-            self.deassigned.push(idx);
-            Some(v)
-        })
+        self.data.remove(idx).inspect(|_| self.deassigned.push(idx))
     }
 
     pub fn contains_idx(&self, idx: UniIndex) -> bool {
@@ -196,7 +193,7 @@ impl<V> UniValMap<V> {
     /// was one.
     pub fn insert(&mut self, idx: UniIndex, val: V) -> Option<V> {
         self.extend_to_length(idx.0.to_usize() + 1);
-        mem::replace(&mut self.data[idx.0.to_usize()], Some(val))
+        self.data[idx.0.to_usize()].replace(val)
     }
 
     /// Get the value at this index, if it exists.

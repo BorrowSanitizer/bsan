@@ -25,13 +25,13 @@ SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_shadow_clear(void *dest, uptr size);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_rc_dec(BorTag Tag, Block *Info, void *DestShadow);
+void __bsan_rc_dec(BorTag Tag, AllocInfo Info, void *DestShadow);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_expose_prov(BorTag bor_tag, Block *alloc_info);
+void __bsan_expose_prov(BorTag bor_tag, AllocInfo alloc_info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_rc_inc(BorTag Tag, Block *Info, void *DestShadow);
+void __bsan_rc_inc(BorTag Tag, AllocInfo Info, void *DestShadow);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 u32 __bsan_symbolize_pc(uptr pc, char *file_buf, uptr file_buf_len, u32 *line,
@@ -41,16 +41,16 @@ SANITIZER_INTERFACE_ATTRIBUTE
 uptr __bsan_read_file(const char *path, char **file_buf, uptr *file_buf_len);
 
 SANITIZER_WEAK_ATTRIBUTE
-bool __bsan_dealloc(void *ptr, BorTag bor_tag, Block *alloc_info, Span pc,
-                    bool checked);
+bool __bsan_dealloc(void *ptr, BorTag bor_tag, Block *alloc_info, NodeIndex idx,
+                    Span pc, bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_read(void *ptr, uptr access_size, BorTag bor_tag, Block *alloc_info,
-                 bool checked);
+void __bsan_read(void *ptr, uptr access_size, BorTag bor_tag,
+                 AllocInfo alloc_info, bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_write(void *ptr, uptr access_size, BorTag bor_tag,
-                  Block *alloc_info, bool checked);
+                  AllocInfo alloc_info, bool checked);
 
 // Requests a garbage collection. Any thread may call this.
 SANITIZER_INTERFACE_ATTRIBUTE
@@ -78,7 +78,7 @@ enum class PruneResult : int {
 // Returns an `EjectStatus`, indicating if the allocation metadata object
 // can be reclaimed.
 SANITIZER_WEAK_ATTRIBUTE
-PruneResult __bsan_prune(Block *Info, BorTag *tags, uptr len);
+PruneResult __bsan_prune(Block *Info, NodeId *nodes, uptr len);
 
 // Clears the contents of a block, so that it can be freed by the allocator;
 SANITIZER_WEAK_ATTRIBUTE

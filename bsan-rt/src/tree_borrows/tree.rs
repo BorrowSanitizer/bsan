@@ -612,26 +612,27 @@ impl EagerTree {
     /// coalesced into their parent.
     ///
     /// We iterate in reverse over each index, with the idea being that indices that are pruned
-    /// earlier are typically children of those that are pruned later. Alternatively, we could
-    /// iterate in reverse, sorting by the borrow tag of each node. This would lead to a more
-    /// efficient pruning, since children are more easily prunable before their parents are.
-    /// When `compact` is false, dead interior nodes are left in place instead of being
-    /// coalesced into their parent. We can only prune a root node once all of its children
-    /// are gone.
+    /// earlier are children of those that are pruned later. Alternatively, we could iterate in
+    /// reverse and sort by the borrow tag of each node. This would lead to a more efficient
+    /// pruning, since children are more easily prunable before their parents are. When `compact`
+    /// is false, dead interior nodes are left in place instead of being coalesced into their parent.
+    /// We can only prune a root node once all of its children are gone.
     fn remove_useless_children(
         &mut self,
         global_ctx: &GlobalCtx,
-        dead_indices: &[UniIndex],
+        dead_nodes: &[NodeId],
         compact: bool,
     ) {
         let mut pending = mem::take(&mut self.dead_persisting);
-        pending.extend_from_slice(dead_indices);
+        pending.extend(
+            dead_nodes.iter().filter(|n| self.contains_tag(n.bor_tag, n.idx)).map(|n| n.idx),
+        );
         pending.sort_unstable();
 
         // Attempt to prune each node again, removing those that are no longer dead.
         let mut survivors: SmallVec<[UniIndex; 2]> = SmallVec::default();
         let mut prev_idx = None;
-        for &idx in pending.iter() {
+        for &idx in pending.iter().rev() {
             // Skip duplicate indices.
             // FIXME: should this ever happen? We deduplicate
             // the contents of the zero count table.
@@ -1114,16 +1115,13 @@ pub trait Tree: Clone {
     ) -> UBResult<()>;
     fn expose_tag(&mut self, tag: BorTag, idx: UniIndex, protected: bool);
 
-    fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_indices: &[UniIndex]) -> bool;
+    fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_nodes: &[NodeId]) -> bool;
 }
 
 impl Tree for LazyTree {
     fn contains_tag(&self, tag: BorTag, idx: UniIndex) -> bool {
         match self {
-            LazyTree::Uninit { root_tag, .. } => {
-                debug_assert!(*root_tag == tag || idx != UniIndex(0));
-                *root_tag == tag
-            }
+            LazyTree::Uninit { root_tag, .. } => *root_tag == tag,
             LazyTree::Init(tree) => tree.nodes.get(idx).is_some_and(|n| n.tag == tag),
         }
     }
@@ -1228,14 +1226,14 @@ impl Tree for LazyTree {
             tree.expose_tag(tag, idx, protected);
         }
     }
-    fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_indices: &[UniIndex]) -> bool {
+    fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_nodes: &[NodeId]) -> bool {
         match self {
-            LazyTree::Init(tree) => tree.remove_dead_tags(global_ctx, dead_indices),
-            LazyTree::Uninit { refcount, .. } => {
+            LazyTree::Init(tree) => tree.remove_dead_tags(global_ctx, dead_nodes),
+            LazyTree::Uninit { root_tag, refcount, .. } => {
                 // A tree in the Uninit state only has a single node (the root). If
                 // this node is in the dead list with a zero reference count, then the
                 // tree is dead and the associated AllocInfo metadata can be freed.
-                refcount.get() == 0 && dead_indices.contains(&UniIndex(0))
+                refcount.get() == 0 && dead_nodes.iter().any(|n| n.bor_tag == *root_tag)
             }
         }
     }
@@ -1549,43 +1547,36 @@ impl Tree for EagerTree {
     }
 
     // Removes all dead tags from the tree. Returns true if the tree is now empty.
-    fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_indices: &[UniIndex]) -> bool {
+    fn remove_dead_tags(&mut self, global_ctx: &GlobalCtx, dead_nodes: &[NodeId]) -> bool {
         // Retained tags are only revisited when new dead tags arrive for this tree.
-        if dead_indices.is_empty() {
+        if dead_nodes.is_empty() {
             return self.roots.is_empty();
         }
         // Only *compaction* of dead interior nodes is skipped on small trees
         let compact = self.nodes.len() > global_ctx.flags.tree_gc_min_nodes;
-        self.remove_useless_children(global_ctx, dead_indices, compact);
+        self.remove_useless_children(global_ctx, dead_nodes, compact);
         self.locations.merge_adjacent_thorough();
         self.roots.is_empty()
     }
     fn increment(&self, tag: BorTag, idx: UniIndex) -> bool {
         self.nodes
             .get(idx)
+            .filter(|node| node.tag == tag)
             // Safety: the tree is locked when this operation occurs.
-            .map(|node| unsafe {
-                debug_assert_eq!(tag, node.tag);
-                node.refcount.increment_nonatomic()
-            })
+            .map(|node| unsafe { node.refcount.increment_nonatomic() })
             .unwrap_or(false)
     }
     fn decrement(&self, tag: BorTag, idx: UniIndex) -> bool {
         self.nodes
             .get(idx)
+            .filter(|node| node.tag == tag)
             // Safety: the tree is locked when this operation occurs.
-            .map(|node| {
-                debug_assert_eq!(tag, node.tag);
-                node.refcount.decrement_nonatomic()
-            })
+            .map(|node| node.refcount.decrement_nonatomic())
             .unwrap_or(false)
     }
 
     fn get_protector_kind(&self, tag: BorTag, idx: UniIndex) -> Option<ProtectorKind> {
-        self.nodes.get(idx).and_then(|node| {
-            debug_assert_eq!(node.tag, tag);
-            node.protector_kind
-        })
+        self.nodes.get(idx).filter(|node| node.tag == tag).and_then(|node| node.protector_kind)
     }
 
     fn size(&self) -> Size {

@@ -89,8 +89,8 @@ void GlobalContext::acquireProvenance(ProvenanceSet &source) {
 }
 
 void GlobalContext::MergeZeroCounts(Snapshot *snap, ProvenanceSet &zct) {
-  zct.retainIf([&](BlockIndex idx, BorTag tag) -> bool {
-    Provenance prov = {tag, BLOCK_PTR(idx)};
+  zct.retainIf([&](BlockIndex idx, NodeId node) -> bool {
+    Provenance prov = {node.tag, PackInfo(idx, node.idx)};
     if (snap->live.contains(prov)) {
       return true;
     }
@@ -121,8 +121,8 @@ void GlobalContext::RunGarbageCollector(Snapshot &snap,
         ShadowRange live = thread->shadowStack(sp);
         for (uptr i = 0; i < live.size; i++) {
           // Tags in shadow memory may carry a slot offset.
-          if (live.blocks[i])
-            snap->live.insert({STRIP_TAG_OFFSET(live.tags[i]), live.blocks[i]});
+          if (live.infos[i])
+            snap->live.insert({STRIP_TAG_OFFSET(live.tags[i]), live.infos[i]});
         }
 
         // The next range is [bottom, sp). These values are below the
@@ -172,13 +172,13 @@ void GlobalContext::CollectGarbage(Snapshot *snap) {
   ProvenanceSet still_pending;
   pending_.drain([&](BlockIndex idx, BorTagSet &tags) {
     Block *info = BLOCK_PTR(idx);
-    tags.forEach([&](BorTag tag) {
+    tags.forEach([&](NodeId node) {
       // None of the borrow tags in the pending set
       // are live on the stack at this point.
       // They might be live on the heap, with a nonzero
       // reference count, or their underlying allocation
       // could be live on the shadow stack under a different tag,
-      DCHECK(!snap->live.contains({tag, info}));
+      DCHECK(!snap->live.contains({node.tag, PackInfo(idx, node.idx)}));
     });
     auto status = __bsan_prune(info, tags.data(), tags.size());
     if (status == PruneResult::Remove)

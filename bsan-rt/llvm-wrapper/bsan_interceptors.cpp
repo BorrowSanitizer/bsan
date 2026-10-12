@@ -125,7 +125,8 @@ INTERCEPTOR(void, free, void *ptr) {
   if (!already_in_scope && INST_CALLER(free)) {
     BlockGC blocked;
     Provenance *slot = GetParamSlot(0);
-    bool had_error = __bsan_dealloc(ptr, slot->tag, slot->block, span, false);
+    bool had_error = __bsan_dealloc(ptr, slot->tag, InfoBlock(slot->info),
+                                    InfoNode(slot->info), span, false);
     HANDLE_ERROR_PC_BP(had_error, pc, bp);
   }
   return bsan_deallocate(ptr);
@@ -156,7 +157,8 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
     BlockGC gc;
     if (is_inst && ptr != nullptr) {
       Provenance *slot = GetParamSlot(0);
-      bool had_error = __bsan_dealloc(ptr, slot->tag, slot->block, span, false);
+      bool had_error = __bsan_dealloc(ptr, slot->tag, InfoBlock(slot->info),
+                                      InfoNode(slot->info), span, false);
       HANDLE_ERROR_PC_BP(had_error, pc, bp);
     }
     void *nptr = bsan_realloc(ptr, size);

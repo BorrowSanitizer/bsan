@@ -218,8 +218,9 @@ static void AlignRange8(uptr addr, uptr size, uptr &aligned_addr,
 ALWAYS_INLINE static void UpdateShadowSlot(uptr d_shadow, uptr d_origin,
                                            uptr s_shadow, uptr s_origin,
                                            uptr offset) {
-  Block **dest_block_ptr = reinterpret_cast<Block **>(d_origin + offset);
-  Block **source_block_ptr = reinterpret_cast<Block **>(s_origin + offset);
+  AllocInfo *dest_block_ptr = reinterpret_cast<AllocInfo *>(d_origin + offset);
+  AllocInfo *source_block_ptr =
+      reinterpret_cast<AllocInfo *>(s_origin + offset);
 
   BorTag *dest_tag_ptr = reinterpret_cast<BorTag *>(d_shadow + offset);
   BorTag *source_tag_ptr = reinterpret_cast<BorTag *>(s_shadow + offset);
@@ -242,8 +243,8 @@ ALWAYS_INLINE static BorTag *SlotTag(uptr slot) {
   return reinterpret_cast<BorTag *>(MEM_TO_SHADOW(slot));
 }
 
-ALWAYS_INLINE static Block **SlotBlock(uptr slot) {
-  return reinterpret_cast<Block **>(MEM_TO_ORIGIN(slot));
+ALWAYS_INLINE static AllocInfo *SlotBlock(uptr slot) {
+  return reinterpret_cast<AllocInfo *>(MEM_TO_ORIGIN(slot));
 }
 
 // Clears the provenance in `slot` if its pointer overlaps [dst, dst + size).
@@ -303,10 +304,10 @@ ALWAYS_INLINE static void TransferSlot(uptr slot, uptr dst, uptr src,
   }
 
   BorTag *tag_ptr = SlotTag(slot);
-  Block **block_ptr = SlotBlock(slot);
+  AllocInfo *block_ptr = SlotBlock(slot);
   BorTag old_tag = *tag_ptr;
   BorTag tag = STRIP_TAG_OFFSET(*SlotTag(moved_slot));
-  Block *block = *SlotBlock(moved_slot);
+  AllocInfo block = *SlotBlock(moved_slot);
   __bsan_rc_inc(tag, block, tag_ptr);
   if (old_tag != 0)
     __bsan_rc_dec(old_tag, *block_ptr, tag_ptr);
@@ -385,7 +386,7 @@ void ClearShadowAligned(uptr shadow_start, uptr origin_start,
 
   for (uptr offset = 0; offset < size_aligned; offset += step) {
     BorTag *tag_ptr = reinterpret_cast<BorTag *>(shadow_start + offset);
-    Block **block_ptr = reinterpret_cast<Block **>(origin_start + offset);
+    AllocInfo *block_ptr = reinterpret_cast<AllocInfo *>(origin_start + offset);
 
     // We use the borrow tag as a proxy for the initialization of the
     // `AllocInfo` component of provenance metadata.
@@ -433,15 +434,15 @@ void WriteShadow(void *dest, Provenance prov) {
   uptr origin_start = MEM_TO_ORIGIN(d_aligned);
 
   BorTag *tag_ptr = reinterpret_cast<BorTag *>(shadow_start);
-  Block **block_ptr = reinterpret_cast<Block **>(origin_start);
+  AllocInfo *block_ptr = reinterpret_cast<AllocInfo *>(origin_start);
 
-  if (prov.block != nullptr)
-    __bsan_rc_inc(prov.tag, prov.block, tag_ptr);
+  if (prov.info != 0)
+    __bsan_rc_inc(prov.tag, prov.info, tag_ptr);
   if (*tag_ptr != 0)
     __bsan_rc_dec(*tag_ptr, *block_ptr, tag_ptr);
 
   // Record where the pointer begins within its slot.
-  *block_ptr = prov.block;
+  *block_ptr = prov.info;
   *tag_ptr = prov.tag | ((uptr)dest & kBorTagOffsetMask);
 }
 } // namespace __bsan

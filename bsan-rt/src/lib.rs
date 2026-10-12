@@ -214,6 +214,13 @@ impl fmt::Debug for BorTag {
 /// Index of a node within the tree of a single allocation.
 pub type NodeIndex = UniIndex;
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NodeId {
+    bor_tag: BorTag,
+    idx: NodeIndex,
+}
+
 /// Metadata associated with a pointer.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -221,6 +228,8 @@ pub struct Provenance {
     /// An identifier for the node in the tree
     /// containing the access permission for this pointer.
     bor_tag: BorTag,
+    /// The index of the slot containing the node.
+    idx: UniIndex,
     /// The allocation that this pointer is permitted to access.
     alloc_info: *mut AllocInfo,
 }
@@ -344,6 +353,7 @@ unsafe extern "C" fn __bsan_retag_impl(
     pin_data: Option<NonNull<[Size; 2]>>,
     pin_len: usize,
     bor_tag: BorTag,
+    idx: UniIndex,
     alloc_info: *mut AllocInfo,
     dest: NonNull<Provenance>,
     pc: Span,
@@ -351,7 +361,7 @@ unsafe extern "C" fn __bsan_retag_impl(
 ) -> bool {
     debug_bsan!("retag", object_addr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
-    let prov = Provenance { bor_tag, alloc_info };
+    let prov = Provenance { bor_tag, idx, alloc_info };
     let opt_slice = |opt_ptr: Option<NonNull<[Size; 2]>>, len| -> Option<_> {
         opt_ptr.map(|ptr| unsafe { slice::from_raw_parts(ptr.as_ptr(), len) })
     };
@@ -395,9 +405,14 @@ unsafe extern "C" fn __bsan_retag_impl(
 /// Removes a protector for the permission specified by the provenance value. This will
 /// never trigger undefined behavior.
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_protector_end_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo, pc: Span) {
+extern "C" fn __bsan_protector_end_impl(
+    bor_tag: BorTag,
+    idx: UniIndex,
+    alloc_info: *mut AllocInfo,
+    pc: Span,
+) {
     let ctx = unsafe { global_ctx() };
-    let prov = Provenance { bor_tag, alloc_info };
+    let prov = Provenance { bor_tag, idx, alloc_info };
     BorrowTracker::for_alloc_weak(prov, |mut bt| {
         let _ = bt.protector_end(ctx, pc);
     });
@@ -410,13 +425,14 @@ unsafe extern "C" fn __bsan_read_impl(
     ptr: *mut c_void,
     access_size: Size,
     bor_tag: BorTag,
+    idx: UniIndex,
     alloc_info: *mut AllocInfo,
     pc: Span,
     checked: bool,
 ) -> bool {
     debug_bsan!("read", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
-    let prov = Provenance { bor_tag, alloc_info };
+    let prov = Provenance { bor_tag, idx, alloc_info };
     let acc_res = if checked {
         unsafe {
             BorrowTracker::for_access_unchecked(
@@ -446,6 +462,7 @@ unsafe extern "C" fn __bsan_write_impl(
     ptr: *mut c_void,
     access_size: Size,
     bor_tag: BorTag,
+    idx: UniIndex,
     alloc_info: *mut AllocInfo,
     pc: Span,
     checked: bool,
@@ -453,7 +470,7 @@ unsafe extern "C" fn __bsan_write_impl(
     debug_bsan!("write", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let offset = Size::from_addr(ptr);
-    let prov = Provenance { bor_tag, alloc_info };
+    let prov = Provenance { bor_tag, idx, alloc_info };
     let acc_res = if checked {
         unsafe {
             BorrowTracker::for_access_unchecked(prov, offset, access_size, |mut bt| {
@@ -499,13 +516,14 @@ extern "C" fn __bsan_dealloc(
     ptr: *mut c_void,
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
+    idx: UniIndex,
     pc: Span,
     checked: bool,
 ) -> bool {
     debug_bsan!("dealloc", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let offset = Size::from_addr(ptr);
-    let prov: Provenance = Provenance { bor_tag, alloc_info };
+    let prov: Provenance = Provenance { bor_tag, idx, alloc_info };
     let acc_res = if checked {
         BorrowTracker::for_alloc(prov, |bt| bt.dealloc(ctx, pc))
     } else {
@@ -525,8 +543,12 @@ extern "C" fn __bsan_dealloc(
 /// If the state associated with this allocation has been invalidated,
 /// then the reference count update is applied to the allocation as a whole.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_rc_inc_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo) -> bool {
-    let prov = Provenance { bor_tag, alloc_info };
+unsafe extern "C" fn __bsan_rc_inc_impl(
+    bor_tag: BorTag,
+    idx: UniIndex,
+    alloc_info: *mut AllocInfo,
+) -> bool {
+    let prov = Provenance { bor_tag, idx, alloc_info };
     BorrowTracker::increment(prov)
 }
 
@@ -536,8 +558,12 @@ unsafe extern "C" fn __bsan_rc_inc_impl(bor_tag: BorTag, alloc_info: *mut AllocI
 /// If the state associated with this allocation has been invalidated,
 /// then the reference count update is applied to the allocation as a whole.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_rc_dec_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo) -> bool {
-    let prov = Provenance { bor_tag, alloc_info };
+unsafe extern "C" fn __bsan_rc_dec_impl(
+    bor_tag: BorTag,
+    idx: UniIndex,
+    alloc_info: *mut AllocInfo,
+) -> bool {
+    let prov = Provenance { bor_tag, idx, alloc_info };
     BorrowTracker::decrement(prov)
 }
 
@@ -566,12 +592,13 @@ unsafe extern "C" fn __bsan_alloc_stack_impl(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_dealloc_stack_impl(
     bor_tag: BorTag,
+    idx: UniIndex,
     alloc_info: *mut AllocInfo,
     span: Span,
 ) {
     debug_bsan!("dealloc", ptr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
-    let prov: Provenance = Provenance { bor_tag, alloc_info };
+    let prov: Provenance = Provenance { bor_tag, idx, alloc_info };
     BorrowTracker::for_alloc_weak(prov, |bt| {
         let _ = bt.dealloc(ctx, span);
     });
@@ -581,9 +608,13 @@ unsafe extern "C" fn __bsan_dealloc_stack_impl(
 /// pointer-to-integer cast), so that it can later be recovered when an
 /// integer is cast back to a pointer with wildcard provenance.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_expose_prov_impl(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+unsafe extern "C" fn __bsan_expose_prov_impl(
+    bor_tag: BorTag,
+    idx: UniIndex,
+    alloc_info: *mut AllocInfo,
+) {
     let ctx = unsafe { global_ctx() };
-    let prov = Provenance { bor_tag, alloc_info };
+    let prov = Provenance { bor_tag, idx, alloc_info };
     BorrowTracker::for_alloc_weak(prov, |mut bt| {
         let _ = bt.expose_tag(ctx);
     });
@@ -612,13 +643,13 @@ pub enum PruneResult {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_prune(
     alloc_info: NonNull<AllocInfo>,
-    dead_indices: *const BorTag,
+    dead_nodes: *const NodeId,
     len: usize,
 ) -> PruneResult {
     let global_ctx = unsafe { global_ctx() };
     let alloc: AllocInfoPtr = alloc_info.into();
-    let dead_indices = if len > 0 {
-        unsafe { slice::from_raw_parts(dead_indices, len) }
+    let dead_nodes = if len > 0 {
+        unsafe { slice::from_raw_parts(dead_nodes, len) }
     } else {
         // We pass a null pointer for `bor_tags` when the list is empty.
         // The function `slice::from_raw_parts` requires a nonnull
@@ -628,7 +659,7 @@ unsafe extern "C" fn __bsan_prune(
     if let Some(mut state) = alloc.state.try_lock() {
         let absent_from_heap = alloc.rc.get() == 0;
         let tree_is_empty = if let Some(tree) = state.tree_opt_mut() {
-            tree.remove_dead_tags(global_ctx, dead_indices)
+            tree.remove_dead_tags(global_ctx, dead_nodes)
         } else {
             true
         };
@@ -667,40 +698,44 @@ unsafe extern "C" fn __bsan_eject(alloc_info: NonNull<AllocInfo>) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_print(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
-    let prov = Provenance { bor_tag, alloc_info };
+extern "C" fn __bsan_print(bor_tag: BorTag, idx: UniIndex, alloc_info: *mut AllocInfo) {
+    let prov = Provenance { bor_tag, idx, alloc_info };
     crate::println!("{prov:?}");
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_print_borrow_state(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
-    let prov = Provenance { bor_tag, alloc_info };
+extern "C" fn __bsan_print_borrow_state(
+    bor_tag: BorTag,
+    idx: UniIndex,
+    alloc_info: *mut AllocInfo,
+) {
+    let prov = Provenance { bor_tag, idx, alloc_info };
     BorrowTracker::for_alloc_weak(prov, |bt| {
         bt.debug_print_tree(false);
     });
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_tree_size(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
-    let prov = Provenance { bor_tag, alloc_info };
+extern "C" fn __bsan_tree_size(bor_tag: BorTag, idx: UniIndex, alloc_info: *mut AllocInfo) {
+    let prov = Provenance { bor_tag, idx, alloc_info };
     BorrowTracker::for_alloc_weak(prov, |bt| {
         crate::println!("Tree size: {}", bt.debug_tree_size());
     });
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_snapshot(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+extern "C" fn __bsan_snapshot(bor_tag: BorTag, idx: UniIndex, alloc_info: *mut AllocInfo) {
     let ctx = unsafe { global_ctx() };
-    let prov = Provenance { bor_tag, alloc_info };
+    let prov = Provenance { bor_tag, idx, alloc_info };
     BorrowTracker::for_alloc_weak(prov, |bt| {
         bt.debug_take_snapshot(ctx);
     });
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __bsan_print_diff(bor_tag: BorTag, alloc_info: *mut AllocInfo) {
+extern "C" fn __bsan_print_diff(bor_tag: BorTag, idx: UniIndex, alloc_info: *mut AllocInfo) {
     let ctx = unsafe { global_ctx() };
-    let prov = Provenance { bor_tag, alloc_info };
+    let prov = Provenance { bor_tag, idx, alloc_info };
     BorrowTracker::for_alloc_weak(prov, |bt| bt.debug_print_diff(ctx));
 }
 

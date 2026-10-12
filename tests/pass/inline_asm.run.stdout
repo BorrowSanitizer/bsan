@@ -1,1 +1,1 @@
-Provenance { bor_tag: <TAG>, alloc_info: 0x0 }
+Provenance { bor_tag: <TAG>, idx: 0, alloc_info: 0x0 }

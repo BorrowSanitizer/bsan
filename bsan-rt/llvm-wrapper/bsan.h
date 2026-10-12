@@ -39,6 +39,17 @@ typedef uptr Span;
 
 struct Provenance {
   BorTag tag;
+  AllocInfo info;
+};
+
+struct NodeId {
+  BorTag tag;
+  NodeIndex idx;
+};
+
+struct UnpackedProvenance {
+  BorTag tag;
+  NodeIndex idx;
   Block *block;
 };
 
@@ -47,7 +58,7 @@ struct AtExitRecord {
   void *arg;
 };
 
-const Provenance OMNIVALID = {kOmnivalidTag, nullptr};
+const Provenance OMNIVALID = {kOmnivalidTag, 0};
 
 static constexpr uptr kParamTLSSizeProv = 100;
 static constexpr uptr kVarArgTLSSizeBytes = 800;
@@ -69,6 +80,19 @@ extern BlockAllocator block_allocator;
 
 #define BLOCK_IDX(ptr) (block_allocator.InvMap(ptr))
 #define BLOCK_PTR(idx) (block_allocator.Map(idx))
+
+inline AllocInfo PackInfo(BlockIndex block, NodeIndex idx) {
+  return (static_cast<AllocInfo>(idx) << 32) | block;
+}
+
+inline Block *InfoBlock(AllocInfo info) {
+  BlockIndex block = static_cast<BlockIndex>(info);
+  return block ? BLOCK_PTR(block) : nullptr;
+}
+
+inline NodeIndex InfoNode(AllocInfo info) {
+  return static_cast<NodeIndex>(info >> 32);
+}
 
 typedef uptr ThreadId;
 enum GCState : u32 {

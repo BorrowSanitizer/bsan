@@ -196,6 +196,7 @@ impl EagerTree {
     /// Also takes as an argument whether the tag is protected or not.
     pub fn expose_tag(&mut self, tag: BorTag, idx: UniIndex, protected: bool) {
         let node = self.nodes.get_mut(idx).unwrap();
+        debug_assert_eq!(node.tag, tag);
         if !node.is_exposed {
             node.is_exposed = true;
             let node = self.nodes.get(idx).unwrap();
@@ -225,6 +226,7 @@ impl EagerTree {
         // We check if the node is already exposed, as we don't want to expose any
         // nodes which aren't already exposed.
         let node = self.nodes.get(idx).unwrap();
+        debug_assert_eq!(node.tag, tag);
         if node.is_exposed {
             for (_, loc) in self.locations.iter_mut_all() {
                 let perm = loc

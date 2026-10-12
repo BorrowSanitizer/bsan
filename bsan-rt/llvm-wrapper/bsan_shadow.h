@@ -19,6 +19,9 @@ typedef u32 BlockIndex;
 
 typedef uptr BorTag;
 
+typedef uptr AllocInfo;
+typedef u32 NodeIndex;
+
 // Borrow tags are assigned in multiples of `kBorTagStride`. The low 3 bits of a
 // tag stored in shadow memory hold the byte offset [0, 7] of the pointer within
 // its 8-byte provenance slot. These bits are never set outside of shadow
@@ -153,11 +156,11 @@ struct ShadowRange {
     begin &= ~(kMinProvAlignment - 1);
     end &= ~(kMinProvAlignment - 1);
     tags = (BorTag *)MEM_TO_SHADOW(begin);
-    blocks = (Block **)MEM_TO_ORIGIN(begin);
+    infos = (AllocInfo *)MEM_TO_ORIGIN(begin);
     size = begin < end ? (end - begin) / kMinProvAlignment : 0;
   }
   BorTag *tags;
-  Block **blocks;
+  AllocInfo *infos;
   uptr size;
 };
 

@@ -22,12 +22,12 @@ public:
 
   BorTagSet() : size_(0), capacity_(kInlineCapacity), heap_(nullptr) {}
 
-  const BorTag *data() const { return isInline() ? inline_ : heap_; }
+  const NodeId *data() const { return isInline() ? inline_ : heap_; }
   // Mutable access to the underlying array.
-  BorTag *data() { return isInline() ? inline_ : heap_; }
+  NodeId *data() { return isInline() ? inline_ : heap_; }
   uptr size() const { return size_; }
 
-  void insert(BorTag Tag);
+  void insert(NodeId Node);
   void erase(BorTag Tag);
   bool contains(BorTag Tag) const;
 
@@ -44,12 +44,12 @@ public:
   // the underlying allocation.
   void clear() { size_ = 0; }
 
-  BorTag &operator[](uptr i) {
+  NodeId &operator[](uptr i) {
     DCHECK_LT(i, size_);
     return data()[i];
   }
 
-  const BorTag &operator[](uptr i) const {
+  const NodeId &operator[](uptr i) const {
     DCHECK_LT(i, size_);
     return data()[i];
   }
@@ -64,9 +64,9 @@ public:
   template <typename Fn> void retainIf(Fn keep) {
     uptr w = 0;
     for (uptr r = 0; r < this->size(); ++r) {
-      BorTag tag = (*this)[r];
-      if (keep(tag)) {
-        (*this)[w++] = tag;
+      NodeId node = (*this)[r];
+      if (keep(node)) {
+        (*this)[w++] = node;
       }
     }
     size_ = w;
@@ -76,8 +76,8 @@ private:
   u32 size_;
   u32 capacity_;
   union {
-    BorTag inline_[kInlineCapacity];
-    BorTag *heap_;
+    NodeId inline_[kInlineCapacity];
+    NodeId *heap_;
   };
 
   bool isInline() const { return capacity_ <= kInlineCapacity; }
@@ -110,7 +110,7 @@ public:
   // given callback for each allocation.
   void takeFrom(ProvenanceSet &other) {
     other.drain([&](BlockIndex idx, BorTagSet &tags) {
-      tags.forEach([&](BorTag tag) { set_[idx].insert(tag); });
+      tags.forEach([&](NodeId node) { set_[idx].insert(node); });
     });
   }
 
@@ -130,7 +130,7 @@ public:
     InternalMmapVector<BlockIndex> ToErase;
     set_.forEach([&](DenseMap<BlockIndex, BorTagSet>::value_type &KV) {
       BlockIndex idx = KV.first;
-      KV.second.retainIf([&](BorTag tag) { return retain(idx, tag); });
+      KV.second.retainIf([&](NodeId node) { return retain(idx, node); });
       if (KV.second.size() == 0) {
         KV.second.reset();
         ToErase.push_back(idx);

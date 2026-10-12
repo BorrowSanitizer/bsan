@@ -135,7 +135,7 @@ Provenance BsanAllocateMeta(void *ptr, uptr size, uptr span) {
                                   memory_order_relaxed);
     Block *block = BLOCK_PTR(CurrentThread()->AllocBlock());
     __bsan_alloc_impl(ptr, size, tag, block, span);
-    Provenance prov = {tag, block};
+    Provenance prov = {tag, PackInfo(BLOCK_IDX(block), 0)};
     return prov;
   } else {
     return OMNIVALID;
@@ -567,21 +567,26 @@ SANITIZER_WEAK_ATTRIBUTE
 bool __bsan_retag_impl(void *object_addr, uptr access_size, u8 flags,
                        const uptr im_data[2], uptr im_len,
                        const uptr pin_data[2], uptr pin_len, BorTag bor_tag,
-                       Block *alloc_info, void *dest, Span pc, bool checked);
+                       NodeIndex idx, Block *alloc_info,
+                       UnpackedProvenance *dest, Span pc, bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_retag(void *object_addr, uptr access_size, u8 flags,
                   const uptr im_data[2], uptr im_len, const uptr pin_data[2],
-                  uptr pin_len, BorTag bor_tag, Block *alloc_info, void *dest,
-                  bool checked) {
+                  uptr pin_len, BorTag bor_tag, AllocInfo alloc_info,
+                  void *dest, bool checked) {
   if (__bsan_retag_impl) {
     GET_SPAN;
     InterceptorBarrier barrier;
-    Provenance prov;
-    bool had_error = __bsan_retag_impl(object_addr, access_size, flags, im_data,
-                                       im_len, pin_data, pin_len, bor_tag,
-                                       alloc_info, &prov, span, checked);
+    UnpackedProvenance unpacked;
+    bool had_error =
+        __bsan_retag_impl(object_addr, access_size, flags, im_data, im_len,
+                          pin_data, pin_len, bor_tag, InfoNode(alloc_info),
+                          InfoBlock(alloc_info), &unpacked, span, checked);
     HANDLE_ERROR(had_error);
+    Provenance prov = {unpacked.tag, 0};
+    if (unpacked.block)
+      prov.info = PackInfo(BLOCK_IDX(unpacked.block), unpacked.idx);
     *(Provenance *)(dest) = prov;
     // We can only acquire provenance *after* we have rooted it to the
     // shadow stack. Otherwise, the GC could clean it up before we have
@@ -593,41 +598,43 @@ void __bsan_retag(void *object_addr, uptr access_size, u8 flags,
 
 SANITIZER_WEAK_ATTRIBUTE
 bool __bsan_read_impl(void *ptr, uptr access_size, BorTag bor_tag,
-                      Block *alloc_info, Span pc, bool checked);
+                      NodeIndex idx, Block *alloc_info, Span pc, bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_read(void *ptr, uptr access_size, BorTag bor_tag, Block *alloc_info,
-                 bool checked) {
+void __bsan_read(void *ptr, uptr access_size, BorTag bor_tag,
+                 AllocInfo alloc_info, bool checked) {
   if (__bsan_read_impl) {
     GET_SPAN;
     InterceptorBarrier barrier;
     bool had_error =
-        __bsan_read_impl(ptr, access_size, bor_tag, alloc_info, span, checked);
+        __bsan_read_impl(ptr, access_size, bor_tag, InfoNode(alloc_info),
+                         InfoBlock(alloc_info), span, checked);
     HANDLE_ERROR(had_error);
   }
 }
 
 SANITIZER_WEAK_ATTRIBUTE
 bool __bsan_write_impl(void *ptr, uptr access_size, BorTag bor_tag,
-                       Block *alloc_info, Span pc, bool checked);
+                       NodeIndex idx, Block *alloc_info, Span pc, bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_write(void *ptr, uptr access_size, BorTag bor_tag,
-                  Block *alloc_info, bool checked) {
+                  AllocInfo alloc_info, bool checked) {
   if (__bsan_write_impl) {
     GET_SPAN;
     InterceptorBarrier barrier;
     bool had_error =
-        __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, span, checked);
+        __bsan_write_impl(ptr, access_size, bor_tag, InfoNode(alloc_info),
+                          InfoBlock(alloc_info), span, checked);
     HANDLE_ERROR(had_error);
   }
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-bool __bsan_rc_inc_impl(BorTag Tag, Block *Info);
+bool __bsan_rc_inc_impl(BorTag Tag, NodeIndex Idx, Block *Info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_rc_inc(BorTag tag, Block *info, void *dest_shadow) {
+void __bsan_rc_inc(BorTag tag, AllocInfo info, void *dest_shadow) {
   // Tags read from shadow memory may carry a slot offset.
   tag = STRIP_TAG_OFFSET(tag);
   if (!CONCRETE(tag))
@@ -647,15 +654,15 @@ void __bsan_rc_inc(BorTag tag, Block *info, void *dest_shadow) {
   }
   if (LIKELY(__bsan_rc_inc_impl)) {
     InterceptorBarrier barrier;
-    __bsan_rc_inc_impl(tag, info);
+    __bsan_rc_inc_impl(tag, InfoNode(info), InfoBlock(info));
   }
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-bool __bsan_rc_dec_impl(BorTag tag, Block *info);
+bool __bsan_rc_dec_impl(BorTag tag, NodeIndex idx, Block *info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_rc_dec(BorTag tag, Block *info, void *dest_shadow) {
+void __bsan_rc_dec(BorTag tag, AllocInfo info, void *dest_shadow) {
   // Tags read from shadow memory may carry a slot offset.
   tag = STRIP_TAG_OFFSET(tag);
   if (!CONCRETE(tag))
@@ -667,7 +674,7 @@ void __bsan_rc_dec(BorTag tag, Block *info, void *dest_shadow) {
     return;
   if (LIKELY(__bsan_rc_dec_impl)) {
     InterceptorBarrier barrier;
-    if (__bsan_rc_dec_impl(tag, info)) {
+    if (__bsan_rc_dec_impl(tag, InfoNode(info), InfoBlock(info))) {
       AcquireProvenance({tag, info});
     }
   }
@@ -685,15 +692,15 @@ void __bsan_shadow_clear_aligned(void *dest_shadow, void *dest_origin,
 }
 
 SANITIZER_INTERFACE_ATTRIBUTE
-Block *__bsan_reserve_stack_slot() {
+AllocInfo __bsan_reserve_stack_slot() {
   Block *block = BLOCK_PTR(CurrentThread()->AllocBlock());
   internal_memset(block, 0, sizeof(atomic_uint64_t));
-  return block;
+  return PackInfo(BLOCK_IDX(block), 0);
 }
 
 SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE bool
-__bsan_dealloc(void *ptr, BorTag bor_tag, Block *alloc_info, Span pc,
-               bool checked) {
+__bsan_dealloc(void *ptr, BorTag bor_tag, Block *alloc_info, NodeIndex idx,
+               Span pc, bool checked) {
   return false;
 }
 
@@ -703,39 +710,44 @@ bool __bsan_alloc_stack_impl(void *base_addr, uptr size, BorTag bor_tag,
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_alloc_stack(void *base_addr, uptr size, BorTag bor_tag,
-                        Block *alloc_info) {
+                        AllocInfo alloc_info) {
   if (__bsan_alloc_stack_impl) {
     GET_SPAN;
     InterceptorBarrier barrier;
-    __bsan_alloc_stack_impl(base_addr, size, bor_tag, alloc_info, span);
+    __bsan_alloc_stack_impl(base_addr, size, bor_tag, InfoBlock(alloc_info),
+                            span);
   }
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-bool __bsan_dealloc_stack_impl(BorTag bor_tag, Block *alloc_info, Span pc);
+bool __bsan_dealloc_stack_impl(BorTag bor_tag, NodeIndex idx, Block *alloc_info,
+                               Span pc);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_dealloc_stack(void *ptr, BorTag bor_tag, Block *alloc_info) {
+void __bsan_dealloc_stack(void *ptr, BorTag bor_tag, AllocInfo alloc_info) {
   if (__bsan_dealloc_stack_impl) {
     GET_SPAN;
     InterceptorBarrier barrier;
-    __bsan_dealloc_stack_impl(bor_tag, alloc_info, span);
+    __bsan_dealloc_stack_impl(bor_tag, InfoNode(alloc_info),
+                              InfoBlock(alloc_info), span);
   }
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_expose_prov_impl(BorTag bor_tag, Block *alloc_info);
+void __bsan_expose_prov_impl(BorTag bor_tag, NodeIndex idx, Block *alloc_info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_expose_prov(BorTag bor_tag, Block *alloc_info) {
+void __bsan_expose_prov(BorTag bor_tag, AllocInfo alloc_info) {
   if (__bsan_expose_prov_impl) {
     InterceptorBarrier barrier;
-    __bsan_expose_prov_impl(bor_tag, alloc_info);
+    __bsan_expose_prov_impl(bor_tag, InfoNode(alloc_info),
+                            InfoBlock(alloc_info));
   }
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_protector_end_impl(BorTag bor_tag, Block *alloc_info, Span pc);
+void __bsan_protector_end_impl(BorTag bor_tag, NodeIndex idx, Block *alloc_info,
+                               Span pc);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_pop_frame(const Provenance *frame_start, uptr prot,
@@ -746,17 +758,19 @@ void __bsan_pop_frame(const Provenance *frame_start, uptr prot,
     for (uptr i = 0; i < prot + alloca_vec_size; i++) {
       const Provenance prov = frame_start[i];
       if (i < prot) {
-        __bsan_protector_end_impl(prov.tag, prov.block, span);
+        __bsan_protector_end_impl(prov.tag, InfoNode(prov.info),
+                                  InfoBlock(prov.info), span);
       } else if (UNLIKELY(prov.tag == kInvalidTag)) {
         // We eagerly allocate blocks for `allocas`, but we assign
         // them a dedicated invalid tag until their first lifetime.
         // If an alloca never reaches its first lifetime, then
         // its tag will still be invalid, so we can free it
         // immediately.
-        if (prov.block)
-          CurrentThread()->FreeBlock(BLOCK_IDX(prov.block));
+        if (InfoBlock(prov.info))
+          CurrentThread()->FreeBlock(static_cast<BlockIndex>(prov.info));
       } else {
-        __bsan_dealloc_stack_impl(prov.tag, prov.block, span);
+        __bsan_dealloc_stack_impl(prov.tag, InfoNode(prov.info),
+                                  InfoBlock(prov.info), span);
         AcquireProvenance(prov);
       }
     }
@@ -764,52 +778,54 @@ void __bsan_pop_frame(const Provenance *frame_start, uptr prot,
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_print(BorTag bor_tag, Block *alloc_info) {}
+void __bsan_print(BorTag bor_tag, NodeIndex idx, Block *alloc_info) {}
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_print(void *ptr) {
   Provenance *slot = GetParamSlot(0);
   InterceptorBarrier barrier;
-  __bsan_print(slot->tag, slot->block);
+  __bsan_print(slot->tag, InfoNode(slot->info), InfoBlock(slot->info));
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_print_borrow_state(BorTag bor_tag, Block *alloc_info) {}
+void __bsan_print_borrow_state(BorTag bor_tag, NodeIndex idx,
+                               Block *alloc_info) {}
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_debug_print_borrow_state(void *ptr) {
   Provenance *slot = GetParamSlot(0);
   InterceptorBarrier barrier;
-  __bsan_print_borrow_state(slot->tag, slot->block);
+  __bsan_print_borrow_state(slot->tag, InfoNode(slot->info),
+                            InfoBlock(slot->info));
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_tree_size(BorTag bor_tag, Block *alloc_info) {}
+void __bsan_tree_size(BorTag bor_tag, NodeIndex idx, Block *alloc_info) {}
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_debug_tree_size(void *ptr) {
   Provenance *slot = GetParamSlot(0);
   InterceptorBarrier barrier;
-  __bsan_tree_size(slot->tag, slot->block);
+  __bsan_tree_size(slot->tag, InfoNode(slot->info), InfoBlock(slot->info));
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_snapshot(BorTag bor_tag, Block *alloc_info) {}
+void __bsan_snapshot(BorTag bor_tag, NodeIndex idx, Block *alloc_info) {}
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_debug_snapshot(void *ptr) {
   Provenance *slot = GetParamSlot(0);
   InterceptorBarrier barrier;
-  __bsan_snapshot(slot->tag, slot->block);
+  __bsan_snapshot(slot->tag, InfoNode(slot->info), InfoBlock(slot->info));
 }
 
-SANITIZER_WEAK_ATTRIBUTE void __bsan_print_diff(BorTag bor_tag,
+SANITIZER_WEAK_ATTRIBUTE void __bsan_print_diff(BorTag bor_tag, NodeIndex idx,
                                                 Block *alloc_info) {}
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_debug_print_diff(void *ptr) {
   Provenance *slot = GetParamSlot(0);
   InterceptorBarrier barrier;
-  __bsan_print_diff(slot->tag, slot->block);
+  __bsan_print_diff(slot->tag, InfoNode(slot->info), InfoBlock(slot->info));
 }
 
 // Asks the global state to run the garbage collector. Any thread may call this;
