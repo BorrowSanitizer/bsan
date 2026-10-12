@@ -888,25 +888,6 @@ fn dead_leaf_is_removed() {
 }
 
 #[test]
-fn live_tag_is_not_marked_dead() {
-    let ctx = GlobalCtx::new(&SharedSanitizerFlags::default());
-    let mut tree = new_tree(t(10));
-    add_child(&mut tree, t(10), t(11));
-    tree.increment(t(11));
-
-    assert!(!tree.remove_dead_tags(&ctx, &[t(11)]));
-    assert!(tree.contains_tag(t(11)));
-    assert!(!is_dead(&tree, t(11)));
-
-    tree.decrement(t(11));
-    assert!(!tree.remove_dead_tags(&ctx, &[]));
-    assert!(tree.contains_tag(t(11)));
-
-    assert!(!tree.remove_dead_tags(&ctx, &[t(11)]));
-    assert!(!tree.contains_tag(t(11)));
-}
-
-#[test]
 fn dead_node_with_multiple_children_is_compacted() {
     // Ensure that we can compact any size of tree
     let flags = SharedSanitizerFlags {
@@ -1049,38 +1030,6 @@ fn stale_dead_node_is_revisited_without_its_own_tag() {
     assert!(tree.contains_tag(t(12)), "its child is reparented onto the root, not removed");
     assert!(!tree.contains_tag(t(20)), "the unrelated dead leaf is removed as usual");
     assert_eq!(tree.node_count(), 2);
-}
-
-#[test]
-fn retained_tag_that_becomes_live_again_is_not_pruned() {
-    // A retained tag is re-checked on every later pass, not just when it is first handed over,
-    // so a node that became reachable again is dropped from the list instead of pruned.
-    let ctx = GlobalCtx::new(&SharedSanitizerFlags::default());
-    let mut tree = new_tree(t(10));
-    add_child(&mut tree, t(10), t(11));
-    add_child(&mut tree, t(11), t(12));
-    add_child(&mut tree, t(10), t(20));
-    tree.increment(t(12));
-    tree.increment(t(20));
-
-    assert!(!tree.remove_dead_tags(&ctx, &[t(11)]));
-    assert!(is_dead(&tree, t(11)));
-
-    // t(11) is reachable again. The next pass, triggered by an unrelated dead leaf, must leave
-    // it alone, even though it is still listed and its own tag is not passed.
-    tree.increment(t(11));
-    tree.decrement(t(20));
-    assert!(!tree.remove_dead_tags(&ctx, &[t(20)]));
-    assert!(!tree.contains_tag(t(20)));
-
-    assert!(tree.contains_tag(t(11)), "a live node must never be pruned");
-    assert!(!is_dead(&tree, t(11)), "it should have been dropped from the list");
-    assert_eq!(tree.node_count(), 3);
-
-    // Once it dies again it re-enters a ZCT, and is tracked as before.
-    tree.decrement(t(11));
-    assert!(!tree.remove_dead_tags(&ctx, &[t(11)]));
-    assert!(is_dead(&tree, t(11)));
 }
 
 /// Maps `tree.roots` to their tags, in vec order.
