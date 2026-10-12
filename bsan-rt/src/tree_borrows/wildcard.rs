@@ -7,7 +7,6 @@ use super::tree::{AccessRelatedness, Node};
 use super::EagerTree;
 #[cfg(feature = "expensive-consistency-checks")]
 use crate::borrow_tracker::GlobalState;
-use crate::BorTag;
 
 /// Represents the maximum access level that is possible.
 ///
