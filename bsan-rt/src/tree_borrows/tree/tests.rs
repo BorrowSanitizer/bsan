@@ -908,15 +908,8 @@ fn add_child_perm(tree: &mut TestTree, parent: BorTag, child: BorTag, perm: Perm
     );
     // A wildcard parent has no node.
     let parent_idx = (parent != BorTag::WILDCARD).then(|| tree.idx(parent));
-    let result = tree.tree.new_child(
-        Size::ZERO,
-        parent_idx,
-        child,
-        inside_perms,
-        perm,
-        None,
-        Span::dummy(),
-    );
+    let result =
+        tree.tree.new_child(Size::ZERO, parent_idx, child, inside_perms, perm, None, Span::dummy());
     let Ok(child_idx) = result else { panic!("failed to add {child:?} as a child of {parent:?}") };
     tree.indices.insert(child, child_idx);
 }
