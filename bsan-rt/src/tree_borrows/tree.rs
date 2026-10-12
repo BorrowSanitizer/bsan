@@ -607,17 +607,17 @@ impl EagerTree {
 
     /// Removes from the tree the nodes for the given *dead* indices, wherever
     /// possible. A tag that cannot be pruned now may become prunable later, so it is kept
-    /// in [`Self::dead_persisting`] and merged with `dead_persisting` on the next pass. 
+    /// in [`Self::dead_persisting`] and merged with `dead_persisting` on the next pass.
     /// When `compact` is false, dead interior nodes are left in place instead of being
     /// coalesced into their parent.
     ///
     /// We iterate in reverse over each index, with the idea being that indices that are pruned
     /// earlier are typically children of those that are pruned later. Alternatively, we could
     /// iterate in reverse, sorting by the borrow tag of each node. This would lead to a more
-    /// efficient pruning, since children are more easily prunable before their parents are. 
+    /// efficient pruning, since children are more easily prunable before their parents are.
     /// When `compact` is false, dead interior nodes are left in place instead of being
-    /// coalesced into their parent. We can only prune a root node once all of its children 
-    /// are gone. 
+    /// coalesced into their parent. We can only prune a root node once all of its children
+    /// are gone.
     fn remove_useless_children(
         &mut self,
         global_ctx: &GlobalCtx,
@@ -632,9 +632,9 @@ impl EagerTree {
         let mut survivors: SmallVec<[UniIndex; 2]> = SmallVec::default();
         let mut prev_idx = None;
         for &idx in pending.iter() {
-            // Skip duplicate indices. 
+            // Skip duplicate indices.
             // FIXME: should this ever happen? We deduplicate
-            // the contents of the zero count table. 
+            // the contents of the zero count table.
             if prev_idx.replace(idx) == Some(idx) {
                 continue;
             }
@@ -1123,10 +1123,8 @@ impl Tree for LazyTree {
             LazyTree::Uninit { root_tag, .. } => {
                 debug_assert!(*root_tag == tag || idx != UniIndex(0));
                 *root_tag == tag
-            },
-            LazyTree::Init(tree) => {
-                tree.nodes.get(idx).is_some_and(|n| n.tag == tag)
-            },
+            }
+            LazyTree::Init(tree) => tree.nodes.get(idx).is_some_and(|n| n.tag == tag),
         }
     }
     fn node_count(&self) -> usize {
@@ -1214,9 +1212,14 @@ impl Tree for LazyTree {
     ) -> UBResult<()> {
         match self {
             LazyTree::Uninit { .. } => Ok(()),
-            LazyTree::Init(tree) => {
-                tree.perform_protector_end_access(global_ctx, tag, idx, alloc_id, span, visits_since_gc)
-            }
+            LazyTree::Init(tree) => tree.perform_protector_end_access(
+                global_ctx,
+                tag,
+                idx,
+                alloc_id,
+                span,
+                visits_since_gc,
+            ),
         }
     }
     fn expose_tag(&mut self, tag: BorTag, idx: UniIndex, protected: bool) {
@@ -1296,11 +1299,7 @@ impl Tree for EagerTree {
         span: Span,
     ) -> UBResult<UniIndex> {
         let protected = protector.is_some();
-        let parent_idx = if parent_tag == BorTag::WILDCARD {
-            None
-        } else {
-            Some(parent_idx)
-        };
+        let parent_idx = if parent_tag == BorTag::WILDCARD { None } else { Some(parent_idx) };
         assert!(outside_perm.is_initial());
 
         let default_strongest_idempotent =
@@ -1365,8 +1364,7 @@ impl Tree for EagerTree {
             self.verify_wildcard_consistency(global);
         }
 
-        let source_idx =
-            if tag == BorTag::WILDCARD { None } else { Some(idx) };
+        let source_idx = if tag == BorTag::WILDCARD { None } else { Some(idx) };
 
         // `visits_since_gc` is only written once per access.
         let mut visits: u32 = 0;
@@ -1416,8 +1414,7 @@ impl Tree for EagerTree {
             visits_since_gc,
         )?;
 
-        let start_idx =
-            if tag == BorTag::WILDCARD { None } else { Some(idx) };
+        let start_idx = if tag == BorTag::WILDCARD { None } else { Some(idx) };
 
         for (loc_range, loc) in self.locations.iter_mut(access_range.start, access_range.size) {
             let diagnostics = DiagnosticInfo {
@@ -1567,9 +1564,9 @@ impl Tree for EagerTree {
         self.nodes
             .get(idx)
             // Safety: the tree is locked when this operation occurs.
-            .map(|node| unsafe { 
+            .map(|node| unsafe {
                 debug_assert_eq!(tag, node.tag);
-                node.refcount.increment_nonatomic() 
+                node.refcount.increment_nonatomic()
             })
             .unwrap_or(false)
     }
@@ -1578,19 +1575,17 @@ impl Tree for EagerTree {
             .get(idx)
             // Safety: the tree is locked when this operation occurs.
             .map(|node| {
-                 debug_assert_eq!(tag, node.tag);
+                debug_assert_eq!(tag, node.tag);
                 node.refcount.decrement_nonatomic()
             })
             .unwrap_or(false)
     }
 
     fn get_protector_kind(&self, tag: BorTag, idx: UniIndex) -> Option<ProtectorKind> {
-        self.nodes
-            .get(idx)
-            .and_then(|node| {
-                debug_assert_eq!(node.tag, tag);
-                node.protector_kind
-            })
+        self.nodes.get(idx).and_then(|node| {
+            debug_assert_eq!(node.tag, tag);
+            node.protector_kind
+        })
     }
 
     fn size(&self) -> Size {

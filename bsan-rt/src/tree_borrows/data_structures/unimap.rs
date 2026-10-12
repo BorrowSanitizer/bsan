@@ -16,6 +16,7 @@ use alloc::vec::Vec;
 use core::fmt::{self, Debug};
 use core::hash::Hash;
 use core::mem;
+
 use crate::helpers::{FxHashMap, ToUsize};
 
 /// Intermediate key between a UniKeyMap and a UniValMap.
@@ -37,7 +38,6 @@ pub struct UniKeyValMap<V> {
     /// due to many deletions.
     deassigned: Vec<UniIndex>,
 }
-
 
 /// From UniIndex to V
 #[derive(Debug, Clone, Eq)]
@@ -75,7 +75,6 @@ impl<V: PartialEq> PartialEq for UniValMap<V> {
         self.equivalent(other)
     }
 }
-
 
 impl<V> Default for UniKeyValMap<V> {
     fn default() -> Self {
@@ -194,8 +193,8 @@ impl<V> UniValMap<V> {
     }
 
     /// Assign a value to the index. Returns the previous value, if there
-    /// was one. 
-    pub fn insert(&mut self, idx: UniIndex, val: V) -> Option<V>{
+    /// was one.
+    pub fn insert(&mut self, idx: UniIndex, val: V) -> Option<V> {
         self.extend_to_length(idx.0.to_usize() + 1);
         mem::replace(&mut self.data[idx.0.to_usize()], Some(val))
     }
