@@ -661,17 +661,19 @@ impl EagerTree {
 
         // Perform checks to skip tags that are already gone, live again, or exposed
         let mut survivors: SmallVec<[BorTag; 2]> = SmallVec::default();
+        let mut prev_tag = None;
         for &tag in pending.iter().rev() {
-            // A missing entry means the node was already removed.
-            let Some(idx) = self.tag_mapping.get(&tag) else {
-                continue;
-            };
-            let node = self.nodes.get(idx).unwrap();
-            // A nonzero refcount means the tag is reachable again and will re-enter a zero-count
-            // table once it drops back to zero; an exposed node can never be pruned.
-            if node.refcount.get() != 0 || node.is_exposed {
+            // Skip duplicate tags.
+            // FIXME: should this ever happen? We deduplicate
+            // the contents of the zero count table.
+            if prev_tag.replace(tag) == Some(tag) {
                 continue;
             }
+            // A missing entry means the node was already removed.
+            let Some(idx) = self.tag_mapping.get(&tag) else {
+                panic!("A dead node should never be revived!")
+            };
+
             if !self.try_remove_node(global_ctx, idx, compact) {
                 survivors.push(tag);
             }
@@ -685,11 +687,26 @@ impl EagerTree {
         );
     }
 
-    /// Attempts to remove a single dead node, returning whether it was removed. A `false` return
-    /// means it is still in the tree and must be revisited; see [`Self::dead_persisting`].
+    /// Attempts to remove a single dead node, returning whether it was removed. If this
+    /// returns `true`, then the node has been exposed, or it is removed. Either way, it can
+    /// now be ignored by the garbage collector. If `false`, then the node is still live,
+    /// unexposed, and could be pruned later, if the state of the tree changes. It needs to
+    /// be kept in the list of dead tags and revisited.
     fn try_remove_node(&mut self, ctx: &GlobalCtx, idx: UniIndex, compact: bool) -> bool {
         let node = self.nodes.get(idx).unwrap();
-        debug_assert!(node.refcount.get() == 0 && !node.is_exposed);
+
+        // The reference count of a node should be zero once
+        // we reach this point. Otherwise, there's a bug within
+        // our garbage collector.
+        debug_assert!(node.refcount.get() == 0);
+
+        // Exposure prevents us from collecting a node.
+        // We can forget about it, until the entire tree
+        // is deallocated.
+        if node.is_exposed {
+            return true;
+        }
+
         let parent = node.parent;
         // Branches are mutually exclusive on child count: `can_be_replaced_by_single_child`
         // only yields `Some` for exactly one child, and `can_be_replaced_by_children` only
