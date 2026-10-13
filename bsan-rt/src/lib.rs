@@ -313,6 +313,9 @@ bitflags::bitflags! {
 pub struct RetagInfo {
     /// The initial range of memory for the permission.
     pub size: Size,
+    /// The number of elements in the dynamic tail of the type,
+    /// if it contains a slice.
+    pub count: usize,
     /// The kind of permission.
     pub flags: RetagFlags,
     /// The subranges that should be treated as interior mutable.
@@ -334,7 +337,8 @@ pub struct RetagInfo {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_retag_impl(
     ptr: *mut c_void,
-    size: Size,
+    size: usize,
+    count: usize,
     flags: RetagFlags,
     im_layout: Option<LayoutArray>,
     pin_layout: Option<LayoutArray>,
@@ -347,7 +351,8 @@ unsafe extern "C" fn __bsan_retag_impl(
     debug_bsan!("retag", object_addr, bor_tag, alloc_info);
     let ctx = unsafe { global_ctx() };
     let prov = Provenance { bor_tag, alloc_info };
-    let retag_info = RetagInfo { size, flags, im_layout, pin_layout };
+    let size = Size::from_bytes(size);
+    let retag_info = RetagInfo { size, count, flags, im_layout, pin_layout };
 
     let offset = Size::from_addr(ptr);
     let retag_res = if checked {
