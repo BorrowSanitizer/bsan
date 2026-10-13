@@ -363,7 +363,7 @@ impl<'b> BorrowTracker<'b> {
 
         let mut cursor = Size::ZERO;
         if let Some(im_layout) = retag_info.im_layout {
-            for (offset, size) in im_layout {
+            for (offset, size) in im_layout.iter_ranges(retag_info.size, retag_info.count) {
                 if cursor != offset {
                     for (_loc_range, loc) in inside_perms.iter_mut(cursor, offset - cursor) {
                         *loc = loc_state(true);
