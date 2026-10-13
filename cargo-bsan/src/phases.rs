@@ -342,12 +342,11 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
 
     let in_rustdoc = phase == RustcPhase::Rustdoc;
 
+    cmd.args(args);
+
     if target_crate {
         cmd.args(bsan_rustflags(&env, &deps, &llvm_tools));
     }
-
-    // Forward everything else.
-    cmd.args(args);
 
     debug_cmd("[cargo-bsan rustc]", env.verbose, &cmd);
     if in_rustdoc {
