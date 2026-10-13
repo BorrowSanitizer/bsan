@@ -23,11 +23,11 @@
 //! to describe the layout of structs with less than `sizeof::<T>()` bytes, where `T`
 //! is some unsigned integer. This would only be worthwhile if there ends up being
 //! a significant performance / resource use impact, which has yet to be seen.
-//! 
+//!
 //! There is one soundness issue with this encoding. A type such as `&mut dyn !Freeze`
 //! will be treated as entirely interior mutable. This includes any padding bytes; we do not
-//! account for the dynamic alignment of the trait object. This can lead to false negatives. 
-//! This limitation could be lifted by adding a vtable entry containing a pointer to the 
+//! account for the dynamic alignment of the trait object. This can lead to false negatives.
+//! This limitation could be lifted by adding a vtable entry containing a pointer to the
 //! interior mutability layout.
 
 use alloc::vec::Vec;
