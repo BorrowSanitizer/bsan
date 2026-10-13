@@ -26,7 +26,7 @@
 //! 
 //! There is one soundness issue with this encoding. A type such as `&mut dyn !Freeze`
 //! will be treated as entirely interior mutable. This includes any padding bytes; we do not
-//! account for the dynamic alignment of the trait object. This can lead to false negative. 
+//! account for the dynamic alignment of the trait object. This can lead to false negatives. 
 //! This limitation could be lifted by adding a vtable entry containing a pointer to the 
 //! interior mutability layout.
 
