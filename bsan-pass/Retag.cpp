@@ -7,7 +7,7 @@ namespace llvm {
 // BorrowSanitizer's retag intrinsic functions.
 bool IsRetag(const CallBase *CB) {
   Function *Callee = CB->getCalledFunction();
-  return CB->arg_size() == 5 && Callee &&
+  return CB->arg_size() == 6 && Callee &&
          Callee->getName().starts_with(RUST_FN("retag"));
 }
 

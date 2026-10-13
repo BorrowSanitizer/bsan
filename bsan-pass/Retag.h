@@ -15,25 +15,26 @@ public:
   Value *Ptr;
   Value *ImArray;
   Value *PinArray;
-  ConstantInt *Size;
+  Value *Size;
+  Value *Count;
   ConstantInt *Perms;
 
   RetagInfo(CallBase *CB) : CB(CB) {
-    assert(CB->arg_size() == 5);
+    assert(CB->arg_size() == 6);
     // Compile-time check that all operands are constants (not a PHI or select),
     // which would be the result of a merge.
-    if (!isa<ConstantInt>(CB->getOperand(1)) ||
-        !isa<ConstantInt>(CB->getOperand(2)) ||
-        !isa<Constant>(CB->getOperand(3)) || !isa<Constant>(CB->getOperand(4)))
+    if (!isa<ConstantInt>(CB->getOperand(3)) ||
+        !isa<Constant>(CB->getOperand(4)) || !isa<Constant>(CB->getOperand(5)))
       report_fatal_error(Twine("BorrowSanitizer: retag in `") +
                          CB->getFunction()->getName() +
                          "` has a non-constant operand. It was likely "
                          "merged with another retag by an optimization.");
     Ptr = CB->getOperand(0);
-    Size = cast<ConstantInt>(CB->getOperand(1));
-    Perms = cast<ConstantInt>(CB->getOperand(2));
-    ImArray = CB->getOperand(3);
-    PinArray = CB->getOperand(4);
+    Size = CB->getOperand(1);
+    Count = CB->getOperand(2);
+    Perms = cast<ConstantInt>(CB->getOperand(3));
+    ImArray = CB->getOperand(4);
+    PinArray = CB->getOperand(5);
   }
 
   bool isProtected() {
@@ -48,7 +49,7 @@ public:
     uint64_t OldVal = Perms->getZExtValue();
     uint64_t NewVal = OldVal & ~0x1;
     Perms = cast<ConstantInt>(ConstantInt::get(Perms->getType(), NewVal));
-    CB->setOperand(2, Perms);
+    CB->setOperand(3, Perms);
   }
 };
 

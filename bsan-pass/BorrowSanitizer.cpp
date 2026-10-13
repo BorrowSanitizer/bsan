@@ -611,9 +611,9 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
 
   AL = AL.addFnAttribute(*C, Attribute::NoUnwind);
 
-  BsanFuncRetag = M.getOrInsertFunction(BSAN("retag"), AL, IRB.getVoidTy(),
-                                        PtrTy, IntptrTy, Int8Ty, PtrTy, PtrTy,
-                                        IntptrTy, PtrTy, PtrTy, BoolTy);
+  BsanFuncRetag = M.getOrInsertFunction(
+      BSAN("retag"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, IntptrTy, Int8Ty,
+      PtrTy, PtrTy, IntptrTy, PtrTy, PtrTy, BoolTy);
 
   BsanFuncPopFrame = M.getOrInsertFunction(
       BSAN("pop_frame"), AL, IRB.getVoidTy(), PtrTy, IntptrTy, IntptrTy);
@@ -2029,9 +2029,9 @@ private:
 
     RetagInfo RI(&CB);
     Value *Slot = allocStackSlot(IRB, RI.isProtected());
-    IRB.CreateCall(BS.BsanFuncRetag,
-                   {SrcAddr, RI.Size, RI.Perms, RI.ImArray, RI.PinArray,
-                    SrcProv.Tag, SrcProv.Info, Slot, IRB.getInt1(false)});
+    IRB.CreateCall(BS.BsanFuncRetag, {SrcAddr, RI.Size, RI.Count, RI.Perms,
+                                      RI.ImArray, RI.PinArray, SrcProv.Tag,
+                                      SrcProv.Info, Slot, IRB.getInt1(false)});
     ProvenancePtr SlotPtr = ProvenancePtr::getPtr(BS, IRB, Slot);
     Provenance RetaggedProv = SlotPtr.load(BS, IRB);
 
@@ -2047,7 +2047,7 @@ private:
       RetagInfo RI(&CB);
       Value *Dest = allocStackSlot(IRB, RI.isProtected());
       IRB.CreateCall(BS.BsanFuncRetag,
-                     {Ptr, RI.Size, RI.Perms, RI.ImArray, RI.PinArray,
+                     {Ptr, RI.Size, RI.Count, RI.Perms, RI.ImArray, RI.PinArray,
                       Prov->Tag, Prov->Info, Dest, IRB.getInt1(false)});
       ProvenancePtr DestPtr = ProvenancePtr::getPtr(BS, IRB, Dest);
       ProvMap.setProvenance(&CB, DestPtr.load(BS, IRB));

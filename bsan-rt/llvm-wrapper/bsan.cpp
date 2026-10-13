@@ -578,12 +578,13 @@ void __bsan_free_buffer(char *buf, uptr size) {
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-bool __bsan_retag_impl(void *object_addr, uptr access_size, u8 flags,
-                       const u64 *im_data, const u64 *pin_data, BorTag bor_tag,
-                       Block *alloc_info, void *dest, Span pc, bool checked);
+bool __bsan_retag_impl(void *object_addr, uptr access_size, uptr count,
+                       u8 flags, const u64 *im_data, const u64 *pin_data,
+                       BorTag bor_tag, Block *alloc_info, void *dest, Span pc,
+                       bool checked);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_retag(void *object_addr, uptr access_size, u8 flags,
+void __bsan_retag(void *object_addr, uptr access_size, uptr count, u8 flags,
                   const u64 *im_data, const u64 *pin_data, BorTag bor_tag,
                   Block *alloc_info, void *dest, bool checked) {
   if (__bsan_retag_impl) {
@@ -591,8 +592,8 @@ void __bsan_retag(void *object_addr, uptr access_size, u8 flags,
     InterceptorBarrier barrier;
     Provenance prov;
     bool had_error =
-        __bsan_retag_impl(object_addr, access_size, flags, im_data, pin_data,
-                          bor_tag, alloc_info, &prov, span, checked);
+        __bsan_retag_impl(object_addr, access_size, count, flags, im_data,
+                          pin_data, bor_tag, alloc_info, &prov, span, checked);
     HANDLE_ERROR(had_error);
     *(Provenance *)(dest) = prov;
     // We can only acquire provenance *after* we have rooted it to the
