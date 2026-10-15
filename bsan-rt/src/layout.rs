@@ -45,12 +45,12 @@ enum LayoutCommand {
     /// The next segment includes the stride, a nonzero number of
     /// iterations, and a number of commands that should be repeated
     /// for that count.
-    Repeat { stride: Size, count: u64, num_cmds: u64 },
+    Iter { stride: Size, count: u64, num_cmds: u64 },
     /// Equivalent to a [`LayoutCommand::Repeat`], except instead of
     /// a static count, use the dynamic count of elements provided as
     /// a parameter to the retag intrinsic. This is used to handle a
     /// type where the last or only field is a slice.
-    Tail { stride: Size, num_cmds: u64 },
+    DynIter { stride: Size, num_cmds: u64 },
     /// Include every byte from `offset` to the dynamic size of the type
     /// within the layout. This is used to handle dynamic trait objects,
     /// or any other type that is imprecise under the current implementation
@@ -188,11 +188,11 @@ impl LayoutArrayIter {
             }
             LayoutCommandTag::Repeat => {
                 let [_, stride, count, num_cmds] = unsafe { self.advance_n::<4>() };
-                Some(LayoutCommand::Repeat { stride: Size::from_bytes(stride), count, num_cmds })
+                Some(LayoutCommand::Iter { stride: Size::from_bytes(stride), count, num_cmds })
             }
             LayoutCommandTag::Tail => {
                 let [_, stride, num_cmds] = unsafe { self.advance_n::<3>() };
-                Some(LayoutCommand::Tail { stride: Size::from_bytes(stride), num_cmds })
+                Some(LayoutCommand::DynIter { stride: Size::from_bytes(stride), num_cmds })
             }
             LayoutCommandTag::Fill => {
                 let [_, offset] = unsafe { self.advance_n::<2>() };
@@ -241,10 +241,10 @@ impl Iterator for LayoutArrayIter {
                     debug_assert!(count > 0);
                     self.ranges_rem = count;
                 }
-                LayoutCommand::Repeat { stride, count, num_cmds } => {
+                LayoutCommand::Iter { stride, count, num_cmds } => {
                     self.push_repeat(count, stride, num_cmds);
                 }
-                LayoutCommand::Tail { stride, num_cmds } => {
+                LayoutCommand::DynIter { stride, num_cmds } => {
                     debug_assert!(
                         self.repeats.is_empty(),
                         "A tail cannot be nested within a repeat!"
