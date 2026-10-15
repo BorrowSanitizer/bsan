@@ -52,11 +52,8 @@ bool InstrumentationPlan::shouldInstrumentAlloca(const AllocaInst &AI) {
 }
 
 void InstrumentationPlan::collectChecks(Instruction *Inst) {
-  if (isa<MemSetInst>(Inst) || isa<MemTransferInst>(Inst)) {
-
-    auto *MI = cast<MemIntrinsic>(Inst);
+  if (auto *MI = dyn_cast<MemIntrinsic>(Inst)) {
     AccessRange Range(DL, MI->getLength());
-
     if (auto *MTI = dyn_cast<MemTransferInst>(MI)) {
       Checks[Inst].push_back(
           CheckInfo(CheckInfo::Read, MTI->getSource(), Range));
@@ -98,10 +95,9 @@ void InstrumentationPlan::build(CycleInfo &CI) {
         continue;
 
       // Collect a list of static allocas to instrument.
-      if (I.getOpcode() == Instruction::Alloca) {
-        auto &AI = static_cast<AllocaInst &>(I);
-        if (shouldInstrumentAlloca(AI))
-          StaticAllocaVec.push_back(&AI);
+      if (auto *AI = dyn_cast<AllocaInst>(&I)) {
+        if (shouldInstrumentAlloca(*AI))
+          StaticAllocaVec.push_back(AI);
         continue;
       }
 
