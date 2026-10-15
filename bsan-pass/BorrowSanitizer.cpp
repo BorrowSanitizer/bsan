@@ -1209,47 +1209,42 @@ PreservedAnalyses BorrowSanitizerPass::run(Module &M,
 
 namespace {
 
-// A value with both a static and a dynamic component, where
-// the static component is constant-folded. This results in cleaner IR,
-// and makes it easier to represent possibly-dynamic offsets for cases
-// like shadow stack slot allocation or working with scalable vectors (TBD).
-struct FoldedValue {
-  FoldedValue() {}
-  FoldedValue(Value *Base) : Base(Base) {}
-  // Adds the a number of elements of the given `ElemSize` to the value.
-  void add(IRBuilder<> &IRB, ElementCount Elems, uint64_t ElemSize,
+// A pointer with a dynamic base and a static byte offset below it. Static
+// offsets are folded into a single constant, so that each pointer is a
+// constant offset from a base that is computed once. Dynamic offsets (e.g. for
+// scalable vectors) move the base itself.
+struct FoldedPtr {
+  FoldedPtr() {}
+  FoldedPtr(Value *Base) : Base(Base) {}
+
+  // Moves the pointer down by `Elems` elements of the given `ElemSize`.
+  void sub(IRBuilder<> &IRB, ElementCount Elems, uint64_t ElemSize,
            Type *IntptrTy) {
     ElementCount Bytes = Elems.multiplyCoefficientBy(ElemSize);
     if (Bytes.isZero())
       return;
-    Cached = nullptr;
     if (Bytes.isScalable()) {
       Value *Count = IRB.CreateElementCount(IntptrTy, Bytes);
-      Base = Base ? IRB.CreateAdd(Base, Count) : Count;
+      Base = ptrsub(IRB, getPtr(IRB, IntptrTy), Count);
+      Offset = 0;
     } else {
       Offset += Bytes.getFixedValue();
     }
+    Cached = nullptr;
   }
 
-  // Returns the value, combining static and dynamic components. The result
-  // is cached until the next call to `add`, so that repeated queries do not
-  // emit duplicate instructions.
-  Value *getValue(IRBuilder<> &IRB, Type *IntptrTy) {
-    if (Cached)
-      return Cached;
-    if (!Base)
-      Cached = ConstantInt::get(IntptrTy, Offset);
-    else if (Offset == 0)
-      Cached = Base;
-    else
-      Cached = IRB.CreateAdd(Base, ConstantInt::get(IntptrTy, Offset));
+  // Returns the pointer. The result is cached until the next call to `sub`,
+  // so that repeated queries do not emit duplicate instructions.
+  Value *getPtr(IRBuilder<> &IRB, Type *IntptrTy) {
+    if (!Cached)
+      Cached = ptrsub(IRB, Base, ConstantInt::get(IntptrTy, Offset));
     return Cached;
   }
 
 private:
   Value *Base = nullptr;
   uint64_t Offset = 0;
-  // The most recently materialized value.
+  // The most recently materialized pointer.
   Value *Cached = nullptr;
 };
 
@@ -1259,103 +1254,106 @@ class SlotAllocator {
 
 private:
   friend class ShadowStackAllocator;
-  // The integer type used to track the byte offset of the slots.
+  // The integer type used for byte offsets.
   Type *IntptrTy = nullptr;
   // The width of a single slot, in bytes.
   uint64_t SlotSize;
-  // We track the total byte width of the stack slots used by this
-  // function with a single alloca that gets promoted to a register.
-  AllocaInst *GlobalOffsetAlloc = nullptr;
+  // We track the bottom of this section of the shadow stack with a single
+  // alloca that gets promoted to a register.
+  AllocaInst *GlobalBottomAlloc = nullptr;
   // If we need to allocate a slot for an instruction,
-  // then we load the incoming offset at the beginning of
-  // its basic block. We increment it for subsequent
+  // then we load the incoming bottom at the beginning of
+  // its basic block. We move it down for subsequent
   // allocations in the same block, and then store it
   // back at the end of the block.
-  DenseMap<BasicBlock *, FoldedValue> BlockOffsets;
+  DenseMap<BasicBlock *, FoldedPtr> BlockBottoms;
   // All of the allocas that we insert can be promoted
   // to registers.
   SmallVector<AllocaInst *> PromoteableAllocas;
-  // Creates a counter alloca in the entry block of the
-  // function and initializes it to 0. Zero-initialization
-  // is crucial, since not all paths through a function will
-  // allocate shadow stack slots, but all paths will pop the
-  // current stack frame.
+  // Creates an alloca in the entry block of the function, initialized to
+  // `Init`. The store is placed after `Init` if it is an instruction.
   AllocaInst *createEntryAlloca(BasicBlock *BB, Value *Init) {
     BasicBlock *EntryBB = &BB->getParent()->getEntryBlock();
     IRBuilder<> EntryIRB(&EntryBB->front());
     AllocaInst *EntryAlloc = EntryIRB.CreateAlloca(Init->getType());
     PromoteableAllocas.push_back(EntryAlloc);
+    if (auto *InitInst = dyn_cast<Instruction>(Init))
+      EntryIRB.SetInsertPoint(InitInst->getNextNode());
     EntryIRB.CreateStore(Init, EntryAlloc);
     return EntryAlloc;
   }
 
-  // Returns the total byte width of the stack slots currently allocated
-  // in the given basic block.
-  FoldedValue &getCurrentOffset(CycleInfo &CI, IRBuilder<> &IRB) {
+  // Returns the bottom of the section below `Top` in the current block.
+  FoldedPtr &getCurrentBottom(CycleInfo &CI, IRBuilder<> &IRB, Value *Top) {
     BasicBlock *InsertBB = IRB.GetInsertBlock();
-    // If we already have an offset, then no initialization is necessary.
-    auto It = BlockOffsets.find(InsertBB);
-    if (It != BlockOffsets.end()) {
+    // If we already have a bottom, then no initialization is necessary.
+    auto It = BlockBottoms.find(InsertBB);
+    if (It != BlockBottoms.end()) {
       return It->second;
     }
-    // Otherwise, this could be the first time we allocate a slot.
-    // We need to ensure that the global counter is initialized.
-    if (!GlobalOffsetAlloc)
-      GlobalOffsetAlloc =
-          createEntryAlloca(InsertBB, ConstantInt::get(IntptrTy, 0));
-    // If we have a single predecessor, then we can use their outgoing offset
-    // as our incoming offset.
+    // Otherwise, this could be the first time we allocate a slot. We need to
+    // ensure that the global bottom is initialized. Initializing it to the top
+    // is crucial, since not all paths through a function will allocate shadow
+    // stack slots, but all paths will pop the current stack frame.
+    if (!GlobalBottomAlloc)
+      GlobalBottomAlloc = createEntryAlloca(InsertBB, Top);
+    // If we have a single predecessor, then we can use their outgoing bottom
+    // as our incoming bottom.
     if (BasicBlock *PredBB = InsertBB->getSinglePredecessor()) {
-      auto OffsetIt = BlockOffsets.find(PredBB);
-      if (OffsetIt != BlockOffsets.end()) {
-        FoldedValue Offset = OffsetIt->getSecond();
-        BlockOffsets[InsertBB] = Offset;
+      auto BottomIt = BlockBottoms.find(PredBB);
+      if (BottomIt != BlockBottoms.end()) {
+        FoldedPtr Bottom = BottomIt->getSecond();
+        BlockBottoms[InsertBB] = Bottom;
         // If this is a linear chain of blocks, then we can skip storing
-        // the offset at the end of the predecessor and wait until the end
-        // of this block to update the global counter.
+        // the bottom at the end of the predecessor and wait until the end
+        // of this block to update the global bottom.
         if (PredBB->getSingleSuccessor()) {
-          BlockOffsets.erase(PredBB);
+          BlockBottoms.erase(PredBB);
         }
-        return BlockOffsets[InsertBB];
+        return BlockBottoms[InsertBB];
       }
     }
 
-    Value *Offset;
-    Value *GlobalOffset = IRB.CreateLoad(IntptrTy, GlobalOffsetAlloc);
-    // We can enter this block more than once, so we need to cache the offset
+    Value *Bottom;
+    Value *GlobalBottom = IRB.CreateLoad(IRB.getPtrTy(), GlobalBottomAlloc);
+    // We can enter this block more than once, so we need to cache the bottom
     // that we assigned on the first visit.
     if (CI.getCycle(InsertBB)) {
-      Value *InitVal = ConstantInt::get(IntptrTy, -1, true);
-      AllocaInst *CachedOffsetAlloc = createEntryAlloca(InsertBB, InitVal);
-      Value *CachedOffset = IRB.CreateLoad(IntptrTy, CachedOffsetAlloc);
-      Value *Flag = IRB.CreateICmpEQ(CachedOffset, InitVal);
-      Offset = IRB.CreateSelect(Flag, GlobalOffset, CachedOffset);
-      IRB.CreateStore(Offset, CachedOffsetAlloc);
+      Value *InitVal = ConstantPointerNull::get(IRB.getPtrTy());
+      AllocaInst *CachedBottomAlloc = createEntryAlloca(InsertBB, InitVal);
+      Value *CachedBottom = IRB.CreateLoad(IRB.getPtrTy(), CachedBottomAlloc);
+      Value *Flag = IRB.CreateICmpEQ(CachedBottom, InitVal);
+      Bottom = IRB.CreateSelect(Flag, GlobalBottom, CachedBottom);
+      IRB.CreateStore(Bottom, CachedBottomAlloc);
     } else {
-      Offset = GlobalOffset;
+      Bottom = GlobalBottom;
     }
-    BlockOffsets[InsertBB] = Offset;
-    return BlockOffsets[InsertBB];
+    BlockBottoms[InsertBB] = Bottom;
+    return BlockBottoms[InsertBB];
   }
 
-  // Allocates the requested number of slots,
-  // returning the byte offset of the new bottom of the section.
-  Value *alloc(CycleInfo &CI, IRBuilder<> &IRB, ElementCount Elems) {
-    FoldedValue &Offset = getCurrentOffset(CI, IRB);
-    Offset.add(IRB, Elems, SlotSize, IntptrTy);
-    return Offset.getValue(IRB, IntptrTy);
+  // Allocates the requested number of slots below `Top`, returning a pointer
+  // to the new bottom of the section.
+  Value *alloc(CycleInfo &CI, IRBuilder<> &IRB, ElementCount Elems,
+               Value *Top) {
+    FoldedPtr &Bottom = getCurrentBottom(CI, IRB, Top);
+    Bottom.sub(IRB, Elems, SlotSize, IntptrTy);
+    return Bottom.getPtr(IRB, IntptrTy);
+  }
+
+  Value *getBottom(CycleInfo &CI, IRBuilder<> &IRB, Value *Top) {
+    return getCurrentBottom(CI, IRB, Top).getPtr(IRB, IntptrTy);
   }
 
   void patch(DominatorTree &DT) {
-    if (!GlobalOffsetAlloc)
+    if (!GlobalBottomAlloc)
       return;
     // Only blocks that allocate slots will be instrumented.
-    for (auto &[BB, Offset] : BlockOffsets) {
-      // Acyclic blocks always update the global offset,
+    for (auto &[BB, Bottom] : BlockBottoms) {
+      // Acyclic blocks always update the global bottom,
       // since we will never visit them again.
       IRBuilder<> ExitIRB(BB->getTerminator());
-      ExitIRB.CreateStore(Offset.getValue(ExitIRB, IntptrTy),
-                          GlobalOffsetAlloc);
+      ExitIRB.CreateStore(Bottom.getPtr(ExitIRB, IntptrTy), GlobalBottomAlloc);
     }
     PromoteMemToReg(PromoteableAllocas, DT);
   }
@@ -1421,6 +1419,14 @@ class ShadowStackAllocator {
 
   static uint64_t getSlotWidth(Value *SlotSize) {
     return cast<ConstantInt>(SlotSize)->getZExtValue();
+  }
+
+  Value *getSectionTop(IRBuilder<> &IRB, bool IsFnEntry) {
+    if (IsFnEntry) {
+      assert(FnEntryTop && "No function-entry slots available");
+      return FnEntryTop;
+    }
+    return getOrInitFrameHeaderBottom(IRB);
   }
 
   // Returns the specified slot allocator.
@@ -1499,13 +1505,8 @@ public:
   // Allocates one or more shadow stack slots from the requested section.
   Value *bumpStackSlot(CycleInfo &CI, IRBuilder<> &IRB, bool IsFnEntry,
                        ElementCount Elems = ElementCount::getFixed(1)) {
-    Value *ProvOffset = slotsFor(IsFnEntry).alloc(CI, IRB, Elems);
-    if (IsFnEntry) {
-      assert(FnEntryTop && "No function-entry slots available");
-      return ptrsub(IRB, FnEntryTop, ProvOffset);
-    }
-    Value *Header = getOrInitFrameHeaderBottom(IRB);
-    return ptrsub(IRB, Header, ProvOffset);
+    return slotsFor(IsFnEntry).alloc(CI, IRB, Elems,
+                                     getSectionTop(IRB, IsFnEntry));
   }
 
   // Allocates one or more shadow stack slots from the requested section.
@@ -1528,18 +1529,13 @@ public:
   // Returns a pointer to the bottom of the specified section of the
   // shadow frame.
   Value *getStackPtr(CycleInfo &CI, IRBuilder<> &IRB, bool IsFnEntry) {
-    Value *ProvOffset = getOutgoingOffset(CI, IRB, IsFnEntry);
-    Value *Base = IsFnEntry ? FnEntryTop : getOrInitFrameHeaderBottom(IRB);
-    return ptrsub(IRB, Base, ProvOffset);
+    return slotsFor(IsFnEntry).getBottom(CI, IRB,
+                                         getSectionTop(IRB, IsFnEntry));
   }
 
-  // Returns the current byte offset from the top of the relevant section.
-  // This is used to update the stack pointer before calling functions and to
-  // get the total number of function-entry retags before popping a stack
-  // frame.
-  Value *getOutgoingOffset(CycleInfo &CI, IRBuilder<> &IRB, bool IsFnEntry) {
-    SlotAllocator &Slots = slotsFor(IsFnEntry);
-    return Slots.getCurrentOffset(CI, IRB).getValue(IRB, IntptrTy);
+  Value *countFnEntrySlots(IRBuilder<> &IRB, Value *Bottom) {
+    Type *SlotTy = ArrayType::get(IRB.getInt8Ty(), getSlotWidth(SlotSize));
+    return IRB.CreatePtrDiff(SlotTy, FnEntryTop, Bottom);
   }
 
   // Patches both section counters and promotes their tracking allocas.
@@ -1690,6 +1686,9 @@ public:
     patchShadowPHINodes();
     ProvMap.patch(DT);
     ShadowStack.patchStackSlots(DT);
+
+    FnPrologueEnd->eraseFromParent();
+    FnPrologueEnd = nullptr;
   }
 
 private:
@@ -1829,7 +1828,7 @@ private:
     // necessary for boundary validation. We can only load a provenance
     // value once we have ensured that its stack slot is omnivalid
     // if we had an uninstrumented caller.
-    FoldedValue ParamBytes;
+    Value *ParamBytes = ConstantInt::get(BS.IntptrTy, 0);
 
     // Iterate over each argument to compute how many provenance slots
     // we need.
@@ -1865,18 +1864,18 @@ private:
         Info.Alignment = ParamAlign.value_or(BS.DL->getABITypeAlign(Ty));
 
         for (auto &Desc : BS.getProvenanceLayout(EntryIRB, Ty)) {
-          Info.Fields.push_back(
-              {ParamBytes.getValue(EntryIRB, BS.IntptrTy), Desc});
-          ParamBytes.add(EntryIRB, Desc.Elems, kProvenanceSize, BS.IntptrTy);
+          Info.Fields.push_back({ParamBytes, Desc});
+          ParamBytes = EntryIRB.CreateAdd(ParamBytes,
+                                          getProvBytes(EntryIRB, Desc.Elems));
         }
         ByValArgs.push_back(Info);
       } else {
         SmallVector<ProvenanceField> ProvDesc =
             BS.getProvenanceLayout(EntryIRB, Arg.getType());
         for (auto &Desc : ProvDesc) {
-          ArgumentProvenance[&Arg].push_back(
-              {ParamBytes.getValue(EntryIRB, BS.IntptrTy), Desc.Elems});
-          ParamBytes.add(EntryIRB, Desc.Elems, kProvenanceSize, BS.IntptrTy);
+          ArgumentProvenance[&Arg].push_back({ParamBytes, Desc.Elems});
+          ParamBytes = EntryIRB.CreateAdd(ParamBytes,
+                                          getProvBytes(EntryIRB, Desc.Elems));
           // We store the shadow stack offset and width of the provenance for
           // each argument, without eagerly loading it.
         }
@@ -1898,8 +1897,8 @@ private:
         VarArgBytes = alignTo(RegionSize, kMinProvAlignment);
       }
       Value *VarArgBytesVal = ConstantInt::get(BS.IntptrTy, VarArgBytes);
-      Value *NumParamProv = EntryIRB.CreateExactUDiv(
-          ParamBytes.getValue(EntryIRB, BS.IntptrTy), BS.ProvenanceSize);
+      Value *NumParamProv =
+          EntryIRB.CreateExactUDiv(ParamBytes, BS.ProvenanceSize);
       EntryIRB.CreateCall(BS.BsanFuncValidateParams,
                           {&F, NumParamProv, VarArgBytesVal});
     }
@@ -2044,6 +2043,11 @@ private:
     return ShadowStack.allocStackSlot(Cycles, IRB, IsFnEntry, Elems);
   }
 
+  Value *getProvBytes(IRBuilder<> &IRB, ElementCount Elems) {
+    return IRB.CreateElementCount(BS.IntptrTy,
+                                  Elems.multiplyCoefficientBy(kProvenanceSize));
+  }
+
   Value *getStackOffset(IRBuilder<> &IRB, bool IsFnEntry) {
     return ShadowStack.getStackPtr(Cycles, IRB, IsFnEntry);
   }
@@ -2088,7 +2092,7 @@ private:
 
     // We store the provenance for each argument into thread-local arrays.
     // First, we calculate where each fixed parameter's provenance is stored.
-    FoldedValue ParamBytes;
+    Value *ParamBytes = ConstantInt::get(BS.IntptrTy, 0);
 
     Function *Callee = CB.getCalledFunction();
     bool MaybeUninstrumented = needsBoundaryValidation(Callee);
@@ -2107,7 +2111,7 @@ private:
 
       for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
 
-        Value *ByteOffset = ParamBytes.getValue(Before, BS.IntptrTy);
+        Value *ByteOffset = ParamBytes;
         Provenance ProvSrc;
         if (IsByVal) {
           Align ABIAlign = BS.DL->getABITypeAlign(ArgTy);
@@ -2124,7 +2128,8 @@ private:
         }
         ParamOffsets.push_back(std::make_pair(ByteOffset, ProvSrc));
 
-        ParamBytes.add(Before, Desc.Elems, kProvenanceSize, BS.IntptrTy);
+        ParamBytes =
+            Before.CreateAdd(ParamBytes, getProvBytes(Before, Desc.Elems));
       }
     }
 
@@ -2788,10 +2793,8 @@ private:
   void popFrame(IRBuilder<> &IRB, Value *RetVal = nullptr) {
     if (ShadowStack.wasUsed()) {
       Value *NumStackAllocs = ShadowStack.getNumStackAllocSlots();
-      Value *ProtectorBytes = ShadowStack.getOutgoingOffset(Cycles, IRB, true);
-      Value *NumProtectors =
-          IRB.CreateExactUDiv(ProtectorBytes, BS.ProvenanceSize);
       Value *Start = ShadowStack.getStackPtr(Cycles, IRB, true);
+      Value *NumProtectors = ShadowStack.countFnEntrySlots(IRB, Start);
 
       IRB.CreateCall(BS.BsanFuncPopFrame,
                      {Start, NumProtectors, NumStackAllocs});
@@ -2803,11 +2806,11 @@ private:
           BS.getProvenanceLayout(IRB, RetVal->getType());
       if (!ProvDesc.empty()) {
         Value *FrameTop = ShadowStack.getOrInitFrameHeaderTop(IRB);
-        FoldedValue ReturnBytes;
+        Value *ReturnBytes = ConstantInt::get(BS.IntptrTy, 0);
         for (const ProvenanceField &Desc : ProvDesc) {
-          ReturnBytes.add(IRB, Desc.Elems, kProvenanceSize, BS.IntptrTy);
-          ReturnProvPtrs.push_back(
-              ptrsub(IRB, FrameTop, ReturnBytes.getValue(IRB, BS.IntptrTy)));
+          ReturnBytes =
+              IRB.CreateAdd(ReturnBytes, getProvBytes(IRB, Desc.Elems));
+          ReturnProvPtrs.push_back(ptrsub(IRB, FrameTop, ReturnBytes));
         }
         for (const auto &[Idx, Ptr] : llvm::enumerate(ReturnProvPtrs)) {
           auto MainPtr = ProvenanceDest::getMainProvenancePtr(BS, IRB, Ptr);
