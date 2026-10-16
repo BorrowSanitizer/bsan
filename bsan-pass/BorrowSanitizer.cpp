@@ -826,7 +826,6 @@ struct ProvenanceDest {
   static ProvenanceDest
   getShadowProvenancePtr(BorrowSanitizer &BS, IRBuilder<> &IRB, Value *Addr,
                          MaybeAlign Alignment = kMinProvAlignment) {
-    VectorType *VectTy = dyn_cast<VectorType>(Addr->getType());
     assert(Addr->getType()->isPtrOrPtrVectorTy());
 
     Type *IntptrTy = ptrToIntPtrType(BS, Addr->getType());
