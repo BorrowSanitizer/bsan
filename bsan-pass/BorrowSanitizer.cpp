@@ -1208,13 +1208,12 @@ PreservedAnalyses BorrowSanitizerPass::run(Module &M,
 
 namespace {
 
-// A pointer with a dynamic base and a static byte offset below it. Static
-// offsets are folded into a single constant, so that each pointer is a
-// constant offset from a base that is computed once. Dynamic offsets (e.g. for
-// scalable vectors) move the base itself.
-struct FoldedPtr {
-  FoldedPtr() {}
-  FoldedPtr(Value *Base) : Base(Base) {}
+// A pointer to a value on the shadow stack.
+// represented as a dynamic base with a static
+// negative offset.
+struct StackPtr {
+  StackPtr() {}
+  StackPtr(Value *Base) : Base(Base) {}
 
   // Moves the pointer down by `Elems` elements of the given `ElemSize`.
   void sub(IRBuilder<> &IRB, ElementCount Elems, uint64_t ElemSize,
@@ -1225,6 +1224,8 @@ struct FoldedPtr {
     if (Bytes.isScalable()) {
       Value *Count = IRB.CreateElementCount(IntptrTy, Bytes);
       Base = ptrsub(IRB, getPtr(IRB, IntptrTy), Count);
+      // We have merged the static offset into the base,
+      // so we need to reset it here.
       Offset = 0;
     } else {
       Offset += Bytes.getFixedValue();
@@ -1232,8 +1233,9 @@ struct FoldedPtr {
     Cached = nullptr;
   }
 
-  // Returns the pointer. The result is cached until the next call to `sub`,
-  // so that repeated queries do not emit duplicate instructions.
+  // Subtracts the static offset from the base.
+  // This value is cached to avoid inserting redundant
+  // instrumentation
   Value *getPtr(IRBuilder<> &IRB, Type *IntptrTy) {
     if (!Cached)
       Cached = ptrsub(IRB, Base, ConstantInt::get(IntptrTy, Offset));
@@ -1243,13 +1245,13 @@ struct FoldedPtr {
 private:
   Value *Base = nullptr;
   uint64_t Offset = 0;
-  // The most recently materialized pointer.
   Value *Cached = nullptr;
 };
 
 class SlotAllocator {
-  SlotAllocator(Type *IntptrTy, uint64_t SlotSize)
-      : IntptrTy(IntptrTy), SlotSize(SlotSize) {}
+  SlotAllocator(Type *IntptrTy, uint64_t SlotSize,
+                SmallVector<AllocaInst *> &Promoteable)
+      : IntptrTy(IntptrTy), SlotSize(SlotSize), Promoteable(Promoteable) {}
 
 private:
   friend class ShadowStackAllocator;
@@ -1259,102 +1261,103 @@ private:
   uint64_t SlotSize;
   // We track the bottom of this section of the shadow stack with a single
   // alloca that gets promoted to a register.
-  AllocaInst *GlobalBottomAlloc = nullptr;
-  // If we need to allocate a slot for an instruction,
-  // then we load the incoming bottom at the beginning of
-  // its basic block. We move it down for subsequent
-  // allocations in the same block, and then store it
-  // back at the end of the block.
-  DenseMap<BasicBlock *, FoldedPtr> BlockBottoms;
+  AllocaInst *GlobalShadowStackAlloc = nullptr;
+  // When we need to root an instruction to the shadow stack,
+  // we load the incoming shadow stack pointer at the beginning
+  // fo the block, and then offset it for each new slot that gets
+  // allocated in this block. At the end of the block, the value is
+  // stored back into the alloca.
+  DenseMap<BasicBlock *, StackPtr> Cursors;
+
   // All of the allocas that we insert can be promoted
   // to registers.
-  SmallVector<AllocaInst *> PromoteableAllocas;
+  SmallVector<AllocaInst *> &Promoteable;
+
   // Creates an alloca in the entry block of the function, initialized to
   // `Init`. The store is placed after `Init` if it is an instruction.
   AllocaInst *createEntryAlloca(BasicBlock *BB, Value *Init) {
     BasicBlock *EntryBB = &BB->getParent()->getEntryBlock();
     IRBuilder<> EntryIRB(&EntryBB->front());
     AllocaInst *EntryAlloc = EntryIRB.CreateAlloca(Init->getType());
-    PromoteableAllocas.push_back(EntryAlloc);
+    Promoteable.push_back(EntryAlloc);
     if (auto *InitInst = dyn_cast<Instruction>(Init))
       EntryIRB.SetInsertPoint(InitInst->getNextNode());
     EntryIRB.CreateStore(Init, EntryAlloc);
     return EntryAlloc;
   }
 
-  // Returns the bottom of the section below `Top` in the current block.
-  FoldedPtr &getCurrentBottom(CycleInfo &CI, IRBuilder<> &IRB, Value *Top) {
+  // Returns the shadow stack offset for the current block.
+  StackPtr &getCurrentOffset(CycleInfo &CI, IRBuilder<> &IRB, Value *Top) {
     BasicBlock *InsertBB = IRB.GetInsertBlock();
-    // If we already have a bottom, then no initialization is necessary.
-    auto It = BlockBottoms.find(InsertBB);
-    if (It != BlockBottoms.end()) {
+    // Return the offset if we have already generated it.
+    auto It = Cursors.find(InsertBB);
+    if (It != Cursors.end()) {
       return It->second;
     }
     // Otherwise, this could be the first time we allocate a slot. We need to
-    // ensure that the global bottom is initialized. Initializing it to the top
-    // is crucial, since not all paths through a function will allocate shadow
-    // stack slots, but all paths will pop the current stack frame.
-    if (!GlobalBottomAlloc)
-      GlobalBottomAlloc = createEntryAlloca(InsertBB, Top);
-    // If we have a single predecessor, then we can use their outgoing bottom
-    // as our incoming bottom.
+    // ensure that the global stack offset is initialized to the top of the
+    // frame.
+    if (!GlobalShadowStackAlloc)
+      GlobalShadowStackAlloc = createEntryAlloca(InsertBB, Top);
+
+    // If this block has a single predecessor, then we can use its
+    // outgoing cursor as our incoming one.
     if (BasicBlock *PredBB = InsertBB->getSinglePredecessor()) {
-      auto BottomIt = BlockBottoms.find(PredBB);
-      if (BottomIt != BlockBottoms.end()) {
-        FoldedPtr Bottom = BottomIt->getSecond();
-        BlockBottoms[InsertBB] = Bottom;
-        // If this is a linear chain of blocks, then we can skip storing
-        // the bottom at the end of the predecessor and wait until the end
-        // of this block to update the global bottom.
+      auto CursorIt = Cursors.find(PredBB);
+      if (CursorIt != Cursors.end()) {
+        StackPtr Cursor = CursorIt->getSecond();
+        Cursors[InsertBB] = Cursor;
         if (PredBB->getSingleSuccessor()) {
-          BlockBottoms.erase(PredBB);
+          Cursors.erase(PredBB);
         }
-        return BlockBottoms[InsertBB];
+        return Cursors[InsertBB];
       }
     }
 
-    Value *Bottom;
-    Value *GlobalBottom = IRB.CreateLoad(IRB.getPtrTy(), GlobalBottomAlloc);
-    // We can enter this block more than once, so we need to cache the bottom
-    // that we assigned on the first visit.
+    // We have multiple incoming blocks. We need to load the current
+    // value of the stack pointer from the temporary "global" alloca,
+    // because the stack offsets of each incoming block could be different.
+    Value *Cursor;
+    Value *GlobalCursor =
+        IRB.CreateLoad(IRB.getPtrTy(), GlobalShadowStackAlloc);
     if (CI.getCycle(InsertBB)) {
+      // We can enter this block more than once, so we need to cache the cursor
+      // that we assigned on the first visit. Otherwise, a loop will continue
+      // to push the shadow stack pointer downward.
       Value *InitVal = ConstantPointerNull::get(IRB.getPtrTy());
-      AllocaInst *CachedBottomAlloc = createEntryAlloca(InsertBB, InitVal);
-      Value *CachedBottom = IRB.CreateLoad(IRB.getPtrTy(), CachedBottomAlloc);
-      Value *Flag = IRB.CreateICmpEQ(CachedBottom, InitVal);
-      Bottom = IRB.CreateSelect(Flag, GlobalBottom, CachedBottom);
-      IRB.CreateStore(Bottom, CachedBottomAlloc);
+      AllocaInst *CachedCursorAlloc = createEntryAlloca(InsertBB, InitVal);
+      Value *CachedCursor = IRB.CreateLoad(IRB.getPtrTy(), CachedCursorAlloc);
+      Value *Flag = IRB.CreateICmpEQ(CachedCursor, InitVal);
+      Cursor = IRB.CreateSelect(Flag, GlobalCursor, CachedCursor);
+      IRB.CreateStore(Cursor, CachedCursorAlloc);
     } else {
-      Bottom = GlobalBottom;
+      Cursor = GlobalCursor;
     }
-    BlockBottoms[InsertBB] = Bottom;
-    return BlockBottoms[InsertBB];
+    Cursors[InsertBB] = Cursor;
+    return Cursors[InsertBB];
   }
 
   // Allocates the requested number of slots below `Top`, returning a pointer
   // to the new bottom of the section.
   Value *alloc(CycleInfo &CI, IRBuilder<> &IRB, ElementCount Elems,
                Value *Top) {
-    FoldedPtr &Bottom = getCurrentBottom(CI, IRB, Top);
-    Bottom.sub(IRB, Elems, SlotSize, IntptrTy);
-    return Bottom.getPtr(IRB, IntptrTy);
+    StackPtr &Cursor = getCurrentOffset(CI, IRB, Top);
+    Cursor.sub(IRB, Elems, SlotSize, IntptrTy);
+    return Cursor.getPtr(IRB, IntptrTy);
   }
 
-  Value *getBottom(CycleInfo &CI, IRBuilder<> &IRB, Value *Top) {
-    return getCurrentBottom(CI, IRB, Top).getPtr(IRB, IntptrTy);
+  Value *getStackPtr(CycleInfo &CI, IRBuilder<> &IRB, Value *Top) {
+    return getCurrentOffset(CI, IRB, Top).getPtr(IRB, IntptrTy);
   }
 
   void patch(DominatorTree &DT) {
-    if (!GlobalBottomAlloc)
+    if (!GlobalShadowStackAlloc)
       return;
-    // Only blocks that allocate slots will be instrumented.
-    for (auto &[BB, Bottom] : BlockBottoms) {
-      // Acyclic blocks always update the global bottom,
-      // since we will never visit them again.
+    for (auto &[BB, Cursor] : Cursors) {
       IRBuilder<> ExitIRB(BB->getTerminator());
-      ExitIRB.CreateStore(Bottom.getPtr(ExitIRB, IntptrTy), GlobalBottomAlloc);
+      ExitIRB.CreateStore(Cursor.getPtr(ExitIRB, IntptrTy),
+                          GlobalShadowStackAlloc);
     }
-    PromoteMemToReg(PromoteableAllocas, DT);
   }
 };
 
@@ -1434,11 +1437,12 @@ class ShadowStackAllocator {
   }
 
 public:
-  ShadowStackAllocator(Value *SlotSize, Value *FramePtrSrc)
+  ShadowStackAllocator(Value *SlotSize, Value *FramePtrSrc,
+                       SmallVector<AllocaInst *> &Promoteable)
       : IntptrTy(SlotSize->getType()), SlotSize(SlotSize),
         FramePtrSrc(FramePtrSrc),
-        RegularSlots(IntptrTy, getSlotWidth(SlotSize)),
-        FnEntrySlots(IntptrTy, getSlotWidth(SlotSize)) {}
+        RegularSlots(IntptrTy, getSlotWidth(SlotSize), Promoteable),
+        FnEntrySlots(IntptrTy, getSlotWidth(SlotSize), Promoteable) {}
 
   bool wasUsed() {
     return FrameHeaderBottom && (FrameHeaderBottom != FrameHeaderTop);
@@ -1528,8 +1532,8 @@ public:
   // Returns a pointer to the bottom of the specified section of the
   // shadow frame.
   Value *getStackPtr(CycleInfo &CI, IRBuilder<> &IRB, bool IsFnEntry) {
-    return slotsFor(IsFnEntry).getBottom(CI, IRB,
-                                         getSectionTop(IRB, IsFnEntry));
+    return slotsFor(IsFnEntry).getStackPtr(CI, IRB,
+                                           getSectionTop(IRB, IsFnEntry));
   }
 
   Value *countFnEntrySlots(IRBuilder<> &IRB, Value *Bottom) {
@@ -1537,8 +1541,7 @@ public:
     return IRB.CreatePtrDiff(SlotTy, FnEntryTop, Bottom);
   }
 
-  // Patches both section counters and promotes their tracking allocas.
-  void patchStackSlots(DominatorTree &DT) {
+  void patch(DominatorTree &DT) {
     RegularSlots.patch(DT);
     FnEntrySlots.patch(DT);
   }
@@ -1640,17 +1643,22 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // violation.
   DenseMap<BasicBlock *, Instruction *> PHISlotInsertPtrs;
 
+  // We create temporary allocas to store the shadow stack offset
+  // for each basic block. This lets us avoid implementing our own
+  // worklist algorithm for this purpose.
+  SmallVector<AllocaInst *> Promoteable;
+
 public:
   BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
                          const TargetLibraryInfo &TLI, DominatorTree &DT,
                          const StackSafetyGlobalInfo &SSGI)
       : F(F), BS(BS), TLI(&TLI), DT(DT), Plan(F, BS.DL, DT, SSGI), ProvMap(BS),
         VAHelper(createVarArgHelper(F, BS, *this)),
-        ShadowStack(BS.ProvenanceSize, BS.ProvStackTLS) {}
+        ShadowStack(BS.ProvenanceSize, BS.ProvStackTLS, Promoteable) {}
   void run() {
     DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Lazy);
     EscapeEnumerator EE(F, "bsan_cleanup", true, &DTU);
-    while (EE.Next()) {
+    while (EE.Next()) { /* We want every exit block to pop the shadow frame. */
     }
     DTU.flush();
     Cycles.compute(F);
@@ -1684,7 +1692,8 @@ public:
 
     patchShadowPHINodes();
     ProvMap.patch(DT);
-    ShadowStack.patchStackSlots(DT);
+    ShadowStack.patch(DT);
+    PromoteMemToReg(Promoteable, DT);
 
     FnPrologueEnd->eraseFromParent();
     FnPrologueEnd = nullptr;
