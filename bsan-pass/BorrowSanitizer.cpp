@@ -2588,10 +2588,13 @@ private:
           IRB.CreateAdd(FieldOffset.Val, Field.getByteWidth(IRB, BS.IntptrTy)));
     }
 
+    // The final gap only covers the slots that lie entirely within the
+    // destination. The slot containing the end of the destination is
+    // handled separately, since it is only partly overwritten.
     Value *Base = Dest.Shift ? Dest.Shift : ConstantInt::get(BS.IntptrTy, 0);
-    Value *End =
-        ProvenanceOffset::alignUp(IRB, IRB.CreateAdd(Base, TotalSize)).Val;
-    Value *FinalGapSize = IRB.CreateSub(End, GapStart.Val);
+    Value *End = IRB.CreateAdd(Base, TotalSize);
+    ProvenanceOffset FullEnd = ProvenanceOffset::alignDown(IRB, End);
+    Value *FinalGapSize = IRB.CreateSub(FullEnd.Val, GapStart.Val);
     if (!match(FinalGapSize, m_Zero()))
       SlotsToClear.push_back(std::make_tuple(GapStart, FinalGapSize));
 
@@ -2599,6 +2602,25 @@ private:
       ProvenancePtr BaseAddr = Dest.ptradd(IRB, Offset);
       clearProvenance(IRB, BaseAddr, GapSize, Ordering);
     }
+
+    Value *EndRem = IRB.CreateAnd(End, kBorTagOffsetMask);
+    if (!match(EndRem, m_Zero()))
+      clearIfStartsBefore(IRB, Dest.ptradd(IRB, FullEnd), EndRem, Ordering);
+  }
+
+  void clearIfStartsBefore(IRBuilder<> &IRB, ProvenancePtr Slot, Value *EndRem,
+                           AtomicOrdering Ordering) {
+    Provenance Old = Slot.load(BS, IRB, ElementCount::getFixed(1), Ordering);
+    Value *Start = IRB.CreateAnd(Old.Tag, kBorTagOffsetMask);
+    Value *Clear = IRB.CreateICmpULT(Start, EndRem);
+    Value *Zero = ConstantInt::get(BS.IntptrTy, 0);
+    if (Slot.UpdateRefCt && Ordering == AtomicOrdering::NotAtomic) {
+      // __bsan_rc_dec ignores tags that aren't concrete, so passing 0 skips it.
+      Value *DecTag = IRB.CreateSelect(Clear, Old.Tag, Zero);
+      IRB.CreateCall(BS.BsanFuncRcDec, {DecTag, Old.Info, Slot.ShadowPtr});
+    }
+    IRB.CreateAlignedStore(IRB.CreateSelect(Clear, Zero, Old.Tag),
+                           Slot.ShadowPtr, kMinProvAlignment);
   }
 
   void clearProvenance(IRBuilder<> &IRB, ProvenancePtr Dest, Value *Size,
@@ -2656,9 +2678,14 @@ private:
     Value *TotalSize = IRB.CreateTypeSize(BS.IntptrTy, StoreSize);
 
     // We clear the provenance of any pointer with an address that
-    // could fall into the range covered by the destination.
-    TotalSize = IRB.CreateAdd(ShadowPtr.Shift, TotalSize);
-    clearProvenance(IRB, ShadowPtr, TotalSize);
+    // falls into the range covered by the destination.
+    Value *End = IRB.CreateAdd(ShadowPtr.Shift, TotalSize);
+    ProvenanceOffset FullEnd = ProvenanceOffset::alignDown(IRB, End);
+    clearProvenance(IRB, ShadowPtr, FullEnd);
+    Value *EndRem = IRB.CreateAnd(End, kBorTagOffsetMask);
+    if (!match(EndRem, m_Zero()))
+      clearIfStartsBefore(IRB, ShadowPtr.ptradd(IRB, FullEnd), EndRem,
+                          AtomicOrdering::NotAtomic);
   }
 
   void visitAtomicRMWInst(AtomicRMWInst &I) {
