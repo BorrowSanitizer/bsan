@@ -77,6 +77,15 @@ static cl::opt<bool> ClInstrumentVariadics(
     "bsan-variadics", cl::desc("Instrument functions with variadic arguments."),
     cl::Hidden, cl::init(true));
 
+static cl::opt<bool> ClTrustAlignHints(
+    "bsan-trust-align",
+    cl::desc("Trust alignment hints when loading and storing provenance. "
+             " If this setting is disabled, then BorrowSanitizer will be "
+             "slightly slower, but it will"
+             " be more robust against programs that have alignment-related "
+             "undefined behavior."),
+    cl::Hidden, cl::init(true));
+
 static AtomicOrdering addReleaseOrdering(AtomicOrdering A) {
   switch (A) {
   case AtomicOrdering::NotAtomic:
@@ -255,7 +264,7 @@ private:
   friend struct VarArgAMD64Helper;
   friend struct VarArgAArch64Helper;
   friend struct Provenance;
-  friend struct ProvenanceDest;
+  friend struct ProvenancePtr;
   friend struct ProvenanceMap;
   friend class BorrowSanitizerVisitor;
 
@@ -759,7 +768,7 @@ public:
 
 // A pointer to a location where a provenance value can be stored.
 // This location must be aligned to the size of a provenance value.
-struct ProvenanceDest {
+struct ProvenancePtr {
   // Pointers to where each component of a provenance value is stored.
   Value *ShadowPtr = nullptr;
   Value *OriginPtr = nullptr;
@@ -778,54 +787,53 @@ struct ProvenanceDest {
   // For destinations within shadow memory, the byte offset [0, 7] of the
   // application address within its provenance slot. This offset is stored
   // in the low bits of the borrow tag. It is null for destinations in main
-  // memory, which are always aligned.
-  Value *SlotOffset = nullptr;
+  // memory, which the instrumentation pass ensures are always aligned.
+  Value *Link = nullptr;
 
-  ProvenanceDest() {}
-  ProvenanceDest(Value *Shadow, Value *Origin, bool UpdateRefCt,
-                 Value *SlotOffset = nullptr)
+  ProvenancePtr() {}
+  ProvenancePtr(Value *Shadow, Value *Origin, bool UpdateRefCt,
+                Value *Link = nullptr)
       : ShadowPtr(Shadow), OriginPtr(Origin), UpdateRefCt(UpdateRefCt),
-        SlotOffset(SlotOffset) {}
-  // Returns the destination at the given offset. The result has no slot
-  // offset, so it should only be used for aligned destinations, such as
-  // main memory or whole slots that are being cleared.
-  ProvenanceDest ptradd(IRBuilder<> &IRB, ProvenanceOffset Offset) {
-    return ProvenanceDest(::ptradd(IRB, ShadowPtr, Offset),
-                          ::ptradd(IRB, OriginPtr, Offset), UpdateRefCt);
+        Link(Link) {}
+
+  // Offsets this pointer by a number of provenance slots,
+  // preserving "link".
+  ProvenancePtr ptradd(IRBuilder<> &IRB, ProvenanceOffset Offset) {
+    return ProvenancePtr(::ptradd(IRB, ShadowPtr, Offset),
+                         ::ptradd(IRB, OriginPtr, Offset), UpdateRefCt, Link);
   }
-  // Returns the destination for a field located `ByteOffset` bytes past
-  // the start of this destination, which falls within the slot at
-  // `AlignedOffset`.
-  ProvenanceDest field(IRBuilder<> &IRB, ProvenanceOffset AlignedOffset,
-                       Value *ByteOffset) {
-    ProvenanceDest Dest = ptradd(IRB, AlignedOffset);
-    if (SlotOffset) {
-      Dest.SlotOffset = SlotOffset;
+  // Offsets this pointer by a number of provenance slots, and then by
+  // a number of bytes. This adjusts the link to reflect the potentially
+  // new in-slot offset.
+  ProvenancePtr field(IRBuilder<> &IRB, ProvenanceOffset AlignedOffset,
+                      Value *ByteOffset) {
+    ProvenancePtr Dest = ptradd(IRB, AlignedOffset);
+    if (this->Link) {
+      Dest.Link = this->Link;
       if (!match(ByteOffset, m_Zero())) {
-        Value *Sum = IRB.CreateAdd(SlotOffset, ByteOffset);
-        Dest.SlotOffset = IRB.CreateAnd(
-            Sum, ConstantInt::get(Sum->getType(), kBorTagOffsetMask));
+        Value *Sum = IRB.CreateAdd(Dest.Link, ByteOffset);
+        Value *Mask = ConstantInt::get(Sum->getType(), kBorTagOffsetMask);
+        Dest.Link = IRB.CreateAnd(Sum, Mask);
       }
     }
     return Dest;
   }
 
-  // Returns a destination for a provenance value to be stored within
-  // "main" memory, indicating that reference counts will not be
-  // updated by the store.
-  static ProvenanceDest getMainProvenancePtr(BorrowSanitizer &BS,
-                                             IRBuilder<> &IRB, Value *Base) {
+  // Returns a pointer to an address within "application" memory.
+  // Reference counts will no be updated by stores to this destination.
+  static ProvenancePtr getPtrToApp(BorrowSanitizer &BS, IRBuilder<> &IRB,
+                                   Value *Base) {
     Value *InfoPtr = IRB.CreateStructGEP(BS.ProvenanceTy, Base, 1);
-    return ProvenanceDest(Base, InfoPtr, false);
+    return ProvenancePtr(Base, InfoPtr, false);
   }
 
-  // Returns a destination for a provenance value to be stored within
-  // "shadow" memory. Storing provenance to shadow memory requires
-  // updating the reference counts of the value being stored and the
-  // value being overwritten.
-  static ProvenanceDest
-  getShadowProvenancePtr(BorrowSanitizer &BS, IRBuilder<> &IRB, Value *Addr,
-                         MaybeAlign Alignment = kMinProvAlignment) {
+  // Returns a pointer to an address within "shadow" memory.
+  // Storing provenance to shadow memory requires updating the
+  // reference counts of the value being stored and the value
+  // being overwritten.
+  static ProvenancePtr
+  getPtrToShadow(BorrowSanitizer &BS, IRBuilder<> &IRB, Value *Addr,
+                 MaybeAlign Alignment = kMinProvAlignment) {
     assert(Addr->getType()->isPtrOrPtrVectorTy());
 
     Type *IntptrTy = ptrToIntPtrType(BS, Addr->getType());
@@ -849,8 +857,8 @@ struct ProvenanceDest {
     // We scan the stack, instead of using reference counting.
     bool UpdateRefCt = !isa<AllocaInst>(getUnderlyingObject(Addr));
 
-    Value *SlotOffset = getSlotOffset(BS, Addr, IRB, Alignment);
-    return ProvenanceDest(ShadowPtr, OriginPtr, UpdateRefCt, SlotOffset);
+    Value *Link = getLink(BS, Addr, IRB, Alignment);
+    return ProvenancePtr(ShadowPtr, OriginPtr, UpdateRefCt, Link);
   }
 
   // Write a provenance value to this destination.
@@ -872,25 +880,25 @@ struct ProvenanceDest {
       // values that are exposed to atomic operations, which is necessary
       // to support atomics without locking.
       if (Ordering == AtomicOrdering::NotAtomic) {
-        Provenance Old = this->load(BS, IRB, Ordering);
+        Provenance Old = this->load(BS, IRB, Prov.Elems, Ordering);
         IRB.CreateCall(BS.BsanFuncRcDec, {Old.Tag, Old.Info, ShadowPtr});
       }
     }
-    // Record where the pointer begins within its slot, so that loads from
-    // a different offset will not pick up this provenance.
-    Value *Tag = Prov.Tag;
-    if (SlotOffset && !match(SlotOffset, m_Zero()))
-      Tag = IRB.CreateOr(Tag, SlotOffset);
 
-    IRB.CreateAlignedStore(Tag, ShadowPtr, kMinProvAlignment);
+    // Record the link within the lower bits of
+    // the borrow tag, if it's nonzero.
+    Value *LinkedTag = Prov.Tag;
+    if (this->Link && !match(this->Link, m_Zero()))
+      LinkedTag = IRB.CreateOr(LinkedTag, this->Link);
+
+    IRB.CreateAlignedStore(LinkedTag, ShadowPtr, kMinProvAlignment);
     IRB.CreateAlignedStore(Prov.Info, OriginPtr, kMinProvAlignment);
   }
 
-  // Loads a provenance value into shadow memory pairwise at the specified
-  // addresses. Each address must be aligned to the wordsize.
+  // Loads a provenance value from shadow memory.
   Provenance load(BorrowSanitizer &BS, IRBuilder<> &IRB,
-                  AtomicOrdering Ordering = AtomicOrdering::NotAtomic,
-                  ElementCount Elems = ElementCount::getFixed(1)) {
+                  ElementCount Elems = ElementCount::getFixed(1),
+                  AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
     if (Elems.isVector()) {
       report_fatal_error("Vector provenance is not supported yet");
     }
@@ -968,13 +976,20 @@ private:
   /// Returns the byte offset [0, 7] of an application address within its
   /// provenance slot. We trust the alignment hint: if it is a multiple of
   /// the slot size, then the offset is zero.
-  static Value *getSlotOffset(BorrowSanitizer &BS, Value *Addr,
-                              IRBuilder<> &IRB, MaybeAlign Alignment) {
+  static Value *getLink(BorrowSanitizer &BS, Value *Addr, IRBuilder<> &IRB,
+                        MaybeAlign Alignment) {
     Type *IntptrTy = ptrToIntPtrType(BS, Addr->getType());
+
     Align CommonAlign =
         commonAlignment(Alignment.valueOrOne(), kMinProvAlignment.value());
-    if (CommonAlign == kMinProvAlignment)
+
+    if (CommonAlign == kMinProvAlignment) {
+      // The pointer's alignment is a multiple of the provenance alignment,
+      // so there's no need to issue a link to its address.
       return constToIntPtr(BS, IntptrTy, 0);
+    }
+
+    // Extract the [0, 7] offset from the lower bits of the pointer.
     Value *AddrLong = IRB.CreatePointerCast(Addr, IntptrTy);
     return IRB.CreateAnd(AddrLong,
                          constToIntPtr(BS, IntptrTy, kBorTagOffsetMask));
@@ -1592,7 +1607,7 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // Every alloca has a shadow stack slot where we "root" its provenance,
   // so that it can be found by the GC. We update the contents of this
   // slot every time we start a new lifetime for an alloca.
-  DenseMap<AllocaInst *, ProvenanceDest> AllocaFrameSlots;
+  DenseMap<AllocaInst *, ProvenancePtr> AllocaFrameSlots;
 
   // Information needed to reconstruct the shadow memory of a `byval` argument
   // once the frame header has been initialized and validated.
@@ -1713,13 +1728,11 @@ private:
       ElementCount Elems = ElementCount::getFixed(1),
       AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
     if (Elems.isScalar()) {
-      auto ShadowPtr =
-          ProvenanceDest::getShadowProvenancePtr(BS, IRB, Base, Alignment);
-      Provenance Stored = ShadowPtr.load(BS, IRB, Ordering);
-      Provenance Prov = checkSlotOffset(IRB, Stored, ShadowPtr.SlotOffset);
+      auto ShadowPtr = ProvenancePtr::getPtrToShadow(BS, IRB, Base, Alignment);
+      Provenance Stored = ShadowPtr.load(BS, IRB, Elems, Ordering);
+      Provenance Prov = checkSlotOffset(IRB, Stored, ShadowPtr.Link);
       Value *Slot = allocStackSlot(IRB, false);
-      ProvenanceDest SlotPtr =
-          ProvenanceDest::getMainProvenancePtr(BS, IRB, Slot);
+      ProvenancePtr SlotPtr = ProvenancePtr::getPtrToApp(BS, IRB, Slot);
       SlotPtr.store(BS, IRB, Prov);
       return Prov;
     }
@@ -1803,10 +1816,9 @@ private:
         Value *ByteOffset = ProvVec[Key.Offset].first;
         ElementCount Elems = ProvVec[Key.Offset].second;
         Value *ArgProvenancePtr = ptradd(EntryIRB, BS.ParamTLS, ByteOffset);
-        ProvenanceDest ArgDest = ProvenanceDest::getMainProvenancePtr(
-            BS, EntryIRB, ArgProvenancePtr);
-        Provenance ArgProvenance =
-            ArgDest.load(BS, EntryIRB, AtomicOrdering::NotAtomic, Elems);
+        ProvenancePtr ArgDest =
+            ProvenancePtr::getPtrToApp(BS, EntryIRB, ArgProvenancePtr);
+        Provenance ArgProvenance = ArgDest.load(BS, EntryIRB, Elems);
         ProvMap.setProvenance(Key, ArgProvenance);
         return ArgProvenance;
       }
@@ -1917,21 +1929,20 @@ private:
       SmallVector<std::pair<ProvenanceField, Provenance>> Fields;
       for (auto &[ByteOffset, Desc] : Info.Fields) {
         Value *ProvPtr = ptradd(EntryIRB, BS.ParamTLS, ByteOffset);
-        ProvenanceDest ProvDest =
-            ProvenanceDest::getMainProvenancePtr(BS, EntryIRB, ProvPtr);
-        Provenance Prov =
-            ProvDest.load(BS, EntryIRB, AtomicOrdering::NotAtomic, Desc.Elems);
+        ProvenancePtr ProvDest =
+            ProvenancePtr::getPtrToApp(BS, EntryIRB, ProvPtr);
+        Provenance Prov = ProvDest.load(BS, EntryIRB, Desc.Elems);
         Fields.push_back({Desc, Prov});
       }
 
-      ProvenanceDest ShadowPtr = ProvenanceDest::getShadowProvenancePtr(
-          BS, EntryIRB, Info.Arg, Info.Alignment);
+      ProvenancePtr ShadowPtr =
+          ProvenancePtr::getPtrToShadow(BS, EntryIRB, Info.Arg, Info.Alignment);
       copyProvenance(EntryIRB, ShadowPtr, Fields, Info.Size,
                      AtomicOrdering::NotAtomic);
 
       if (Info.AllocProv) {
         Value *Slot = ShadowStack.getStackAllocSlot(EntryIRB);
-        auto SlotPtr = ProvenanceDest::getMainProvenancePtr(BS, EntryIRB, Slot);
+        auto SlotPtr = ProvenancePtr::getPtrToApp(BS, EntryIRB, Slot);
         SlotPtr.store(BS, EntryIRB, *Info.AllocProv);
       }
     }
@@ -1955,7 +1966,7 @@ private:
         Prov = Provenance(InitialTag, Info);
         ProvMap.cacheAllocaProvenance(EntryIRB, AI, Prov);
       }
-      auto SlotPtr = ProvenanceDest::getMainProvenancePtr(BS, EntryIRB, Slot);
+      auto SlotPtr = ProvenancePtr::getPtrToApp(BS, EntryIRB, Slot);
       SlotPtr.store(BS, EntryIRB, Prov);
       if (Plan.hasLifetimeStart(AI)) {
         AllocaFrameSlots[AI] = SlotPtr;
@@ -2014,12 +2025,11 @@ private:
                    {SrcAddr, RI.Size, RI.Perms, RI.ImArray, ImArrayLen,
                     RI.PinArray, PinArrayLen, SrcProv.Tag, SrcProv.Info, Slot,
                     IRB.getInt1(false)});
-    ProvenanceDest SlotPtr =
-        ProvenanceDest::getMainProvenancePtr(BS, IRB, Slot);
+    ProvenancePtr SlotPtr = ProvenancePtr::getPtrToApp(BS, IRB, Slot);
     Provenance RetaggedProv = SlotPtr.load(BS, IRB);
 
     auto ShadowPtr =
-        ProvenanceDest::getShadowProvenancePtr(BS, IRB, Operand, OperandAlign);
+        ProvenancePtr::getPtrToShadow(BS, IRB, Operand, OperandAlign);
     ShadowPtr.store(BS, IRB, RetaggedProv);
   }
 
@@ -2035,8 +2045,7 @@ private:
                      {Ptr, RI.Size, RI.Perms, RI.ImArray, ImArrayLen,
                       RI.PinArray, PinArrayLen, Prov->Tag, Prov->Info, Dest,
                       IRB.getInt1(false)});
-      ProvenanceDest DestPtr =
-          ProvenanceDest::getMainProvenancePtr(BS, IRB, Dest);
+      ProvenancePtr DestPtr = ProvenancePtr::getPtrToApp(BS, IRB, Dest);
       ProvMap.setProvenance(&CB, DestPtr.load(BS, IRB));
     }
   }
@@ -2173,7 +2182,7 @@ private:
 
     for (auto [ByteOffset, Prov] : ParamOffsets) {
       Value *Slot = ptradd(Before, BS.ParamTLS, ByteOffset);
-      auto SlotPtr = ProvenanceDest::getMainProvenancePtr(BS, Before, Slot);
+      auto SlotPtr = ProvenancePtr::getPtrToApp(BS, Before, Slot);
       SlotPtr.store(BS, Before, Prov);
     }
 
@@ -2301,10 +2310,8 @@ private:
     // Finally, load the return value's provenance from the shadow stack.
     for (const auto &[Idx, Ptr] : llvm::enumerate(ReturnProvPtrs)) {
       ElementCount Elems = ReturnDesc[Idx].Elems;
-      ProvenanceDest RetDest =
-          ProvenanceDest::getMainProvenancePtr(BS, After, Ptr);
-      Provenance Prov =
-          RetDest.load(BS, After, AtomicOrdering::NotAtomic, Elems);
+      ProvenancePtr RetDest = ProvenancePtr::getPtrToApp(BS, After, Ptr);
+      Provenance Prov = RetDest.load(BS, After, Elems);
       ProvMap.setProvenance({&CB, Idx}, Prov);
     }
   }
@@ -2394,8 +2401,7 @@ private:
       // TODO: does every PHI node need to be
       // rooted in this way?
       Value *Slot = allocStackSlot(AfterPHI, false);
-      ProvenanceDest SlotPtr =
-          ProvenanceDest::getMainProvenancePtr(BS, AfterPHI, Slot);
+      ProvenancePtr SlotPtr = ProvenancePtr::getPtrToApp(BS, AfterPHI, Slot);
       SlotPtr.store(BS, AfterPHI, Prov);
 
       ProvPHINodes.push_back({{&PN, Idx}, Prov});
@@ -2530,13 +2536,13 @@ private:
     // additional release ordering if it is atomic. Any thread that
     // acquires the stored value will also observe its provenance.
     IRBuilder<> IRB(&SI);
-    ProvenanceDest ShadowPtr =
-        ProvenanceDest::getShadowProvenancePtr(BS, IRB, Ptr, SI.getAlign());
+    ProvenancePtr ShadowPtr =
+        ProvenancePtr::getPtrToShadow(BS, IRB, Ptr, SI.getAlign());
     copyProvenance(IRB, ShadowPtr, Val, SI.getOrdering());
     SI.setOrdering(addReleaseOrdering(SI.getOrdering()));
   }
 
-  void copyProvenance(IRBuilder<> &IRB, ProvenanceDest Dest, Value *Val,
+  void copyProvenance(IRBuilder<> &IRB, ProvenancePtr Dest, Value *Val,
                       AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
     BasicBlock *BB = IRB.GetInsertBlock();
     Type *Ty = Val->getType();
@@ -2555,7 +2561,7 @@ private:
     copyProvenance(IRB, Dest, FieldValues, TotalSize, Ordering);
   }
 
-  void copyProvenance(IRBuilder<> &IRB, ProvenanceDest Dest,
+  void copyProvenance(IRBuilder<> &IRB, ProvenancePtr Dest,
                       ArrayRef<std::pair<ProvenanceField, Provenance>> ProvDesc,
                       Value *TotalSize,
                       AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
@@ -2612,12 +2618,12 @@ private:
       SlotsToClear.push_back(std::make_tuple(FinalGapStart, FinalGapSize));
 
     for (auto &[Offset, GapSize] : SlotsToClear) {
-      ProvenanceDest BaseAddr = Dest.ptradd(IRB, Offset);
+      ProvenancePtr BaseAddr = Dest.ptradd(IRB, Offset);
       clearProvenance(IRB, BaseAddr, GapSize, Ordering);
     }
   }
 
-  void clearProvenance(IRBuilder<> &IRB, ProvenanceDest Dest,
+  void clearProvenance(IRBuilder<> &IRB, ProvenancePtr Dest,
                        ProvenanceOffset Size,
                        AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
     const uint64_t SlotSize = kMinProvAlignment.value();
@@ -2630,7 +2636,7 @@ private:
       if (NumSlots <= MaxInlineSlots) {
         for (uint64_t I = 0; I < NumSlots; ++I) {
           ProvenanceOffset SlotOffset(BS.IntptrTy, I * SlotSize);
-          ProvenanceDest SlotPtr = Dest.ptradd(IRB, SlotOffset);
+          ProvenancePtr SlotPtr = Dest.ptradd(IRB, SlotOffset);
           SlotPtr.store(BS, IRB, Provenance::omnivalid(BS), Ordering);
         }
         return;
@@ -2654,8 +2660,8 @@ private:
     IRBuilder<> IRB(&I);
     Value *Addr = I.getOperand(0);
     Value *Val = I.getOperand(1);
-    ProvenanceDest ShadowPtr =
-        ProvenanceDest::getShadowProvenancePtr(BS, IRB, Addr, Align(1));
+    ProvenancePtr ShadowPtr =
+        ProvenancePtr::getPtrToShadow(BS, IRB, Addr, Align(1));
     TypeSize StoreSize = BS.DL->getTypeStoreSize(Val->getType());
     Value *TotalSize = IRB.CreateTypeSize(BS.IntptrTy, StoreSize);
     clearProvenance(IRB, ShadowPtr, TotalSize);
@@ -2821,7 +2827,7 @@ private:
           ReturnProvPtrs.push_back(ptrsub(IRB, FrameTop, ReturnBytes));
         }
         for (const auto &[Idx, Ptr] : llvm::enumerate(ReturnProvPtrs)) {
-          auto MainPtr = ProvenanceDest::getMainProvenancePtr(BS, IRB, Ptr);
+          auto MainPtr = ProvenancePtr::getPtrToApp(BS, IRB, Ptr);
           Provenance Prov = assertProvenance(
               IRB.GetInsertBlock(), ProvDesc[Idx].Elems, {RetVal, Idx});
           MainPtr.store(BS, IRB, Prov);
@@ -2876,13 +2882,13 @@ struct VarArgHelperBase : public VarArgHelper {
       : F(F), BS(BS), BSV(BSV), VAListTagSize(VAListTagSize) {}
 
   /// Compute the shadow address for a given va_arg.
-  ProvenanceDest getShadowPtrForVAArgument(IRBuilder<> &IRB,
-                                           unsigned ArgOffset) {
-    ProvenanceDest Base(BS.VAArgTagTLS, BS.VAArgInfoTLS, false);
+  ProvenancePtr getShadowPtrForVAArgument(IRBuilder<> &IRB,
+                                          unsigned ArgOffset) {
+    ProvenancePtr Base(BS.VAArgTagTLS, BS.VAArgInfoTLS, false);
     return Base.ptradd(IRB, ProvenanceOffset(BS.IntptrTy, ArgOffset));
   }
 
-  void cleanUnusedTLS(IRBuilder<> &IRB, ProvenanceDest Ptr,
+  void cleanUnusedTLS(IRBuilder<> &IRB, ProvenancePtr Ptr,
                       unsigned BaseOffset) {
     // The tails of `__bsan_va_arg_tls` is not large enough to fit full
     // value shadow, but it will be copied to backup anyway. Make it clean.
@@ -2905,8 +2911,7 @@ struct VarArgHelperBase : public VarArgHelper {
     Value *VAListTag = I.getArgOperand(0);
 
     ProvenanceOffset Offset(BS.IntptrTy, VAListTagSize);
-    ProvenanceDest Shadow =
-        ProvenanceDest::getShadowProvenancePtr(BS, IRB, VAListTag);
+    ProvenancePtr Shadow = ProvenancePtr::getPtrToShadow(BS, IRB, VAListTag);
     // Here, we're clearing shadow, so we need to adjust reference counts.
     BSV.clearProvenance(IRB, Shadow, Offset, AtomicOrdering::NotAtomic);
   }
@@ -3007,7 +3012,7 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
         uint64_t ArgSize = DL.getTypeAllocSize(RealTy);
         uint64_t AlignedSize = alignTo(ArgSize, 8);
         unsigned BaseOffset = OverflowOffset;
-        ProvenanceDest DestPtr = getShadowPtrForVAArgument(IRB, OverflowOffset);
+        ProvenancePtr DestPtr = getShadowPtrForVAArgument(IRB, OverflowOffset);
         OverflowOffset += AlignedSize;
 
         if (OverflowOffset > kVarArgTLSSizeBytes) {
@@ -3015,8 +3020,8 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
           continue; // We have no space to copy shadow there.
         }
 
-        ProvenanceDest SrcPtr = ProvenanceDest::getShadowProvenancePtr(
-            BS, IRB, A, kMinProvAlignment);
+        ProvenancePtr SrcPtr =
+            ProvenancePtr::getPtrToShadow(BS, IRB, A, kMinProvAlignment);
 
         // We are copying provenance into the variadic TLS array. Any provenance
         // value within a TLS array is rooted somewhere else on the shadow
@@ -3032,7 +3037,7 @@ struct VarArgAMD64Helper : public VarArgHelperBase {
           AK = AK_Memory;
         if (AK == AK_FloatingPoint && FpOffset >= AMD64FpEndOffset)
           AK = AK_Memory;
-        ProvenanceDest Ptr;
+        ProvenancePtr Ptr;
         unsigned Offset = 0;
 
         switch (AK) {
