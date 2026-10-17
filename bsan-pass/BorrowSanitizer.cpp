@@ -2651,7 +2651,11 @@ private:
                        ProvenanceOffset Size,
                        AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
     const uint64_t SlotSize = kMinProvAlignment.value();
+    // For large values, we call clear / memset,
+    // depending on whether we need to update the
+    // reference count of the destination.
     const uint64_t MaxInlineSlots = 4;
+
     if (auto *CI = dyn_cast<ConstantInt>(Size.Val)) {
       uint64_t Bytes = CI->getZExtValue();
       if (Bytes == 0)
@@ -2672,8 +2676,8 @@ private:
                      {Dest.ShadowPtr, Dest.OriginPtr, Size.Val});
 
     } else {
-      // We only need to clear tag values, since they gate the validity
-      // of a provenance value.
+      // We only need to clear tag values, since they gate the
+      // validity of a provenance value.
       IRB.CreateMemSet(Dest.ShadowPtr,
                        ConstantInt::getNullValue(IRB.getInt8Ty()), Size.Val,
                        kMinProvAlignment);
@@ -2688,16 +2692,12 @@ private:
     ProvenancePtr ShadowPtr =
         ProvenancePtr::getPtrToShadow(BS, IRB, Addr, Alignment);
 
-    // We clear the provenance of any pointer with an address that
-    // could fall into the range of the destination. This includes
-    // the link offset of the shadow pointer, plus the size of the
-    // type being stored. So, if the type is 8 bytes, and the shadow
-    // destination is carrying a 4-byte offset, then we clear two
-    // shadow slots.
     TypeSize StoreSize = BS.DL->getTypeStoreSize(Val->getType());
     Value *TotalSize = IRB.CreateTypeSize(BS.IntptrTy, StoreSize);
-    TotalSize = IRB.CreateAdd(ShadowPtr.Link, TotalSize);
 
+    // We clear the provenance of any pointer with an address that
+    // could fall into the range covered by the destination.
+    TotalSize = IRB.CreateAdd(ShadowPtr.Link, TotalSize);
     clearProvenance(IRB, ShadowPtr, TotalSize);
   }
 
