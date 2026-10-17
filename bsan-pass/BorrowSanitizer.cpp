@@ -218,6 +218,10 @@ namespace {
 
 // A component of a type that carries provenance information.
 struct ProvenanceField {
+  // The slot index where this provenance field will be stored.
+  // This is equal to its byte offset within its parent type
+  // divided by the alignment of a provenance value.
+  uint64_t SlotIdx;
   // The offset where this field is located.
   Value *ByteOffset;
   // The byte width of this field.
@@ -228,10 +232,10 @@ struct ProvenanceField {
   ElementCount Elems;
 
 public:
-  ProvenanceField(Value *ByteOffset, Value *ByteWidth, ElementCount Elems,
-                  Align FieldAlign)
-      : ByteOffset(ByteOffset), ByteWidth(ByteWidth), Elems(Elems),
-        FieldAlign(FieldAlign) {}
+  ProvenanceField(uint64_t SlotIdx, Value *ByteOffset, Value *ByteWidth,
+                  ElementCount Elems, Align FieldAlign)
+      : SlotIdx(SlotIdx), ByteOffset(ByteOffset), ByteWidth(ByteWidth),
+        Elems(Elems), FieldAlign(FieldAlign) {}
 };
 
 // Instrument functions of a module to detect violations of Rust's aliasing
@@ -428,7 +432,8 @@ private:
 private:
   Value *getProvenanceLayout(IRBuilder<> &IRB,
                              SmallVector<ProvenanceField> &ProvDesc,
-                             Type *CurrentTy, Value *ByteOffset);
+                             Type *CurrentTy, Value *ByteOffset,
+                             uint64_t ConstByteOffset);
 };
 } // end anonymous namespace
 
@@ -438,7 +443,7 @@ BorrowSanitizer::getProvenanceLayout(IRBuilder<> &IRB, Type *Ty) {
   SmallVector<ProvenanceField> Desc;
   if (Ty->isSized()) {
     Value *Zero = ConstantInt::get(IRB.getIntPtrTy(*DL), 0);
-    getProvenanceLayout(IRB, Desc, Ty, Zero);
+    getProvenanceLayout(IRB, Desc, Ty, Zero, 0);
   }
   return Desc;
 }
@@ -450,10 +455,9 @@ Value *BorrowSanitizer::getAllocaSizeBytes(IRBuilder<> &IRB, AllocaInst *AI) {
 
 // Populates a vector with the list of locations of provenance
 // values within a type.
-Value *
-BorrowSanitizer::getProvenanceLayout(IRBuilder<> &IRB,
-                                     SmallVector<ProvenanceField> &ProvDesc,
-                                     Type *CurrentTy, Value *ByteOffset) {
+Value *BorrowSanitizer::getProvenanceLayout(
+    IRBuilder<> &IRB, SmallVector<ProvenanceField> &ProvDesc, Type *CurrentTy,
+    Value *ByteOffset, uint64_t ConstByteOffset) {
   assert(CurrentTy->isSized() && "expected a sized type");
   Type *IntptrTy = IRB.getIntPtrTy(*DL);
 
@@ -462,7 +466,8 @@ BorrowSanitizer::getProvenanceLayout(IRBuilder<> &IRB,
     TypeSize AllocTySize = DL->getTypeAllocSize(CurrentTy);
     Value *AllocSize = IRB.CreateTypeSize(IntptrTy, AllocTySize);
     Align AllocAlign = DL->getABITypeAlign(CurrentTy);
-    ProvenanceField Desc(ByteOffset, AllocSize, ElementCount::get(1, false),
+    ProvenanceField Desc(ConstByteOffset / kMinProvAlignment.value(),
+                         ByteOffset, AllocSize, ElementCount::get(1, false),
                          AllocAlign);
     ProvDesc.push_back(Desc);
     return ConstantInt::get(IntptrTy, 1);
@@ -485,8 +490,9 @@ BorrowSanitizer::getProvenanceLayout(IRBuilder<> &IRB,
       Value *Offset =
           IRB.CreateAdd(ByteOffset, ConstantInt::get(IntptrTy, ChunkOffset));
       ProvDesc.push_back(ProvenanceField(
-          Offset, ConstantInt::get(IntptrTy, PtrBytes),
-          ElementCount::getFixed(1), commonAlignment(IntAlign, ChunkOffset)));
+          (ConstByteOffset + ChunkOffset) / kMinProvAlignment.value(), Offset,
+          ConstantInt::get(IntptrTy, PtrBytes), ElementCount::getFixed(1),
+          commonAlignment(IntAlign, ChunkOffset)));
     }
     return ConstantInt::get(IntptrTy, NumSlots);
   } break;
@@ -498,8 +504,9 @@ BorrowSanitizer::getProvenanceLayout(IRBuilder<> &IRB,
       Value *ElemOffset =
           IRB.CreateTypeSize(IntptrTy, SL->getElementOffset(Idx));
       Value *CurrByteOffset = IRB.CreateAdd(ByteOffset, ElemOffset);
-      auto *ProvOffset =
-          getProvenanceLayout(IRB, ProvDesc, ElemTy, CurrByteOffset);
+      auto *ProvOffset = getProvenanceLayout(
+          IRB, ProvDesc, ElemTy, CurrByteOffset,
+          ConstByteOffset + SL->getElementOffset(Idx).getKnownMinValue());
       CurrProvOffset = IRB.CreateAdd(CurrProvOffset, ProvOffset);
     }
     return CurrProvOffset;
@@ -512,7 +519,8 @@ BorrowSanitizer::getProvenanceLayout(IRBuilder<> &IRB,
       Value *CurrByteOffset = IRB.CreateTypeSize(IntptrTy, ElemTySize * Idx);
       CurrByteOffset = IRB.CreateAdd(ByteOffset, CurrByteOffset);
       auto *ProvOffset = getProvenanceLayout(
-          IRB, ProvDesc, AT->getElementType(), CurrByteOffset);
+          IRB, ProvDesc, AT->getElementType(), CurrByteOffset,
+          ConstByteOffset + (ElemTySize * Idx).getKnownMinValue());
       CurrProvOffset = IRB.CreateAdd(CurrProvOffset, ProvOffset);
     }
     return CurrProvOffset;
