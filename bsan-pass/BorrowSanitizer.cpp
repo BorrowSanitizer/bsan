@@ -192,7 +192,7 @@ struct ProvenanceOffset {
     }
     Value *Addr = IRB.CreateAdd(Offset, ConstantInt::get(OffsetTy, Align - 1));
     Value *Mask = ConstantInt::get(OffsetTy, ~Align);
-    return ProvenanceOffset(IRB.CreateAnd(Offset, Mask));
+    return ProvenanceOffset(IRB.CreateAnd(Addr, Mask));
   }
 };
 
@@ -218,25 +218,34 @@ namespace {
 
 // A component of a type that carries provenance information.
 struct ProvenanceField {
-  // The slot index where this provenance field will be stored.
-  // This is equal to its byte offset divided by the alignment
-  // of a provenance value.
-  uint64_t SlotIdx;
-  // The byte offset where this field is located.
-  Value *ByteOffset;
-  // The byte width of this field.
-  Value *ByteWidth;
-  // The alignment of this field relative to its outermost
-  // parent type.
-  Align FieldAlign;
+  // The byte offset of this field within its outermost type.
+  uint64_t ByteOffset;
   // The number of provenance values in this field.
   ElementCount Elems;
 
 public:
-  ProvenanceField(uint64_t SlotIdx, Value *ByteOffset, Value *ByteWidth,
-                  ElementCount Elems, Align FieldAlign)
-      : SlotIdx(SlotIdx), ByteOffset(ByteOffset), ByteWidth(ByteWidth),
-        Elems(Elems), FieldAlign(FieldAlign) {}
+  ProvenanceField(uint64_t ByteOffset, ElementCount Elems)
+      : ByteOffset(ByteOffset), Elems(Elems) {}
+
+  // The index of the provenance slot containing the start of this field.
+  uint64_t getSlotIdx() const { return ByteOffset / kMinProvAlignment.value(); }
+
+  // The alignment of this field, given the alignment of its outermost type.
+  Align getAlign(Align OuterAlign) const {
+    return commonAlignment(OuterAlign, ByteOffset);
+  }
+
+  Value *getByteOffset(Type *IntptrTy) const {
+    return ConstantInt::get(IntptrTy, ByteOffset);
+  }
+
+  // The byte width of this field. Each provenance value covers
+  // a single pointer-sized slot.
+  Value *getByteWidth(IRBuilder<> &IRB, Type *IntptrTy) const {
+    Value *NumProv = IRB.CreateElementCount(IntptrTy, Elems);
+    return IRB.CreateMul(NumProv,
+                         ConstantInt::get(IntptrTy, kMinProvAlignment.value()));
+  }
 };
 
 // Instrument functions of a module to detect violations of Rust's aliasing
@@ -428,24 +437,21 @@ private:
   Value *getAllocaSizeBytes(IRBuilder<> &IRB, AllocaInst *AI);
 
   /// Returns a list of the fields within a type that carry provenance
-  SmallVector<ProvenanceField> getProvenanceLayout(IRBuilder<> &IRB, Type *Ty);
+  SmallVector<ProvenanceField> getProvenanceLayout(Type *Ty);
 
 private:
-  Value *getProvenanceLayout(IRBuilder<> &IRB,
-                             SmallVector<ProvenanceField> &ProvDesc,
-                             Type *CurrentTy, Value *ByteOffset,
-                             uint64_t ConstByteOffset);
+  void getProvenanceLayout(SmallVector<ProvenanceField> &ProvDesc,
+                           Type *CurrentTy, uint64_t ByteOffset);
 };
 } // end anonymous namespace
 
 // Provides a list of the locations of provenance values inside a type.
-SmallVector<ProvenanceField>
-BorrowSanitizer::getProvenanceLayout(IRBuilder<> &IRB, Type *Ty) {
+SmallVector<ProvenanceField> BorrowSanitizer::getProvenanceLayout(Type *Ty) {
   SmallVector<ProvenanceField> Desc;
-  if (Ty->isSized()) {
-    Value *Zero = ConstantInt::get(IRB.getIntPtrTy(*DL), 0);
-    getProvenanceLayout(IRB, Desc, Ty, Zero, 0);
-  }
+  // Scalable types can only contain scalable vectors, which do not
+  // carry provenance yet.
+  if (Ty->isSized() && !DL->getTypeAllocSize(Ty).isScalable())
+    getProvenanceLayout(Desc, Ty, 0);
   return Desc;
 }
 
@@ -456,23 +462,14 @@ Value *BorrowSanitizer::getAllocaSizeBytes(IRBuilder<> &IRB, AllocaInst *AI) {
 
 // Populates a vector with the list of locations of provenance
 // values within a type.
-Value *BorrowSanitizer::getProvenanceLayout(
-    IRBuilder<> &IRB, SmallVector<ProvenanceField> &ProvDesc, Type *CurrentTy,
-    Value *ByteOffset, uint64_t ConstByteOffset) {
+void BorrowSanitizer::getProvenanceLayout(
+    SmallVector<ProvenanceField> &ProvDesc, Type *CurrentTy,
+    uint64_t ByteOffset) {
   assert(CurrentTy->isSized() && "expected a sized type");
-  Type *IntptrTy = IRB.getIntPtrTy(*DL);
 
   switch (CurrentTy->getTypeID()) {
   case Type::PointerTyID: {
-    TypeSize AllocTySize = DL->getTypeAllocSize(CurrentTy);
-    Value *AllocSize = IRB.CreateTypeSize(IntptrTy, AllocTySize);
-    Align AllocAlign =
-        commonAlignment(DL->getABITypeAlign(CurrentTy), ConstByteOffset);
-    ProvenanceField Desc(ConstByteOffset / kMinProvAlignment.value(),
-                         ByteOffset, AllocSize, ElementCount::get(1, false),
-                         AllocAlign);
-    ProvDesc.push_back(Desc);
-    return ConstantInt::get(IntptrTy, 1);
+    ProvDesc.push_back(ProvenanceField(ByteOffset, ElementCount::getFixed(1)));
   } break;
   case Type::IntegerTyID: {
     IntegerType *IT = cast<IntegerType>(CurrentTy);
@@ -486,50 +483,30 @@ Value *BorrowSanitizer::getProvenanceLayout(
     // that are less than the size of a pointer.
     unsigned NumSlots = IntBitWidth / PtrBitWidth;
     uint64_t PtrBytes = PtrBitWidth / 8;
-    Align IntAlign = DL->getABITypeAlign(CurrentTy);
     for (unsigned I = 0; I < NumSlots; ++I) {
-      uint64_t ChunkOffset = I * PtrBytes;
-      Value *Offset =
-          IRB.CreateAdd(ByteOffset, ConstantInt::get(IntptrTy, ChunkOffset));
-      ProvDesc.push_back(ProvenanceField(
-          (ConstByteOffset + ChunkOffset) / kMinProvAlignment.value(), Offset,
-          ConstantInt::get(IntptrTy, PtrBytes), ElementCount::getFixed(1),
-          commonAlignment(IntAlign, ConstByteOffset + ChunkOffset)));
+      ProvDesc.push_back(ProvenanceField(ByteOffset + I * PtrBytes,
+                                         ElementCount::getFixed(1)));
     }
-    return ConstantInt::get(IntptrTy, NumSlots);
   } break;
   case Type::StructTyID: {
     StructType *ST = cast<StructType>(CurrentTy);
     const StructLayout *SL = DL->getStructLayout(ST);
-    Value *CurrProvOffset = ConstantInt::get(IntptrTy, 0);
     for (auto [Idx, ElemTy] : llvm::enumerate(ST->elements())) {
-      Value *ElemOffset =
-          IRB.CreateTypeSize(IntptrTy, SL->getElementOffset(Idx));
-      Value *CurrByteOffset = IRB.CreateAdd(ByteOffset, ElemOffset);
-      auto *ProvOffset = getProvenanceLayout(
-          IRB, ProvDesc, ElemTy, CurrByteOffset,
-          ConstByteOffset + SL->getElementOffset(Idx).getKnownMinValue());
-      CurrProvOffset = IRB.CreateAdd(CurrProvOffset, ProvOffset);
+      uint64_t ElemOffset = SL->getElementOffset(Idx).getFixedValue();
+      getProvenanceLayout(ProvDesc, ElemTy, ByteOffset + ElemOffset);
     }
-    return CurrProvOffset;
   } break;
   case Type::ArrayTyID: {
     ArrayType *AT = cast<ArrayType>(CurrentTy);
-    Value *CurrProvOffset = ConstantInt::get(IntptrTy, 0);
-    TypeSize ElemTySize = DL->getTypeAllocSize(AT->getElementType());
+    uint64_t ElemTySize =
+        DL->getTypeAllocSize(AT->getElementType()).getFixedValue();
     for (unsigned Idx = 0; Idx < AT->getNumElements(); ++Idx) {
-      Value *CurrByteOffset = IRB.CreateTypeSize(IntptrTy, ElemTySize * Idx);
-      CurrByteOffset = IRB.CreateAdd(ByteOffset, CurrByteOffset);
-      auto *ProvOffset = getProvenanceLayout(
-          IRB, ProvDesc, AT->getElementType(), CurrByteOffset,
-          ConstByteOffset + (ElemTySize * Idx).getKnownMinValue());
-      CurrProvOffset = IRB.CreateAdd(CurrProvOffset, ProvOffset);
+      getProvenanceLayout(ProvDesc, AT->getElementType(),
+                          ByteOffset + ElemTySize * Idx);
     }
-    return CurrProvOffset;
   } break;
-  default: {
-    return ConstantInt::get(IntptrTy, 0);
-  } break;
+  default:
+    break;
   }
 }
 
@@ -1911,7 +1888,7 @@ private:
         MaybeAlign ParamAlign = Arg.getParamAlign();
         Info.Alignment = ParamAlign.value_or(BS.DL->getABITypeAlign(Ty));
 
-        for (auto &Desc : BS.getProvenanceLayout(EntryIRB, Ty)) {
+        for (auto &Desc : BS.getProvenanceLayout(Ty)) {
           Info.Fields.push_back({ParamBytes, Desc});
           ParamBytes = EntryIRB.CreateAdd(ParamBytes,
                                           getProvBytes(EntryIRB, Desc.Elems));
@@ -1919,7 +1896,7 @@ private:
         ByValArgs.push_back(Info);
       } else {
         SmallVector<ProvenanceField> ProvDesc =
-            BS.getProvenanceLayout(EntryIRB, Arg.getType());
+            BS.getProvenanceLayout(Arg.getType());
         for (auto &Desc : ProvDesc) {
           ArgumentProvenance[&Arg].push_back({ParamBytes, Desc.Elems});
           ParamBytes = EntryIRB.CreateAdd(ParamBytes,
@@ -2151,8 +2128,7 @@ private:
       bool IsByVal = CB.paramHasAttr(i, Attribute::ByVal);
       Type *ArgTy = IsByVal ? CB.getParamByValType(i) : Arg->getType();
 
-      SmallVector<ProvenanceField> ProvDesc =
-          BS.getProvenanceLayout(Before, ArgTy);
+      SmallVector<ProvenanceField> ProvDesc = BS.getProvenanceLayout(ArgTy);
 
       for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
 
@@ -2163,9 +2139,8 @@ private:
           Align ByValAlign = CB.getParamAlign(i).value_or(ABIAlign);
           // Read the field's provenance from the caller's copy of the byval
           // memory so that we can forward it to the callee.
-          Value *ObjAddr = ptradd(Before, Arg, Desc.ByteOffset);
-          Align FieldAlign =
-              commonAlignment(ByValAlign, Desc.FieldAlign.value());
+          Value *ObjAddr = ptradd(Before, Arg, Desc.getByteOffset(BS.IntptrTy));
+          Align FieldAlign = Desc.getAlign(ByValAlign);
           ProvSrc =
               loadProvenanceFromShadow(Before, ObjAddr, FieldAlign, Desc.Elems);
         } else {
@@ -2246,7 +2221,7 @@ private:
     SmallVector<Value *> ReturnProvPtrs;
 
     SmallVector<ProvenanceField> ReturnDesc =
-        BS.getProvenanceLayout(Before, CB.getType());
+        BS.getProvenanceLayout(CB.getType());
 
     // Only sized return types have provenance
     if (CB.getType()->isSized()) {
@@ -2368,7 +2343,7 @@ private:
     for (unsigned OuterIdx = 0; OuterIdx < NumOutputs; OuterIdx++) {
       Value *Operand = CB.getOperand(OuterIdx);
       SmallVector<ProvenanceField> Components =
-          BS.getProvenanceLayout(IRB, Operand->getType());
+          BS.getProvenanceLayout(Operand->getType());
       for (const auto &[InnerIdx, Comp] : llvm::enumerate(Components)) {
         ProvMap.setProvenance({Operand, InnerIdx}, Provenance::omnivalid(BS));
       }
@@ -2402,7 +2377,7 @@ private:
   void visitPHINode(PHINode &PN) {
     IRBuilder<> IRB(&PN);
     SmallVector<ProvenanceField> Components =
-        BS.getProvenanceLayout(IRB, PN.getType());
+        BS.getProvenanceLayout(PN.getType());
 
     // PHI nodes need to be clustered at the beginning of
     // a basic block.
@@ -2535,14 +2510,12 @@ private:
     IRBuilder<> IRB(&LI);
 
     SmallVector<ProvenanceField> Components =
-        BS.getProvenanceLayout(IRB, LI.getType());
+        BS.getProvenanceLayout(LI.getType());
 
     Value *Base = LI.getPointerOperand();
     for (const auto &[Idx, Comp] : llvm::enumerate(Components)) {
-      Value *ByteOffset = Comp.ByteOffset;
-      Value *ObjAddr = ptradd(IRB, Base, ByteOffset);
-      Align FieldAlign =
-          commonAlignment(LI.getAlign(), Comp.FieldAlign.value());
+      Value *ObjAddr = ptradd(IRB, Base, Comp.getByteOffset(BS.IntptrTy));
+      Align FieldAlign = Comp.getAlign(LI.getAlign());
       Provenance Prov = loadProvenanceFromShadow(IRB, ObjAddr, FieldAlign,
                                                  Comp.Elems, LI.getOrdering());
       ProvMap.setProvenance({&LI, Idx}, Prov);
@@ -2576,7 +2549,7 @@ private:
     Type *Ty = Val->getType();
 
     SmallVector<std::pair<ProvenanceField, Provenance>> FieldValues;
-    SmallVector<ProvenanceField> Fields = BS.getProvenanceLayout(IRB, Ty);
+    SmallVector<ProvenanceField> Fields = BS.getProvenanceLayout(Ty);
 
     for (const auto &[Idx, Desc] : llvm::enumerate(Fields)) {
       Provenance Prov = assertProvenance(BB, Desc.Elems, {Val, Idx});
@@ -2598,19 +2571,18 @@ private:
     SmallVector<std::tuple<ProvenanceOffset, ProvenanceOffset>> SlotsToClear;
 
     for (const auto &[Desc, Prov] : ProvDesc) {
-      // We are given an address that is aligned to the size of a provenance
-      // value, but the size of the type that we are storing might not be
-      // aligned.
-      Align FieldAlign =
-          commonAlignment(Desc.FieldAlign, kMinProvAlignment.value());
+      Value *ByteOffset = Desc.getByteOffset(BS.IntptrTy);
 
-      if (Cursor != Desc.ByteOffset) {
+      if (Cursor != ByteOffset) {
         // There is a gap between provenance values within the layout
         // of the type
-        Value *GapSize = IRB.CreateSub(Desc.ByteOffset, Cursor);
+        Value *GapSize = IRB.CreateSub(ByteOffset, Cursor);
         ProvenanceOffset GapSizeRounded;
 
-        if (FieldAlign == kMinProvAlignment) {
+        // We are given an address that is aligned to the size of a provenance
+        // value, but the size of the type that we are storing might not be
+        // aligned.
+        if (isAligned(kMinProvAlignment, Desc.ByteOffset)) {
           // The field is already slot aligned. It will be
           // disjoint from the slots covered by the gap.
           GapSizeRounded = ProvenanceOffset::alignUp(IRB, GapSize);
@@ -2627,11 +2599,12 @@ private:
           SlotsToClear.push_back(std::make_tuple(GapStart, GapSizeRounded));
       }
 
-      auto AlignedOffset = ProvenanceOffset::alignDown(IRB, Desc.ByteOffset);
-      auto DestField = Dest.field(IRB, AlignedOffset, Desc.ByteOffset);
+      auto AlignedOffset = ProvenanceOffset::alignDown(IRB, ByteOffset);
+      auto DestField = Dest.field(IRB, AlignedOffset, ByteOffset);
       DestField.store(BS, IRB, Prov, Ordering);
 
-      Cursor = IRB.CreateNUWAdd(Desc.ByteOffset, Desc.ByteWidth);
+      Cursor =
+          IRB.CreateNUWAdd(ByteOffset, Desc.getByteWidth(IRB, BS.IntptrTy));
     }
 
     // When we are in the middle of a type, we round the gap size down,
@@ -2763,7 +2736,7 @@ private:
       for (unsigned CurrIdx = 0; CurrIdx < Idx; ++CurrIdx) {
         Type *ElemType = ST->getElementType(CurrIdx);
         SmallVector<ProvenanceField> ProvDesc =
-            BS.getProvenanceLayout(IRB, ElemType);
+            BS.getProvenanceLayout(ElemType);
         Offset += ProvDesc.size();
       }
       return {ST->getElementType(Idx), Offset};
@@ -2771,7 +2744,7 @@ private:
 
     if (auto *AT = dyn_cast<ArrayType>(Ty)) {
       SmallVector<ProvenanceField> ProvDesc =
-          BS.getProvenanceLayout(IRB, AT->getElementType());
+          BS.getProvenanceLayout(AT->getElementType());
       return {AT->getElementType(), ProvDesc.size() * Idx};
     }
 
@@ -2783,7 +2756,7 @@ private:
     Value *AggregateSrc = EI.getAggregateOperand();
 
     SmallVector<ProvenanceField> DestProvDesc =
-        BS.getProvenanceLayout(IRB, EI.getType());
+        BS.getProvenanceLayout(EI.getType());
 
     Type *CurrType = AggregateSrc->getType();
     uint64_t StartIdx = 0;
@@ -2806,7 +2779,7 @@ private:
     ProvMap.transfer(II.getAggregateOperand(), &II);
     Value *ToInsert = II.getInsertedValueOperand();
     SmallVector<ProvenanceField> SrcProvDesc =
-        BS.getProvenanceLayout(IRB, ToInsert->getType());
+        BS.getProvenanceLayout(ToInsert->getType());
 
     Type *CurrType = II.getType();
     uint64_t StartIdx = 0;
@@ -2826,7 +2799,7 @@ private:
   void visitSelectInst(SelectInst &SI) {
     IRBuilder<> IRB(&SI);
     SmallVector<ProvenanceField> ProvDesc =
-        BS.getProvenanceLayout(IRB, SI.getType());
+        BS.getProvenanceLayout(SI.getType());
 
     for (auto [Idx, Desc] : llvm::enumerate(ProvDesc)) {
       if (Desc.Elems.isVector()) {
@@ -2861,7 +2834,7 @@ private:
     if (RetVal) {
       SmallVector<Value *> ReturnProvPtrs;
       SmallVector<ProvenanceField> ProvDesc =
-          BS.getProvenanceLayout(IRB, RetVal->getType());
+          BS.getProvenanceLayout(RetVal->getType());
       if (!ProvDesc.empty()) {
         Value *FrameTop = ShadowStack.getOrInitFrameHeaderTop(IRB);
         Value *ReturnBytes = ConstantInt::get(BS.IntptrTy, 0);
