@@ -993,7 +993,7 @@ private:
     Align CommonAlign =
         commonAlignment(Alignment.valueOrOne(), kMinProvAlignment.value());
 
-    if (CommonAlign == kMinProvAlignment) {
+    if (ClTrustAlignHints && CommonAlign == kMinProvAlignment) {
       // The pointer's alignment is a multiple of the provenance alignment,
       // so there's no need to issue a link to its address.
       return constToIntPtr(BS, IntptrTy, 0);
