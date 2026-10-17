@@ -219,14 +219,15 @@ namespace {
 // A component of a type that carries provenance information.
 struct ProvenanceField {
   // The slot index where this provenance field will be stored.
-  // This is equal to its byte offset within its parent type
-  // divided by the alignment of a provenance value.
+  // This is equal to its byte offset divided by the alignment
+  // of a provenance value.
   uint64_t SlotIdx;
-  // The offset where this field is located.
+  // The byte offset where this field is located.
   Value *ByteOffset;
   // The byte width of this field.
   Value *ByteWidth;
-  // The alignment of this field relative to its parent type.
+  // The alignment of this field relative to its outermost
+  // parent type.
   Align FieldAlign;
   // The number of provenance values in this field.
   ElementCount Elems;
@@ -465,7 +466,8 @@ Value *BorrowSanitizer::getProvenanceLayout(
   case Type::PointerTyID: {
     TypeSize AllocTySize = DL->getTypeAllocSize(CurrentTy);
     Value *AllocSize = IRB.CreateTypeSize(IntptrTy, AllocTySize);
-    Align AllocAlign = DL->getABITypeAlign(CurrentTy);
+    Align AllocAlign =
+        commonAlignment(DL->getABITypeAlign(CurrentTy), ConstByteOffset);
     ProvenanceField Desc(ConstByteOffset / kMinProvAlignment.value(),
                          ByteOffset, AllocSize, ElementCount::get(1, false),
                          AllocAlign);
@@ -492,7 +494,7 @@ Value *BorrowSanitizer::getProvenanceLayout(
       ProvDesc.push_back(ProvenanceField(
           (ConstByteOffset + ChunkOffset) / kMinProvAlignment.value(), Offset,
           ConstantInt::get(IntptrTy, PtrBytes), ElementCount::getFixed(1),
-          commonAlignment(IntAlign, ChunkOffset)));
+          commonAlignment(IntAlign, ConstByteOffset + ChunkOffset)));
     }
     return ConstantInt::get(IntptrTy, NumSlots);
   } break;
