@@ -165,17 +165,34 @@ struct ProvenanceOffset {
     Val = ConstantInt::get(Ty, Bytes);
   }
 
-  operator Value *() const { return Val; }
-
-  static ProvenanceOffset alignDown(IRBuilder<> &IRB, Value *V) {
-    const uint64_t ProvAlign = kMinProvAlignment.value();
-    return IRB.CreateAnd(V, ConstantInt::get(V->getType(), ~(ProvAlign - 1)));
+  // Returns a provenance offset by rounding the given offset
+  // down to the nearest multiple of the alignment.
+  static ProvenanceOffset alignDown(IRBuilder<> &IRB, Value *Offset) {
+    const uint64_t Align = kMinProvAlignment.value();
+    if (auto *CI = dyn_cast<ConstantInt>(Offset)) {
+      if (CI->getZExtValue() % Align == 0) {
+        return ProvenanceOffset(Offset);
+      }
+    }
+    Type *OffsetTy = Offset->getType();
+    Value *Mask = ConstantInt::get(OffsetTy, ~(Align - 1));
+    return ProvenanceOffset(IRB.CreateAnd(Offset, Mask));
   }
 
-  static ProvenanceOffset alignUp(IRBuilder<> &IRB, Value *V) {
-    const uint64_t ProvAlign = kMinProvAlignment.value();
-    return alignDown(
-        IRB, IRB.CreateAdd(V, ConstantInt::get(V->getType(), ProvAlign - 1)));
+  // Returns a provenance offset by aligning the given offset.
+  // Offsets that are already aligned will remain unadjusted.
+  static ProvenanceOffset alignUp(IRBuilder<> &IRB, Value *Offset) {
+    // Computes: `(size + (align-1)) & -align`
+    const uint64_t Align = kMinProvAlignment.value();
+    Type *OffsetTy = Offset->getType();
+    if (auto *CI = dyn_cast<ConstantInt>(Offset)) {
+      if (CI->getZExtValue() % kMinProvAlignment.value() == 0) {
+        return ProvenanceOffset(Offset);
+      }
+    }
+    Value *Addr = IRB.CreateAdd(Offset, ConstantInt::get(OffsetTy, Align - 1));
+    Value *Mask = ConstantInt::get(OffsetTy, ~Align);
+    return ProvenanceOffset(IRB.CreateAnd(Offset, Mask));
   }
 };
 
@@ -799,8 +816,9 @@ struct ProvenancePtr {
   // Offsets this pointer by a number of provenance slots,
   // preserving "link".
   ProvenancePtr ptradd(IRBuilder<> &IRB, ProvenanceOffset Offset) {
-    return ProvenancePtr(::ptradd(IRB, ShadowPtr, Offset),
-                         ::ptradd(IRB, OriginPtr, Offset), UpdateRefCt, Link);
+    Value *Shadow = ::ptradd(IRB, ShadowPtr, Offset.Val);
+    Value *Origin = ::ptradd(IRB, OriginPtr, Offset.Val);
+    return ProvenancePtr(Shadow, Origin, UpdateRefCt, Link);
   }
   // Offsets this pointer by a number of provenance slots, and then by
   // a number of bytes. This adjusts the link to reflect the potentially
@@ -2623,6 +2641,12 @@ private:
     }
   }
 
+  void clearProvenance(IRBuilder<> &IRB, ProvenancePtr Dest, Value *Size,
+                       AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
+    auto Offset = ProvenanceOffset::alignUp(IRB, Size);
+    clearProvenance(IRB, Dest, Offset, Ordering);
+  }
+
   void clearProvenance(IRBuilder<> &IRB, ProvenancePtr Dest,
                        ProvenanceOffset Size,
                        AtomicOrdering Ordering = AtomicOrdering::NotAtomic) {
@@ -2645,35 +2669,45 @@ private:
 
     if (Dest.UpdateRefCt) {
       IRB.CreateCall(BS.BsanFuncShadowClearAligned,
-                     {Dest.ShadowPtr, Dest.OriginPtr, Size});
+                     {Dest.ShadowPtr, Dest.OriginPtr, Size.Val});
 
     } else {
       // We only need to clear tag values, since they gate the validity
       // of a provenance value.
       IRB.CreateMemSet(Dest.ShadowPtr,
-                       ConstantInt::getNullValue(IRB.getInt8Ty()), Size,
+                       ConstantInt::getNullValue(IRB.getInt8Ty()), Size.Val,
                        kMinProvAlignment);
     }
   }
 
-  void handleCASOrRMW(Instruction &I) {
+  void handleCASOrRMW(Instruction &I, Align Alignment) {
     IRBuilder<> IRB(&I);
     Value *Addr = I.getOperand(0);
     Value *Val = I.getOperand(1);
+
     ProvenancePtr ShadowPtr =
-        ProvenancePtr::getPtrToShadow(BS, IRB, Addr, Align(1));
+        ProvenancePtr::getPtrToShadow(BS, IRB, Addr, Alignment);
+
+    // We clear the provenance of any pointer with an address that
+    // could fall into the range of the destination. This includes
+    // the link offset of the shadow pointer, plus the size of the
+    // type being stored. So, if the type is 8 bytes, and the shadow
+    // destination is carrying a 4-byte offset, then we clear two
+    // shadow slots.
     TypeSize StoreSize = BS.DL->getTypeStoreSize(Val->getType());
     Value *TotalSize = IRB.CreateTypeSize(BS.IntptrTy, StoreSize);
+    TotalSize = IRB.CreateAdd(ShadowPtr.Link, TotalSize);
+
     clearProvenance(IRB, ShadowPtr, TotalSize);
   }
 
   void visitAtomicRMWInst(AtomicRMWInst &I) {
-    handleCASOrRMW(I);
+    handleCASOrRMW(I, I.getAlign());
     I.setOrdering(addReleaseOrdering(I.getOrdering()));
   }
 
   void visitAtomicCmpXchgInst(AtomicCmpXchgInst &I) {
-    handleCASOrRMW(I);
+    handleCASOrRMW(I, I.getAlign());
     I.setSuccessOrdering(addReleaseOrdering(I.getSuccessOrdering()));
   }
 
