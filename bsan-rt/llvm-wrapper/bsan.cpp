@@ -62,19 +62,25 @@ static void *kTrustedMarker = (void *)1;
 SANITIZER_INTERFACE_ATTRIBUTE
 THREADLOCAL uptr __bsan_var_arg_overflow = 0;
 
-// A thread-local array used to store the tag
+// A thread-local array used to store the "tag"
 // component of variadic arguments.
 SANITIZER_INTERFACE_ATTRIBUTE
-THREADLOCAL u8 __bsan_var_arg_tag_tls[kVarArgTLSSizeBytes];
+THREADLOCAL u8 __bsan_var_arg_tag_tls[kTLSSizeBytes];
 
-// A thread-local array used to store the info
+// A thread-local array used to store the "info"
 // component of variadic arguments.
 SANITIZER_INTERFACE_ATTRIBUTE
-THREADLOCAL u8 __bsan_var_arg_info_tls[kVarArgTLSSizeBytes];
+THREADLOCAL u8 __bsan_var_arg_info_tls[kTLSSizeBytes];
 
-// A thread-local array used to store parameter provenance values.
-SANITIZER_INTERFACE_ATTRIBUTE
-THREADLOCAL Provenance __bsan_param_tls[kParamTLSSizeProv];
+// A thread-local array used to store the "tag" component
+// of parameters' provenance values.
+alignas(kMinProvAlignment) SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL u8
+    __bsan_param_tag_tls[kTLSSizeBytes];
+
+// A thread-local array used to store the "info" component
+// of parameters' provenance values.
+alignas(kMinProvAlignment) SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL u8
+    __bsan_param_info_tls[kTLSSizeBytes];
 
 // Pointer to the start of the current frame within the shadow
 // stack, which stores the provenance of pointers that are on
@@ -176,10 +182,15 @@ u32 GetStackTraceLen() {
   return static_cast<u32>(stacktrace_max_len) + 1;
 }
 
-// Returns a pointer to the slot on the shadow stack at the given index.
-// The shadow stack grows downward, so we subtract by the given index
-// plus one to adjust the for the the zero-th slot.
-Provenance *GetParamSlot(uptr idx) { return &__bsan_param_tls[idx]; }
+// Returns the provenance of the parameter at the given index. Each
+// component is stored in its own TLS array, in slots of
+// `kMinProvAlignment` bytes.
+Provenance GetParamSlot(uptr idx) {
+  DCHECK_LT(idx, kTLSSizeBytes / kMinProvAlignment);
+  BorTag tag = reinterpret_cast<BorTag *>(__bsan_param_tag_tls)[idx];
+  Block *block = reinterpret_cast<Block **>(__bsan_param_info_tls)[idx];
+  return {tag, block};
+}
 
 // Returns a pointer to the slot on the shadow stack at the given index.
 // The shadow stack grows downward, so we subtract by the given index
@@ -191,7 +202,10 @@ Provenance *GetRetValSlot(uptr idx) {
 }
 
 // Clears the provenance from the given stack slot.
-void ClearParamSlot(uptr Idx) { *GetParamSlot(Idx) = OMNIVALID; }
+void ClearParamSlot(uptr idx) {
+  DCHECK_LT(idx, kTLSSizeBytes / kMinProvAlignment);
+  reinterpret_cast<BorTag *>(__bsan_param_tag_tls)[idx] = OMNIVALID.tag;
+}
 void ClearRetValSlot(uptr Idx) { *GetRetValSlot(Idx) = OMNIVALID; }
 
 // Prints a note suggesting users raise stacktrace_max_len when the trace was
@@ -425,9 +439,7 @@ SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_validate_params(void *current_fn, uptr len, uptr var_arg_bytes) {
   bool trusted = CallerIsInstrumented(current_fn);
   if (!trusted) {
-    for (uptr i = 0; i < len; ++i) {
-      __bsan_param_tls[i] = OMNIVALID;
-    }
+    internal_memset(&__bsan_param_tag_tls, 0, len * kMinProvAlignment);
     internal_memset(&__bsan_var_arg_tag_tls, 0, var_arg_bytes);
   }
 }
@@ -767,9 +779,9 @@ SANITIZER_WEAK_ATTRIBUTE
 void __bsan_print(BorTag bor_tag, Block *alloc_info) {}
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_print(void *ptr) {
-  Provenance *slot = GetParamSlot(0);
+  Provenance slot = GetParamSlot(0);
   InterceptorBarrier barrier;
-  __bsan_print(slot->tag, slot->block);
+  __bsan_print(slot.tag, slot.block);
 }
 
 SANITIZER_WEAK_ATTRIBUTE
@@ -777,9 +789,9 @@ void __bsan_print_borrow_state(BorTag bor_tag, Block *alloc_info) {}
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_debug_print_borrow_state(void *ptr) {
-  Provenance *slot = GetParamSlot(0);
+  Provenance slot = GetParamSlot(0);
   InterceptorBarrier barrier;
-  __bsan_print_borrow_state(slot->tag, slot->block);
+  __bsan_print_borrow_state(slot.tag, slot.block);
 }
 
 SANITIZER_WEAK_ATTRIBUTE
@@ -787,9 +799,9 @@ void __bsan_tree_size(BorTag bor_tag, Block *alloc_info) {}
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_debug_tree_size(void *ptr) {
-  Provenance *slot = GetParamSlot(0);
+  Provenance slot = GetParamSlot(0);
   InterceptorBarrier barrier;
-  __bsan_tree_size(slot->tag, slot->block);
+  __bsan_tree_size(slot.tag, slot.block);
 }
 
 SANITIZER_WEAK_ATTRIBUTE
@@ -797,9 +809,9 @@ void __bsan_snapshot(BorTag bor_tag, Block *alloc_info) {}
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_debug_snapshot(void *ptr) {
-  Provenance *slot = GetParamSlot(0);
+  Provenance slot = GetParamSlot(0);
   InterceptorBarrier barrier;
-  __bsan_snapshot(slot->tag, slot->block);
+  __bsan_snapshot(slot.tag, slot.block);
 }
 
 SANITIZER_WEAK_ATTRIBUTE void __bsan_print_diff(BorTag bor_tag,
@@ -807,9 +819,9 @@ SANITIZER_WEAK_ATTRIBUTE void __bsan_print_diff(BorTag bor_tag,
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_debug_print_diff(void *ptr) {
-  Provenance *slot = GetParamSlot(0);
+  Provenance slot = GetParamSlot(0);
   InterceptorBarrier barrier;
-  __bsan_print_diff(slot->tag, slot->block);
+  __bsan_print_diff(slot.tag, slot.block);
 }
 
 // Asks the global state to run the garbage collector. Any thread may call this;

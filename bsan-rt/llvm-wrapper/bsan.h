@@ -49,8 +49,7 @@ struct AtExitRecord {
 
 const Provenance OMNIVALID = {kOmnivalidTag, nullptr};
 
-static constexpr uptr kParamTLSSizeProv = 100;
-static constexpr uptr kVarArgTLSSizeBytes = 800;
+static constexpr uptr kTLSSizeBytes = 800;
 
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL Provenance
     *__bsan_shadow_stack;
@@ -136,7 +135,7 @@ u32 GetStackTraceLen();
 void PrintStackTrace(StackTrace &stack);
 uptr FindUserFramePc(uptr pc, uptr bp);
 
-Provenance *GetParamSlot(uptr Idx);
+Provenance GetParamSlot(uptr Idx);
 Provenance *GetRetValSlot(uptr Idx);
 void ClearParamSlot(uptr Idx);
 void ClearRetValSlot(uptr Idx);
