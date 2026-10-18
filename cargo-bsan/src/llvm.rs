@@ -188,6 +188,7 @@ impl LibCxx {
             ("CMAKE_INSTALL_PREFIX", &install_dir.display().to_string()),
             ("CMAKE_C_COMPILER", &clang.display().to_string()),
             ("CMAKE_CXX_COMPILER", &clangxx.display().to_string()),
+            ("CMAKE_POSITION_INDEPENDENT_CODE", "TRUE"),
             ("CMAKE_C_FLAGS", &cflags),
             ("CMAKE_CXX_FLAGS", &cflags),
             ("CMAKE_EXE_LINKER_FLAGS", &ldflags),
