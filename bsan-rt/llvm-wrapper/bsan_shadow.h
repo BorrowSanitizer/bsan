@@ -162,11 +162,10 @@ struct ShadowRange {
 };
 
 bool InitShadowWithReExec();
-void CopyShadow(void *dest, const void *src, uptr size);
 void JoinShadow(void *dest, const void *src_shadow, const void *src_origin,
                 uptr size);
 
-void MoveShadow(void *dest, const void *src, uptr size);
+void TransferShadow(void *dest, const void *src, uptr size);
 void ClearShadow(void *dest, uptr size);
 void ClearShadowAligned(uptr shadow_start, uptr origin_start,
                         uptr size_aligned);
