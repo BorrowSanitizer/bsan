@@ -287,6 +287,7 @@ bool CallerIsInstrumented(void *sym) {
                   (__bsan_marker == kTrustedMarker || __bsan_marker == sym));
   if (matches) {
     __bsan_marker = 0;
+  }else{
     __bsan_var_arg_overflow = 0;
   }
   return matches;
@@ -429,6 +430,7 @@ void __bsan_validate_params(void *current_fn, uptr len, uptr var_arg_bytes) {
       __bsan_param_tls[i] = OMNIVALID;
     }
     internal_memset(&__bsan_var_arg_tag_tls, 0, var_arg_bytes);
+    __bsan_var_arg_overflow = 0;
   }
 }
 
