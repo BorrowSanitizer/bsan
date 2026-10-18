@@ -265,15 +265,30 @@ ALWAYS_INLINE static void TransferSlot(uptr slot, uptr dst, uptr src,
   uptr hi = Min(slot + src - dst + kMinProvAlignment,
                 src + size - (kMinProvAlignment - 1));
 
-  // Since the bounds span 8 bytes, a pointer could begin in either of two
-  // source slots. Two pointers cannot overlap, so if both slots hold one, one
-  // of them must be stale. We cannot tell which, so neither one is copied.
   uptr start = 0;
+
+  uptr lo_slot = SlotOf(lo);
+  uptr hi_slot = SlotOf(hi - 1);
+
   if (lo < hi) {
-    start = PointerWithin(SlotOf(lo), lo, hi);
-    if (SlotOf(hi - 1) != SlotOf(lo)) {
-      uptr other = PointerWithin(SlotOf(hi - 1), lo, hi);
-      start = start ? (other ? 0 : start) : other;
+    // Since the bounds span 8 bytes, a pointer could begin in
+    // either of two source slots.
+    start = PointerWithin(lo_slot, lo, hi);
+    if (hi_slot != lo_slot) {
+      uptr other = PointerWithin(hi_slot, lo, hi);
+      // If this pointer could correspond to either slot,
+      // then we always take the provenance of the higher
+      // slot. This is because when we copy provenance, we
+      // clear the provenance of a pointers that overlaps with
+      // the high end of the range being copied, but we do not
+      // clear for the low end of the range. Mostly because this
+      // would add a constant overhead for aligned stores in main
+      // memory. So if two provenance values correspond to the same
+      // slot, we know that either they are both stale values, or
+      // the higher one is valid.
+      if (other) {
+        start = other;
+      }
     }
   }
 
