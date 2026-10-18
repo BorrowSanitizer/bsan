@@ -475,23 +475,6 @@ void BorrowSanitizer::getProvenanceLayout(
   case Type::PointerTyID: {
     ProvDesc.push_back(ProvenanceField(ByteOffset, ElementCount::getFixed(1)));
   } break;
-  case Type::IntegerTyID: {
-    IntegerType *IT = cast<IntegerType>(CurrentTy);
-    unsigned IntBitWidth = IT->getBitWidth();
-    unsigned PtrBitWidth = DL->getPointerSizeInBits();
-    // Each full, pointer-sized chunk of an integer
-    // is treated as possibly carrying provenance. This
-    // is necessary to handle type-punning.
-    // We round down to the nearest number of slots,
-    // which is equivalent to returning zero for integers
-    // that are less than the size of a pointer.
-    unsigned NumSlots = IntBitWidth / PtrBitWidth;
-    uint64_t PtrBytes = PtrBitWidth / 8;
-    for (unsigned I = 0; I < NumSlots; ++I) {
-      ProvDesc.push_back(ProvenanceField(ByteOffset + I * PtrBytes,
-                                         ElementCount::getFixed(1)));
-    }
-  } break;
   case Type::StructTyID: {
     StructType *ST = cast<StructType>(CurrentTy);
     const StructLayout *SL = DL->getStructLayout(ST);
@@ -2154,7 +2137,29 @@ private:
     Function *Callee = CB.getCalledFunction();
     bool MaybeUninstrumented = needsBoundaryValidation(Callee);
     SmallVector<std::pair<uint64_t, Provenance>> ParamSlots;
+
+    // We write every slot in each argument's range, clearing the slots that
+    // do not hold provenance. This helps in supporting cases where IR from
+    // different frontends disagrees about the ABIs used for passing types. For
+    // example, a struct might be passed by Rust as `byval [N ; i8]`, but
+    // received in C as `{ptr, ...}`. If both C and Rust are instrumented, then
+    // boundary validation will not help us catch this issue. We need to clear
+    // gaps eagerly so that the parameter TLS array is empty in C. Fixing this
+    // for good would require support for the byte type. We default to being
+    // conservative in this situation.
     SmallVector<std::pair<uint64_t, uint64_t>> ParamGaps;
+    auto AddGap = [&](uint64_t Start, uint64_t End) {
+      if (Start >= End)
+        return;
+      if (!ParamGaps.empty()) {
+        auto &[PrevStart, PrevLen] = ParamGaps.back();
+        if (PrevStart + PrevLen == Start) {
+          PrevLen += End - Start;
+          return;
+        }
+      }
+      ParamGaps.push_back({Start, End - Start});
+    };
     for (const auto &[i, Arg] : llvm::enumerate(CB.args())) {
       // Variadics have special handling.
       bool IsFixed = i < CB.getFunctionType()->getNumParams();
@@ -2174,8 +2179,7 @@ private:
       uint64_t GapStart = *FirstSlot;
       for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
         uint64_t SlotIdx = *FirstSlot + Desc.getSlotIdx();
-        if (MaybeUninstrumented && GapStart < SlotIdx)
-          ParamGaps.push_back({GapStart, SlotIdx - GapStart});
+        AddGap(GapStart, SlotIdx);
         GapStart = SlotIdx + Desc.Elems.getFixedValue();
         Provenance ProvSrc;
         if (IsByVal) {
@@ -2192,8 +2196,7 @@ private:
         }
         ParamSlots.push_back(std::make_pair(SlotIdx, ProvSrc));
       }
-      if (MaybeUninstrumented && GapStart < CurrParamSlot)
-        ParamGaps.push_back({GapStart, CurrParamSlot - GapStart});
+      AddGap(GapStart, CurrParamSlot);
     }
 
     if (CB.getFunctionType()->isVarArg()) {
