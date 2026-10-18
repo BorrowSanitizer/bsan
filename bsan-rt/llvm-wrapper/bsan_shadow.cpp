@@ -210,6 +210,11 @@ ALWAYS_INLINE static uptr SlotOf(uptr addr) {
   return addr & ~(kMinProvAlignment - 1);
 }
 
+// Returns the byte offset of `addr` within its provenance slot.
+ALWAYS_INLINE static uptr AlignRemOf(uptr addr) {
+  return addr & (kMinProvAlignment - 1);
+}
+
 ALWAYS_INLINE static BorTag *SlotTag(uptr slot) {
   return reinterpret_cast<BorTag *>(MEM_TO_SHADOW(slot));
 }
@@ -257,55 +262,96 @@ ALWAYS_INLINE static uptr PointerWithin(uptr slot, uptr lo, uptr hi) {
 // bytes from `src` to `dst`. A pointer is copied into `slot` if all of its
 // bytes lie within the source range and it lands within `slot`. Otherwise,
 // `slot` is cleared if its pointer was overwritten.
-ALWAYS_INLINE static void TransferSlot(uptr slot, uptr dst, uptr src,
-                                       uptr size) {
-  // Bounds on where a source pointer can begin. The lower bound comes from
-  // `slot`, and the upper bound comes from both `slot` and the source range.
-  uptr lo = Max(slot + src - dst, src);
-  uptr hi = Min(slot + src - dst + kMinProvAlignment,
-                src + size - (kMinProvAlignment - 1));
+//
+// `kAligned` must be true only if `src_start_addr` and `dest_start_addr` have
+// the same offset within their slots.
+template <bool kAligned>
+ALWAYS_INLINE static void TransferSlot(uptr slot, uptr dest_start_addr,
+                                       uptr src_start_addr, uptr size) {
+  // Each slot in the destination corresponds
+  // to at most 8 bytes of the source: (0, 8]
+  uptr src_lo = (slot + src_start_addr) - dest_start_addr;
 
-  uptr start = 0;
+  // The maximum address where we can transfer a slot.
+  // For example, if we are copying 8 bytes, then we
+  // can only copy a full pointer if we are starting
+  // at the 0th byte.
+  uptr src_max = src_start_addr + size - (kMinProvAlignment - 1);
 
-  uptr lo_slot = SlotOf(lo);
-  uptr hi_slot = SlotOf(hi - 1);
+  uptr src_ptr_addr = 0;
+  if constexpr (kAligned) {
+    // When the source and destination are equally
+    // aligned, `src_lo` is itself a slot, so a pointer
+    // can only come from that one slot, and it keeps
+    // its offset when it is copied.
+    src_ptr_addr = PointerWithin(src_lo, src_start_addr, src_max);
+  } else {
+    uptr src_hi = src_lo + kMinProvAlignment;
 
-  if (lo < hi) {
-    // Since the bounds span 8 bytes, a pointer could begin in
-    // either of two source slots.
-    start = PointerWithin(lo_slot, lo, hi);
-    if (hi_slot != lo_slot) {
-      uptr other = PointerWithin(hi_slot, lo, hi);
-      // If this pointer could correspond to either slot,
-      // then we always take the provenance of the higher
-      // slot. This is because when we copy provenance, we
-      // clear the provenance of a pointers that overlaps with
-      // the high end of the range being copied, but we do not
-      // clear for the low end of the range. Mostly because this
-      // would add a constant overhead for aligned stores in main
-      // memory. So if two provenance values correspond to the same
-      // slot, we know that either they are both stale values, or
-      // the higher one is valid.
-      if (other) {
-        start = other;
+    // However, the first slot copied might be
+    // before the start of the source address.
+    // If our destination is unaligned, then our
+    // slot will be positioned at `-align_rem`,
+    // The inclusive lower bound of the source
+    // range is either the low end above, or the
+    // start of the source range—whichever is greater.
+    uptr lo = Max(src_lo, src_start_addr);
+
+    // The exclusive upper bound of the source
+    // range being copied.
+    uptr hi = Min(src_hi, src_max);
+
+    uptr lo_slot = SlotOf(lo);
+    uptr hi_slot = SlotOf(hi - 1);
+
+    if (lo < hi) {
+      // Since the bounds span 8 bytes, a pointer could begin in
+      // either of two source slots.
+      src_ptr_addr = PointerWithin(lo_slot, lo, hi);
+      if (hi_slot != lo_slot) {
+        uptr other = PointerWithin(hi_slot, lo, hi);
+        // If this pointer could correspond to either slot,
+        // then we always take the provenance of the higher
+        // slot. This is because when we copy provenance, we
+        // clear the provenance of a pointers that overlaps with
+        // the high end of the range being copied, but we do not
+        // clear for the low end of the range. Mostly because this
+        // would add a constant overhead for aligned stores in main
+        // memory. So if two provenance values correspond to the same
+        // slot, we know that either they are both stale values, or
+        // the higher one is valid.
+        if (other)
+          src_ptr_addr = other;
       }
     }
   }
 
-  if (!start) {
-    ClearIfOverlapping(slot, dst, size);
-    return;
+  if (src_ptr_addr) {
+    uptr from = SlotOf(src_ptr_addr);
+    uptr to = src_ptr_addr + dest_start_addr - src_start_addr;
+    uptr tag = STRIP_TAG_OFFSET(*SlotTag(from)) | (to & kBorTagOffsetMask);
+    StoreProvenance(SlotTag(slot), SlotBlock(slot), tag, *SlotBlock(from));
+  } else {
+    ClearIfOverlapping(slot, dest_start_addr, size);
   }
-
-  uptr from = SlotOf(start);
-  uptr to = start + dst - src;
-  StoreProvenance(SlotTag(slot), SlotBlock(slot),
-                  STRIP_TAG_OFFSET(*SlotTag(from)) | (to & kBorTagOffsetMask),
-                  *SlotBlock(from));
 }
 
-void CopyShadow(void *dest, const void *src, uptr size) {
-  MoveShadow(dest, src, size);
+// Transfers provenance into every destination slot that overlaps
+// [dest_addr, dest_addr + size). Slots are visited in the same order as
+// `memmove`, so that overlapping source slots are read before they are
+// overwritten.
+template <bool kAligned>
+static void TransferSlots(uptr dest_addr, uptr src_addr, uptr size) {
+  uptr first = SlotOf(dest_addr);
+  uptr last = SlotOf(dest_addr + size - 1);
+  if (dest_addr < src_addr) {
+    for (uptr slot = first; slot <= last; slot += kMinProvAlignment)
+      TransferSlot<kAligned>(slot, dest_addr, src_addr, size);
+  } else {
+    for (uptr slot = last + kMinProvAlignment; slot != first;)
+      TransferSlot<kAligned>(slot -= kMinProvAlignment, dest_addr, src_addr,
+                             size);
+  }
 }
 
 void JoinShadow(void *dest, const void *s_shadow, const void *s_origin,
@@ -317,40 +363,29 @@ void JoinShadow(void *dest, const void *s_shadow, const void *s_origin,
   Block **d_blocks = SlotBlock(d_aligned);
   const BorTag *s_tags = reinterpret_cast<const BorTag *>(s_shadow);
   Block *const *s_blocks = reinterpret_cast<Block *const *>(s_origin);
-
   for (uptr i = 0; i * kMinProvAlignment < s_size; i++)
     StoreProvenance(&d_tags[i], &d_blocks[i], s_tags[i], s_blocks[i]);
 }
 
 // Copies provenance for `size` bytes from `src` to `dest`, as if by `memmove`.
-void MoveShadow(void *dest, const void *src, uptr size) {
+void TransferShadow(void *dest, const void *src, uptr size) {
   if (!MEM_IS_APP(dest) || !MEM_IS_APP(src))
     return;
-  uptr dst = (uptr)dest;
-  uptr from = (uptr)src;
-  if (size == 0 || dst == from)
+  uptr dest_addr = (uptr)dest;
+  uptr src_addr = (uptr)src;
+  if (size == 0 || dest_addr == src_addr)
     return;
 
-  // Only the slots that overlap [dst, dst + size) are written to, matching
-  // how our instrumentation pass stores provenance.
-  uptr first = SlotOf(dst);
-  uptr last = SlotOf(dst + size - 1);
-  // Read in the backwards/forwards direction based on the ordering of
-  // `dst`/`from`. This prevents slots being overwritten before they're read.
-  if (dst < from) {
-    for (uptr slot = first; slot <= last; slot += kMinProvAlignment)
-      TransferSlot(slot, dst, from, size);
-  } else {
-    for (uptr slot = last + kMinProvAlignment; slot != first;)
-      TransferSlot(slot -= kMinProvAlignment, dst, from, size);
-  }
+  if (AlignRemOf(src_addr) == AlignRemOf(dest_addr))
+    TransferSlots<true>(dest_addr, src_addr, size);
+  else
+    TransferSlots<false>(dest_addr, src_addr, size);
 }
 
 void ClearShadow(void *dest, uptr size) {
   if (!MEM_IS_APP(dest) || size == 0)
     return;
-  // Only the slots that overlap [dst, dst + size) are cleared, matching how
-  // our instrumentation pass clears provenance.
+  // Only the slots that overlap [dst, dst + size) are cleared.
   uptr dst = (uptr)dest;
   uptr first = SlotOf(dst);
   uptr last = SlotOf(dst + size - 1);

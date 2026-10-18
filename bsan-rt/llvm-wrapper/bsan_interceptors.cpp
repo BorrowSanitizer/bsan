@@ -276,7 +276,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memmove(void *dest, const void *src,
     return;
   }
   REAL(memmove)(dest, src, n);
-  MoveShadow(dest, src, n);
+  TransferShadow(dest, src, n);
 }
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memcpy(void *dest, const void *src,
@@ -290,7 +290,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memcpy(void *dest, const void *src,
     return;
   }
   REAL(memcpy)(dest, src, n);
-  CopyShadow(dest, src, n);
+  TransferShadow(dest, src, n);
 }
 
 } // extern "C"
