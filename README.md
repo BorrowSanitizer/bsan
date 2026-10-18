@@ -1,7 +1,10 @@
 [![CI](https://github.com/BorrowSanitizer/bsan/actions/workflows/ci.yml/badge.svg)](https://github.com/BorrowSanitizer/bsan/actions/workflows/ci.yml) [![Benchmarks](https://github.com/BorrowSanitizer/bsan/actions/workflows/bench.yml/badge.svg)](https://borrowsanitizer.github.io/bsan/) [![docs](https://github.com/borrow-sanitizer/docs/actions/workflows/docs.yml/badge.svg)](https://borrowsanitizer.com) [![project chat](https://img.shields.io/badge/zulip-join_chat-brightgreen.svg)](https://bsan.zulipchat.com/) [![Open in Dev Containers](https://img.shields.io/static/v1?label=Dev%20Containers&message=Open&color=blue)](https://vscode.dev/redirect?url=vscode://ms-vscode-remote.remote-containers/cloneInVolume?url=https://github.com/BorrowSanitizer/bsan)
 
-# <a href="https://borrowsanitizer.com"><img height="50px" width="30px" src="https://borrowsanitizer.com/images/bsan.svg" alt="BorrowSanitizer" /></a> <a href="https://github.com/BorrowSanitizer/bsan"><picture><source media="(prefers-color-scheme: dark)" height="60px" height="60px" srcset="https://borrowsanitizer.com/images/bsan-text-dark.svg"/><img height="60px" height="60px" src="https://borrowsanitizer.com/images/bsan-text-light.svg" alt="BorrowSanitizer" /></picture></a>
+# BorrowSanitizer
 
+<img src="bor.svg" align="right" width="200px" alt=""
+ title="Art by Molly MacLaren">
+ 
 BorrowSanitizer is a work-in-progress LLVM instrumentation pass for detecting aliasing violations in multi-language Rust applications. Our project is still in early development, but may help you find cross-language bugs otherwise undetectable by Miri. Our goal is to support detecting the following types of errors:
 
 * Violations of Rust's [*Tree Borrows*](https://perso.crans.org/vanille/treebor/) aliasing model.
