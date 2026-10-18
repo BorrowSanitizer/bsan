@@ -127,6 +127,7 @@ fn run_tests(
     let (with_dependencies, extra_stderr_filters) = match with_dependencies {
         WithDependencies => (Some("tests/deps"), &[][..]),
         WithCxxDependencies => (Some("tests/cxx/deps"), cxx_stderr_filters()),
+        WithCDependencies => (Some("tests/c/deps"), cxx_stderr_filters()),
         WithoutDependencies => (None, &[][..]),
     };
     let with_dependencies =
@@ -338,6 +339,8 @@ regexes! {
 enum Dependencies {
     /// The crates in `tests/deps`.
     WithDependencies,
+    /// The C sources of the tests in `tests/c`.
+    WithCDependencies,
     /// The C++ sources of the tests in `tests/cxx`.
     WithCxxDependencies,
     WithoutDependencies,
@@ -459,6 +462,8 @@ fn main() -> Result<()> {
     if env::var("BSAN_CXX").is_ok() {
         ui(Mode::Fail, "tests/cxx/fail", &target, WithCxxDependencies, tmpdir.path(), false)?;
     }
+
+    ui(Mode::Fail, "tests/c/pass", &target, WithCDependencies, tmpdir.path(), false)?;
 
     Ok(())
 }
