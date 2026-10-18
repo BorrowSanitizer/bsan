@@ -1906,25 +1906,24 @@ private:
         MaybeAlign ParamAlign = Arg.getParamAlign();
         Info.Alignment = ParamAlign.value_or(BS.DL->getABITypeAlign(Ty));
 
-        uint64_t FirstSlot = CurrParamSlot;
-        CurrParamSlot += getNumParamSlots(Ty);
-        if (CurrParamSlot > kParamTLSSlots)
+        std::optional<uint64_t> FirstSlot = allocParamSlots(Ty, &CurrParamSlot);
+        if (!FirstSlot)
           break;
 
         for (auto &Desc : BS.getProvenanceLayout(Ty)) {
-          Info.Fields.push_back({FirstSlot + Desc.getSlotIdx(), Desc});
+          Info.Fields.push_back({*FirstSlot + Desc.getSlotIdx(), Desc});
         }
         ByValArgs.push_back(Info);
       } else {
-        uint64_t FirstSlot = CurrParamSlot;
-        CurrParamSlot += getNumParamSlots(Arg.getType());
-        if (CurrParamSlot > kParamTLSSlots)
+        std::optional<uint64_t> FirstSlot =
+            allocParamSlots(Arg.getType(), &CurrParamSlot);
+        if (!FirstSlot)
           break;
 
         SmallVector<ProvenanceField> ProvDesc =
             BS.getProvenanceLayout(Arg.getType());
         for (auto &Desc : ProvDesc) {
-          ArgProv[&Arg].push_back({FirstSlot + Desc.getSlotIdx(), Desc.Elems});
+          ArgProv[&Arg].push_back({*FirstSlot + Desc.getSlotIdx(), Desc.Elems});
         }
       }
     }
@@ -2083,11 +2082,15 @@ private:
     return ShadowStack.allocStackSlot(Cycles, IRB, IsFnEntry, Elems);
   }
 
-  uint64_t getNumParamSlots(Type *Ty) {
+  std::optional<uint64_t> allocParamSlots(Type *Ty, uint64_t *SlotCounter) {
     TypeSize Size = BS.DL->getTypeAllocSize(Ty);
     uint64_t AlignedSize = alignTo(Size.getKnownMinValue(), kMinProvAlignment);
     uint64_t NumSlots = AlignedSize / kMinProvAlignment.value();
-    return NumSlots;
+    uint64_t FirstSlot = *SlotCounter;
+    if (FirstSlot + NumSlots > kParamTLSSlots)
+      return std::nullopt;
+    *SlotCounter += NumSlots;
+    return FirstSlot;
   }
 
   Provenance loadParamProvenance(IRBuilder<> &IRB, uint64_t SlotIdx,
@@ -2161,16 +2164,16 @@ private:
       bool IsByVal = CB.paramHasAttr(i, Attribute::ByVal);
       Type *ArgTy = IsByVal ? CB.getParamByValType(i) : Arg->getType();
 
-      uint64_t FirstSlot = CurrParamSlot;
-      CurrParamSlot += getNumParamSlots(ArgTy);
-      if (CurrParamSlot > kParamTLSSlots)
+      std::optional<uint64_t> FirstSlot =
+          allocParamSlots(ArgTy, &CurrParamSlot);
+      if (!FirstSlot)
         break;
 
       SmallVector<ProvenanceField> ProvDesc = BS.getProvenanceLayout(ArgTy);
 
-      uint64_t GapStart = FirstSlot;
+      uint64_t GapStart = *FirstSlot;
       for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
-        uint64_t SlotIdx = FirstSlot + Desc.getSlotIdx();
+        uint64_t SlotIdx = *FirstSlot + Desc.getSlotIdx();
         if (MaybeUninstrumented && GapStart < SlotIdx)
           ParamGaps.push_back({GapStart, SlotIdx - GapStart});
         GapStart = SlotIdx + Desc.Elems.getFixedValue();
