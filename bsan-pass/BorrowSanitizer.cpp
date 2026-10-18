@@ -1908,8 +1908,8 @@ private:
 
         uint64_t FirstSlot = CurrParamSlot;
         CurrParamSlot += getNumParamSlots(Ty);
-        if (CurrParamSlot >= kParamTLSSlots)
-          continue;
+        if (CurrParamSlot > kParamTLSSlots)
+          break;
 
         for (auto &Desc : BS.getProvenanceLayout(Ty)) {
           Info.Fields.push_back({FirstSlot + Desc.getSlotIdx(), Desc});
@@ -1918,7 +1918,7 @@ private:
       } else {
         uint64_t FirstSlot = CurrParamSlot;
         CurrParamSlot += getNumParamSlots(Arg.getType());
-        if (CurrParamSlot >= kParamTLSSlots)
+        if (CurrParamSlot > kParamTLSSlots)
           break;
 
         SmallVector<ProvenanceField> ProvDesc =
@@ -2163,7 +2163,7 @@ private:
 
       uint64_t FirstSlot = CurrParamSlot;
       CurrParamSlot += getNumParamSlots(ArgTy);
-      if (CurrParamSlot >= kParamTLSSlots)
+      if (CurrParamSlot > kParamTLSSlots)
         break;
 
       SmallVector<ProvenanceField> ProvDesc = BS.getProvenanceLayout(ArgTy);
@@ -2173,7 +2173,7 @@ private:
         uint64_t SlotIdx = FirstSlot + Desc.getSlotIdx();
         if (MaybeUninstrumented && GapStart < SlotIdx)
           ParamGaps.push_back({GapStart, SlotIdx - GapStart});
-        GapStart = SlotIdx + 1;
+        GapStart = SlotIdx + Desc.Elems.getFixedValue();
         Provenance ProvSrc;
         if (IsByVal) {
           Align ABIAlign = BS.DL->getABITypeAlign(ArgTy);
