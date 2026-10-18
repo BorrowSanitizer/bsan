@@ -287,7 +287,7 @@ bool CallerIsInstrumented(void *sym) {
                   (__bsan_marker == kTrustedMarker || __bsan_marker == sym));
   if (matches) {
     __bsan_marker = 0;
-  }else{
+  } else {
     __bsan_var_arg_overflow = 0;
   }
   return matches;
