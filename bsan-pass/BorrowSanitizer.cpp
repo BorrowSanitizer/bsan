@@ -475,6 +475,23 @@ void BorrowSanitizer::getProvenanceLayout(
   case Type::PointerTyID: {
     ProvDesc.push_back(ProvenanceField(ByteOffset, ElementCount::getFixed(1)));
   } break;
+  case Type::IntegerTyID: {
+    IntegerType *IT = cast<IntegerType>(CurrentTy);
+    unsigned IntBitWidth = IT->getBitWidth();
+    unsigned PtrBitWidth = DL->getPointerSizeInBits();
+    // Each full, pointer-sized chunk of an integer
+    // is treated as possibly carrying provenance. This
+    // is necessary to handle type-punning.
+    // We round down to the nearest number of slots,
+    // which is equivalent to returning zero for integers
+    // that are less than the size of a pointer.
+    unsigned NumSlots = IntBitWidth / PtrBitWidth;
+    uint64_t PtrBytes = PtrBitWidth / 8;
+    for (unsigned I = 0; I < NumSlots; ++I) {
+      ProvDesc.push_back(ProvenanceField(ByteOffset + I * PtrBytes,
+                                         ElementCount::getFixed(1)));
+    }
+  } break;
   case Type::StructTyID: {
     StructType *ST = cast<StructType>(CurrentTy);
     const StructLayout *SL = DL->getStructLayout(ST);
