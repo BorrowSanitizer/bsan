@@ -11,8 +11,6 @@ BorrowSanitizer is a work-in-progress LLVM instrumentation pass for detecting al
 * Accesses out-of-bounds
 * Use-after free errors.
 
-This project contains a fork of Miri's borrow tracker ([`bsan-shared`](https://github.com/BorrowSanitizer/bsan/tree/main/bsan-shared), [`bsan-rt`](https://github.com/BorrowSanitizer/bsan/tree/main/bsan-rt)), as well as several other components from both Miri and the Rust compiler. 
-
 Check out [our website](https://borrowsanitizer.com) for more information.
 
 ## Usage
