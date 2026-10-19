@@ -56,6 +56,7 @@ static const uint64_t kWildcardTag = 2 * kBorTagStride;
 // stored within a TLS array for
 // variadic arguments.
 static const unsigned kVarArgTLSSizeBytes = 800;
+static const uint64_t kParamTLSSlots = kVarArgTLSSizeBytes / 8;
 
 // BorrowSanitizer's garbage collector requires a set of
 // "safepoints", where threads can be interrupted while the
@@ -321,8 +322,13 @@ private:
   Type *ProvenanceTy = nullptr;
   Value *ProvenanceSize = nullptr;
 
-  /// Thread-local array used to pass the provenance of parameters.
-  Value *ParamTLS = nullptr;
+  /// Thread-local array used to pass the "tag" component of parameters'
+  /// provenance.
+  Value *ParamTagTLS = nullptr;
+
+  /// Thread-local array used to pass the "info" component of parameters'
+  /// provenance.
+  Value *ParamInfoTLS = nullptr;
 
   /// Global flag that is set to activate safepoints.
   Value *GCTrigger = nullptr;
@@ -694,7 +700,8 @@ void BorrowSanitizer::createUserspaceApi(Module &M,
 
   VAArgTagTLS = getOrInsertTLSGlobal(M, BSAN("var_arg_tag_tls"), PtrTy);
   VAArgInfoTLS = getOrInsertTLSGlobal(M, BSAN("var_arg_info_tls"), PtrTy);
-  ParamTLS = getOrInsertTLSGlobal(M, BSAN("param_tls"), PtrTy);
+  ParamTagTLS = getOrInsertTLSGlobal(M, BSAN("param_tag_tls"), PtrTy);
+  ParamInfoTLS = getOrInsertTLSGlobal(M, BSAN("param_info_tls"), PtrTy);
 
   ProvStackTLS = getOrInsertTLSGlobal(M, BSAN("shadow_stack"), PtrTy);
   BorTagCounter = getOrInsertGlobal(M, BSAN("bor_tag_ctr"), IntptrTy);
@@ -832,6 +839,15 @@ struct ProvenancePtr {
                               Value *Base) {
     Value *InfoPtr = IRB.CreateStructGEP(BS.ProvenanceTy, Base, 1);
     return ProvenancePtr(Base, InfoPtr, false);
+  }
+
+  static ProvenancePtr getParamSlot(BorrowSanitizer &BS, IRBuilder<> &IRB,
+                                    uint64_t Idx) {
+    Value *ByteOffset =
+        ConstantInt::get(BS.IntptrTy, Idx * kMinProvAlignment.value());
+    Value *TagPtr = ::ptradd(IRB, BS.ParamTagTLS, ByteOffset);
+    Value *InfoPtr = ::ptradd(IRB, BS.ParamInfoTLS, ByteOffset);
+    return ProvenancePtr(TagPtr, InfoPtr, false);
   }
 
   // Returns a pointer to an address within "shadow" memory.
@@ -1605,11 +1621,11 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // The instance of `VarArgHelper` for the target architecture.
   std::unique_ptr<VarArgHelper> VAHelper;
 
-  // A map from Arguments to (byte offset, provenance count) pairs, indicating
-  // the offset from the top of the header where the argument's provenane is
+  // A map from Arguments to (slot index, provenance count) pairs, indicating
+  // the slot in the parameter TLS arrays where the argument's provenane is
   // stored, and how many provenance values are stored there.
-  SmallDenseMap<Argument *, SmallVector<std::pair<Value *, ElementCount>>>
-      ArgumentProvenance;
+  SmallDenseMap<Argument *, SmallVector<std::pair<uint64_t, ElementCount>>>
+      ArgProv;
 
   // A map from values to their provenance.
   ProvenanceMap ProvMap;
@@ -1628,9 +1644,9 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     std::optional<Provenance> AllocProv;
     Value *Size;
     Align Alignment;
-    // The shadow-stack byte offset where the caller stored the provenance
+    // The parameter slot where the caller stored the provenance
     // of each field within the `byval` pointee type.
-    SmallVector<std::pair<Value *, ProvenanceField>> Fields;
+    SmallVector<std::pair<uint64_t, ProvenanceField>> Fields;
   };
 
   // A vector containing yet-to-be resolved provenance values for PHI nodes.
@@ -1817,18 +1833,15 @@ private:
       // beginning of the function. Otherwise, subsequent function calls could
       // overwrite them before they can be read from the shadow stack.
       IRBuilder<> EntryIRB(FnPrologueEnd);
-      auto It = ArgumentProvenance.find(Arg);
-      if (It != ArgumentProvenance.end()) {
+      auto It = ArgProv.find(Arg);
+      if (It != ArgProv.end()) {
         auto &ProvVec = It->second;
         if (Key.Offset >= ProvVec.size()) {
           report_fatal_error("Invalid argument provenance!");
         }
-        Value *ByteOffset = ProvVec[Key.Offset].first;
-        ElementCount Elems = ProvVec[Key.Offset].second;
-        Value *ArgProvenancePtr = ptradd(EntryIRB, BS.ParamTLS, ByteOffset);
-        ProvenancePtr ArgDest =
-            ProvenancePtr::getPtr(BS, EntryIRB, ArgProvenancePtr);
-        Provenance ArgProvenance = ArgDest.load(BS, EntryIRB, Elems);
+        auto [SlotIdx, Elems] = ProvVec[Key.Offset];
+        Provenance ArgProvenance =
+            loadParamProvenance(EntryIRB, SlotIdx, Elems);
         ProvMap.setProvenance(Key, ArgProvenance);
         return ArgProvenance;
       }
@@ -1858,7 +1871,7 @@ private:
     // necessary for boundary validation. We can only load a provenance
     // value once we have ensured that its stack slot is omnivalid
     // if we had an uninstrumented caller.
-    Value *ParamBytes = ConstantInt::get(BS.IntptrTy, 0);
+    uint64_t CurrParamSlot = 0;
 
     // Iterate over each argument to compute how many provenance slots
     // we need.
@@ -1893,21 +1906,24 @@ private:
         MaybeAlign ParamAlign = Arg.getParamAlign();
         Info.Alignment = ParamAlign.value_or(BS.DL->getABITypeAlign(Ty));
 
+        std::optional<uint64_t> FirstSlot = allocParamSlots(Ty, &CurrParamSlot);
+        if (!FirstSlot)
+          break;
+
         for (auto &Desc : BS.getProvenanceLayout(Ty)) {
-          Info.Fields.push_back({ParamBytes, Desc});
-          ParamBytes = EntryIRB.CreateAdd(ParamBytes,
-                                          getProvBytes(EntryIRB, Desc.Elems));
+          Info.Fields.push_back({*FirstSlot + Desc.getSlotIdx(), Desc});
         }
         ByValArgs.push_back(Info);
       } else {
+        std::optional<uint64_t> FirstSlot =
+            allocParamSlots(Arg.getType(), &CurrParamSlot);
+        if (!FirstSlot)
+          break;
+
         SmallVector<ProvenanceField> ProvDesc =
             BS.getProvenanceLayout(Arg.getType());
         for (auto &Desc : ProvDesc) {
-          ArgumentProvenance[&Arg].push_back({ParamBytes, Desc.Elems});
-          ParamBytes = EntryIRB.CreateAdd(ParamBytes,
-                                          getProvBytes(EntryIRB, Desc.Elems));
-          // We store the shadow stack offset and width of the provenance for
-          // each argument, without eagerly loading it.
+          ArgProv[&Arg].push_back({*FirstSlot + Desc.getSlotIdx(), Desc.Elems});
         }
       }
     }
@@ -1927,20 +1943,17 @@ private:
         VarArgBytes = alignTo(RegionSize, kMinProvAlignment);
       }
       Value *VarArgBytesVal = ConstantInt::get(BS.IntptrTy, VarArgBytes);
-      Value *NumParamProv =
-          EntryIRB.CreateExactUDiv(ParamBytes, BS.ProvenanceSize);
-      EntryIRB.CreateCall(BS.BsanFuncValidateParams,
-                          {&F, NumParamProv, VarArgBytesVal});
+      EntryIRB.CreateCall(
+          BS.BsanFuncValidateParams,
+          {&F, ConstantInt::get(BS.IntptrTy, CurrParamSlot), VarArgBytesVal});
     }
 
     // Afterward, we can load the provenance of the byval type,
     // and store it to the shadow memory of the byval pointer.
     for (auto &Info : ByValArgs) {
       SmallVector<std::pair<ProvenanceField, Provenance>> Fields;
-      for (auto &[ByteOffset, Desc] : Info.Fields) {
-        Value *ProvPtr = ptradd(EntryIRB, BS.ParamTLS, ByteOffset);
-        ProvenancePtr ProvDest = ProvenancePtr::getPtr(BS, EntryIRB, ProvPtr);
-        Provenance Prov = ProvDest.load(BS, EntryIRB, Desc.Elems);
+      for (auto &[SlotIdx, Desc] : Info.Fields) {
+        Provenance Prov = loadParamProvenance(EntryIRB, SlotIdx, Desc.Elems);
         Fields.push_back({Desc, Prov});
       }
 
@@ -2069,6 +2082,24 @@ private:
     return ShadowStack.allocStackSlot(Cycles, IRB, IsFnEntry, Elems);
   }
 
+  std::optional<uint64_t> allocParamSlots(Type *Ty, uint64_t *SlotCounter) {
+    TypeSize Size = BS.DL->getTypeAllocSize(Ty);
+    uint64_t AlignedSize = alignTo(Size.getKnownMinValue(), kMinProvAlignment);
+    uint64_t NumSlots = AlignedSize / kMinProvAlignment.value();
+    uint64_t FirstSlot = *SlotCounter;
+    if (FirstSlot + NumSlots > kParamTLSSlots)
+      return std::nullopt;
+    *SlotCounter += NumSlots;
+    return FirstSlot;
+  }
+
+  Provenance loadParamProvenance(IRBuilder<> &IRB, uint64_t SlotIdx,
+                                 ElementCount Elems) {
+    if (SlotIdx >= kParamTLSSlots)
+      return Provenance::omnivalid(BS);
+    return ProvenancePtr::getParamSlot(BS, IRB, SlotIdx).load(BS, IRB, Elems);
+  }
+
   Value *getProvBytes(IRBuilder<> &IRB, ElementCount Elems) {
     return IRB.CreateElementCount(BS.IntptrTy,
                                   Elems.multiplyCoefficientBy(kProvenanceSize));
@@ -2118,11 +2149,34 @@ private:
 
     // We store the provenance for each argument into thread-local arrays.
     // First, we calculate where each fixed parameter's provenance is stored.
-    Value *ParamBytes = ConstantInt::get(BS.IntptrTy, 0);
+    uint64_t CurrParamSlot = 0;
 
     Function *Callee = CB.getCalledFunction();
     bool MaybeUninstrumented = needsBoundaryValidation(Callee);
-    SmallVector<std::pair<Value *, Provenance>> ParamOffsets;
+    SmallVector<std::pair<uint64_t, Provenance>> ParamSlots;
+
+    // For byval arguments, we write every slot in the argument's range,
+    // clearing the slots that do not hold provenance. This helps in supporting
+    // cases where IR from different frontends disagrees about the ABIs used
+    // for passing types. For example, a struct might be passed by Rust as
+    // `byval [N ; i8]`, but received in C as `{ptr, ...}`. If both C and Rust
+    // are instrumented, then boundary validation will not help us catch this
+    // issue. We need to clear gaps eagerly so that the parameter TLS array is
+    // empty in C. Fixing this for good would require support for the byte
+    // type. We default to being conservative in this situation.
+    SmallVector<std::pair<uint64_t, uint64_t>> ParamGaps;
+    auto AddGap = [&](uint64_t Start, uint64_t End) {
+      if (Start >= End)
+        return;
+      if (!ParamGaps.empty()) {
+        auto &[PrevStart, PrevLen] = ParamGaps.back();
+        if (PrevStart + PrevLen == Start) {
+          PrevLen += End - Start;
+          return;
+        }
+      }
+      ParamGaps.push_back({Start, End - Start});
+    };
     for (const auto &[i, Arg] : llvm::enumerate(CB.args())) {
       // Variadics have special handling.
       bool IsFixed = i < CB.getFunctionType()->getNumParams();
@@ -2132,11 +2186,19 @@ private:
       bool IsByVal = CB.paramHasAttr(i, Attribute::ByVal);
       Type *ArgTy = IsByVal ? CB.getParamByValType(i) : Arg->getType();
 
+      std::optional<uint64_t> FirstSlot =
+          allocParamSlots(ArgTy, &CurrParamSlot);
+      if (!FirstSlot)
+        break;
+
       SmallVector<ProvenanceField> ProvDesc = BS.getProvenanceLayout(ArgTy);
 
+      uint64_t GapStart = *FirstSlot;
       for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
-
-        Value *ByteOffset = ParamBytes;
+        uint64_t SlotIdx = *FirstSlot + Desc.getSlotIdx();
+        if (IsByVal)
+          AddGap(GapStart, SlotIdx);
+        GapStart = SlotIdx + Desc.Elems.getFixedValue();
         Provenance ProvSrc;
         if (IsByVal) {
           Align ABIAlign = BS.DL->getABITypeAlign(ArgTy);
@@ -2150,11 +2212,10 @@ private:
         } else {
           ProvSrc = assertProvenance(CB.getParent(), Desc.Elems, {Arg, Idx});
         }
-        ParamOffsets.push_back(std::make_pair(ByteOffset, ProvSrc));
-
-        ParamBytes =
-            Before.CreateAdd(ParamBytes, getProvBytes(Before, Desc.Elems));
+        ParamSlots.push_back(std::make_pair(SlotIdx, ProvSrc));
       }
+      if (IsByVal)
+        AddGap(GapStart, CurrParamSlot);
     }
 
     if (CB.getFunctionType()->isVarArg()) {
@@ -2187,9 +2248,14 @@ private:
       Before.CreateStore(StackOffset, BS.ProvStackTLS);
     }
 
-    for (auto [ByteOffset, Prov] : ParamOffsets) {
-      Value *Slot = ptradd(Before, BS.ParamTLS, ByteOffset);
-      auto SlotPtr = ProvenancePtr::getPtr(BS, Before, Slot);
+    for (auto [SlotIdx, NumSlots] : ParamGaps) {
+      ProvenanceOffset Size(BS.IntptrTy, NumSlots * kMinProvAlignment.value());
+      auto ParamSlot = ProvenancePtr::getParamSlot(BS, Before, SlotIdx);
+      clearProvenance(Before, ParamSlot, Size);
+    }
+
+    for (auto [SlotIdx, Prov] : ParamSlots) {
+      auto SlotPtr = ProvenancePtr::getParamSlot(BS, Before, SlotIdx);
       SlotPtr.store(BS, Before, Prov);
     }
 
