@@ -184,15 +184,24 @@ bool InitShadowWithReExec() {
 #if SANITIZER_LINUX
     // Perhaps ASLR entropy is too high. If ASLR is enabled, re-exec without it.
     int old_personality = personality(0xffffffff);
+    bool personality_failed = (old_personality == -1);
     bool aslr_on =
-        (old_personality != -1) && ((old_personality & ADDR_NO_RANDOMIZE) == 0);
-
+        !personality_failed && ((old_personality & ADDR_NO_RANDOMIZE) == 0);
     if (aslr_on) {
       VReport(1, "WARNING: BorrowSanitizer: memory layout is incompatible, "
-                 "possibly due to high-entropy ASLR.\n"
-                 "Re-execing with fixed virtual address space.\n"
-                 "N.B. reducing ASLR entropy is preferable.\n");
-      CHECK_NE(personality(old_personality | ADDR_NO_RANDOMIZE), -1);
+                 "possibly due to high-entropy ASLR.\n");
+      personality_failed =
+          personality(old_personality | ADDR_NO_RANDOMIZE) == -1;
+      if (personality_failed) {
+        VReport(1,
+                "Failed to disable ASLR, `personality` syscall returned -1.\n"
+                "It may have been blocked by a security setting if "
+                "BorrowSanitizer is running in a containerized environment.\n"
+                "Reducing ASLR entropy is preferable. Trying again...\n");
+      } else {
+        VReport(1, "Re-executing with a fixed virtual address space.\n"
+                   "Reducing ASLR entropy is preferable.\n");
+      }
       ReExec();
     }
 #endif
