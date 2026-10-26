@@ -2,8 +2,8 @@ source = "nightly"
 
 [nightly]
 url = "https://ci-artifacts.rust-lang.org/rustc-builds/"
-rust_sha = "080cc27146389dbb5c8772c476b1937be9c6110f"
-llvm_sha = "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019"
+rust_sha = "12433c307b5a497388ffe2f4e49dbf1ab8c71fa0"
+llvm_sha = "f738f3b0ed65c01edcb44a504a77edc12a82c319"
 
 [rolling]
 url = "https://github.com/BorrowSanitizer/rust/releases/download/"
