@@ -189,7 +189,9 @@ def run_limited(cmd: list[str], timeout: float, capture: bool = False,
 
     The command gets its own process group, and on timeout the whole group is
     killed: a test binary under hyperfine, or `miri` under cargo, must not
-    outlive its parent and keep a CPU busy during later measurements.
+    outlive its parent and keep a CPU busy during later measurements. For the
+    same reason, it is killed if we are interrupted while waiting for it, since
+    a signal sent to our own process group does not reach it.
     """
     sys.stderr.flush()
     env = _build_env(dict(kwargs))
@@ -205,6 +207,10 @@ def run_limited(cmd: list[str], timeout: float, capture: bool = False,
         os.killpg(proc.pid, signal.SIGKILL)
         out, _ = proc.communicate()
         return None, out or ""
+    except BaseException:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait()
+        raise
 
 def probe(cmd: list[str], timeout: float, **kwargs) -> tuple[str, str | None]:
     """Run a test once, untimed, and return `(status, output)`.
@@ -225,8 +231,9 @@ def probe(cmd: list[str], timeout: float, **kwargs) -> tuple[str, str | None]:
 ARROW_LOCATION = re.compile(r"^\s*--> (?P<path>[^\s:][^:]*):(?P<line>\d+):(?P<col>\d+)")
 # `thread 'x' panicked at src/lib.rs:12:5:`, with the message on the next line.
 PANIC_LOCATION = re.compile(r"panicked at (?P<path>[^\s:][^:]*):(?P<line>\d+):(?P<col>\d+):?")
-# `error[E0308]: mismatched types`, as rustc prints it.
-COMPILER_ERROR = re.compile(r"^error(\[\w+\])?: ")
+# `error[E0308]: mismatched types`, as rustc prints it. Not cargo's
+# `error: test failed, to rerun pass `--lib``, which follows a panic.
+COMPILER_ERROR = re.compile(r"^error(\[\w+\])?: (?!test failed)")
 # A dependency's source, as cargo unpacks it from a registry.
 REGISTRY_PATH = re.compile(
     r"/registry/src/[^/]+/(?P<name>[A-Za-z0-9_-]+?)-(?P<version>\d[^/]*)/(?P<rest>.+)$")

@@ -328,10 +328,13 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
         // During setup, configure libtest as if we were Miri. It has Miri-specific
         // configuration options.
         if phase == RustcPhase::Setup {
-            if get_arg_flag_value("--crate-name").as_deref() == Some("test") {
+            if get_arg_flag_value("--crate-name").as_deref() == Some("test")
+                && env::var("BSAN_LIBTEST_CFG_MIRI").as_deref() != Ok("0")
+            {
                 // We patch in `--cfg=miri` for libtest to prevent it from parsing
                 // terminfo, which is slow. Miri does this using a confitional compilation
-                // directive.
+                // directive. Set `BSAN_LIBTEST_CFG_MIRI=0` to build libtest without it.
+                // The sysroot cache does not track this, so use a separate `BSAN_SYSROOT`.
                 cmd.arg("--cfg=miri");
             }
             if get_arg_flag_value("--crate-name").as_deref() == Some("panic_abort") {
