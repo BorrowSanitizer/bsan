@@ -2,7 +2,7 @@
 
 # BorrowSanitizer
 
-<img src="bor.svg" align="right" width="200px" alt=""
+<img src="bor.svg" align="right" width="175px" alt=""
  title="Art by Molly MacLaren">
  
 BorrowSanitizer is a work-in-progress LLVM instrumentation pass for detecting aliasing violations in multi-language Rust applications. Our project is still in early development, but may help you find cross-language bugs otherwise undetectable by Miri. Our goal is to support detecting the following types of errors:
