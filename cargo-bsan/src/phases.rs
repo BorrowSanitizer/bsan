@@ -66,6 +66,12 @@ pub const BSAN_DEFAULT_RUSTFLAGS: &[&str] = &[
 pub const BSAN_DEFAULT_CFLAGS: &[&str] =
     &["-g", "-O0", "-fno-omit-frame-pointer", "-mno-omit-leaf-frame-pointer"];
 
+pub const BSAN_ARCH_RUSTFLAGS: &[&str] =
+    if cfg!(target_arch = "aarch64") { &["-Ctarget-feature=-outline-atomics"] } else { &[] };
+
+pub const BSAN_ARCH_CFLAGS: &[&str] =
+    if cfg!(target_arch = "aarch64") { &["-mno-outline-atomics"] } else { &[] };
+
 // We need to ensure that libc and certain default system libraries are always linked.
 // Our runtime intercepts symbols within these libraries, so if they are missing, then
 // linking will fail (see llvm-project/clang/lib/Driver/ToolChains/CommonArgs.cpp#L1590).
@@ -363,8 +369,11 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
 }
 
 fn bsan_rustflags(env: &EnvConfig, deps: &Dependencies, llvm_tools: &LlvmTools) -> Vec<String> {
-    let mut additional_args =
-        BSAN_DEFAULT_RUSTFLAGS.iter().map(ToString::to_string).collect::<Vec<_>>();
+    let mut additional_args = BSAN_DEFAULT_RUSTFLAGS
+        .iter()
+        .chain(BSAN_ARCH_RUSTFLAGS)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
 
     let (llvm_include, llvm_lib) = deps.llvm_runtime();
     additional_args.push(format!("-L{}", llvm_include.display()));
@@ -407,8 +416,11 @@ fn bsan_rustflags(env: &EnvConfig, deps: &Dependencies, llvm_tools: &LlvmTools) 
 
 /// Flags needed to compile C/C++ sources with BorrowSanitizer instrumentation.
 pub fn bsan_cflags(deps: &Dependencies) -> Vec<String> {
-    let mut additional_args =
-        BSAN_DEFAULT_CFLAGS.iter().map(ToString::to_string).collect::<Vec<_>>();
+    let mut additional_args = BSAN_DEFAULT_CFLAGS
+        .iter()
+        .chain(BSAN_ARCH_CFLAGS)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
     // The instrumentation pass must run during compilation, so it is always required.
     additional_args.push(format!("-fpass-plugin={}", deps.llvm_pass.display()));
     additional_args
