@@ -401,6 +401,7 @@ impl BsanEnv {
         path: &Path,
         out_dir: &Path,
         include_dirs: &[PathBuf],
+        extra_cxxflags: &[&str],
     ) -> Result<cmake::Config> {
         let llvm_config = self.sysroot_binary("llvm-config");
         let cxxflags = cmd!(self.sh, "{llvm_config}").arg("--cxxflags").output()?.stdout;
@@ -412,7 +413,7 @@ impl BsanEnv {
             .collect::<Vec<_>>()
             .join(" ");
 
-        let cxxflags = format!("{} {}", includes, cxxflags.trim());
+        let cxxflags = format!("{} {} {}", includes, cxxflags.trim(), extra_cxxflags.join(" "));
         let mut cfg = cmake::Config::new(path);
         cfg.profile(self.mode.profile());
         cfg.target(&self.toolchain_config.meta.host);

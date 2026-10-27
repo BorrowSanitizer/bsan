@@ -471,7 +471,26 @@ impl CompilerRt {
         let llvm_cmake = path!(env.toolchain_config.llvm_dir / "llvm" / "cmake");
         let cmake_common = path!(env.toolchain_config.llvm_dir / "cmake");
 
-        let mut cfg = env.llvm_cmake(&src_dir, &output_dir, &[crt_include, sanitizer_common])?;
+        // On AArch64, atomics are lowered to calls to "outline" helpers functions, like `__aarch64_swp1_acq`.
+        // These functions are implemented in assembly by Rust's `compiler_builtins`. These used to be declared
+        // as `#[unsafe(naked)]`, which meant that they were only ever declarations and did not have an
+        // instrumentable function body. However, recent changes have removed this attribute (see #1321).
+        // Our runtime calls these functions on aarch64 during its initialization, so if they are instrumented
+        // we will end up in an infinite loop. We need to pass `-mno-outline-atomics` to prevent this.
+        // We could do better to ensure that our runtime becomes a no-op prior to full initialization, but
+        // that would not be sufficient to fix this bug, because we insert shadow memory accesses directly
+        // into the instrumented binary, which will likely segfault in this case.
+        let extra_cxxflags: &[&str] = if env.toolchain_config.meta.host.starts_with("aarch64") {
+            &["-mno-outline-atomics"]
+        } else {
+            &[]
+        };
+        let mut cfg = env.llvm_cmake(
+            &src_dir,
+            &output_dir,
+            &[crt_include, sanitizer_common],
+            extra_cxxflags,
+        )?;
 
         cfg.define("LLVM_MAIN_SRC_DIR", &env.toolchain_config.llvm_dir);
         cfg.define("COMPILER_RT_SANITIZERS_TO_BUILD", "bsan");
@@ -591,7 +610,7 @@ impl BsanPass {
     fn cmake(env: &mut BsanEnv) -> Result<Config> {
         let source_dir = path!(env.root_dir / "bsan-pass");
         let output_dir = path!(env.artifact_dir() / "bsan-pass");
-        let mut cfg = env.llvm_cmake(&source_dir, &output_dir, &[])?;
+        let mut cfg = env.llvm_cmake(&source_dir, &output_dir, &[], &[])?;
         cfg.define("BSAN_CLANG_FORMAT", env.sysroot_binary("clang-format"));
         Ok(cfg)
     }
