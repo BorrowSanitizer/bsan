@@ -60,7 +60,7 @@ pub const BSAN_DEFAULT_RUSTFLAGS: &[&str] = &[
     "-Zmerge-functions=disabled",
     "-Cembed-bitcode=yes",
     "-Cdebuginfo=2",
-    "-Zmir-enable-passes=-CheckAlignment,-CheckNull,-CheckEnums",
+    "-Zmir-enable-passes=-CheckNull",
 ];
 
 pub const BSAN_DEFAULT_CFLAGS: &[&str] =
