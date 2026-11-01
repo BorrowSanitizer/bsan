@@ -48,8 +48,6 @@ fn show_version() {
 
 pub const BSAN_DEFAULT_RUSTFLAGS: &[&str] = &[
     "--cfg=bsan",
-    "-Copt-level=0",
-    "-Zmir-opt-level=0",
     "-Zcodegen-emit-retag",
     "-Cforce-frame-pointers=yes",
     "-Zmir-preserve-ub",
@@ -62,6 +60,8 @@ pub const BSAN_DEFAULT_RUSTFLAGS: &[&str] = &[
     "-Cdebuginfo=2",
     "-Zmir-enable-passes=-CheckNull",
 ];
+
+pub const BSAN_DEFAULT_RUSTC_OPTS: &[&str] = &["-Copt-level=0", "-Zmir-opt-level=0"];
 
 pub const BSAN_DEFAULT_CFLAGS: &[&str] =
     &["-g", "-O0", "-fno-omit-frame-pointer", "-mno-omit-leaf-frame-pointer"];
@@ -365,6 +365,10 @@ pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
 fn bsan_rustflags(env: &EnvConfig, deps: &Dependencies, llvm_tools: &LlvmTools) -> Vec<String> {
     let mut additional_args =
         BSAN_DEFAULT_RUSTFLAGS.iter().map(ToString::to_string).collect::<Vec<_>>();
+
+    if env::var_os("BSAN_OPT_SYSROOT").is_none() {
+        additional_args.extend(BSAN_DEFAULT_RUSTC_OPTS.iter().map(ToString::to_string));
+    }
 
     let (llvm_include, llvm_lib) = deps.llvm_runtime();
     additional_args.push(format!("-L{}", llvm_include.display()));

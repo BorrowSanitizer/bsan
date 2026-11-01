@@ -916,7 +916,6 @@ struct ProvenancePtr {
       if (this->Shift && !match(this->Shift, m_Zero()))
         Tag = IRB.CreateOr(Tag, this->Shift);
     }
-
     IRB.CreateAlignedStore(Tag, ShadowPtr, kMinProvAlignment);
     IRB.CreateAlignedStore(Prov.Info, OriginPtr, kMinProvAlignment);
   }
@@ -928,12 +927,12 @@ struct ProvenancePtr {
     if (Elems.isVector()) {
       report_fatal_error("Vector provenance is not supported yet");
     }
+    if (Ordering != AtomicOrdering::NotAtomic)
+      return Provenance::omnivalid(BS, Elems);
     LoadInst *Tag =
         IRB.CreateAlignedLoad(BS.IntptrTy, ShadowPtr, kMinProvAlignment);
-    Tag->setAtomic(Ordering);
     LoadInst *Info =
         IRB.CreateAlignedLoad(BS.PtrTy, OriginPtr, kMinProvAlignment);
-    Info->setAtomic(Ordering);
     return Provenance(Tag, Info);
   }
 
@@ -2594,10 +2593,11 @@ private:
     // This is necessary for accurate reference counting and to
     // make sure that pointers that are cast from integers via load / store
     // type punning receive omnivalid provenance.
-    //
+
     // Provenance is stored before the application's store, which is given an
     // additional release ordering if it is atomic. Any thread that
     // acquires the stored value will also observe its provenance.
+
     IRBuilder<> IRB(&SI);
     ProvenancePtr ShadowPtr =
         ProvenancePtr::getPtrToShadow(BS, IRB, Ptr, SI.getAlign());
@@ -2668,17 +2668,18 @@ private:
 
   void clearIfStartsBefore(IRBuilder<> &IRB, ProvenancePtr Slot, Value *EndRem,
                            AtomicOrdering Ordering) {
-    Provenance Old = Slot.load(BS, IRB, ElementCount::getFixed(1), Ordering);
-    Value *Start = IRB.CreateAnd(Old.Tag, kBorTagOffsetMask);
-    Value *Clear = IRB.CreateICmpULT(Start, EndRem);
     Value *Zero = ConstantInt::get(BS.IntptrTy, 0);
-    if (Slot.UpdateRefCt && Ordering == AtomicOrdering::NotAtomic) {
-      // __bsan_rc_dec ignores tags that aren't concrete, so passing 0 skips it.
-      Value *DecTag = IRB.CreateSelect(Clear, Old.Tag, Zero);
-      IRB.CreateCall(BS.BsanFuncRcDec, {DecTag, Old.Info, Slot.ShadowPtr});
+    if (Ordering == AtomicOrdering::NotAtomic) {
+      Provenance Old = Slot.load(BS, IRB, ElementCount::getFixed(1), Ordering);
+      Value *Start = IRB.CreateAnd(Old.Tag, kBorTagOffsetMask);
+      Value *Clear = IRB.CreateICmpULT(Start, EndRem);
+      if (Slot.UpdateRefCt) {
+        Value *DecTag = IRB.CreateSelect(Clear, Old.Tag, Zero);
+        IRB.CreateCall(BS.BsanFuncRcDec, {DecTag, Old.Info, Slot.ShadowPtr});
+      }
+      IRB.CreateAlignedStore(IRB.CreateSelect(Clear, Zero, Old.Tag),
+                             Slot.ShadowPtr, kMinProvAlignment);
     }
-    IRB.CreateAlignedStore(IRB.CreateSelect(Clear, Zero, Old.Tag),
-                           Slot.ShadowPtr, kMinProvAlignment);
   }
 
   void clearProvenance(IRBuilder<> &IRB, ProvenancePtr Dest, Value *Size,
@@ -2711,10 +2712,9 @@ private:
       }
     }
 
-    if (Dest.UpdateRefCt) {
+    if (Dest.UpdateRefCt && Ordering == AtomicOrdering::NotAtomic) {
       IRB.CreateCall(BS.BsanFuncShadowClearAligned,
                      {Dest.ShadowPtr, Dest.OriginPtr, Size.Val});
-
     } else {
       // We only need to clear tag values, since they gate the
       // validity of a provenance value.
@@ -2724,7 +2724,8 @@ private:
     }
   }
 
-  void handleCASOrRMW(Instruction &I, Align Alignment) {
+  void handleCASOrRMW(Instruction &I, Align Alignment,
+                      AtomicOrdering Ordering) {
     IRBuilder<> IRB(&I);
     Value *Addr = I.getOperand(0);
     Value *Val = I.getOperand(1);
@@ -2739,20 +2740,21 @@ private:
     // falls into the range covered by the destination.
     Value *End = IRB.CreateAdd(ShadowPtr.Shift, TotalSize);
     ProvenanceOffset FullEnd = ProvenanceOffset::alignDown(IRB, End);
-    clearProvenance(IRB, ShadowPtr, FullEnd);
+    clearProvenance(IRB, ShadowPtr, FullEnd, Ordering);
+
     Value *EndRem = IRB.CreateAnd(End, kBorTagOffsetMask);
     if (!match(EndRem, m_Zero()))
       clearIfStartsBefore(IRB, ShadowPtr.ptradd(IRB, FullEnd), EndRem,
-                          AtomicOrdering::NotAtomic);
+                          Ordering);
   }
 
   void visitAtomicRMWInst(AtomicRMWInst &I) {
-    handleCASOrRMW(I, I.getAlign());
+    handleCASOrRMW(I, I.getAlign(), I.getOrdering());
     I.setOrdering(addReleaseOrdering(I.getOrdering()));
   }
 
   void visitAtomicCmpXchgInst(AtomicCmpXchgInst &I) {
-    handleCASOrRMW(I, I.getAlign());
+    handleCASOrRMW(I, I.getAlign(), I.getSuccessOrdering());
     I.setSuccessOrdering(addReleaseOrdering(I.getSuccessOrdering()));
   }
 

@@ -169,6 +169,7 @@ pub fn setup_sysroot(
     let print_rustflags = only_setup && has_arg_flag("--print-rustflags");
     let print_cxxflags = only_setup && has_arg_flag("--print-cxxflags");
     let print_ldflags = only_setup && has_arg_flag("--print-ldflags");
+    let opt_sysroot = has_arg_flag("--opt-sysroot");
     let print_sysroot = only_setup && has_arg_flag("--print-sysroot"); // whether we just print the sysroot path
     let show_setup =
         only_setup && !print_sysroot && !print_rustflags && !print_cxxflags && !print_ldflags;
@@ -276,6 +277,11 @@ pub fn setup_sysroot(
         deps.populate_env(&mut command);
         llvm_tools.populate_env(&mut command);
         env.populate_env(&mut command);
+
+        if opt_sysroot {
+            command.env("BSAN_OPT_SYSROOT", "1");
+        }
+
         command
     };
     // Disable debug assertions in the standard library -- Miri is already slow enough.
@@ -283,7 +289,7 @@ pub fn setup_sysroot(
     // the user might have set, which is consistent with normal `cargo build` that does
     // not apply `RUSTFLAGS` to the sysroot either.
     let rustflags =
-        &["-Cdebug-assertions=off", "-Coverflow-checks=on", "-Cdebuginfo=2", "-Cembed-bitcode"];
+        vec!["-Cdebug-assertions=off", "-Coverflow-checks=on", "-Cdebuginfo=2", "-Cembed-bitcode"];
 
     let mut after_build_output = String::new(); // what should be printed when the build is done.
     let notify = || {
