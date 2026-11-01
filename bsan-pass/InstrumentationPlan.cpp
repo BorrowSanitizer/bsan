@@ -74,6 +74,15 @@ void InstrumentationPlan::collectChecks(Instruction *Inst) {
     Ptr = LI->getPointerOperand();
     AccessTy = LI->getType();
     AccessKind = CheckInfo::Read;
+  } else if (auto *RMW = dyn_cast<AtomicRMWInst>(Inst)) {
+    Ptr = RMW->getPointerOperand();
+    AccessTy = RMW->getValOperand()->getType();
+    AccessKind = CheckInfo::Write;
+  } else if (auto *CAS = dyn_cast<AtomicCmpXchgInst>(Inst)) {
+    // A compare-exchange always reads but only writes when it succeeds.
+    Ptr = CAS->getPointerOperand();
+    AccessTy = CAS->getNewValOperand()->getType();
+    AccessKind = CheckInfo::Read;
   } else {
     return;
   }
