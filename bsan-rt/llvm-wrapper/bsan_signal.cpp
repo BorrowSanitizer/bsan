@@ -18,11 +18,11 @@ static constexpr int kMaxSignals = 65;
 static constexpr int kSigSetMask = 2;              // SIG_SETMASK
 static constexpr unsigned kSaRestart = 0x10000000; // SA_RESTART
 
-// The action that the program most recently installed for each signal. 
-// Writers hold `actions_mu`. The trampoline reads an action without a lock, 
-// since it can interrupt a writer. 
-// 
-// Each action is guarded by a sequence lock: `seq` is odd while the action is 
+// The action that the program most recently installed for each signal.
+// Writers hold `actions_mu`. The trampoline reads an action without a lock,
+// since it can interrupt a writer.
+//
+// Each action is guarded by a sequence lock: `seq` is odd while the action is
 // being written, and otherwise even.
 struct UserAction {
   atomic_uint32_t seq;
@@ -63,7 +63,7 @@ static void SignalTrampoline(int signo, __sanitizer_siginfo *info, void *uc) {
   __sanitizer_sigaction act;
   LoadUserAction(signo, &act);
   // The program can replace its handler with `SIG_DFL` or `SIG_IGN` before
-  // we load the user action in the previous line. There is no handler to 
+  // we load the user action in the previous line. There is no handler to
   // call in this case, so we drop the signal.
   uptr cb = (uptr)act.handler;
   if (cb != sig_dfl && cb != sig_ign) {
