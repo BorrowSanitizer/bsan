@@ -1663,6 +1663,9 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // removal is deferred until after checks have been inserted, because each one
   // is the insertion point for the checks guarding its own access.
   SmallVector<MemIntrinsic *, 4> ReplacedMemIntrinsics;
+  // Write checks for compare-exchange instructions, with a flag indicating
+  // whether the exchange succeeded.
+  SmallVector<std::pair<Value *, CallInst *>, 4> CASWriteChecks;
   // When we enter a function that may be called while the thread is
   // "gc-safe", we need to tell the GC that we are now "gc-unsafe". We do this
   // by calling `__bsan_enter_gc_unsafe` in the prologue, which returns a flag
@@ -1734,6 +1737,16 @@ public:
     ProvMap.patch(DT);
     ShadowStack.patch(DT);
     PromoteMemToReg(Promoteable, DT);
+
+    // Add branches to the checks guarding compare-exchange instructions.
+    DomTreeUpdater CASDTU(DT, DomTreeUpdater::UpdateStrategy::Lazy);
+    for (auto &[Success, Check] : CASWriteChecks) {
+      Instruction *Then =
+          SplitBlockAndInsertIfThen(Success, Check, false, nullptr, &CASDTU);
+      Check->moveBefore(Then->getIterator());
+    }
+    CASDTU.flush();
+    CASWriteChecks.clear();
 
     FnPrologueEnd->eraseFromParent();
     FnPrologueEnd = nullptr;
@@ -2557,11 +2570,12 @@ private:
     }
   }
 
-  void insertWriteCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size) {
+  CallInst *insertWriteCheck(IRBuilder<> &IRB, Value *Ptr, Value *Size) {
     if (auto Prov = getProvenance(IRB.GetInsertBlock(), Ptr)) {
-      IRB.CreateCall(BS.BsanFuncWrite,
-                     {Ptr, Size, Prov->Tag, Prov->Info, IRB.getInt1(false)});
+      return IRB.CreateCall(BS.BsanFuncWrite, {Ptr, Size, Prov->Tag, Prov->Info,
+                                               IRB.getInt1(false)});
     }
+    return nullptr;
   }
 
   void visitLoadInst(LoadInst &LI) {
@@ -2754,6 +2768,17 @@ private:
   }
 
   void visitAtomicCmpXchgInst(AtomicCmpXchgInst &I) {
+    // The read check was emitted before the instruction. The write check
+    // only applies when the exchange succeeds.
+    if (Plan.hasChecks(&I)) {
+      NextNodeIRBuilder IRB(&I);
+      Value *Success = IRB.CreateExtractValue(&I, 1);
+      TypeSize StoreSize =
+          BS.DL->getTypeStoreSize(I.getNewValOperand()->getType());
+      Value *Size = IRB.CreateTypeSize(BS.IntptrTy, StoreSize);
+      if (CallInst *Check = insertWriteCheck(IRB, I.getPointerOperand(), Size))
+        CASWriteChecks.push_back({Success, Check});
+    }
     handleCASOrRMW(I, I.getAlign(), I.getSuccessOrdering());
     I.setSuccessOrdering(addReleaseOrdering(I.getSuccessOrdering()));
   }
