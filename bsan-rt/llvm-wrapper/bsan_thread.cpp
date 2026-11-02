@@ -2,6 +2,7 @@
 #include "bsan.h"
 #include "bsan_global.h"
 #include "bsan_interface_internal.h"
+#include "bsan_signal.h"
 #include "sanitizer_common/sanitizer_atomic.h"
 #include "sanitizer_common/sanitizer_linux.h"
 
@@ -261,6 +262,8 @@ void BsanThread::Destroy() {
     block_allocator.FlushCache(&this->block_cache_);
     if (common_flags()->use_sigaltstack)
       UnsetAlternateSignalStack(altstack_base_);
+    // Signals are blocked by now, so none can be deferred after this.
+    FreeSignalContext();
 
     // The provenance within this set was drained into the
     // global table via `FinishThread` above, so this must be
