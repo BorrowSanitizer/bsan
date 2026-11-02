@@ -428,6 +428,7 @@ void *__bsan_mark(void *callee) {
 /// pass.
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_shadow_join(void *dest, void *src_tag, void *src_info, uptr size) {
+  RuntimeScope scope;
   JoinShadow(dest, src_tag, src_info, size);
 }
 
@@ -657,13 +658,14 @@ void __bsan_rc_inc(BorTag tag, Block *info, void *dest_shadow) {
   if (is_thread) {
     return;
   }
+  // Checking for a heap address may take the secondary allocator's lock.
+  RuntimeScope scope;
   bool is_heap = IsHeapAddr(dest);
   if (is_heap) {
     if (ShadowedMetadata *meta = GetAllocMetaData((void *)dest))
       meta->setContainsProvenance(true);
   }
   if (LIKELY(__bsan_rc_inc_impl)) {
-    RuntimeScope scope;
     InterceptorBarrier barrier;
     __bsan_rc_inc_impl(tag, info);
   }
@@ -681,10 +683,11 @@ void __bsan_rc_dec(BorTag tag, Block *info, void *dest_shadow) {
   uptr dest = SHADOW_TO_MEM(dest_shadow);
   if (!dest)
     return;
+  // Checking for a heap address may take the secondary allocator's lock.
+  RuntimeScope scope;
   if (!IsHeapAddr(dest))
     return;
   if (LIKELY(__bsan_rc_dec_impl)) {
-    RuntimeScope scope;
     InterceptorBarrier barrier;
     if (__bsan_rc_dec_impl(tag, info)) {
       AcquireProvenance({tag, info});
@@ -693,18 +696,24 @@ void __bsan_rc_dec(BorTag tag, Block *info, void *dest_shadow) {
 }
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_shadow_clear(void *dest, uptr size) { ClearShadow(dest, size); }
+void __bsan_shadow_clear(void *dest, uptr size) {
+  RuntimeScope scope;
+  ClearShadow(dest, size);
+}
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_shadow_clear_aligned(void *dest_shadow, void *dest_origin,
                                  uptr size) {
   if (!MEM_IS_SHADOW(dest_shadow))
     return;
+  RuntimeScope scope;
   ClearShadowAligned((uptr)dest_shadow, (uptr)dest_origin, size);
 }
 
 SANITIZER_INTERFACE_ATTRIBUTE
 Block *__bsan_reserve_stack_slot() {
+  // The thread's block cache is not reentrant.
+  RuntimeScope scope;
   Block *block = BLOCK_PTR(CurrentThread()->AllocBlock());
   internal_memset(block, 0, sizeof(atomic_uint64_t));
   return block;
