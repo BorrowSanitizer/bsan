@@ -1,0 +1,29 @@
+error: Undefined Behavior: write access through <TAG>(unprotected) at ALLOC[0x0] is forbidden
+    --> bsan/tests/fail/aliasing/cas_success_frozen.rs:LL:CC
+   |
+LL | let _ = unsafe { (*ptr).compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst) };
+   |                         ^
+     = note: the above line calls library code, where the error was detected:
+    --> RUSTLIB/core/src/sync/atomic.rs:LL:CC
+     = help: the accessed tag <TAG>(unprotected) is a child of the conflicting tag <TAG>(unprotected)
+     = help: the conflicting tag <TAG>(unprotected) has state Frozen which forbids this child write access
+help: the accessed tag <TAG>(unprotected) was created here
+    --> RUSTLIB/core/src/cell.rs:LL:CC
+   |
+LL | pub const fn get(&self) -> *mut T {
+   | ^
+help: the conflicting tag <TAG>(unprotected) was created here, in the initial state Frozen
+    --> bsan/tests/fail/aliasing/cas_success_frozen.rs:LL:CC
+   |
+LL | let ptr = &x as *const usize as *const AtomicUsize;
+   |           ^
+
+stack backtrace:
+0: core::sync::atomic::atomic_compare_exchange
+ at RUSTLIB/core/src/sync/atomic.rs
+1: <core::sync::atomic::Atomic<usize>>::compare_exchange
+ at RUSTLIB/core/src/sync/atomic.rs:LL:CC
+2: cas_success_frozen::main
+ at bsan/tests/fail/aliasing/cas_success_frozen.rs:LL:CC
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.
