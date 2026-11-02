@@ -10,6 +10,7 @@ set(BSAN_SOURCES
   bsan_thread.cpp
   bsan_allocator.cpp
   bsan_shadow.cpp
+  bsan_signal.cpp
   bsan_global.cpp
 )
 
@@ -25,6 +26,7 @@ SET(BSAN_HEADERS
   bsan_interface_internal.h
   bsan_interceptors.h
   bsan_shadow.h
+  bsan_signal.h
   bsan_allocator.h
   bsan_global.h
 )

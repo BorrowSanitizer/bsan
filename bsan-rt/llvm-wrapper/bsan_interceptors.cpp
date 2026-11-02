@@ -5,6 +5,7 @@
 #include "bsan_global.h"
 #include "bsan_interface_internal.h"
 #include "bsan_shadow.h"
+#include "bsan_signal.h"
 #include "bsan_thread.h"
 #include "interception/interception.h"
 #include "sanitizer_common/sanitizer_allocator.h"
@@ -480,6 +481,14 @@ INTERCEPTOR(void, miri_promise_symbolic_alignment, void *ptr,
 // clang-format on
 
 #define SIGNAL_INTERCEPTOR_ENTER() ENSURE_BSAN_INITED()
+#define SIGNAL_INTERCEPTOR_SIGACTION_IMPL(signum, act, oldact)                 \
+  {                                                                            \
+    return SigactionImpl(signum, act, oldact);                                 \
+  }
+#define SIGNAL_INTERCEPTOR_SIGNAL_IMPL(func, signum, handler)                  \
+  {                                                                            \
+    return SignalImpl(signum, handler);                                        \
+  }
 
 #include "sanitizer_common/sanitizer_signal_interceptors.inc"
 

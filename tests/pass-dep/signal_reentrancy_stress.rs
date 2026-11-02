@@ -1,7 +1,27 @@
-use std::sync::atomic::{AtomicPtr, Ordering};
+//@run:0
+#[path = "../utils/watchdog.rs"]
+mod watchdog;
+
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+// libc doesn't bind `setitimer` on Linux, so declare it here.
+extern "C" {
+    fn setitimer(
+        which: libc::c_int,
+        new_value: *const libc::itimerval,
+        old_value: *mut libc::itimerval,
+    ) -> libc::c_int;
+}
+
 static SHARED: AtomicPtr<u64> = AtomicPtr::new(std::ptr::null_mut());
+static HANDLED: AtomicUsize = AtomicUsize::new(0);
+
+// How long the child retags for. Bounded by time rather than iterations,
+// since one retag costs tens of microseconds under BSan.
+const RUN_FOR: Duration = Duration::from_secs(3);
+// Well above RUN_FOR and BSan's 10s `gc_hang_threshold_ms`.
+const WATCHDOG: Duration = Duration::from_secs(30);
 
 // Regression test for signal handlers re-entering the BSan runtime: SIGALRM fires
 // constantly while the main thread retags, so handlers interrupt runtime code.
@@ -15,6 +35,7 @@ extern "C" fn on_alarm(_sig: libc::c_int) {
     let x = unsafe { &*p };
     let x_r = &*x;
     std::hint::black_box(*x_r);
+    HANDLED.fetch_add(1, Ordering::Relaxed);
 }
 
 fn child_workload() {
@@ -29,41 +50,27 @@ fn child_workload() {
         // Fire SIGALRM every 50µs.
         let tick = libc::timeval { tv_sec: 0, tv_usec: 50 };
         let it = libc::itimerval { it_interval: tick, it_value: tick };
-        libc::setitimer(libc::ITIMER_REAL, &it, std::ptr::null_mut());
+        setitimer(libc::ITIMER_REAL, &it, std::ptr::null_mut());
     }
 
-    for _ in 0..4_000_000 {
-        let b_r = &*b;
-        std::hint::black_box(*b_r);
+    let start = Instant::now();
+    while start.elapsed() < RUN_FOR {
+        for _ in 0..256 {
+            let b_r = &*b;
+            std::hint::black_box(*b_r);
+        }
     }
 
     // Stop the timer and clear the pointer before `b` is freed, so a late
     // signal can't read freed memory.
     unsafe {
         let off: libc::itimerval = std::mem::zeroed();
-        libc::setitimer(libc::ITIMER_REAL, &off, std::ptr::null_mut());
+        setitimer(libc::ITIMER_REAL, &off, std::ptr::null_mut());
     }
     SHARED.store(std::ptr::null_mut(), Ordering::Relaxed);
+    assert!(HANDLED.load(Ordering::Relaxed) > 0, "the SIGALRM handler never ran");
 }
 
 fn main() {
-    match unsafe { libc::fork() } {
-        0 => { child_workload(); unsafe { libc::_exit(0) } }
-        pid => {
-            let start = Instant::now();
-            loop {
-                let mut status = 0;
-                if unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) } == pid {
-                    assert!(libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
-                            "child crashed: {status:#x}");
-                    return;
-                }
-                if start.elapsed() > Duration::from_secs(20) {
-                    unsafe { libc::kill(pid, libc::SIGKILL) };
-                    panic!("child deadlocked");
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-        }
-    }
+    watchdog::run_with_watchdog(WATCHDOG, child_workload);
 }
