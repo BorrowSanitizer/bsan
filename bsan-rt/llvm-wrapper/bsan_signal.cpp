@@ -110,6 +110,20 @@ static bool IsSyncSignal(int signo, const siginfo_t *info) {
          signo == SIGPIPE || signo == SIGSYS;
 }
 
+// Pushes the provenance in the given argument arrays onto the shadow stack,
+// below `*cursor`, so that the GC treats it as a root.
+static void PushArgumentRoots(Provenance **cursor, Provenance *limit,
+                              const u8 *tags, const u8 *blocks) {
+  const BorTag *arg_tags = reinterpret_cast<const BorTag *>(tags);
+  Block *const *arg_blocks = reinterpret_cast<Block *const *>(blocks);
+  for (uptr i = 0; i < kTLSSizeBytes / kMinProvAlignment; i++) {
+    BorTag tag = STRIP_TAG_OFFSET(arg_tags[i]);
+    if (!CONCRETE(tag) || !arg_blocks[i] || *cursor <= limit)
+      continue;
+    *--*cursor = {tag, arg_blocks[i]};
+  }
+}
+
 // Saves the per-thread state that instrumented code uses to pass provenance
 // between functions, and restores it when the scope exits. A handler can
 // interrupt instrumented code after it has stored the provenance of a call's
@@ -117,12 +131,21 @@ static bool IsSyncSignal(int signo, const siginfo_t *info) {
 // instrumented functions overwrite this state, starting with its entry point,
 // which clears the parameter arrays since it is called from uninstrumented
 // code. MSan does the same for its own per-thread state.
+//
+// The GC does not scan these arrays, and the saved copy is out of its sight,
+// so we also push the saved provenance onto the shadow stack. The handler's
+// frames are allocated below it, and it is popped when the shadow stack
+// pointer is restored.
+// Some of it may be stale, which only means that the GC keeps it alive until
+// the handler returns.
 struct ScopedProvenanceStateBackup {
   void *marker;
   uptr var_arg_overflow;
   Provenance *shadow_stack;
-  u8 var_arg_tag[kTLSSizeBytes], var_arg_info[kTLSSizeBytes];
-  u8 param_tag[kTLSSizeBytes], param_info[kTLSSizeBytes];
+  alignas(kMinProvAlignment) u8 var_arg_tag[kTLSSizeBytes];
+  alignas(kMinProvAlignment) u8 var_arg_info[kTLSSizeBytes];
+  alignas(kMinProvAlignment) u8 param_tag[kTLSSizeBytes];
+  alignas(kMinProvAlignment) u8 param_info[kTLSSizeBytes];
 
   ScopedProvenanceStateBackup() {
     marker = __bsan_marker;
@@ -132,6 +155,18 @@ struct ScopedProvenanceStateBackup {
     internal_memcpy(var_arg_info, __bsan_var_arg_info_tls, kTLSSizeBytes);
     internal_memcpy(param_tag, __bsan_param_tag_tls, kTLSSizeBytes);
     internal_memcpy(param_info, __bsan_param_info_tls, kTLSSizeBytes);
+    BsanThread *thread = CurrentThread();
+    Provenance *limit = thread ? thread->shadowRootsLimit() : nullptr;
+    if (thread && shadow_stack > limit) {
+      // Leave at least half of the remaining shadow stack to the handler.
+      Provenance *cursor = shadow_stack;
+      Provenance *push_limit = limit + (shadow_stack - limit) / 2;
+      PushArgumentRoots(&cursor, push_limit, param_tag, param_info);
+      PushArgumentRoots(&cursor, push_limit, var_arg_tag, var_arg_info);
+      // The roots must be in place before the GC can see the new cursor.
+      atomic_signal_fence(memory_order_seq_cst);
+      __bsan_shadow_stack = cursor;
+    }
   }
   ~ScopedProvenanceStateBackup() {
     __bsan_marker = marker;
@@ -165,6 +200,17 @@ static void CopyUcontext(ucontext_t *dst, const ucontext_t *src) {
                     sizeof(dst->__fpregs_mem));
     dst->uc_mcontext.fpregs = &dst->__fpregs_mem;
   }
+#endif
+}
+
+// Returns the stack pointer of the code that the signal interrupted.
+static uptr InterruptedStackPointer(const ucontext_t *uc) {
+#if defined(__aarch64__)
+  return uc->uc_mcontext.sp;
+#elif defined(__x86_64__)
+  return uc->uc_mcontext.gregs[REG_RSP];
+#else
+#error "Unsupported architecture"
 #endif
 }
 
@@ -210,10 +256,25 @@ static void SignalTrampoline(int signo, __sanitizer_siginfo *info, void *uc) {
     // since its pending-signal storage is freed when it is unregistered.
     bool defer = atomic_load(&bsan_runtime_depth, memory_order_relaxed) &&
                  !IsSyncSignal(signo, si) && CurrentThread();
-    if (defer)
+    if (defer) {
       DeferSignal(signo, act, si, (const ucontext_t *)uc);
-    else
+    } else {
+      // A thread only waits for the GC within `BsanThread::poll`, which
+      // defers asynchronous signals. If a handler ran here, it would move
+      // the thread out of waiting while the GC is running.
+      if (BsanThread *thread = CurrentThread()) {
+        CHECK(IsSyncSignal(signo, si) ||
+              thread->getGCState(memory_order_relaxed) != GCState::kWaiting);
+        // On an alternate signal stack, the handler cannot publish a stack
+        // pointer that bounds the frames that it interrupted, so we publish
+        // theirs. Otherwise, a GC during the handler would miss them.
+        if (!thread->ownsAddress((uptr)__builtin_frame_address(0)))
+          thread->publishStackPointer(
+              InterruptedStackPointer((const ucontext_t *)uc),
+              memory_order_relaxed);
+      }
       CallUserHandler(signo, act, info, uc);
+    }
   }
   errno = saved_errno;
 }

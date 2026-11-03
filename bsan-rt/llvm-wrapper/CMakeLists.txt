@@ -45,6 +45,9 @@ set(BSAN_COMMON_CFLAGS ${SANITIZER_COMMON_CFLAGS})
 append_rtti_flag(OFF BSAN_COMMON_CFLAGS)
 # Prevent clang from generating libc calls.
 append_list_if(COMPILER_RT_HAS_FFREESTANDING_FLAG -ffreestanding BSAN_COMMON_CFLAGS)
+# Thread-locals are read in signal handlers, so their accesses must not call
+# into the dynamic loader.
+append_list_if(COMPILER_RT_HAS_FTLS_MODEL_INITIAL_EXEC -ftls-model=initial-exec BSAN_COMMON_CFLAGS)
 set(BSAN_CFLAGS ${BSAN_COMMON_CFLAGS})
 set(BSAN_DYNAMIC_CFLAGS ${BSAN_COMMON_CFLAGS})
 

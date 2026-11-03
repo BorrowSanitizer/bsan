@@ -85,9 +85,11 @@ alignas(kMinProvAlignment) SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL u8
 
 // Pointer to the start of the current frame within the shadow
 // stack, which stores the provenance of pointers that are on
-// the stack or in registers. The shadow stack is always a fully
-// initialized and contiguous from the top of the stack to the
-// current value of the stack pointer.
+// the stack or in registers. The shadow stack is contiguous from
+// the top of the stack to the current value of the stack pointer.
+// A function moves the pointer below its frame header before it
+// fills the header in, so the GC may briefly see slots that still
+// hold stale provenance, which it keeps alive conservatively.
 SANITIZER_INTERFACE_ATTRIBUTE
 THREADLOCAL Provenance *__bsan_shadow_stack = nullptr;
 

@@ -94,12 +94,18 @@ public:
     ReleaseShadow(stack_bottom_, sp & ~(kMinProvAlignment - 1));
   }
 
+  // Returns the lowest address that this thread's shadow stack can grow to.
+  Provenance *shadowRootsLimit() const {
+    return (Provenance *)shadow_stack_bottom_;
+  }
+
   // Returns the current value of this thread's shadow stack pointer.
   Provenance *shadowRootCursor() const {
     return shadow_stack_ptr_ ? *shadow_stack_ptr_ : nullptr;
   }
 
   void publishStackPointer(memory_order order);
+  void publishStackPointer(uptr addr, memory_order order);
   uptr getStackPointer(memory_order order);
 
   // Zeroes this thread's tree-node visit counter. This writes to another

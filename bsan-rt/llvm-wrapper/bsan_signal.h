@@ -40,7 +40,11 @@ void FreeSignalContext();
 //
 // It must not be held during a call that may block, since a blocking call may
 // rely on the signal handler running, and since the handler waits for the scope
-// to exit, the program will hang.
+// to exit, the program will hang. Waiting for the GC is the exception: the GC
+// finishes once every other thread is stopped or in uninstrumented code, and
+// no thread needs one of our handlers to run to get there, since a thread
+// that waits for one either blocks in uninstrumented code or loops through a
+// safepoint.
 struct RuntimeScope {
   RuntimeScope() {
     u32 depth = atomic_load(&bsan_runtime_depth, memory_order_relaxed);

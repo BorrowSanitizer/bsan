@@ -3,6 +3,7 @@
 #include "bsan_flags.h"
 #include "bsan_interceptors.h"
 #include "bsan_interface_internal.h"
+#include "bsan_signal.h"
 #include "sanitizer_common/sanitizer_allocator_internal.h"
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_placement_new.h"
@@ -118,6 +119,10 @@ void GlobalContext::RunGarbageCollector(Snapshot &snap,
         // The range [sp, top) includes all values within the shadow of
         // live stack allocations. These must be read and then left untouched.
         uptr sp = thread->getStackPointer(memory_order_relaxed);
+        // A stack pointer outside of the thread's stack does not bound its
+        // live frames, so we scan the whole stack and release none of it.
+        if (sp < thread->stackBottom() || sp > thread->stackTop())
+          sp = thread->stackBottom();
         ShadowRange live = thread->shadowStack(sp);
         for (uptr i = 0; i < live.size; i++) {
           // Tags in shadow memory may carry a slot offset.
@@ -215,6 +220,9 @@ void GlobalContext::CollectGarbage(Snapshot *snap) {
 }
 
 void GlobalContext::requestGC() {
+  // A handler that ran on this thread during a collection could not reach a
+  // safepoint without waiting for the collection to finish.
+  RuntimeScope scope;
   CurrentThread()->publishStackPointer(memory_order_relaxed);
   // Get the current generation count
   uptr gen = atomic_load(&gc_gen, memory_order_acquire);

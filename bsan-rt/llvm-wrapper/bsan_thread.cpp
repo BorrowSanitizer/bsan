@@ -174,11 +174,11 @@ bool BsanThread::tryEnterUnsafeMode() {
 }
 
 void BsanThread::poll() {
-  // TODO: We need to block asynchronous signals during polling.
-  // Otherwise, if the user's code has an instrumented asynchronous
-  // signal handler, then we'll be kicked out of the waiting state
-  // back into the unsafe state, which is an invalid transition.
+  // Asynchronous signals are deferred until we are back in the unsafe state.
+  // Otherwise, an instrumented handler would move us from waiting back into
+  // the unsafe state while the GC is running, which is an invalid transition.
   // Only the GC is allowed to move threads out of waiting.
+  RuntimeScope scope;
   publishStackPointer(memory_order_relaxed);
   do {
     setGCState(GCState::kWaiting, memory_order_release);
@@ -193,6 +193,10 @@ bool BsanThread::enterUnsafeMode() {
   auto state = getGCState(memory_order_relaxed);
   if (LIKELY(state == kUnsafe))
     return false;
+  // `tryEnterUnsafeMode` marks us as unsafe before it checks whether the GC
+  // is running. A handler that interrupted us in between would run in the
+  // unsafe state alongside the GC.
+  RuntimeScope scope;
   if (!tryEnterUnsafeMode())
     poll();
   return true;
@@ -207,7 +211,14 @@ void BsanThread::FreeBlock(BlockIndex idx) {
 }
 
 void BsanThread::publishStackPointer(memory_order order) {
-  uptr addr = (uptr)__builtin_frame_address(0);
+  publishStackPointer((uptr)__builtin_frame_address(0), order);
+}
+
+void BsanThread::publishStackPointer(uptr addr, memory_order order) {
+  // A signal handler on an alternate stack is outside of this thread's stack.
+  // Its stack pointer says nothing about which of our frames are live.
+  if (!ownsAddress(addr))
+    return;
   atomic_store(&curr_stack_bottom_, addr, order);
 }
 
