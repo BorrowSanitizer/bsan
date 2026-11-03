@@ -1942,6 +1942,22 @@ private:
 
     Value *HeaderBottom = ShadowStack.getOrInitFrameHeaderBottom(EntryIRB);
 
+    // Move the shadow stack pointer below the frame header before we fill it
+    // in. Otherwise, its slots would lie below the shadow stack pointer while
+    // we store to them and call into the runtime, so a signal handler that
+    // runs in between could overwrite them, and the GC would not see them.
+    unsigned NumHeaderAllocSlots =
+        llvm::count_if(ByValArgs,
+                       [](const ByValArgInfo &Info) {
+                         return Info.AllocProv.has_value();
+                       }) +
+        Plan.allocas().size();
+    unsigned NumHeaderSlots = NumHeaderAllocSlots + Plan.getNumFnEntryRetags();
+    Value *FrameBottom =
+        ptrsub(EntryIRB, HeaderBottom,
+               ConstantInt::get(BS.IntptrTy, NumHeaderSlots * kProvenanceSize));
+    EntryIRB.CreateStore(FrameBottom, BS.ProvStackTLS);
+
     // We have computed the total number of shadow stack slots that
     // are associated with parameters. Now, if this function could be
     // called from an uninstrumented context, we need to check to see if
@@ -2013,11 +2029,10 @@ private:
     // different branches. This is Rust-specific behavior.
     ShadowStack.allocateFnEntryRegion(EntryIRB, Plan.getNumFnEntryRetags());
 
-    // We have initialized the frame header, but we have not updated
-    // the frame pointer to reflect it.
-    if (std::optional<Value *> FHB = ShadowStack.getFrameHeaderBottom()) {
-      EntryIRB.CreateStore(*FHB, BS.ProvStackTLS);
-    }
+    // The frame header must end where we moved the shadow stack pointer.
+    assert(cast<ConstantInt>(ShadowStack.getNumStackAllocSlots())
+                   ->getZExtValue() == NumHeaderAllocSlots &&
+           "the frame header does not match the shadow stack pointer");
   }
 
   void patchShadowPHINodes() {

@@ -5,6 +5,7 @@
 #include "bsan_global.h"
 #include "bsan_interface_internal.h"
 #include "bsan_shadow.h"
+#include "bsan_signal.h"
 #include "bsan_thread.h"
 #include "interception/interception.h"
 #include "sanitizer_common/sanitizer_allocator.h"
@@ -101,6 +102,7 @@ INTERCEPTOR(void *, malloc, SIZE_T size) {
     return DlsymAlloc::Allocate(size);
   GET_SPAN;
   bool already_in_scope = BlockInterception();
+  RuntimeScope scope;
   InterceptorBarrier barrier;
   void *ptr = bsan_malloc(size);
   bool is_inst = !already_in_scope && INST_CALLER(malloc);
@@ -121,6 +123,7 @@ INTERCEPTOR(void, free, void *ptr) {
     return DlsymAlloc::Free(ptr);
   GET_SPAN_PC_BP;
   bool already_in_scope = BlockInterception();
+  RuntimeScope scope;
   InterceptorBarrier barrier;
   if (!already_in_scope && INST_CALLER(free)) {
     BlockGC blocked;
@@ -136,6 +139,7 @@ INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
     return DlsymAlloc::Callocate(nmemb, size);
   GET_SPAN;
   bool already_in_scope = BlockInterception();
+  RuntimeScope scope;
   InterceptorBarrier barrier;
   void *ptr = bsan_calloc(nmemb, size);
   bool is_inst = !already_in_scope && INST_CALLER(calloc);
@@ -148,6 +152,7 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
     return DlsymAlloc::Realloc(ptr, size);
   GET_SPAN_PC_BP;
   bool already_in_scope = BlockInterception();
+  RuntimeScope scope;
   InterceptorBarrier barrier;
   bool is_inst = !already_in_scope && INST_CALLER(realloc);
   // If the pointer is null, then realloc behaves like malloc,
@@ -172,6 +177,7 @@ INTERCEPTOR(void *, aligned_alloc, SIZE_T alignment, SIZE_T size) {
   if (DlsymAlloc::Use())
     return DlsymAlloc::Allocate(size, alignment);
   bool already_in_scope = BlockInterception();
+  RuntimeScope scope;
   InterceptorBarrier barrier;
   void *ptr = bsan_aligned_alloc(alignment, size);
   bool is_inst = !already_in_scope && INST_CALLER(aligned_alloc);
@@ -184,6 +190,7 @@ INTERCEPTOR(void *, memalign, SIZE_T alignment, SIZE_T size) {
   if (DlsymAlloc::Use())
     return DlsymAlloc::Allocate(size, alignment);
   bool already_in_scope = BlockInterception();
+  RuntimeScope scope;
   InterceptorBarrier barrier;
   void *ptr = bsan_memalign(alignment, size);
   bool is_inst = !already_in_scope && INST_CALLER(memalign);
@@ -197,6 +204,7 @@ INTERCEPTOR(void *, __libc_memalign, SIZE_T alignment, SIZE_T size) {
   if (DlsymAlloc::Use())
     return DlsymAlloc::Allocate(size, alignment);
   bool already_in_scope = BlockInterception();
+  RuntimeScope scope;
   InterceptorBarrier barrier;
   void *ptr = bsan_memalign(alignment, size);
   bool is_inst = !already_in_scope && INST_CALLER(__libc_memalign);
@@ -211,6 +219,7 @@ INTERCEPTOR(void *, pvalloc, SIZE_T size) {
     return DlsymAlloc::Allocate(RoundUpTo(size, GetPageSizeCached()),
                                 GetPageSizeCached());
   bool already_in_scope = BlockInterception();
+  RuntimeScope scope;
   InterceptorBarrier barrier;
   void *ptr = bsan_pvalloc(size);
   bool is_inst = !already_in_scope && INST_CALLER(pvalloc);
@@ -225,6 +234,7 @@ INTERCEPTOR(void *, valloc, SIZE_T size) {
   if (DlsymAlloc::Use())
     return DlsymAlloc::Allocate(size, GetPageSizeCached());
   bool already_in_scope = BlockInterception();
+  RuntimeScope scope;
   InterceptorBarrier barrier;
   void *ptr = bsan_valloc(size);
   bool is_inst = !already_in_scope && INST_CALLER(valloc);
@@ -241,6 +251,7 @@ INTERCEPTOR(int, posix_memalign, void **memptr, SIZE_T alignment, SIZE_T size) {
     return 0;
   }
   bool already_in_scope = BlockInterception();
+  RuntimeScope scope;
   InterceptorBarrier barrier;
   bool is_inst = !already_in_scope && INST_CALLER(posix_memalign);
   int res = bsan_posix_memalign(memptr, alignment, size);
@@ -262,6 +273,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memset(void *dest, int c, uptr n) {
     return;
   }
   REAL(memset)(dest, c, n);
+  RuntimeScope scope;
   ClearShadow(dest, n);
 }
 
@@ -276,6 +288,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memmove(void *dest, const void *src,
     return;
   }
   REAL(memmove)(dest, src, n);
+  RuntimeScope scope;
   TransferShadow(dest, src, n);
 }
 
@@ -290,6 +303,7 @@ SANITIZER_INTERFACE_ATTRIBUTE void __bsan_memcpy(void *dest, const void *src,
     return;
   }
   REAL(memcpy)(dest, src, n);
+  RuntimeScope scope;
   TransferShadow(dest, src, n);
 }
 
@@ -480,6 +494,14 @@ INTERCEPTOR(void, miri_promise_symbolic_alignment, void *ptr,
 // clang-format on
 
 #define SIGNAL_INTERCEPTOR_ENTER() ENSURE_BSAN_INITED()
+#define SIGNAL_INTERCEPTOR_SIGACTION_IMPL(signum, act, oldact)                 \
+  {                                                                            \
+    return SigactionImpl(signum, act, oldact);                                 \
+  }
+#define SIGNAL_INTERCEPTOR_SIGNAL_IMPL(func, signum, handler)                  \
+  {                                                                            \
+    return SignalImpl(signum, handler);                                        \
+  }
 
 #include "sanitizer_common/sanitizer_signal_interceptors.inc"
 

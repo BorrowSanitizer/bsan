@@ -3,6 +3,7 @@
 #include "bsan_flags.h"
 #include "bsan_global.h"
 #include "bsan_interface_internal.h"
+#include "bsan_signal.h"
 #include "bsan_thread.h"
 #include "sanitizer_common/sanitizer_addrhashmap.h"
 #include "sanitizer_common/sanitizer_atomic.h"
@@ -84,9 +85,11 @@ alignas(kMinProvAlignment) SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL u8
 
 // Pointer to the start of the current frame within the shadow
 // stack, which stores the provenance of pointers that are on
-// the stack or in registers. The shadow stack is always a fully
-// initialized and contiguous from the top of the stack to the
-// current value of the stack pointer.
+// the stack or in registers. The shadow stack is contiguous from
+// the top of the stack to the current value of the stack pointer.
+// A function moves the pointer below its frame header before it
+// fills the header in, so the GC may briefly see slots that still
+// hold stale provenance, which it keeps alive conservatively.
 SANITIZER_INTERFACE_ATTRIBUTE
 THREADLOCAL Provenance *__bsan_shadow_stack = nullptr;
 
@@ -427,6 +430,7 @@ void *__bsan_mark(void *callee) {
 /// pass.
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_shadow_join(void *dest, void *src_tag, void *src_info, uptr size) {
+  RuntimeScope scope;
   JoinShadow(dest, src_tag, src_info, size);
 }
 
@@ -589,6 +593,7 @@ void __bsan_retag(void *object_addr, uptr access_size, uptr count, u8 flags,
                   Block *alloc_info, void *dest, bool checked) {
   if (__bsan_retag_impl) {
     GET_SPAN;
+    RuntimeScope scope;
     InterceptorBarrier barrier;
     Provenance prov;
     bool had_error =
@@ -613,6 +618,7 @@ void __bsan_read(void *ptr, uptr access_size, BorTag bor_tag, Block *alloc_info,
                  bool checked) {
   if (__bsan_read_impl) {
     GET_SPAN;
+    RuntimeScope scope;
     InterceptorBarrier barrier;
     bool had_error =
         __bsan_read_impl(ptr, access_size, bor_tag, alloc_info, span, checked);
@@ -629,6 +635,7 @@ void __bsan_write(void *ptr, uptr access_size, BorTag bor_tag,
                   Block *alloc_info, bool checked) {
   if (__bsan_write_impl) {
     GET_SPAN;
+    RuntimeScope scope;
     InterceptorBarrier barrier;
     bool had_error =
         __bsan_write_impl(ptr, access_size, bor_tag, alloc_info, span, checked);
@@ -653,6 +660,8 @@ void __bsan_rc_inc(BorTag tag, Block *info, void *dest_shadow) {
   if (is_thread) {
     return;
   }
+  // Checking for a heap address may take the secondary allocator's lock.
+  RuntimeScope scope;
   bool is_heap = IsHeapAddr(dest);
   if (is_heap) {
     if (ShadowedMetadata *meta = GetAllocMetaData((void *)dest))
@@ -676,6 +685,8 @@ void __bsan_rc_dec(BorTag tag, Block *info, void *dest_shadow) {
   uptr dest = SHADOW_TO_MEM(dest_shadow);
   if (!dest)
     return;
+  // Checking for a heap address may take the secondary allocator's lock.
+  RuntimeScope scope;
   if (!IsHeapAddr(dest))
     return;
   if (LIKELY(__bsan_rc_dec_impl)) {
@@ -687,18 +698,24 @@ void __bsan_rc_dec(BorTag tag, Block *info, void *dest_shadow) {
 }
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_shadow_clear(void *dest, uptr size) { ClearShadow(dest, size); }
+void __bsan_shadow_clear(void *dest, uptr size) {
+  RuntimeScope scope;
+  ClearShadow(dest, size);
+}
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_shadow_clear_aligned(void *dest_shadow, void *dest_origin,
                                  uptr size) {
   if (!MEM_IS_SHADOW(dest_shadow))
     return;
+  RuntimeScope scope;
   ClearShadowAligned((uptr)dest_shadow, (uptr)dest_origin, size);
 }
 
 SANITIZER_INTERFACE_ATTRIBUTE
 Block *__bsan_reserve_stack_slot() {
+  // The thread's block cache is not reentrant.
+  RuntimeScope scope;
   Block *block = BLOCK_PTR(CurrentThread()->AllocBlock());
   internal_memset(block, 0, sizeof(atomic_uint64_t));
   return block;
@@ -719,6 +736,7 @@ void __bsan_alloc_stack(void *base_addr, uptr size, BorTag bor_tag,
                         Block *alloc_info) {
   if (__bsan_alloc_stack_impl) {
     GET_SPAN;
+    RuntimeScope scope;
     InterceptorBarrier barrier;
     __bsan_alloc_stack_impl(base_addr, size, bor_tag, alloc_info, span);
   }
@@ -731,6 +749,7 @@ SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_dealloc_stack(void *ptr, BorTag bor_tag, Block *alloc_info) {
   if (__bsan_dealloc_stack_impl) {
     GET_SPAN;
+    RuntimeScope scope;
     InterceptorBarrier barrier;
     __bsan_dealloc_stack_impl(bor_tag, alloc_info, span);
   }
@@ -742,6 +761,7 @@ void __bsan_expose_prov_impl(BorTag bor_tag, Block *alloc_info);
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_expose_prov(BorTag bor_tag, Block *alloc_info) {
   if (__bsan_expose_prov_impl) {
+    RuntimeScope scope;
     InterceptorBarrier barrier;
     __bsan_expose_prov_impl(bor_tag, alloc_info);
   }
@@ -755,6 +775,7 @@ void __bsan_pop_frame(const Provenance *frame_start, uptr prot,
                       uptr alloca_vec_size) {
   if (__bsan_protector_end_impl && __bsan_dealloc_stack_impl) {
     GET_SPAN;
+    RuntimeScope scope;
     InterceptorBarrier barrier;
     for (uptr i = 0; i < prot + alloca_vec_size; i++) {
       const Provenance prov = frame_start[i];
@@ -781,6 +802,7 @@ void __bsan_print(BorTag bor_tag, Block *alloc_info) {}
 
 SANITIZER_INTERFACE_ATTRIBUTE void __bsan_debug_print(void *ptr) {
   Provenance slot = GetParamSlot(0);
+  RuntimeScope scope;
   InterceptorBarrier barrier;
   __bsan_print(slot.tag, slot.block);
 }
@@ -791,6 +813,7 @@ void __bsan_print_borrow_state(BorTag bor_tag, Block *alloc_info) {}
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_debug_print_borrow_state(void *ptr) {
   Provenance slot = GetParamSlot(0);
+  RuntimeScope scope;
   InterceptorBarrier barrier;
   __bsan_print_borrow_state(slot.tag, slot.block);
 }
@@ -801,6 +824,7 @@ void __bsan_tree_size(BorTag bor_tag, Block *alloc_info) {}
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_debug_tree_size(void *ptr) {
   Provenance slot = GetParamSlot(0);
+  RuntimeScope scope;
   InterceptorBarrier barrier;
   __bsan_tree_size(slot.tag, slot.block);
 }
@@ -811,6 +835,7 @@ void __bsan_snapshot(BorTag bor_tag, Block *alloc_info) {}
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_debug_snapshot(void *ptr) {
   Provenance slot = GetParamSlot(0);
+  RuntimeScope scope;
   InterceptorBarrier barrier;
   __bsan_snapshot(slot.tag, slot.block);
 }
@@ -821,6 +846,7 @@ SANITIZER_WEAK_ATTRIBUTE void __bsan_print_diff(BorTag bor_tag,
 SANITIZER_INTERFACE_ATTRIBUTE
 void __bsan_debug_print_diff(void *ptr) {
   Provenance slot = GetParamSlot(0);
+  RuntimeScope scope;
   InterceptorBarrier barrier;
   __bsan_print_diff(slot.tag, slot.block);
 }
