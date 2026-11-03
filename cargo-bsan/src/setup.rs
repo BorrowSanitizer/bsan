@@ -1,5 +1,6 @@
 use std::env;
 use std::ffi::OsStr;
+use std::hash::{DefaultHasher, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
@@ -288,8 +289,16 @@ pub fn setup_sysroot(
     // But keep the overflow checks, they are cheap. This completely overwrites flags
     // the user might have set, which is consistent with normal `cargo build` that does
     // not apply `RUSTFLAGS` to the sysroot either.
-    let rustflags =
-        vec!["-Cdebug-assertions=off", "-Coverflow-checks=on", "-Cdebuginfo=2", "-Cembed-bitcode"];
+    let mut rustflags: Vec<String> =
+        ["-Cdebug-assertions=off", "-Coverflow-checks=on", "-Cdebuginfo=2", "-Cembed-bitcode"]
+            .into_iter()
+            .map(Into::into)
+            .collect();
+    // A cached sysroot is only rebuilt when its sources, its flags, or rustc change. The
+    // instrumentation pass is none of these, so we make its contents part of the flags.
+    // Otherwise, a sysroot instrumented by an older pass would be reused with a newer runtime.
+    rustflags.push(format!("--cfg=bsan_pass=\"{:016x}\"", hash_file(&deps.llvm_pass)));
+    rustflags.push("--check-cfg=cfg(bsan_pass,values(any()))".into());
 
     let mut after_build_output = String::new(); // what should be printed when the build is done.
     let notify = || {
@@ -345,4 +354,14 @@ pub fn setup_sysroot(
     }
 
     unsafe { env::set_var("BSAN_SYSROOT", sysroot_dir.as_os_str()) }
+}
+
+/// Hashes the contents of the given file.
+fn hash_file(path: &Path) -> u64 {
+    let contents = std::fs::read(path).unwrap_or_else(|err| {
+        show_error!("failed to read `{}`: {err}", path.display());
+    });
+    let mut hasher = DefaultHasher::new();
+    hasher.write(&contents);
+    hasher.finish()
 }
