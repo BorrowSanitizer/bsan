@@ -66,4 +66,6 @@ BorrowSanitizer is dual-licensed under [Apache](https://github.com/BorrowSanitiz
 ## Bugs found by BorrowSanitizer
 
 BorrowSanitizer has been used to find a variety of new cross-language aliasing bugs in open source projects. 
-* [Writing through an immutable reference in `aws-lc-rs`](https://github.com/aws/aws-lc-rs/pull/1288)
+* [Overlapping references in `aws-lc-rs`](https://github.com/aws/aws-lc-rs/pull/1288)
+* [Writing through an immutable reference in CXX](https://github.com/dtolnay/cxx/issues/1762)
+
