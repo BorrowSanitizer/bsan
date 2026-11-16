@@ -2,7 +2,7 @@ source = "nightly"
 
 [nightly]
 url = "https://ci-artifacts.rust-lang.org/rustc-builds/"
-rust_sha = "5b7b37aefcb5b2fba3c2392bc9065b9e4602d494"
+rust_sha = "5f4effd579500175af844241eb179e756190f1e7"
 llvm_sha = "0a5579eb649d3634a9c30ac873300cc2944fa070"
 
 [rolling]
