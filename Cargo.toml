@@ -15,7 +15,7 @@ ui_test = "0.30.7"
 rustc_version = "0.4"
 regex = "1.13.1"
 tempfile = "3"
-libc = "0.2.189"
+libc = "0.2.191"
 
 [[test]]
 name = "ui"
