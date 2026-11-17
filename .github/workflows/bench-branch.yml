@@ -92,7 +92,7 @@ jobs:
       baseline_label: ${{ steps.main.outputs.label }}
       cached_main_commit: ${{ steps.plan.outputs.cached_main_commit }}
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@v7.0.1
       with:
         ref: ${{ env.HEAD_SHA }}
         # The whole history, branches and tags, to resolve the baseline.
@@ -184,7 +184,7 @@ jobs:
         } >> "$GITHUB_OUTPUT"
     - name: Upload main's published results
       if: steps.plan.outputs.cached_main_commit != ''
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@v7.0.2
       with:
         # Hand the merge job the exact copy this plan was made from.
         name: main-cache
@@ -202,22 +202,22 @@ jobs:
     steps:
     # The Dockerfile comes from the branch, like the rest of the harness; the
     # source it installs comes from the side's own commit.
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@v7.0.1
       with:
         ref: ${{ env.HEAD_SHA }}
     - name: Check out ${{ matrix.label }}
-      uses: actions/checkout@v7
+      uses: actions/checkout@v7.0.1
       with:
         ref: ${{ matrix.ref }}
         path: .src
-    - uses: docker/login-action@v4
+    - uses: docker/login-action@v4.8.0
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-    - uses: docker/setup-buildx-action@v4
+    - uses: docker/setup-buildx-action@v4.4.1
     - name: Build and push
-      uses: docker/build-push-action@v7
+      uses: docker/build-push-action@v7.4.0
       with:
         context: .src
         file: bsan-script/etc/bench-branch/bench.Dockerfile
@@ -244,10 +244,10 @@ jobs:
     name: "branch ${{ matrix.crate }} (${{ matrix.target }})"
     steps:
     # The harness, bench.py and the crate list, from the branch.
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@v7.0.1
       with:
         ref: ${{ env.HEAD_SHA }}
-    - uses: ./.github/actions/bench-crate
+    - uses: $/.github/actions/bench-crate
       with:
         label: ${{ matrix.label }}
         crate: ${{ matrix.crate }}
@@ -273,10 +273,10 @@ jobs:
         shell: bash
     name: "main ${{ matrix.crate }} (${{ matrix.target }})"
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@v7.0.1
       with:
         ref: ${{ env.HEAD_SHA }}
-    - uses: ./.github/actions/bench-crate
+    - uses: $/.github/actions/bench-crate
       with:
         label: ${{ matrix.label }}
         crate: ${{ matrix.crate }}
@@ -291,18 +291,18 @@ jobs:
     if: ${{ !cancelled() && needs.setup.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@v7.0.1
       with:
         ref: ${{ env.HEAD_SHA }}
     - name: Download results
-      uses: actions/download-artifact@v8
+      uses: actions/download-artifact@v8.0.2
       with:
         pattern: results_*
         merge-multiple: true
         path: results/
     - name: Download main's published results
       if: needs.setup.outputs.cached_main_commit != ''
-      uses: actions/download-artifact@v8
+      uses: actions/download-artifact@v8.0.2
       with:
         name: main-cache
         path: main-cache/
@@ -493,7 +493,7 @@ jobs:
         echo "Benchmarks published to <${{ steps.pages.outputs.url }}>" >> "$GITHUB_STEP_SUMMARY"
         cat summary.md >> "$GITHUB_STEP_SUMMARY"
     - if: env.PR != ''
-      uses: ./.github/actions/pr-comment
+      uses: $/.github/actions/pr-comment
       with:
         body-file: summary.md
         pr: ${{ env.PR }}

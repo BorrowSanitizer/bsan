@@ -41,7 +41,7 @@ jobs:
       PR: ${{ github.event.pull_request.number }}
       GH_TOKEN: ${{ github.token }}
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@v7.0.1
       with:
         ref: ${{ github.event.pull_request.head.sha }}
         # The whole history, to tell whether `main` has been merged in.
@@ -76,7 +76,7 @@ jobs:
           echo "Not run: merge the latest \`main\` (\`${SHA:0:8}\`) into this branch, and the next push will be benchmarked against it."
         } > "$RUNNER_TEMP/comment.md"
     - if: steps.main.outputs.ready == 'false'
-      uses: ./.github/actions/pr-comment
+      uses: $/.github/actions/pr-comment
       with:
         body-file: ${{ runner.temp }}/comment.md
         pr: ${{ github.event.pull_request.number }}
