@@ -498,7 +498,7 @@ impl CompilerRt {
         // At the end of the build process, we inject a "hook", adding a deferred
         // call to build our runtime library.
         cfg.define("CMAKE_PROJECT_CompilerRT_INCLUDE", hook);
-        
+
         cfg.define("COMPILER_RT_HAS_LLVMTESTINGSUPPORT", "FALSE");
         cfg.define("LLVM_COMMON_CMAKE_UTILS", cmake_common);
         cfg.define("LLVM_CMAKE_DIR", llvm_cmake);
