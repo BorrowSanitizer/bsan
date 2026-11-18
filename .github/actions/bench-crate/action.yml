@@ -67,7 +67,7 @@ runs:
         "$CRATES_JSON" "$TARGET" "$out.json" "$out.csv"
   - name: Upload results
     if: ${{ !cancelled() }}
-    uses: actions/upload-artifact@v7
+    uses: actions/upload-artifact@v7.0.2
     with:
       name: results_${{ inputs.label }}_${{ inputs.target }}_${{ inputs.crate }}
       path: results/
