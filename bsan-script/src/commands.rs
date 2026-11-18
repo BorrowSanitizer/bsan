@@ -470,6 +470,7 @@ impl CompilerRt {
 
         let llvm_cmake = path!(env.toolchain_config.llvm_dir / "llvm" / "cmake");
         let cmake_common = path!(env.toolchain_config.llvm_dir / "cmake");
+        let hook = path!(env.root_dir / "bsan-rt" / "llvm-wrapper" / "compiler-rt-hook.cmake");
 
         // On AArch64, atomics are lowered to calls to "outline" helpers functions, like `__aarch64_swp1_acq`.
         // These functions are implemented in assembly by Rust's `compiler_builtins`. These used to be declared
@@ -493,8 +494,11 @@ impl CompilerRt {
         )?;
 
         cfg.define("LLVM_MAIN_SRC_DIR", &env.toolchain_config.llvm_dir);
-        cfg.define("COMPILER_RT_SANITIZERS_TO_BUILD", "bsan");
-        cfg.define("COMPILER_RT_HAS_BSAN", "TRUE");
+        cfg.define("COMPILER_RT_SANITIZERS_TO_BUILD", "");
+        // At the end of the build process, we inject a "hook", adding a deferred
+        // call to build our runtime library.
+        cfg.define("CMAKE_PROJECT_CompilerRT_INCLUDE", hook);
+        
         cfg.define("COMPILER_RT_HAS_LLVMTESTINGSUPPORT", "FALSE");
         cfg.define("LLVM_COMMON_CMAKE_UTILS", cmake_common);
         cfg.define("LLVM_CMAKE_DIR", llvm_cmake);

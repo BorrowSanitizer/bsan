@@ -256,20 +256,5 @@ pub fn ensure_llvm_cmake(
         })?;
     }
 
-    let link_source = path!(root_dir / "bsan-rt" / "llvm-wrapper");
-    let link_target = path!(compiler_rt_src / "lib" / "bsan");
-
-    // We need to recreate the symlink if it does not exist, or if it
-    // does exist, but points to a different source directory (which will
-    // happen if there are multiple clones of BorrowSanitizer that share
-    // the same toolchain version).
-    let needs_relink = fs::read_link(&link_target).map_or(true, |current| current != link_source);
-
-    // Without `-n`, `ln` would follow an existing link to another clone's
-    // directory and create the new link inside of it.
-    if needs_relink {
-        cmdq!(sh, "ln -fsn {link_source} {link_target}").run()?;
-    }
-
     Ok(())
 }
