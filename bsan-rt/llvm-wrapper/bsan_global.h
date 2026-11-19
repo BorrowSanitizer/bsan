@@ -6,15 +6,6 @@
 #include "bsan_thread.h"
 
 namespace __bsan {
-
-struct Snapshot {
-public:
-  Snapshot() {};
-  // The set of borrow tags that are currently
-  // reachable from any of the shadow stacks.
-  ProvenanceSet live;
-};
-
 // Global state associated with the runtime.
 struct GlobalContext {
 public:
@@ -67,16 +58,16 @@ private:
   // and deallocation in contexts where a thread has yet to be
   // initialized.
   BlockAllocator::Cache block_cache_;
-  void RunGarbageCollector(Snapshot &snap, ScopedThreadLock &threads);
+  void RunGarbageCollector(ProvenanceSet &snap, ScopedThreadLock &threads);
   // Iterates over every thread's zero-count-table, merging its contents into
   // the set of pending provenance values. We only add values to the pending set
   // if they are not present on any shadow stack. Values that we add to the
   // pending set are also removed from their thread's zero-count-table.
-  static void MergeZeroCounts(Snapshot *snap, ProvenanceSet &zct);
+  static void MergeZeroCounts(ProvenanceSet *snap, ProvenanceSet &zct);
   // Drains the contents of the pending provenance set, pruning the associated
   // state from the tree for each allocation. Ejects any retired allocation
   // objects that are confirmed to be unreachable.
-  void CollectGarbage(Snapshot *snap);
+  void CollectGarbage(ProvenanceSet *snap);
 
   // Guards `at_exit_stack_`.
   Mutex at_exit_lock_;
