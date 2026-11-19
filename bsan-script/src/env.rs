@@ -9,7 +9,7 @@ use xshell::{cmd, Cmd, Shell};
 
 use crate::commands::Buildable;
 use crate::setup::ToolchainConfig;
-use crate::utils::{active_libdir, active_sysroot, active_toolchain, cmdq, show_error};
+use crate::utils::{active_libdir, active_sysroot, cmdq, show_error};
 use crate::{setup, utils, TOOLCHAIN_NAME};
 
 #[allow(dead_code)]
@@ -113,7 +113,8 @@ impl BsanEnv {
     ) -> Result<Self> {
         let sh = Shell::new()?;
         let root_dir = utils::root_dir()?;
-        let host = utils::version_meta(&sh, &active_toolchain()?)?;
+        let active_toolchain = utils::ensure_active_toolchain()?;
+        let host = utils::version_meta(&sh, &active_toolchain)?;
 
         let deps_dir = toolchain_dir.unwrap_or_else(|| {
             let sysroot = active_sysroot().unwrap();
@@ -133,6 +134,7 @@ impl BsanEnv {
 
         let toolchain_config = setup::setup_toolchain(
             &sh,
+            &active_toolchain,
             &host,
             &mut config,
             &deps_dir,

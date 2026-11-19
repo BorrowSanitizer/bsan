@@ -12,7 +12,7 @@ use xshell::{cmd, Cmd, Shell};
 use xz2::bufread::XzDecoder;
 
 pub fn show_error_(msg: &impl std::fmt::Display) -> ! {
-    eprintln!("fatal error: {msg}");
+    eprintln!("error: {msg}");
     std::process::exit(1)
 }
 
@@ -77,6 +77,15 @@ pub fn active_toolchain() -> Result<String> {
     sh.change_dir(root_dir()?);
     let stdout = cmd!(sh, "rustup show active-toolchain").read()?;
     Ok(stdout.split_whitespace().next().context("Could not obtain active Rust toolchain")?.into())
+}
+
+pub fn ensure_active_toolchain() -> Result<String> {
+    active_toolchain().or_else(|_| {
+        let sh = Shell::new()?;
+        sh.change_dir(root_dir()?);
+        cmdq!(sh, "rustup override set nightly").run()?;
+        active_toolchain()
+    })
 }
 
 /// Gets the sysroot of the active toolchain

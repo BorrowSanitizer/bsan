@@ -8,9 +8,7 @@ use rustc_version::VersionMeta;
 use xshell::{cmd, Shell};
 
 use crate::env::BsanConfig;
-use crate::utils::{
-    self, active_toolchain, cmdq, prompt_user_unless, show_error, version_meta, PromptResult,
-};
+use crate::utils::{self, cmdq, prompt_user_unless, show_error, version_meta, PromptResult};
 use crate::TOOLCHAIN_NAME;
 
 static INSTALL_PROMPT: &str = "You need to configure a custom Rust toolchain (`bsan`) to build BorrowSanitizer from source. Continue?";
@@ -40,6 +38,7 @@ pub struct ToolchainConfig {
 
 pub fn setup_toolchain(
     sh: &Shell,
+    host_toolchain_name: &str,
     host: &VersionMeta,
     config: &mut BsanConfig,
     toolchain_dir: &Path,
@@ -47,34 +46,39 @@ pub fn setup_toolchain(
     mut skip_prompt: bool,
     local_dir: Option<PathBuf>,
 ) -> Result<ToolchainConfig> {
-    let meta = ensure_toolchain(sh, host, config, toolchain_dir, local_dir, &mut skip_prompt)?;
+    let meta = ensure_toolchain(
+        sh,
+        host_toolchain_name,
+        host,
+        config,
+        toolchain_dir,
+        local_dir,
+        &mut skip_prompt,
+    )?;
     ensure_llvm_cmake(sh, config, toolchain_dir, root_dir, &mut skip_prompt)?;
     Ok(ToolchainConfig { llvm_dir: toolchain_dir.to_path_buf(), meta })
 }
 fn ensure_toolchain(
     sh: &Shell,
+    host_toolchain_name: &str,
     host: &VersionMeta,
     config: &mut BsanConfig,
     toolchain_dir: &Path,
     local_dir: Option<PathBuf>,
     skip_prompt: &mut bool,
 ) -> Result<VersionMeta> {
-    // If we have the `bsan` toolchain installed, then we've either already
-    // run the setup script, or we're in our Docker container, which has all of
-    // the dependencies that we need.
-
-    // Let's make sure that we have all of the right dependencies
     for dep in crate::DEPENDENCIES.iter() {
         if which::which(dep).is_err() {
             show_error!("Unable to find `{dep}`, is it installed?");
         }
     }
+
     let metadata = if let Ok(meta) = version_meta(sh, TOOLCHAIN_NAME)
         && let Some(ref commit_hash) = meta.commit_hash
         && commit_hash == &config.rust_sha
         && local_dir.is_none()
     {
-        if active_toolchain()? != TOOLCHAIN_NAME {
+        if host_toolchain_name != TOOLCHAIN_NAME {
             cmd!(sh, "rustup override set {TOOLCHAIN_NAME}").run()?;
         }
         meta
