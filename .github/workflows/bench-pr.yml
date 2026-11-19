@@ -17,6 +17,9 @@ name: Branch benchmark request
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+    paths: 
+      - bsan-rt/**
+      - bsan-pass/**
 permissions:
   # To start bench-branch.yml.
   actions: write
