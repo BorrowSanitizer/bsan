@@ -47,8 +47,7 @@ BorrowSanitizer has been used to find a variety of new cross-language aliasing b
 * [Writing through an immutable reference in CXX](https://github.com/dtolnay/cxx/issues/1762)
 
 ## License & Credits
-
-BorrowSanitizer is dual-licensed under [Apache](https://github.com/BorrowSanitizer/bsan/blob/main/LICENSE-APACHE) and [MIT](https://github.com/BorrowSanitizer/bsan/blob/main/LICENSE-MIT), following the Rust project.
+BorrowSanitizer is licensed under [Apache](https://github.com/BorrowSanitizer/bsan/blob/main/LICENSE.txt) with LLVM exemptions.
 
 [<img src="https://borrowsanitizer.com/images/zulip-icon-circle.svg" alt="Zulip" style="height: 1em;"/> Zulip](https://zulip.com/) sponsors free hosting for BorrowSanitizer. Zulip is an organized team chat app designed for efficient communication.
 
