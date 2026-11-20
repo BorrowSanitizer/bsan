@@ -4,7 +4,6 @@
 #include "bsan_allocator.h"
 #include "bsan_dense_slab.h"
 #include "bsan_shadow.h"
-#include "sanitizer_common/sanitizer_addrhashmap.h"
 #include "sanitizer_common/sanitizer_atomic.h"
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_dense_map.h"
@@ -13,16 +12,10 @@
 #include "sanitizer_common/sanitizer_internal_defs.h"
 #include "sanitizer_common/sanitizer_mutex.h"
 #include "sanitizer_common/sanitizer_placement_new.h"
-#include "sanitizer_common/sanitizer_procmaps.h"
-#include "sanitizer_common/sanitizer_report_decorator.h"
-#include "sanitizer_common/sanitizer_stackdepot.h"
 #include "sanitizer_common/sanitizer_stacktrace.h"
-#include "sanitizer_common/sanitizer_suppressions.h"
 #include "sanitizer_common/sanitizer_thread_registry.h"
-#include "sanitizer_common/sanitizer_tls_get_addr.h"
 #include "sanitizer_common/sanitizer_vector.h"
 
-using __sanitizer::AddrHashMap;
 using __sanitizer::atomic_uintptr_t;
 using __sanitizer::DenseMap;
 using __sanitizer::Mutex;
@@ -69,7 +62,6 @@ extern BlockAllocator block_allocator;
 #define BLOCK_IDX(ptr) (block_allocator.InvMap(ptr))
 #define BLOCK_PTR(idx) (block_allocator.Map(idx))
 
-typedef uptr ThreadId;
 enum GCState : u32 {
   // This thread is executing uninstrumented
   // code. The garbage collector can ignore it.

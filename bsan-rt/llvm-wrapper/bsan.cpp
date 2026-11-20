@@ -206,7 +206,6 @@ void ClearParamSlot(uptr idx) {
   DCHECK_LT(idx, kTLSSizeBytes / kMinProvAlignment);
   reinterpret_cast<BorTag *>(__bsan_param_tag_tls)[idx] = OMNIVALID.tag;
 }
-void ClearRetValSlot(uptr Idx) { *GetRetValSlot(Idx) = OMNIVALID; }
 
 // Prints a note suggesting users raise stacktrace_max_len when the trace was
 // truncated. The unwind in HANDLE_ERROR is bounded by GetStackTraceLen(), so a
