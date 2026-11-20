@@ -1,7 +1,36 @@
-==================================================================================
-The BorrowSanitizer Project is under the Apache License v2.0 with LLVM Exceptions:
-==================================================================================
+BorrowSanitizer is available for use under both the MIT license
+and the Apache-2.0 license with the LLVM exception (MIT AND Apache-2.0 WITH
+LLVM-exception).
 
+As a contributor, you agree that your code may be used under any of the
+following: the MIT license, the Apache-2.0 license, or the Apache-2.0 license
+with the LLVM exception. In other words, original (non-derivative) work is
+licensed under MIT OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception. This is
+the default license for all other source in this repository.
+
+Text of the relevant licenses is provided below:
+
+------------------------------------------------------------------------------
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+------------------------------------------------------------------------------
                                  Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -190,8 +219,6 @@ The BorrowSanitizer Project is under the Apache License v2.0 with LLVM Exception
       same "printed page" as the copyright notice for easier
       identification within third-party archives.
 
-    Copyright [yyyy] [name of copyright owner]
-
     Licensed under the Apache License, Version 2.0 (the "License");
     you may not use this file except in compliance with the License.
     You may obtain a copy of the License at
@@ -220,59 +247,27 @@ conflicts with the conditions of the GPLv2, you may retroactively and
 prospectively choose to deem waived or otherwise exclude such Section(s) of
 the License, but only in their entirety and only with respect to the Combined
 Software.
+------------------------------------------------------------------------------
 
-==============================================================================
-Software from third parties included in the LLVM Project:
-==============================================================================
-The LLVM Project contains third party software which is under different license
-terms. All such code will be identified clearly using at least one of two
-mechanisms:
-1) It will be in a separate directory tree with its own `LICENSE.txt` or
-   `LICENSE` file at the top containing the specific license and restrictions
-   which apply to that software, or
-2) It will contain specific license and restriction terms at the top of every
-   file.
+Portions of this software are derived from third-party works licensed under
+terms compatible with the above Apache-2.0 WITH LLVM-exception AND MIT
+license:
 
-==============================================================================
-Legacy LLVM License (https://llvm.org/docs/DeveloperPolicy.html#legacy):
-==============================================================================
-University of Illinois/NCSA
-Open Source License
+* compiler-builtins is derived from LLVM's compiler-rt (https://llvm.org/).
+  Work derived from compiler-rt prior to 2019-01-19 is usable under the MIT
+  license, with the following copyright:
 
-Copyright (c) 2003-2019 University of Illinois at Urbana-Champaign.
-All rights reserved.
+      Copyright (c) 2009-2016 by the contributors listed in CREDITS.TXT
 
-Developed by:
+  The relevant CREDITS.TXT is located at
+  https://github.com/llvm/llvm-project/blob/main/compiler-rt/CREDITS.TXT.
 
-    LLVM Team
+* Work derived from compiler-rt after 2019-01-19 is usable under the
+  Apache-2.0 license with the LLVM exception.
 
-    University of Illinois at Urbana-Champaign
+* The bundled `math` module is from the libm crate, usable under the MIT
+  license. For further details and copyrights, see see libm/LICENSE.txt at
+  https://github.com/rust-lang/compiler-builtins.
 
-    http://llvm.org
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the "Software"), to deal with
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
-of the Software, and to permit persons to whom the Software is furnished to do
-so, subject to the following conditions:
-
-    * Redistributions of source code must retain the above copyright notice,
-      this list of conditions and the following disclaimers.
-
-    * Redistributions in binary form must reproduce the above copyright notice,
-      this list of conditions and the following disclaimers in the
-      documentation and/or other materials provided with the distribution.
-
-    * Neither the names of the LLVM Team, University of Illinois at
-      Urbana-Champaign, nor the names of its contributors may be used to
-      endorse or promote products derived from this Software without specific
-      prior written permission.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
-FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
-CONTRIBUTORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS WITH THE
-SOFTWARE.
+Additionally, some source files may contain comments with specific copyrights
+or licenses.

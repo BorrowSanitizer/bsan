@@ -2,6 +2,7 @@
 name = "bsan-script"
 version = "0.1.0"
 edition = "2024"
+license = "MIT AND Apache-2.0 WITH LLVM-exception AND (MIT OR Apache-2.0)"
 
 [dependencies]
 anyhow = "1.0.104"

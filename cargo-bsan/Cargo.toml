@@ -2,6 +2,7 @@
 name = "cargo-bsan"
 version = "0.1.0"
 edition = "2024"
+license = "MIT AND Apache-2.0 WITH LLVM-exception AND (MIT OR Apache-2.0)"
 
 [dependencies]
 cargo_metadata = "0.23"
