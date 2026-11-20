@@ -50,8 +50,8 @@ impl Command {
             Command::Install { components, args } => {
                 components.iter().try_for_each(|c| c.install(env, &args))
             }
-            Command::UI { bless, keep_sysroot, allow_unsafe_deps, libcxx } => {
-                Self::ui(env, bless, keep_sysroot, allow_unsafe_deps, libcxx)
+            Command::UI { bless, keep_sysroot, allow_unsafe_deps, libcxx, filters } => {
+                Self::ui(env, bless, keep_sysroot, allow_unsafe_deps, libcxx, &filters)
             }
             Command::Miri { components, args } => components.iter().try_for_each(|c| {
                 c.miri(env, &args)?;
@@ -85,10 +85,15 @@ impl Command {
         keep_sysroot: bool,
         allow_unsafe_deps: bool,
         libcxx: bool,
+        filters: &[String],
     ) -> Result<()> {
-        let config = TestConfig { keep_sysroot, allow_unsafe_deps, libcxx, bless, fix: false };
+        let config =
+            TestConfig { keep_sysroot, allow_unsafe_deps, libcxx, bless, fix: false, filters };
 
         run_tests(env, config)?;
+        if !filters.is_empty() {
+            return Ok(());
+        }
 
         crate::all_components!().iter().try_for_each(|c| c.install(env, &[]))?;
 
@@ -107,7 +112,7 @@ impl Command {
             Self::fmt(env, true)?;
             components.iter().try_for_each(|c| c.clippy(env, args))?;
             components.iter().try_for_each(|c| c.test(env, args))?;
-            Self::ui(env, false, false, allow_unsafe_deps, true)
+            Self::ui(env, false, false, allow_unsafe_deps, true, &[])
         })
     }
 
@@ -239,6 +244,7 @@ impl Command {
             fix: true,
             allow_unsafe_deps: false,
             libcxx: false,
+            filters: &[],
         };
         run_tests(env, config)?;
         Ok(())
@@ -246,7 +252,7 @@ impl Command {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct TestConfig {
+struct TestConfig<'a> {
     /// Record test output as canonical
     bless: bool,
     /// If tests that "should" fail or pass have the correct
@@ -263,9 +269,11 @@ struct TestConfig {
     /// Builds tests with C++ dependencies. This will also build an
     /// instrumented copy of libc++.
     libcxx: bool,
+    /// Only run ui tests whose path contains one of these filters.
+    filters: &'a [String],
 }
 
-fn run_tests(env: &mut BsanEnv, config: TestConfig) -> Result<(), anyhow::Error> {
+fn run_tests(env: &mut BsanEnv, config: TestConfig<'_>) -> Result<(), anyhow::Error> {
     let sysroot_dir = path!(&env.target_dir / "sysroot");
     if !config.keep_sysroot {
         cmdq!(env.sh, "rm -rf {sysroot_dir}").run()?;
@@ -329,8 +337,9 @@ fn run_tests(env: &mut BsanEnv, config: TestConfig) -> Result<(), anyhow::Error>
             env_guards.push(env.sh.push_env("BSAN_UNSAFE_DEPS", "1"))
         }
 
-        let add_bless = if config.bless { "--bless" } else { "" };
-        cmd!(env.sh, "cargo test -p bsan --test ui -- {add_bless}").run()?;
+        let add_bless = config.bless.then_some("--bless");
+        let filters = config.filters;
+        cmd!(env.sh, "cargo test -p bsan --test ui -- {add_bless...} {filters...}").run()?;
         Ok(())
     })?;
     Ok(())
