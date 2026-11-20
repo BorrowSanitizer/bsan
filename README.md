@@ -35,46 +35,21 @@ cargo bsan test
 ```
 Our plugin supports most of the same subcommands as Miri. When it's used for the first time, it will perform a one-time setup step of building an instrumented sysroot. You can trigger this step manually using the `setup` subcommand. 
 
-## Building from Source
-Every single command needed to build, test, and install BorrrowSanitizer can be accessed through `xb`, our build script.
+## Contributing
+We follow the LLVM Project's [AI Tool Use Policy](https://llvm.org/docs/AIToolPolicy.html). All AI-generated content must be disclosed. There must always be a human in the loop. 
 
-For first-time setup, run:
-```
-# install the nightly Rust toolchain and dependencies
-rustup toolchain install nightly --component rust-src rustc-dev llvm-tools-preview
-
-# install build dependencies
-sudo apt-get update && sudo apt-get install -y cmake ninja-build clang lld clang-tidy
-
-./xb setup
-```
-This will install a [custom Rust toolchain](https://github.com/BorrowSanitizer/rust) under the name `bsan`.
-
-Then, to install BorrowSanitizer, run:
-```
-./xb install
-```
-This will place our tool's binaries into Cargo's [home directory](https://doc.rust-lang.org/cargo/guide/cargo-home.html) (`$HOME/.cargo`). You will need to have `bsan` set as the active toolchain (e.g. `rustup default bsan`) for our tool to work.
-
-You can build and test components of the project using the `build` and `test` subcommands. For example, running `xb build` will build everything, but you can also pass the name of a subdirectory to build just that component, like so:
-```
-./xb build bsan-rt
-```
-Nearly every subcommand can be used this way.
-
-After making a change, you should run all of our CI steps locally using:
-```
-./xb ci
-```
----
-BorrowSanitizer is dual-licensed under [Apache](https://github.com/BorrowSanitizer/bsan/blob/main/LICENSE-APACHE) and [MIT](https://github.com/BorrowSanitizer/bsan/blob/main/LICENSE-MIT), following the Rust project.
-
-[<img src="https://borrowsanitizer.com/images/zulip-icon-circle.svg" alt="Zulip" style="height: 1em;"/> Zulip](https://zulip.com/) sponsors free hosting for BorrowSanitizer. Zulip is an organized team chat app designed for efficient communication.
-
+We welcome contributions! Please consult our [contribution guide](https://github.com/BorrowSanitizer/bsan/blob/main/CONTRIBUTING.md) and join [our Zulip](https://bsan.zulipchat.com/) if you have questions.
 
 ## Bugs found by BorrowSanitizer
 
 BorrowSanitizer has been used to find a variety of new cross-language aliasing bugs in open source projects. 
 * [Overlapping references in `aws-lc-rs`](https://github.com/aws/aws-lc-rs/pull/1288)
 * [Writing through an immutable reference in CXX](https://github.com/dtolnay/cxx/issues/1762)
+
+## License & Credits
+
+BorrowSanitizer is dual-licensed under [Apache](https://github.com/BorrowSanitizer/bsan/blob/main/LICENSE-APACHE) and [MIT](https://github.com/BorrowSanitizer/bsan/blob/main/LICENSE-MIT), following the Rust project.
+
+[<img src="https://borrowsanitizer.com/images/zulip-icon-circle.svg" alt="Zulip" style="height: 1em;"/> Zulip](https://zulip.com/) sponsors free hosting for BorrowSanitizer. Zulip is an organized team chat app designed for efficient communication.
+
 
