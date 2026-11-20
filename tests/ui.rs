@@ -448,22 +448,84 @@ fn main() -> Result<()> {
     let target = get_version_info();
     let tmpdir = tempfile::Builder::new().prefix("bsan-uitest-").tempdir()?;
 
-    ui(Mode::Pass, "tests/pass", &target, WithoutDependencies, tmpdir.path(), false)?;
-    ui(Mode::Pass, "tests/miri-tests/pass", &target, WithoutDependencies, tmpdir.path(), false)?;
+    // Filters are positional arguments to the test harness (e.g. `tests/fail-dep/` or `qsort`).
+    // `ui_test` applies them to each file, but we also use them to skip entire suites that
+    // contain no matching tests, so that we don't build their dependencies needlessly.
+    let args = ui_test::Args::test()?;
+    let filters = Filters { files: args.filters, skip: args.skip, exact: args.exact };
+    let unsafe_deps = env::var("BSAN_UNSAFE_DEPS").is_ok();
+    let cxx = env::var("BSAN_CXX").is_ok();
 
-    ui(Mode::Fail, "tests/fail", &target, WithoutDependencies, tmpdir.path(), false)?;
-    ui(Mode::Fail, "tests/miri-tests/fail", &target, WithoutDependencies, tmpdir.path(), false)?;
+    let suites = [
+        (Mode::Pass, "tests/pass", WithoutDependencies, true, None),
+        (Mode::Pass, "tests/miri-tests/pass", WithoutDependencies, true, None),
+        (Mode::Fail, "tests/fail", WithoutDependencies, true, None),
+        (Mode::Fail, "tests/miri-tests/fail", WithoutDependencies, true, None),
+        (Mode::Pass, "tests/pass-dep", WithDependencies, unsafe_deps, Some("--allow-unsafe-deps")),
+        (Mode::Fail, "tests/fail-dep", WithDependencies, unsafe_deps, Some("--allow-unsafe-deps")),
+        (Mode::Fail, "tests/cxx/fail", WithCxxDependencies, cxx, Some("--libcxx")),
+        (Mode::Fail, "tests/c/pass", WithCDependencies, true, None),
+    ];
 
-    if env::var("BSAN_UNSAFE_DEPS").is_ok() {
-        ui(Mode::Pass, "tests/pass-dep", &target, WithDependencies, tmpdir.path(), false)?;
-        ui(Mode::Fail, "tests/fail-dep", &target, WithDependencies, tmpdir.path(), false)?;
+    let mut ran_any = false;
+    for (mode, path, deps, enabled, required_flag) in suites {
+        let selected = filters.selects_any(Path::new(path));
+        if !enabled {
+            if filters.is_active() && selected {
+                let flag = required_flag.unwrap_or_default();
+                let msg =
+                    format!("## Skipping matching ui tests in {path}; pass `{flag}` to run them");
+                eprintln!("{}", msg.yellow().bold());
+            }
+            continue;
+        }
+        if !selected {
+            continue;
+        }
+        ran_any = true;
+        ui(mode, path, &target, deps, tmpdir.path(), false)?;
     }
 
-    if env::var("BSAN_CXX").is_ok() {
-        ui(Mode::Fail, "tests/cxx/fail", &target, WithCxxDependencies, tmpdir.path(), false)?;
+    if filters.is_active() && !ran_any {
+        eprintln!("{}", "## No ui tests matched the given filters".yellow().bold());
     }
-
-    ui(Mode::Fail, "tests/c/pass", &target, WithCDependencies, tmpdir.path(), false)?;
 
     Ok(())
+}
+
+/// The file filters passed on the command line, mirroring `ui_test::default_any_file_filter`.
+struct Filters {
+    files: Vec<String>,
+    skip: Vec<String>,
+    exact: bool,
+}
+
+impl Filters {
+    fn is_active(&self) -> bool {
+        !self.files.is_empty() || !self.skip.is_empty()
+    }
+
+    fn matches(&self, path: &Path) -> bool {
+        let path = path.display().to_string();
+        let contains = |filters: &[String]| {
+            filters.iter().any(|f| if self.exact { *f == path } else { path.contains(f.as_str()) })
+        };
+        !contains(&self.skip) && (self.files.is_empty() || contains(&self.files))
+    }
+
+    /// Returns `true` if any `.rs` test within `dir` (recursively) would be selected.
+    fn selects_any(&self, dir: &Path) -> bool {
+        if !self.is_active() {
+            return true;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else { return false };
+        entries.flatten().any(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                self.selects_any(&path)
+            } else {
+                path.extension().is_some_and(|ext| ext == "rs") && self.matches(&path)
+            }
+        })
+    }
 }
