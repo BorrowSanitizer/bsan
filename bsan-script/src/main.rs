@@ -127,6 +127,9 @@ pub enum Command {
         /// Build an instrumented libc++ and run the C++ interoperation tests.
         #[arg(long)]
         libcxx: bool,
+        /// Only run tests whose path contains one of these filters
+        /// (e.g. `tests/fail-dep/` or `qsort`).
+        filters: Vec<String>,
     },
     /// Installs binaries into the custom toolchain.
     Install {

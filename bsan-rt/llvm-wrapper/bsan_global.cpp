@@ -88,10 +88,10 @@ void GlobalContext::acquireProvenance(ProvenanceSet &source) {
   global_zct_.takeFrom(source);
 }
 
-void GlobalContext::MergeZeroCounts(Snapshot *snap, ProvenanceSet &zct) {
+void GlobalContext::MergeZeroCounts(ProvenanceSet *snap, ProvenanceSet &zct) {
   zct.retainIf([&](BlockIndex idx, BorTag tag) -> bool {
     Provenance prov = {tag, BLOCK_PTR(idx)};
-    if (snap->live.contains(prov)) {
+    if (snap->contains(prov)) {
       return true;
     }
     global_ctx()->pending_.insert(prov);
@@ -99,18 +99,18 @@ void GlobalContext::MergeZeroCounts(Snapshot *snap, ProvenanceSet &zct) {
   });
 }
 
-void GlobalContext::RunGarbageCollector(Snapshot &snap,
+void GlobalContext::RunGarbageCollector(ProvenanceSet &snap,
                                         ScopedThreadLock &threads) {
   ForEachThread(
       threads,
-      [](BsanThread *thread, Snapshot *snap) {
+      [](BsanThread *thread, ProvenanceSet *snap) {
         // Each thread has three different areas that
         // we need to scan to identify provenance values in
         // shadow memory. First, we look at the "shadow roots",
         // which store the provenance of values that may have been
         // loaded into registers at the time the world is stopped.
         for (auto prov : thread->shadowRoots()) {
-          snap->live.insert(prov);
+          snap->insert(prov);
         }
 
         // Next, we scan the shadow of the thread's stack. There are
@@ -122,7 +122,7 @@ void GlobalContext::RunGarbageCollector(Snapshot &snap,
         for (uptr i = 0; i < live.size; i++) {
           // Tags in shadow memory may carry a slot offset.
           if (live.blocks[i])
-            snap->live.insert({STRIP_TAG_OFFSET(live.tags[i]), live.blocks[i]});
+            snap->insert({STRIP_TAG_OFFSET(live.tags[i]), live.blocks[i]});
         }
 
         // The next range is [bottom, sp). These values are below the
@@ -140,7 +140,7 @@ void GlobalContext::RunGarbageCollector(Snapshot &snap,
 
   ForEachThread(
       threads,
-      [](BsanThread *thread, Snapshot *snap) {
+      [](BsanThread *thread, ProvenanceSet *snap) {
         // Drain the zero-count tables for each thread, as well
         // as the global zero count table. This happens in a separate
         // step from scanning the stacks, since we need to know if a
@@ -155,7 +155,8 @@ void GlobalContext::RunGarbageCollector(Snapshot &snap,
   // thread's counter starts over from the collection we are about to perform.
   ForEachThread(
       threads,
-      [](BsanThread *thread, Snapshot *) { thread->ResetVisitCount(); }, &snap);
+      [](BsanThread *thread, ProvenanceSet *) { thread->ResetVisitCount(); },
+      &snap);
   // Prune all unreachable nodes, destroying
   // allocations that have had their trees fully pruned.
   // At the moment, we wait until after restarting the
@@ -168,7 +169,7 @@ void GlobalContext::RunGarbageCollector(Snapshot &snap,
   global_ctx()->CollectGarbage(&snap);
 }
 
-void GlobalContext::CollectGarbage(Snapshot *snap) {
+void GlobalContext::CollectGarbage(ProvenanceSet *snap) {
   ProvenanceSet still_pending;
   pending_.drain([&](BlockIndex idx, BorTagSet &tags) {
     Block *info = BLOCK_PTR(idx);
@@ -178,7 +179,7 @@ void GlobalContext::CollectGarbage(Snapshot *snap) {
       // They might be live on the heap, with a nonzero
       // reference count, or their underlying allocation
       // could be live on the shadow stack under a different tag,
-      DCHECK(!snap->live.contains({tag, info}));
+      DCHECK(!snap->contains({tag, info}));
     });
     auto status = __bsan_prune(info, tags.data(), tags.size());
     if (status == PruneResult::Remove)
@@ -186,7 +187,7 @@ void GlobalContext::CollectGarbage(Snapshot *snap) {
     if (status == PruneResult::Eject) {
       // Every tag has been removed from the tree.
       // The reference count for this allocation is zero.
-      if (!snap->live.contains(idx)) {
+      if (!snap->contains(idx)) {
         // The root is no longer present on any
         // of the shadow stacks. We can retire it.
         {
@@ -240,7 +241,7 @@ void GlobalContext::requestGC() {
         {
           {
 
-            Snapshot snap;
+            ProvenanceSet snap;
             RunGarbageCollector(snap, threads);
           }
         }
