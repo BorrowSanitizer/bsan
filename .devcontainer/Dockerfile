@@ -64,3 +64,4 @@ FROM base AS image-release
 COPY --from=build-image-release /root/.rustup/toolchains/bsan /root/.rustup/toolchains/bsan
 COPY --from=build-image-release /root/.cargo/bin /root/.cargo/bin
 RUN rustup default bsan && rustc -vV
+RUN cargo bsan setup --build-libcxx
